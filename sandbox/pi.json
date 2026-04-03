@@ -1,0 +1,28 @@
+{
+  "network": {
+    "allowedDomains": [
+      "calude.ai",
+      "platform.claude.com",
+      "api.anthropic.com",
+      "openrouter.ai",
+      "github.com",
+      "*.github.com",
+      "api.github.com",
+      "raw.githubusercontent.com"
+    ],
+    "deniedDomains": []
+  },
+  "filesystem": {
+    "denyRead": [
+      "~/.ssh",
+      "~/.aws",
+      "~/.gnupg"
+    ],
+    "allowWrite": [
+      ".",
+      "/tmp",
+      "~/.pi"
+    ],
+    "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
+  }
+}

@@ -7,7 +7,6 @@ Small shell utilities for local Git/GitHub workflows: worktrees, PR notes sync, 
 - `bash`
 - `git`
 - [`just`](https://github.com/casey/just) (for installation)
-- [`gh`](https://cli.github.com/) (required by `prlog.sh` and `prsync.sh`)
 - [`srt`](https://github.com/anthropic-experimental/sandbox-runtime) (required by `sandbox.sh`)
 
 ## Install
@@ -97,40 +96,6 @@ Fetch/prune `origin` and create local tracking branches for remote branches that
 ```bash
 brsync.sh
 ```
-
-### `git-rm-branches.sh`
-
-Delete all local branches except `main` and the currently checked out branch.
-
-```bash
-git-rm-branches.sh
-```
-
-Use with care: this force-deletes branches (`git branch -D`).
-
-### `prlog.sh`
-
-Create a draft PR from current branch, move PR notes into `docs/history/pr_<N>_<slug>.md`, commit, and push.
-
-```bash
-prlog.sh -t "feat: add useful thing" -F PR.md
-```
-
-Notes:
-- Requires a clean working tree/index before running.
-- `-F` defaults to `PR.md`.
-
-### `prsync.sh`
-
-Sync current branch PR title/body into `docs/history/pr_<N>_<slug>.md`, rename file if title subject changed, then commit.
-
-```bash
-prsync.sh
-```
-
-Notes:
-- Requires a clean working tree/index before running.
-- Expects PR title format `type: subject`.
 
 ### `sandbox.sh`
 

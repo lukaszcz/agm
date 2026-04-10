@@ -313,6 +313,29 @@ class TestTmuxLayout:
         assert_rejects(parser, ["tmux", "layout", "4", "@1"])
 
 
+# ── help ─────────────────────────────────────────────────────────────────────
+
+class TestHelp:
+    def test_help_bare(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["help"])
+        assert ns.command == "help"
+        assert ns.help_command is None
+
+    def test_help_with_command(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["help", "open"])
+        assert ns.command == "help"
+        assert ns.help_command == "open"
+
+    def test_help_with_alias(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["help", "br"])
+        assert ns.help_command == "br"
+
+    def test_help_with_unknown(self, parser: argparse.ArgumentParser) -> None:
+        # argparse accepts any string; validation is in dispatch
+        ns = parse(parser, ["help", "bogus"])
+        assert ns.help_command == "bogus"
+
+
 # ── top-level ────────────────────────────────────────────────────────────────
 
 class TestTopLevel:

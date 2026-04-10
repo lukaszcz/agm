@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agm.cli import main
+from agm.cli import main, _HELP_TEXTS, _HELP_ALIASES
 
 
 def run_agm(mock_execvp: MagicMock, argv: list[str]) -> tuple[str, list[str]]:
@@ -21,6 +21,59 @@ def run_agm(mock_execvp: MagicMock, argv: list[str]) -> tuple[str, list[str]]:
     executable: str = call_args[0][0]
     argv_list: list[str] = call_args[0][1]
     return executable, argv_list
+
+
+# ── help ─────────────────────────────────────────────────────────────────────
+
+class TestHelp:
+    def test_help_overview(self, mock_execvp: Any, capsys: Any) -> None:
+        """'agm help' (no args) prints the overview and exits 0."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["help"])
+        assert exc_info.value.code == 0
+        mock_execvp.assert_not_called()
+        out = capsys.readouterr().out
+        assert "agm - Agent Management Framework" in out
+        assert "Commands:" in out
+        assert "open" in out
+
+    def test_help_specific_command(self, mock_execvp: Any, capsys: Any) -> None:
+        """'agm help open' prints detailed help for open."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["help", "open"])
+        assert exc_info.value.code == 0
+        mock_execvp.assert_not_called()
+        out = capsys.readouterr().out
+        assert "agm open" in out
+        assert "BRANCH" in out
+
+    def test_help_alias(self, mock_execvp: Any, capsys: Any) -> None:
+        """'agm help br' shows the same help as 'agm help branch'."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["help", "br"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "agm branch sync" in out
+
+    def test_help_unknown_command(self, mock_execvp: Any, capsys: Any) -> None:
+        """'agm help bogus' prints an error and exits 1."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["help", "bogus"])
+        assert exc_info.value.code == 1
+        mock_execvp.assert_not_called()
+        err = capsys.readouterr().err
+        assert "unknown command" in err
+
+    def test_all_commands_have_help(self) -> None:
+        """Every canonical command must have a _HELP_TEXTS entry."""
+        expected = {"open", "new", "checkout", "init", "fetch", "branch",
+                    "config", "worktree", "dep", "run", "tmux", "help"}
+        assert set(_HELP_TEXTS.keys()) == expected
+
+    def test_all_aliases_resolve(self) -> None:
+        """Every alias in _HELP_ALIASES must point to a valid _HELP_TEXTS key."""
+        for alias, canonical in _HELP_ALIASES.items():
+            assert canonical in _HELP_TEXTS, f"alias '{alias}' -> '{canonical}' not in _HELP_TEXTS"
 
 
 # ── branch sync ──────────────────────────────────────────────────────────────

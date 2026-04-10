@@ -1,17 +1,18 @@
-# devtools
+# agm
 
-Small shell utilities for local Git/GitHub workflows: worktrees, PR notes sync, and branch cleanup.
+Agent Management Framework — a unified CLI for managing worktrees, project dependencies, configuration, sandbox execution, and tmux sessions.
 
 ## Requirements
 
 - `bash`
 - `git`
+- Python ≥ 3.12
 - [`just`](https://github.com/casey/just) (for installation)
-- [`srt`](https://github.com/anthropic-experimental/sandbox-runtime) (required by `sandbox.sh`)
+- [`srt`](https://github.com/anthropic-experimental/sandbox-runtime) (required by `agm run`)
 
 ## Install
 
-Install all scripts to `prefix/bin` (default: `$HOME/.local/bin`):
+Install the `agm` CLI, all supporting scripts, and sandbox configuration to `prefix/bin` (default: `$HOME/.local/bin`):
 
 ```bash
 just install
@@ -25,95 +26,139 @@ Install to a custom prefix:
 just install /usr/local
 ```
 
-Install as symlinks instead of copying files:
+## Usage
 
-```bash
-just install "$HOME/.local" true
+```
+agm <command> [options] [args]
 ```
 
-Top-level overrides (named style):
+Run `agm help` to list all commands, or `agm help <command>` for detailed help on a specific command. Every subcommand also supports `--help`.
+
+## Commands
+
+### `agm open` — Open a project session
+
+Open a tmux session for a project branch. If no branch is given, the current branch is used.
 
 ```bash
-just prefix="$HOME/.local" symlink=true install
+agm open                      # open session for current branch
+agm open feat/login           # open session for feat/login
+agm open -n 4 feat/login      # open with 4 panes
 ```
 
-## Scripts
+### `agm new` — Create a branch and open a session
 
-### `mkwt.sh`
-
-Create a git worktree and optionally create a new branch.
+Create a new branch worktree and immediately open a tmux session for it.
 
 ```bash
-# existing branch
-mkwt.sh feature/my-branch
-
-# create new branch
-mkwt.sh -b feature/new-branch
-
-# custom worktrees dir
-mkwt.sh -d .worktrees feature/my-branch
+agm new feat/search
+agm new -p develop feat/search         # fork from 'develop'
+agm new -n 3 -p main feat/search      # 3 panes, fork from 'main'
 ```
 
-### `pm-dep.sh`
+### `agm checkout` — Check out a branch and open a session
 
-Manage dependency checkouts under `deps/DEP/BRANCH`.
+Check out an existing branch into a worktree (creating it if needed) and open a tmux session. Alias: `agm co`.
 
 ```bash
-# clone a new dependency into deps/repo-name/main
-pm-dep.sh new https://github.com/org/repo-name.git
-
-# clone a specific branch into deps/repo-name/feature/foo
-pm-dep.sh new -b feature/foo https://github.com/org/repo-name.git
-
-# add a worktree for an existing branch
-pm-dep.sh switch repo-name feature/foo
-
-# create a new branch worktree from the dependency's default branch
-pm-dep.sh switch repo-name -b feature/bar
+agm co feat/login
+agm checkout -n 4 feat/login
+agm co -p main feat/new-thing
 ```
 
-### `pm-fetch.sh`
+### `agm init` — Initialize a new project
 
-Fetch `repo/` and one checked out worktree for each dependency under `deps/DEP/`.
+Clone a repository and set up the project structure. The project name is derived from the URL if omitted.
 
 ```bash
-pm-fetch.sh
+agm init https://github.com/org/repo.git
+agm init myproject https://github.com/org/repo.git
+agm init -b develop myproject https://github.com/org/repo.git
 ```
 
-### `rmwt.sh`
+### `agm fetch` — Fetch repo and dependencies
 
-Remove a worktree by branch name, then delete the branch locally.
+Fetch the latest changes for the main repository and for every dependency that has a checked-out worktree under `deps/`.
 
 ```bash
-rmwt.sh feature/my-branch
-rmwt.sh -f feature/my-branch
+agm fetch
 ```
 
-### `brsync.sh`
+### `agm branch sync` — Sync remote tracking branches
 
-Fetch/prune `origin` and create local tracking branches for remote branches that are not merged into `origin/main`.
+Fetch and prune `origin`, then create local tracking branches for every remote branch not yet merged into `origin/main`. Alias: `agm br sync`.
 
 ```bash
-brsync.sh
+agm br sync
+agm branch sync
 ```
 
-### `sandbox.sh`
+### `agm config copy` — Copy configuration files
 
-Run a command inside [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime).
+Copy project configuration files into a target directory. Alias: `agm config cp`.
 
 ```bash
-# use ~/.sandbox/default.json and/or ./.sandbox/default.json
-sandbox.sh npm test
-
-# use an explicit settings file
-sandbox.sh -f .sandbox/ci.json npm test
-
-# disable the temporary PROJ_DIR-based patching
-sandbox.sh --no-patch npm test
+agm config cp mydir
+agm config copy -d /path/to/project target
 ```
 
-Notes:
-- If both default settings files exist, `./.sandbox/default.json` overrides `~/.sandbox/default.json` with section-aware merging.
-- If neither default settings file exists, the script exits with an error.
-- If `PROJ_DIR` is set, the selected settings file is patched temporarily to add `$PROJ_DIR/notes` and `$PROJ_DIR/issues` to `filesystem.allowWrite`.
-- Use `--no-patch` to disable the temporary patching.
+### `agm worktree` — Git worktree management
+
+Low-level worktree operations. Alias: `agm wt`.
+
+```bash
+# check out a branch into a worktree
+agm wt co feat/login
+agm worktree checkout -d /custom/dir feat/login
+
+# create a new branch and worktree
+agm wt new feat/search
+agm wt co -b feat/search          # equivalent
+
+# remove a worktree and its local branch
+agm wt rm old-branch
+agm wt rm -f old-branch           # force removal
+```
+
+### `agm dep` — Manage dependencies
+
+Manage dependency checkouts under `deps/`.
+
+```bash
+# clone a new dependency
+agm dep new https://github.com/org/lib.git
+agm dep new -b v2 https://github.com/org/lib.git
+
+# switch a dependency to a different branch
+agm dep switch mylib feat/update
+agm dep switch -b mylib feat/new-thing    # create the branch
+```
+
+### `agm run` — Run a command in a sandbox
+
+Run a command inside an [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime) container. Settings are loaded from `~/.sandbox/default.json` and/or `./.sandbox/default.json` (local overrides global with section-aware merging).
+
+```bash
+agm run npm test
+agm run -f .sandbox/ci.json make build
+agm run --no-patch python3 script.py
+```
+
+### `agm tmux` — Tmux session management
+
+Create tmux sessions and apply pane layouts.
+
+```bash
+agm tmux new
+agm tmux new -d -n 4 my-session       # detached, 4 panes
+agm tmux layout 4 @1 200 50           # apply layout (internal use)
+```
+
+## Getting help
+
+```bash
+agm help               # list all commands
+agm help open          # detailed help for 'open'
+agm help worktree      # detailed help for 'worktree'
+agm open --help        # argparse-style option summary
+```

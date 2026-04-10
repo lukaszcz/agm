@@ -28,13 +28,55 @@ needs_zsh = pytest.mark.skipif(not HAS_ZSH, reason="zsh is required")
 # tmux-apply-layout.sh.  It logs every invocation and returns canned
 # responses so that the calling zsh scripts can complete without a real
 # tmux server.
+#
+# Real tmux subcommands emulated and their actual behaviour:
+#
+#   new-session [-d] [-P] [-F FMT] [-c DIR] [-s NAME] [-e K=V …]
+#     Creates a new session.  With -dP the real tmux creates the session
+#     detached and prints the session info formatted by -F.  Our mock
+#     prints the NAME supplied via -s (or "0" as default) — matching the
+#     format string '#{session_name}' used by tmux.sh.
+#
+#   display-message -p [-t TARGET] FORMAT
+#     Real tmux expands format variables and prints the result.  Our mock
+#     returns hard-coded values for the three variables the scripts query:
+#       #{window_id}     → @0   (tmux window-id format: @ + integer)
+#       #{window_width}  → 200  (columns)
+#       #{window_height} → 50   (rows)
+#
+#   split-window [-d] [-h|-v] [-t TARGET] [-c DIR]
+#     Splits a pane.  The mock logs and exits 0.
+#
+#   select-layout [-t WINDOW] LAYOUT_STRING
+#     Applies a custom layout string.  The mock logs and exits 0.
+#
+#   select-pane [-t TARGET]
+#     Selects a pane.  The mock logs and exits 0.
+#
+#   switch-client [-t TARGET]
+#     Switches the current client to another session.  The mock logs
+#     and exits 0.
+#
+#   run-shell COMMAND
+#     Real tmux executes COMMAND in a shell.  The mock also executes the
+#     command so that tmux-apply-layout.sh (invoked via run-shell by
+#     tmux.sh in non-detached mode) issues its own select-layout call
+#     which is then captured in the log.
+#
+# Limitation: when tmux.sh passes a compound command with ';' separators
+# (non-detached path), the mock receives them as a single invocation.  It
+# handles the first subcommand (new-session) and logs everything, but
+# individual embedded subcommands are not executed separately — only the
+# argument list is captured.  This is acceptable because the detached path
+# (the primary test path) makes separate tmux calls.
 _FAKE_TMUX_SCRIPT = r"""#!/bin/bash
 log="${TMUX_LOG:?TMUX_LOG must be set}"
 echo "CMD: $*" >> "$log"
 
 case "$1" in
   new-session)
-    # If -P flag is present (detached-print mode) output session name.
+    # With -dP (detach + print), real tmux prints the session name
+    # formatted by -F '#{session_name}'.  We return the -s argument.
     has_P=false
     session_name="0"
     prev=""
@@ -46,6 +88,8 @@ case "$1" in
     if $has_P; then echo "$session_name"; fi
     ;;
   display-message)
+    # Real tmux expands #{var} in the format argument.
+    # We return the hard-coded value for the requested variable.
     for arg in "$@"; do
       case "$arg" in
         *window_id*)     echo "@0"; break ;;
@@ -53,6 +97,12 @@ case "$1" in
         *window_height*) echo "50"; break ;;
       esac
     done
+    ;;
+  run-shell)
+    # Real tmux executes the argument in a shell.  We do the same so
+    # that tmux-apply-layout.sh can issue its own tmux select-layout.
+    shift
+    eval "$*"
     ;;
 esac
 exit 0
@@ -158,6 +208,22 @@ def _make_project(
         (project / d).mkdir()
     make_working_repo(project / "repo", bare, env)
     return project
+
+
+def _srt_settings(result: subprocess.CompletedProcess[str]) -> dict:
+    """Extract the JSON settings dict from fake srt stdout."""
+    for line in result.stdout.splitlines():
+        if line.startswith("SETTINGS:"):
+            return json.loads(line[len("SETTINGS:"):])
+    raise ValueError(f"No SETTINGS line in srt output:\n{result.stdout}")
+
+
+def _srt_command(result: subprocess.CompletedProcess[str]) -> str:
+    """Extract the forwarded command string from fake srt stdout."""
+    for line in result.stdout.splitlines():
+        if line.startswith("COMMAND:"):
+            return line[len("COMMAND:"):]
+    return ""
 
 
 # ── agm br sync ─────────────────────────────────────────────────────────────
@@ -377,6 +443,21 @@ class TestCpConfig:
         for f in files:
             assert (dest / f).read_text() == f"content of {f}"
 
+    def test_config_copy_long_alias(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """The 'config copy' alias works identically to 'config cp'."""
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        (src / ".env").write_text("ALIAS=1")
+
+        run_agm(["config", "copy", str(dest)], env=env, cwd=str(src))
+
+        assert (dest / ".env").read_text() == "ALIAS=1"
+
 
 # ── agm wt co / wt new ──────────────────────────────────────────────────────
 
@@ -588,6 +669,54 @@ class TestMkWt:
         assert result.returncode != 0
         assert "usage" in result.stdout.lower()
 
+    def test_wt_co_with_b_flag(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """agm wt co -b creates a new branch via the checkout subcommand."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        work = make_working_repo(tmp_path / "work", bare, env)
+
+        wt_dir = tmp_path / "worktrees"
+        wt_dir.mkdir()
+
+        run_agm(
+            ["wt", "co", "-b", "co-created", "-d", str(wt_dir)],
+            env=env, cwd=str(work),
+        )
+
+        assert (wt_dir / "co-created").is_dir()
+        assert (wt_dir / "co-created" / "README.md").exists()
+        head = _git(
+            "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=str(wt_dir / "co-created"), env=env,
+        ).stdout.strip()
+        assert head == "co-created"
+
+    def test_worktree_checkout_long_alias(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """'worktree checkout' works identically to 'wt co'."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        work = make_working_repo(tmp_path / "work", bare, env)
+
+        _push_branch(work, bare, "feat/long", "long.txt", env)
+        _git("branch", "-D", "feat/long", cwd=str(work), env=env)
+
+        wt_dir = tmp_path / "worktrees"
+        wt_dir.mkdir()
+
+        run_agm(
+            ["worktree", "checkout", "-d", str(wt_dir), "feat/long"],
+            env=env, cwd=str(work),
+        )
+
+        assert (wt_dir / "feat/long" / "long.txt").exists()
+        head = _git(
+            "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=str(wt_dir / "feat/long"), env=env,
+        ).stdout.strip()
+        assert head == "feat/long"
+
 
 # ── agm wt rm ───────────────────────────────────────────────────────────────
 
@@ -640,6 +769,8 @@ class TestRmWt:
         )
         assert result.returncode != 0
         assert "dirty" in result.stderr.lower() or "changes" in result.stderr.lower()
+        # Worktree must still exist after the failed removal.
+        assert (wt_dir / "dirty-branch").is_dir()
 
         # Force removal should succeed and delete the branch.
         run_agm(["wt", "rm", "-f", "dirty-branch"], env=env, cwd=str(work))
@@ -693,6 +824,27 @@ class TestRmWt:
         result = run_agm(["wt", "rm"], env=env, cwd=str(work), check=False)
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
+
+    def test_worktree_remove_long_alias(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """'worktree remove' works identically to 'wt rm'."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        work = make_working_repo(tmp_path / "work", bare, env)
+
+        wt_dir = tmp_path / "worktrees"
+        wt_dir.mkdir()
+        _git(
+            "worktree", "add", "-b", "long-rm",
+            str(wt_dir / "long-rm"),
+            cwd=str(work), env=env,
+        )
+
+        run_agm(["worktree", "remove", "long-rm"], env=env, cwd=str(work))
+
+        assert not (wt_dir / "long-rm").exists()
+        branches = _git("branch", cwd=str(work), env=env).stdout
+        assert "long-rm" not in branches
 
 
 # ── agm dep new ─────────────────────────────────────────────────────────────
@@ -878,6 +1030,44 @@ class TestDepSwitch:
         assert result.returncode != 0
         assert "already exists" in result.stderr
 
+    def test_switch_with_slashed_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """dep switch with slashed branch names creates nested dirs."""
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/deep/name", "deep.txt", env)
+
+        project = self._setup_dep(tmp_path, bare, env)
+
+        run_agm(
+            ["dep", "switch", "mylib", "feat/deep/name"],
+            env=env, cwd=str(project),
+        )
+
+        switched = project / "deps" / "mylib" / "feat/deep/name"
+        assert (switched / "deep.txt").exists()
+        head = _git(
+            "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=str(switched), env=env,
+        ).stdout.strip()
+        assert head == "feat/deep/name"
+
+    def test_switch_nonexistent_remote_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """dep switch to a branch that doesn't exist fails."""
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = self._setup_dep(tmp_path, bare, env)
+
+        result = run_agm(
+            ["dep", "switch", "mylib", "no-such-branch"],
+            env=env, cwd=str(project), check=False,
+        )
+        assert result.returncode != 0
+
 
 # ── agm fetch ───────────────────────────────────────────────────────────────
 
@@ -922,6 +1112,7 @@ class TestFetch:
 
         result = run_agm(["fetch"], env=env, cwd=str(project))
         assert result.returncode == 0
+        assert "Fetching repo" in result.stdout
 
     def test_error_when_repo_missing(
         self, tmp_path: Path, env: dict[str, str]
@@ -954,6 +1145,30 @@ class TestFetch:
             "log", "--oneline", "origin/main", cwd=str(project / "repo"), env=env,
         ).stdout
         assert "new commit" in log
+
+    def test_fetches_multiple_dependencies(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """fetch picks up all dependencies under deps/."""
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep1 = make_bare_repo(tmp_path / "dep1.git", env)
+        bare_dep2 = make_bare_repo(tmp_path / "dep2.git", env)
+
+        project = _make_project(tmp_path, bare_main, env)
+
+        dep1_wt = project / "deps" / "dep1" / "main"
+        dep1_wt.mkdir(parents=True)
+        make_working_repo(dep1_wt, bare_dep1, env)
+
+        dep2_wt = project / "deps" / "dep2" / "main"
+        dep2_wt.mkdir(parents=True)
+        make_working_repo(dep2_wt, bare_dep2, env)
+
+        result = run_agm(["fetch"], env=env, cwd=str(project))
+        assert result.returncode == 0
+        assert "Fetching repo" in result.stdout
+        assert "Fetching deps/dep1" in result.stdout
+        assert "Fetching deps/dep2" in result.stdout
 
 
 # ── agm init ────────────────────────────────────────────────────────────────
@@ -1097,18 +1312,39 @@ class TestSandbox:
 
     @staticmethod
     def _make_fake_srt(directory: Path, env: dict[str, str]) -> None:
-        """Create a fake ``srt`` binary that dumps the settings file contents."""
+        """Create a fake ``srt`` (Anthropic Sandbox Runtime) binary.
+
+        Real srt interface::
+
+            srt --settings FILE -- COMMAND [ARGS...]
+
+        The real ``srt``:
+          1. Reads the JSON settings file specified by ``--settings``.
+          2. Creates a sandboxed environment per those settings (bwrap).
+          3. Executes ``COMMAND [ARGS...]`` inside the sandbox.
+          4. Exits with the command's exit code.
+
+        This mock:
+          1. Captures the ``--settings`` file path.
+          2. Prints ``SETTINGS:<contents>`` so tests can verify settings
+             merging/patching via :func:`_srt_settings`.
+          3. Captures the command after the ``--`` separator.
+          4. Prints ``COMMAND:<args>`` so tests can verify command
+             forwarding via :func:`_srt_command`.
+          5. Exits 0.
+        """
         directory.mkdir(parents=True, exist_ok=True)
         srt = directory / "srt"
         srt.write_text(
             "#!/bin/bash\n"
+            "# Mock srt — see _make_fake_srt docstring for correspondence\n"
+            "# to real srt behaviour.\n"
+            'settings_file=""\n'
             'while [[ $# -gt 0 ]]; do\n'
             '  case "$1" in\n'
             "    --settings)\n"
             "      shift\n"
-            '      if [[ -f "$1" ]]; then\n'
-            '        echo "SETTINGS:$(cat "$1")"\n'
-            "      fi\n"
+            '      settings_file="$1"\n'
             "      shift\n"
             "      ;;\n"
             "    --)\n"
@@ -1118,6 +1354,12 @@ class TestSandbox:
             "    *) shift ;;\n"
             "  esac\n"
             "done\n"
+            'if [[ -n "$settings_file" && -f "$settings_file" ]]; then\n'
+            '  echo "SETTINGS:$(cat "$settings_file")"\n'
+            "fi\n"
+            'if [[ $# -gt 0 ]]; then\n'
+            '  echo "COMMAND:$*"\n'
+            "fi\n"
             "exit 0\n"
         )
         srt.chmod(srt.stat().st_mode | stat.S_IEXEC)
@@ -1193,6 +1435,8 @@ class TestSandbox:
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
+        parsed = _srt_settings(result)
+        assert parsed["network"]["allowedDomains"] == ["example.com"]
 
     def test_uses_local_settings(
         self, tmp_path: Path, env: dict[str, str]
@@ -1209,6 +1453,8 @@ class TestSandbox:
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
+        parsed = _srt_settings(result)
+        assert parsed["filesystem"]["allowWrite"] == ["."]
 
     def test_merges_home_and_local_settings(
         self, tmp_path: Path, env: dict[str, str]
@@ -1236,7 +1482,7 @@ class TestSandbox:
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
 
-        merged = json.loads(result.stdout.split("SETTINGS:")[1].strip())
+        merged = _srt_settings(result)
         assert merged["network"]["allowedDomains"] == ["local.com"]
         assert merged["filesystem"]["allowWrite"] == ["/home"]
 
@@ -1263,7 +1509,7 @@ class TestSandbox:
         }))
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
-        merged = json.loads(result.stdout.split("SETTINGS:")[1].strip())
+        merged = _srt_settings(result)
         # Local ignoreViolations replaces (not merges with) home.
         assert merged["ignoreViolations"] == {"ruleB": True}
 
@@ -1292,7 +1538,7 @@ class TestSandbox:
         }))
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
-        merged = json.loads(result.stdout.split("SETTINGS:")[1].strip())
+        merged = _srt_settings(result)
         assert merged["enabled"] is False
         assert merged["enableWeakerNestedSandbox"] is True
 
@@ -1310,7 +1556,7 @@ class TestSandbox:
             ["run", "-f", str(sf), "echo", "hi"], env=env, cwd=str(work),
         )
         assert result.returncode == 0
-        merged = json.loads(result.stdout.split("SETTINGS:")[1].strip())
+        merged = _srt_settings(result)
         assert merged["network"]["allowedDomains"] == ["custom.com"]
 
     def test_explicit_settings_file_not_found(
@@ -1342,7 +1588,7 @@ class TestSandbox:
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
-        parsed = json.loads(result.stdout.split("SETTINGS:")[1].strip())
+        parsed = _srt_settings(result)
         assert "/some/project/dir" in parsed["filesystem"]["allowWrite"]
 
     def test_no_patch_flag(
@@ -1364,7 +1610,7 @@ class TestSandbox:
             ["run", "--no-patch", "echo", "hi"], env=env, cwd=str(work),
         )
         assert result.returncode == 0
-        parsed = json.loads(result.stdout.split("SETTINGS:")[1].strip())
+        parsed = _srt_settings(result)
         assert str(work) not in parsed["filesystem"]["allowWrite"]
 
     def test_invalid_option(
@@ -1396,9 +1642,47 @@ class TestSandbox:
             env=env, cwd=str(work),
         )
         assert result.returncode == 0
-        parsed = json.loads(result.stdout.split("SETTINGS:")[1].strip())
+        parsed = _srt_settings(result)
         assert parsed["filesystem"]["allowWrite"] == ["/x"]
         assert "/proj" not in parsed["filesystem"]["allowWrite"]
+
+    def test_run_forwards_command_to_srt(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """The command after agm run options is forwarded to srt."""
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "default.json").write_text(json.dumps({"enabled": True}))
+
+        result = run_agm(
+            ["run", "npm", "test", "--coverage"],
+            env=env, cwd=str(work),
+        )
+        assert result.returncode == 0
+        assert _srt_command(result) == "npm test --coverage"
+
+    def test_run_with_double_dash_separator(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """agm run -- command works with an explicit separator."""
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "default.json").write_text(json.dumps({"enabled": True}))
+
+        result = run_agm(
+            ["run", "--", "echo", "hello"],
+            env=env, cwd=str(work),
+        )
+        assert result.returncode == 0
+        assert _srt_command(result) == "echo hello"
 
 
 # ── agm open / new / co ─────────────────────────────────────────────────────
@@ -1956,6 +2240,40 @@ class TestTmuxLayout:
         assert result.returncode != 0
         assert "usage" in result.stderr.lower() or "argument" in result.stderr.lower()
 
+    def test_five_pane_layout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """Non-square pane count: 5 panes → 2 rows (3+2)."""
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(
+            ["tmux", "layout", "5", "@0", "200", "50"],
+            env=env, cwd=str(tmp_path),
+        )
+
+        log = tmux_log.read_text()
+        assert "select-layout" in log
+        for idx in range(5):
+            assert f",{idx}" in log
+
+    def test_seven_pane_layout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """Non-square pane count: 7 panes → 2 rows (4+3)."""
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(
+            ["tmux", "layout", "7", "@0", "200", "50"],
+            env=env, cwd=str(tmp_path),
+        )
+
+        log = tmux_log.read_text()
+        assert "select-layout" in log
+        for idx in range(7):
+            assert f",{idx}" in log
+
 
 # ── help system ────────────────────────────────────────────────────────────
 
@@ -2154,6 +2472,21 @@ class TestEdgeCases:
         )
         assert result.returncode != 0
 
+    @needs_zsh
+    def test_large_pane_count(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """A larger pane count (16) should work without error."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["open", "-n", "16"], env=env, cwd=str(project))
+
+        log = tmux_log.read_text()
+        assert log.count("split-window") == 15
+
 
 # ── multi-step workflows ───────────────────────────────────────────────────
 
@@ -2299,3 +2632,61 @@ class TestWorkflows:
         ).stdout.strip()
         assert head_a == "branch-a"
         assert head_b == "branch-b"
+
+    def test_branch_sync_then_checkout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """br sync discovers remote branches, then wt co checks one out."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        # Push a branch from a separate clone.
+        other = make_working_repo(tmp_path / "other", bare, env)
+        _push_branch(other, bare, "feat/synced", "synced.txt", env)
+
+        # Sync to discover the remote branch.
+        run_agm(["br", "sync"], env=env, cwd=str(project / "repo"))
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/synced" in branches
+
+        # Check out the synced branch into a worktree.
+        run_agm(
+            ["wt", "co", "feat/synced"],
+            env=env, cwd=str(project / "repo"),
+        )
+        wt = project / "worktrees" / "feat/synced"
+        assert (wt / "synced.txt").exists()
+        head = _git(
+            "rev-parse", "--abbrev-ref", "HEAD", cwd=str(wt), env=env,
+        ).stdout.strip()
+        assert head == "feat/synced"
+
+    def test_parallel_worktrees_remove_one(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """Create two worktrees, remove one, verify the other is unaffected."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        run_agm(["wt", "new", "branch-keep"], env=env, cwd=str(project / "repo"))
+        run_agm(["wt", "new", "branch-rm"], env=env, cwd=str(project / "repo"))
+
+        # Both exist.
+        assert (project / "worktrees" / "branch-keep").is_dir()
+        assert (project / "worktrees" / "branch-rm").is_dir()
+
+        # Remove one.
+        run_agm(["wt", "rm", "branch-rm"], env=env, cwd=str(project / "repo"))
+
+        # Removed worktree is gone.
+        assert not (project / "worktrees" / "branch-rm").exists()
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "branch-rm" not in branches
+
+        # Surviving worktree is still healthy.
+        assert (project / "worktrees" / "branch-keep" / "README.md").exists()
+        head = _git(
+            "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=str(project / "worktrees" / "branch-keep"), env=env,
+        ).stdout.strip()
+        assert head == "branch-keep"

@@ -4,7 +4,22 @@ default_prefix := env_var_or_default("HOME", "") + "/.local"
 prefix := default_prefix
 symlink := "false"
 
-install p=prefix s=symlink:
+# Run the test suite
+test:
+    .venv/bin/python -m pytest tests/ -v
+
+# Type-check with mypy
+typecheck:
+    MYPYPATH=src:stubs mypy src/agm/ --strict --python-version 3.12
+
+# Run both tests and type-checking
+check: test typecheck
+
+# Install the agm CLI into an isolated environment
+install-agm:
+    uv tool install --reinstall "{{justfile_directory()}}"
+
+install p=prefix s=symlink: install-agm
     @bin_dir="{{p}}/bin"; \
     sandbox_dir="$HOME/.sandbox"; \
     mkdir -p "$bin_dir"; \

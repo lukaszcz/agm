@@ -18,7 +18,7 @@ def run_agm(mock_execvp: MagicMock, argv: list[str]) -> tuple[str, list[str]]:
         main(argv)
     mock_execvp.assert_called_once()
     call_args = mock_execvp.call_args
-    executable: str = call_args[0][0]
+    executable: str = str(call_args[0][0])
     argv_list: list[str] = call_args[0][1]
     return executable, argv_list
 

@@ -344,3 +344,46 @@ class TestTopLevel:
 
     def test_unknown_command(self, parser: argparse.ArgumentParser) -> None:
         assert_rejects(parser, ["bogus"])
+
+
+# ── help text coverage ──────────────────────────────────────────────────────
+
+class TestHelpTextCoverage:
+    """Verify that _HELP_TEXTS and _HELP_ALIASES are complete and consistent."""
+
+    def test_every_canonical_command_has_help_text(self) -> None:
+        from agm.cli import _HELP_TEXTS, _COMMAND_OVERVIEW
+        canonical_commands = {
+            "open", "new", "checkout", "init", "fetch",
+            "branch", "config", "worktree", "dep", "run", "tmux", "help",
+        }
+        for cmd in canonical_commands:
+            assert cmd in _HELP_TEXTS, f"missing help text for '{cmd}'"
+
+    def test_every_overview_command_has_help_text(self) -> None:
+        from agm.cli import _HELP_TEXTS, _COMMAND_OVERVIEW
+        for name, _ in _COMMAND_OVERVIEW:
+            # Overview names may include aliases like "checkout (co)".
+            canonical = name.split(" (")[0]
+            assert canonical in _HELP_TEXTS, (
+                f"overview lists '{canonical}' but _HELP_TEXTS has no entry"
+            )
+
+    def test_aliases_point_to_valid_commands(self) -> None:
+        from agm.cli import _HELP_TEXTS, _HELP_ALIASES
+        for alias, target in _HELP_ALIASES.items():
+            assert target in _HELP_TEXTS, (
+                f"alias '{alias}' → '{target}' but '{target}' not in _HELP_TEXTS"
+            )
+
+    def test_no_empty_help_texts(self) -> None:
+        from agm.cli import _HELP_TEXTS
+        for cmd, text in _HELP_TEXTS.items():
+            assert text.strip(), f"help text for '{cmd}' is empty"
+
+    def test_help_texts_contain_command_name(self) -> None:
+        from agm.cli import _HELP_TEXTS
+        for cmd, text in _HELP_TEXTS.items():
+            assert f"agm {cmd}" in text, (
+                f"help text for '{cmd}' doesn't mention 'agm {cmd}'"
+            )

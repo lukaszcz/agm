@@ -3,6 +3,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default_prefix := env_var_or_default("HOME", "") + "/.local"
 prefix := default_prefix
 
+# Create the virtualenv and install the project with dev dependencies
+setup:
+    uv venv .venv --python 3.12
+    uv pip install --python .venv/bin/python -e ".[dev]" --group dev
+
 # Run the test suite
 test:
     .venv/bin/python -m pytest tests/ -v

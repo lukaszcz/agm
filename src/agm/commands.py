@@ -1,60 +1,43 @@
-"""Command implementations that dispatch to the underlying shell scripts."""
+"""Command implementations backed by native Python modules."""
 
 from __future__ import annotations
 
-import os
-import sys
 from typing import NoReturn
 
-from plumbum import CommandNotFound, local
+from agm import dep as dep_module
+from agm import fetch as fetch_module
+from agm import init as init_module
+from agm import sandbox as sandbox_module
+from agm import session as session_module
+from agm import tmux_layout as tmux_layout_module
+from agm import tmux_session as tmux_session_module
+from agm import worktree as worktree_module
 
 
-def _resolve(script: str) -> str:
-    """Look up *script* on ``PATH`` via plumbum and return its absolute path."""
-    try:
-        cmd = local[script]
-    except CommandNotFound:
-        print(f"error: {script} not found on PATH", file=sys.stderr)
-        sys.exit(127)
-    return cmd.executable
+def _exit_success() -> NoReturn:
+    raise SystemExit(0)
 
-
-def _run(script: str, args: list[str]) -> NoReturn:
-    """Replace the current process with *script* executed with *args*.
-
-    Uses ``os.execvp`` so the script inherits the full environment and stdio.
-    """
-    executable = _resolve(script)
-    os.execvp(executable, [script, *args])
-
-
-# ---------------------------------------------------------------------------
-# agm br sync  →  brsync.sh
-# ---------------------------------------------------------------------------
 
 def cmd_branch_sync() -> NoReturn:
-    _run("brsync.sh", [])
+    worktree_module.branch_sync()
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm config {cp|copy}  →  cpconfig.sh [-d project-dir] dirname
-# ---------------------------------------------------------------------------
 
 def cmd_config_copy(
     *,
     project_dir: str | None,
     dirname: str,
 ) -> NoReturn:
-    args: list[str] = []
-    if project_dir is not None:
-        args.extend(["-d", project_dir])
-    args.append(dirname)
-    _run("cpconfig.sh", args)
+    from pathlib import Path
 
+    from agm.project import copy_config
 
-# ---------------------------------------------------------------------------
-# agm wt {co|checkout}  →  mkwt.sh [-b branch] [-d dir] [branch]
-# ---------------------------------------------------------------------------
+    copy_config(
+        project_dir=Path(project_dir) if project_dir is not None else None,
+        target=Path(dirname),
+    )
+    _exit_success()
+
 
 def cmd_worktree_checkout(
     *,
@@ -62,51 +45,35 @@ def cmd_worktree_checkout(
     worktrees_dir: str | None,
     branch: str | None,
 ) -> NoReturn:
-    args: list[str] = []
-    if new_branch is not None:
-        args.extend(["-b", new_branch])
-    if worktrees_dir is not None:
-        args.extend(["-d", worktrees_dir])
-    if branch is not None:
-        args.append(branch)
-    _run("mkwt.sh", args)
+    worktree_module.worktree_checkout(
+        new_branch=new_branch,
+        worktrees_dir=worktrees_dir,
+        branch=branch,
+    )
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm wt new  →  mkwt.sh -b <branch> [-d dir]
-# ---------------------------------------------------------------------------
 
 def cmd_worktree_new(
     *,
     branch: str,
     worktrees_dir: str | None,
 ) -> NoReturn:
-    args: list[str] = ["-b", branch]
-    if worktrees_dir is not None:
-        args.extend(["-d", worktrees_dir])
-    _run("mkwt.sh", args)
+    worktree_module.worktree_checkout(
+        new_branch=branch,
+        worktrees_dir=worktrees_dir,
+        branch=None,
+    )
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm wt {rm|remove}  →  rmwt.sh [-f] <branch>
-# ---------------------------------------------------------------------------
 
 def cmd_worktree_remove(
     *,
     force: bool,
     branch: str,
 ) -> NoReturn:
-    args: list[str] = []
-    if force:
-        args.append("-f")
-    args.append(branch)
-    _run("rmwt.sh", args)
+    worktree_module.worktree_remove(force=force, branch=branch)
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm dep new  →  pm-dep.sh new [-b branch] repo-url
-# agm dep switch  →  pm-dep.sh switch dep [-b] branch
-# ---------------------------------------------------------------------------
 
 def cmd_dep(
     *,
@@ -116,66 +83,40 @@ def cmd_dep(
     dep: str | None = None,
     create_branch: bool = False,
 ) -> NoReturn:
-    args: list[str] = [subcmd]
     if subcmd == "new":
-        if branch is not None:
-            args.extend(["-b", branch])
         assert repo_url is not None
-        args.append(repo_url)
-    elif subcmd == "switch":
+        dep_module.dep_new(branch=branch, repo_url=repo_url)
+        _exit_success()
+    if subcmd == "switch":
         assert dep is not None
-        args.append(dep)
-        if create_branch:
-            args.append("-b")
         assert branch is not None
-        args.append(branch)
-    _run("pm-dep.sh", args)
+        dep_module.dep_switch(dep=dep, branch=branch, create_branch=create_branch)
+        _exit_success()
+    raise SystemExit(1)
 
-
-# ---------------------------------------------------------------------------
-# agm fetch  →  pm-fetch.sh
-# ---------------------------------------------------------------------------
 
 def cmd_fetch() -> NoReturn:
-    _run("pm-fetch.sh", [])
+    fetch_module.fetch_all()
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm init  →  pm-init.sh [-b branch] [project-name] [repo-url]
-# ---------------------------------------------------------------------------
 
 def cmd_init(
     *,
     branch: str | None,
     positional: list[str],
 ) -> NoReturn:
-    args: list[str] = []
-    if branch is not None:
-        args.extend(["-b", branch])
-    args.extend(positional)
-    _run("pm-init.sh", args)
+    init_module.init_project(branch=branch, positional=positional)
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm open  →  pm.sh open [-n pane_count] [branch]
-# ---------------------------------------------------------------------------
 
 def cmd_open(
     *,
     pane_count: str | None,
     branch: str | None,
 ) -> NoReturn:
-    args: list[str] = ["open"]
-    if pane_count is not None:
-        args.extend(["-n", pane_count])
-    if branch is not None:
-        args.append(branch)
-    _run("pm.sh", args)
+    session_module.open_session(pane_count=pane_count, branch=branch)
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm new  →  pm.sh new [-n pane_count] [-p parent] branch
-# ---------------------------------------------------------------------------
 
 def cmd_new(
     *,
@@ -183,18 +124,9 @@ def cmd_new(
     parent: str | None,
     branch: str,
 ) -> NoReturn:
-    args: list[str] = ["new"]
-    if pane_count is not None:
-        args.extend(["-n", pane_count])
-    if parent is not None:
-        args.extend(["-p", parent])
-    args.append(branch)
-    _run("pm.sh", args)
+    session_module.new_session(pane_count=pane_count, parent=parent, branch=branch)
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm {co|checkout}  →  pm.sh co [-n pane_count] [-p parent] branch
-# ---------------------------------------------------------------------------
 
 def cmd_checkout(
     *,
@@ -202,18 +134,9 @@ def cmd_checkout(
     parent: str | None,
     branch: str,
 ) -> NoReturn:
-    args: list[str] = ["co"]
-    if pane_count is not None:
-        args.extend(["-n", pane_count])
-    if parent is not None:
-        args.extend(["-p", parent])
-    args.append(branch)
-    _run("pm.sh", args)
+    session_module.checkout_session(pane_count=pane_count, parent=parent, branch=branch)
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm run  →  sandbox.sh [--no-patch] [-f settings.json] <command> [args...]
-# ---------------------------------------------------------------------------
 
 def cmd_run(
     *,
@@ -221,18 +144,13 @@ def cmd_run(
     settings_file: str | None,
     run_command: list[str],
 ) -> NoReturn:
-    args: list[str] = []
-    if no_patch:
-        args.append("--no-patch")
-    if settings_file is not None:
-        args.extend(["-f", settings_file])
-    args.extend(run_command)
-    _run("sandbox.sh", args)
+    sandbox_module.run_in_sandbox(
+        no_patch=no_patch,
+        settings_file=settings_file,
+        run_command=run_command,
+    )
+    raise AssertionError("unreachable")
 
-
-# ---------------------------------------------------------------------------
-# agm tmux new  →  tmux.sh [-d] [-n pane_count] [session_name]
-# ---------------------------------------------------------------------------
 
 def cmd_tmux_new(
     *,
@@ -240,19 +158,13 @@ def cmd_tmux_new(
     pane_count: str | None,
     session_name: str | None,
 ) -> NoReturn:
-    args: list[str] = []
-    if detach:
-        args.append("-d")
-    if pane_count is not None:
-        args.extend(["-n", pane_count])
-    if session_name is not None:
-        args.append(session_name)
-    _run("tmux.sh", args)
+    tmux_session_module.create_tmux_session(
+        detach=detach,
+        pane_count=pane_count,
+        session_name=session_name,
+    )
+    _exit_success()
 
-
-# ---------------------------------------------------------------------------
-# agm tmux layout  →  tmux-apply-layout.sh pane_count window_id width height
-# ---------------------------------------------------------------------------
 
 def cmd_tmux_layout(
     *,
@@ -261,4 +173,10 @@ def cmd_tmux_layout(
     width: str,
     height: str,
 ) -> NoReturn:
-    _run("tmux-apply-layout.sh", [pane_count, window_id, width, height])
+    tmux_layout_module.apply_layout(
+        pane_count=int(pane_count),
+        window_id=window_id,
+        width=int(width),
+        height=int(height),
+    )
+    _exit_success()

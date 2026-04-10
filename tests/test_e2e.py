@@ -375,6 +375,23 @@ class TestCpConfig:
 
         assert (dest / ".env").read_text() == "FROM_WT=1"
 
+    def test_auto_detects_simple_project_from_dot_worktrees_subdir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+        (project / "config").mkdir()
+        (project / "config" / ".env").write_text("FROM_SIMPLE=1")
+
+        wt = project / ".worktrees" / "feat-x"
+        wt.mkdir(parents=True)
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        run_agm(["config", "cp", str(dest)], env=env, cwd=str(wt))
+
+        assert (dest / ".env").read_text() == "FROM_SIMPLE=1"
+
     def test_auto_detects_project_from_project_root(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -658,6 +675,16 @@ class TestMkWt:
         run_agm(["wt", "new", "auto-dir"], env=env, cwd=str(project / "repo"))
 
         assert (project / "worktrees" / "auto-dir").is_dir()
+
+    def test_default_worktrees_dir_for_simple_project(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+
+        run_agm(["wt", "new", "simple-auto"], env=env, cwd=str(project))
+
+        assert (project / ".worktrees" / "simple-auto").is_dir()
 
     def test_checkout_without_b_or_branch_fails(
         self, tmp_path: Path, env: dict[str, str]
@@ -1723,6 +1750,21 @@ class TestPm:
         assert "-s proj/feat/x" in log
         # The worktrees/feat/x dir should have been mkdir -p'd.
         assert (project / "worktrees" / "feat/x").is_dir()
+
+    def test_open_specific_branch_in_simple_project(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["open", "feat/x"], env=env, cwd=str(project))
+
+        log = tmux_log.read_text()
+        assert "new-session" in log
+        assert "-s proj/feat/x" in log
+        assert (project / ".worktrees" / "feat/x").is_dir()
 
     def test_open_with_pane_count(
         self, tmp_path: Path, env: dict[str, str]

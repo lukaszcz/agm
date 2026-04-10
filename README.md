@@ -12,7 +12,7 @@ Agent Management Framework — a unified CLI for managing worktrees, project dep
 
 ## Install
 
-Install the `agm` CLI, all supporting scripts, and sandbox configuration to `prefix/bin` (default: `$HOME/.local/bin`):
+Install the `agm` CLI and sandbox configuration (default CLI install location: `$HOME/.local/bin`):
 
 ```bash
 just install

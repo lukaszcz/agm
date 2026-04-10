@@ -10,7 +10,7 @@ setup:
 
 # Run the test suite
 test:
-    .venv/bin/python -m pytest tests/ -v
+    .venv/bin/python -m pytest tests/ -q
 
 # Type-check with mypy
 typecheck:
@@ -24,17 +24,8 @@ install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
 install p=prefix: install-agm
-    @bin_dir="{{p}}/bin"; \
-    sandbox_dir="$HOME/.sandbox"; \
-    mkdir -p "$bin_dir"; \
+    @sandbox_dir="$HOME/.sandbox"; \
     mkdir -p "$sandbox_dir"; \
-    for file in scripts/*.sh; do \
-      script=$(basename $file) \
-      src="{{justfile_directory()}}/scripts/$script"; \
-      dst="$bin_dir/$script"; \
-      install -m 0755 "$src" "$dst"; \
-      echo "Installed $dst"; \
-    done; \
     for sandbox_src in "{{justfile_directory()}}"/sandbox/*; do \
       [ -f "$sandbox_src" ] || continue; \
       sandbox_dst="$sandbox_dir/$(basename "$sandbox_src")"; \

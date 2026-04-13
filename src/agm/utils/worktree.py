@@ -15,7 +15,9 @@ def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -
 
     repo_dir = git_helpers.git_setup(cwd)
     git_helpers.fetch_prune_origin(repo_dir, env=env)
-    for remote_branch in git_helpers.remote_unmerged_branches(repo_dir, base_ref="origin/main", env=env):
+    for remote_branch in git_helpers.remote_unmerged_branches(
+        repo_dir, base_ref="origin/main", env=env
+    ):
         if remote_branch == "origin/HEAD":
             continue
         local_branch = remote_branch.removeprefix("origin/")
@@ -41,7 +43,9 @@ def ensure_worktree(
         raise SystemExit(1)
 
     project_dir = current_project_dir(current)
-    worktrees_path = default_worktrees_dir(project_dir) if worktrees_dir is None else Path(worktrees_dir)
+    worktrees_path = (
+        default_worktrees_dir(project_dir) if worktrees_dir is None else Path(worktrees_dir)
+    )
     if not worktrees_path.is_absolute():
         worktrees_path = current / worktrees_path
     dirname = worktrees_path / branch_name
@@ -50,7 +54,10 @@ def ensure_worktree(
     repo_dir = git_helpers.git_setup(current)
     existing_worktrees = git_helpers.worktree_list(repo_dir, env=env)
     for worktree in existing_worktrees:
-        if worktree.branch == branch_name and worktree.path.resolve(strict=False) == resolved_dirname:
+        if (
+            worktree.branch == branch_name
+            and worktree.path.resolve(strict=False) == resolved_dirname
+        ):
             if not existing_ok:
                 print(f"error: worktree already exists for branch '{branch_name}'")
                 raise SystemExit(1)

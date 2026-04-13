@@ -108,7 +108,16 @@ def create_tmux_session(
         target_session = result.stdout.strip()
         for _ in range(1, pane_total):
             status = subprocess.run(
-                ["tmux", "split-window", "-d", "-h", "-t", f"{target_session}:0", "-c", str(current)],
+                [
+                    "tmux",
+                    "split-window",
+                    "-d",
+                    "-h",
+                    "-t",
+                    f"{target_session}:0",
+                    "-c",
+                    str(current),
+                ],
                 cwd=current,
                 env=resolved_env,
                 check=False,

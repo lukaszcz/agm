@@ -12,12 +12,16 @@ setup:
 test:
     .venv/bin/python -m pytest tests/ -q
 
+# Lint with ruff
+lint:
+    .venv/bin/ruff check src/ tests/
+
 # Type-check with mypy
 typecheck:
     MYPYPATH=src:stubs mypy src/agm/ --strict --python-version 3.12
 
-# Run both tests and type-checking
-check: test typecheck
+# Run linting, tests, and type-checking
+check: lint test typecheck
 
 # Install the agm CLI into an isolated environment
 install-agm:

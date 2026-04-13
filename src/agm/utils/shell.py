@@ -43,7 +43,8 @@ def source_env_files(
     command = [
         "bash",
         "-c",
-        'set -euo pipefail; for file in "$@"; do [[ -f "$file" ]] || continue; source "$file"; done; env -0',
+        'set -euo pipefail; for file in "$@"; do [[ -f "$file" ]] || continue; '
+        'source "$file"; done; env -0',
         "agm-capture-env",
         *existing_paths,
     ]

@@ -160,7 +160,13 @@ def remote_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | N
 
     return (
         run_foreground(
-            [*_git_args(repo_dir), "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
+            [
+                *_git_args(repo_dir),
+                "show-ref",
+                "--verify",
+                "--quiet",
+                f"refs/remotes/origin/{branch}",
+            ],
             env=env,
         )
         == 0
@@ -206,7 +212,9 @@ def create_tracking_branch(
 def symbolic_ref(repo_dir: Path, ref: str, *, env: dict[str, str] | None = None) -> str:
     """Resolve a symbolic ref."""
 
-    return require_capture([*_git_args(repo_dir), "symbolic-ref", "--quiet", "--short", ref], env=env).strip()
+    return require_capture(
+        [*_git_args(repo_dir), "symbolic-ref", "--quiet", "--short", ref], env=env
+    ).strip()
 
 
 def ls_remote_head(repo_url: str, *, env: dict[str, str] | None = None) -> str:

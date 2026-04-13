@@ -325,7 +325,7 @@ class TestHelpTextCoverage:
             assert cmd in _HELP_TEXTS, f"missing help text for '{cmd}'"
 
     def test_every_overview_command_has_help_text(self) -> None:
-        from agm.cli import _HELP_TEXTS, _COMMAND_OVERVIEW
+        from agm.cli import _COMMAND_OVERVIEW, _HELP_TEXTS
         for name, _ in _COMMAND_OVERVIEW:
             # Overview names may include aliases like "checkout (co)".
             canonical = name.split(" (")[0]
@@ -334,7 +334,7 @@ class TestHelpTextCoverage:
             )
 
     def test_aliases_point_to_valid_commands(self) -> None:
-        from agm.cli import _HELP_TEXTS, _HELP_ALIASES
+        from agm.cli import _HELP_ALIASES, _HELP_TEXTS
         for alias, target in _HELP_ALIASES.items():
             assert target in _HELP_TEXTS, (
                 f"alias '{alias}' → '{target}' but '{target}' not in _HELP_TEXTS"

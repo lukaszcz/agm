@@ -10,7 +10,7 @@ def layout_checksum(layout: str) -> str:
 
     checksum = 0
     for char in layout:
-        checksum = (((checksum >> 1) + ((checksum & 1) << 15) + ord(char)) & 0xFFFF)
+        checksum = ((checksum >> 1) + ((checksum & 1) << 15) + ord(char)) & 0xFFFF
     return f"{checksum:04x}"
 
 
@@ -60,7 +60,9 @@ def build_window_layout(
         if row_panes > cols:
             row_panes = cols
         current_height = base_height if row + 1 < rows else height - current_y
-        children.append(build_row_layout(width, current_height, 0, current_y, next_index, row_panes))
+        children.append(
+            build_row_layout(width, current_height, 0, current_y, next_index, row_panes)
+        )
         next_index += row_panes
         current_y += current_height + 1
     return f"{width}x{height},0,0[" + ",".join(children) + "]"

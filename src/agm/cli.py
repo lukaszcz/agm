@@ -22,7 +22,6 @@ import agm.commands.worktree.checkout as worktree_checkout_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 
-
 _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
         agm open [-n PANES] [-p PARENT] TARGET
@@ -203,7 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("-b", dest="branch", metavar="branch", default=None)
     init_parser.add_argument("positional", nargs="+", metavar="arg")
 
-    run_parser = subparsers.add_parser("run", help="Run a command inside an Anthropic Sandbox Runtime")
+    run_parser = subparsers.add_parser(
+        "run", help="Run a command inside an Anthropic Sandbox Runtime"
+    )
     run_parser.add_argument("--no-patch", dest="no_patch", action="store_true", default=False)
     run_parser.add_argument("-f", dest="settings_file", metavar="settings.json", default=None)
     run_parser.add_argument("run_command", nargs=argparse.REMAINDER, metavar="command")

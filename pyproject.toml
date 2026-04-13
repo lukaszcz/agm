@@ -29,8 +29,16 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "mypy>=1.10",
+    "ruff>=0.11",
 ]

@@ -21,15 +21,26 @@ def merge_settings(home_data: JsonDict, local_data: JsonDict) -> JsonDict:
         merged["enabled"] = local_data["enabled"]
     if isinstance(local_data.get("network"), dict):
         local_network = cast(JsonDict, local_data["network"])
-        home_network = cast(JsonDict, home_data["network"]) if isinstance(home_data.get("network"), dict) else {}
+        home_network = (
+            cast(JsonDict, home_data["network"])
+            if isinstance(home_data.get("network"), dict)
+            else {}
+        )
         merged["network"] = {**home_network, **local_network}
     if isinstance(local_data.get("filesystem"), dict):
         local_filesystem = cast(JsonDict, local_data["filesystem"])
-        home_filesystem = cast(JsonDict, home_data["filesystem"]) if isinstance(home_data.get("filesystem"), dict) else {}
+        home_filesystem = (
+            cast(JsonDict, home_data["filesystem"])
+            if isinstance(home_data.get("filesystem"), dict)
+            else {}
+        )
         merged["filesystem"] = {**home_filesystem, **local_filesystem}
     if isinstance(local_data.get("ignoreViolations"), dict):
         merged["ignoreViolations"] = local_data["ignoreViolations"]
-    if "enableWeakerNestedSandbox" in local_data and local_data["enableWeakerNestedSandbox"] is not None:
+    if (
+        "enableWeakerNestedSandbox" in local_data
+        and local_data["enableWeakerNestedSandbox"] is not None
+    ):
         merged["enableWeakerNestedSandbox"] = local_data["enableWeakerNestedSandbox"]
     return merged
 
@@ -182,13 +193,19 @@ def run(args: argparse.Namespace) -> None:
                 with local_settings.open("r", encoding="utf-8") as handle:
                     raw_local_data = json.load(handle)
                 home_data = cast(JsonDict, raw_home_data) if isinstance(raw_home_data, dict) else {}
-                local_data = cast(JsonDict, raw_local_data) if isinstance(raw_local_data, dict) else {}
-                selected_settings = _write_json_temp(merge_settings(home_data, local_data), temp_files)
+                local_data = (
+                    cast(JsonDict, raw_local_data) if isinstance(raw_local_data, dict) else {}
+                )
+                selected_settings = _write_json_temp(
+                    merge_settings(home_data, local_data), temp_files
+                )
 
         if not args.no_patch and resolved_env.get("PROJ_DIR"):
             with selected_settings.open("r", encoding="utf-8") as handle:
                 raw_settings_data = json.load(handle)
-            settings_data = cast(JsonDict, raw_settings_data) if isinstance(raw_settings_data, dict) else {}
+            settings_data = (
+                cast(JsonDict, raw_settings_data) if isinstance(raw_settings_data, dict) else {}
+            )
             selected_settings = _write_json_temp(
                 patch_for_proj_dir(settings_data, resolved_env["PROJ_DIR"]),
                 temp_files,

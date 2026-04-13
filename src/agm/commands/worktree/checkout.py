@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 from agm.utils.worktree import ensure_worktree
-
 
 _USAGE = "usage: agm worktree checkout [-b branch-name] [-d dir] [branch-name]"
 

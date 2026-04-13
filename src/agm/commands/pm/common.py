@@ -47,7 +47,9 @@ def resolve_parent_checkout_dir(proj_dir: Path, parent: str | None, *, env: dict
     return branch_path(proj_dir, resolved_parent)
 
 
-def has_expected_worktree(proj_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
+def has_expected_worktree(
+    proj_dir: Path, branch: str, *, env: dict[str, str] | None = None
+) -> bool:
     repo_dir = main_repo_dir(proj_dir)
     expected_path = expected_branch_path(proj_dir, branch)
     for worktree in git_helpers.worktree_list(repo_dir, env=env):
@@ -57,10 +59,9 @@ def has_expected_worktree(proj_dir: Path, branch: str, *, env: dict[str, str] | 
 
 
 def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
-    return (
-        git_helpers.local_branch_exists(repo_dir, branch, env=env)
-        or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
-    )
+    return git_helpers.local_branch_exists(
+        repo_dir, branch, env=env
+    ) or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
 
 
 def open_session(*, pane_count: str | None, branch: str | None, cwd: Path | None = None) -> None:
@@ -90,7 +91,9 @@ def open_session(*, pane_count: str | None, branch: str | None, cwd: Path | None
     )
 
 
-def new_session(*, pane_count: str | None, parent: str | None, branch: str, cwd: Path | None = None) -> None:
+def new_session(
+    *, pane_count: str | None, parent: str | None, branch: str, cwd: Path | None = None
+) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
@@ -116,7 +119,9 @@ def new_session(*, pane_count: str | None, parent: str | None, branch: str, cwd:
     )
 
 
-def checkout_session(*, pane_count: str | None, parent: str | None, branch: str, cwd: Path | None = None) -> None:
+def checkout_session(
+    *, pane_count: str | None, parent: str | None, branch: str, cwd: Path | None = None
+) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)

@@ -6,7 +6,7 @@ import argparse
 import sys
 
 import agm.vcs.git as git_helpers
-from agm.commands.dep.common import default_branch_from_repo, first_dep_repo
+from agm.commands.dep.common import default_branch_from_repo, main_dep_repo
 from agm.utils.project import current_project_dir
 
 
@@ -17,7 +17,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"error: deps/{args.dep} does not exist", file=sys.stderr)
         raise SystemExit(1)
 
-    repo_path = first_dep_repo(dep_dir)
+    repo_path = main_dep_repo(dep_dir)
     target_dir = dep_dir / args.branch
     if target_dir.exists():
         print(f"error: deps/{args.dep}/{args.branch} already exists", file=sys.stderr)

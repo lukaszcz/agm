@@ -1109,6 +1109,79 @@ class TestDepSwitch:
         assert result.returncode != 0
 
 
+class TestDepRemove:
+    """agm dep rm: remove dependency worktrees and repositories."""
+
+    def test_removes_dependency_worktree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/remove", "remove.txt", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        run_agm(["dep", "switch", "mylib", "feat/remove"], env=env, cwd=str(project))
+
+        run_agm(["dep", "rm", "mylib/feat/remove"], env=env, cwd=str(project))
+
+        dep_dir = project / "deps" / "mylib"
+        assert not (dep_dir / "feat/remove").exists()
+        assert (dep_dir / "main").is_dir()
+        branches = _git("branch", cwd=str(dep_dir / "main"), env=env).stdout
+        assert "feat/remove" not in branches
+
+    def test_removes_all_dependency_worktrees_and_repo(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/remove", "remove.txt", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        run_agm(["dep", "switch", "mylib", "feat/remove"], env=env, cwd=str(project))
+
+        run_agm(["dep", "rm", "--all", "mylib"], env=env, cwd=str(project))
+
+        assert not (project / "deps" / "mylib").exists()
+
+    def test_removes_dependency_repo_via_repo_alias(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+
+        run_agm(["dep", "rm", "mylib/repo"], env=env, cwd=str(project))
+
+        assert not (project / "deps" / "mylib").exists()
+
+    def test_removes_dependency_repo_via_main_branch_target(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+
+        run_agm(["dep", "rm", "mylib/main"], env=env, cwd=str(project))
+
+        assert not (project / "deps" / "mylib").exists()
+
+    def test_repo_removal_fails_when_other_worktrees_exist(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/remove", "remove.txt", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        run_agm(["dep", "switch", "mylib", "feat/remove"], env=env, cwd=str(project))
+
+        result = run_agm(["dep", "rm", "mylib/repo"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert (project / "deps" / "mylib").is_dir()
+        output = (result.stdout + result.stderr).lower()
+        assert "other worktrees" in output
+
+
 # ── agm fetch ───────────────────────────────────────────────────────────────
 
 

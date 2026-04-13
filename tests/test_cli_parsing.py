@@ -148,6 +148,21 @@ class TestDep:
         ns = parse(parser, ["dep", "switch", "-b", "mylib", "feat/x"])
         assert ns.create_branch is True
 
+    def test_dep_rm(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["dep", "rm", "mylib/feat/x"])
+        assert ns.dep_command == "rm"
+        assert ns.target == "mylib/feat/x"
+        assert ns.all is False
+
+    def test_dep_rm_all(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["dep", "rm", "--all", "mylib"])
+        assert ns.dep_command == "rm"
+        assert ns.target == "mylib"
+        assert ns.all is True
+
+    def test_dep_rm_missing_target(self, parser: argparse.ArgumentParser) -> None:
+        assert_rejects(parser, ["dep", "rm"])
+
     def test_dep_missing_subcommand(self, parser: argparse.ArgumentParser) -> None:
         assert_rejects(parser, ["dep"])
 

@@ -91,9 +91,25 @@ def remove_worktree(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> None:
-    """Remove a worktree and delete its branch."""
+    """Remove a worktree from the current repo and delete its branch."""
 
-    repo_dir = git_helpers.git_setup(cwd)
+    remove_worktree_from_repo(
+        repo_dir=git_helpers.git_setup(cwd),
+        force=force,
+        branch=branch,
+        env=env,
+    )
+
+
+def remove_worktree_from_repo(
+    *,
+    repo_dir: Path,
+    force: bool,
+    branch: str,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Remove a worktree from *repo_dir* and delete its branch."""
+
     worktree_path: Path | None = None
     worktrees = git_helpers.worktree_list(repo_dir, env=env)
     for worktree in worktrees:

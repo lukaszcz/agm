@@ -11,6 +11,7 @@ from typing import NoReturn
 import agm.commands.branch.sync as branch_sync_command
 import agm.commands.config.copy as config_copy_command
 import agm.commands.dep.new as dep_new_command
+import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
@@ -76,6 +77,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "dep": textwrap.dedent("""\
         agm dep new    [-b BRANCH] REPO_URL
+        agm dep rm     [--all] DEP | DEP/BRANCH
         agm dep switch [-b] DEP BRANCH
 
         Manage project dependency checkouts under deps/.
@@ -195,6 +197,9 @@ def build_parser() -> argparse.ArgumentParser:
     dep_switch.add_argument("-b", dest="create_branch", action="store_true", default=False)
     dep_switch.add_argument("dep")
     dep_switch.add_argument("branch")
+    dep_rm = dep_sub.add_parser("rm", help="Remove a dependency worktree or repo")
+    dep_rm.add_argument("--all", dest="all", action="store_true", default=False)
+    dep_rm.add_argument("target")
 
     subparsers.add_parser("fetch", help="Fetch the repo and dependencies")
 
@@ -251,6 +256,8 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
     if cmd == "dep":
         if args.dep_command == "new":
             dep_new_command.run(args)
+        elif args.dep_command == "rm":
+            dep_remove_command.run(args)
         else:
             dep_switch_command.run(args)
         raise SystemExit(0)

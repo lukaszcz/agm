@@ -67,7 +67,14 @@ def default_branch_from_repo(repo_path: Path, *, env: dict[str, str] | None = No
     raise SystemExit(1)
 
 
-def first_dep_repo(dep_dir: Path) -> Path:
-    """Return the first checked-out dependency repo under *dep_dir*."""
+def main_dep_repo(dep_dir: Path) -> Path:
+    """Return the main checked-out dependency repo under *dep_dir*."""
 
-    return git_helpers.find_first_git_repo(dep_dir)
+    for path in sorted(candidate for candidate in dep_dir.rglob("*") if candidate.is_dir()):
+        if (path / ".git").is_dir() and git_helpers.is_git_repo(path):
+            return path
+    print(
+        f"error: {dep_dir} must contain a main checked out branch",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)

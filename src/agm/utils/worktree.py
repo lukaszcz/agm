@@ -1,17 +1,13 @@
-"""Git worktree management."""
+"""Shared worktree operations used by multiple commands."""
 
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
-from agm import git as git_helpers
-from agm.project import copy_config, default_worktrees_dir, detect_project_dir
-from agm.shell import require_success
-
-
-_MKW_USAGE = "usage: mkwt.sh [-b branch-name] [-d dir] [branch-name]"
+import agm.vcs.git as git_helpers
+from agm.utils.project import copy_config, current_project_dir, default_worktrees_dir
+from agm.utils.shell import require_success
 
 
 def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -27,35 +23,40 @@ def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -
             git_helpers.create_tracking_branch(repo_dir, local_branch, remote_branch, env=env)
 
 
-def worktree_checkout(
+def ensure_worktree(
     *,
     new_branch: str | None,
     worktrees_dir: str | None,
     branch: str | None,
+    existing_ok: bool = False,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
-) -> None:
-    """Create or check out a worktree."""
+) -> Path:
+    """Create a worktree if needed and return its path."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
     create_branch = new_branch is not None
     branch_name = new_branch if create_branch else branch
     if branch_name is None:
-        print(_MKW_USAGE)
         raise SystemExit(1)
 
-    repo_dir = git_helpers.git_setup(current)
-    git_helpers.fetch(repo_dir, env=env)
-
-    worktrees_path = (
-        default_worktrees_dir(detect_project_dir(current))
-        if worktrees_dir is None
-        else Path(worktrees_dir)
-    )
+    project_dir = current_project_dir(current)
+    worktrees_path = default_worktrees_dir(project_dir) if worktrees_dir is None else Path(worktrees_dir)
     if not worktrees_path.is_absolute():
         worktrees_path = current / worktrees_path
-
     dirname = worktrees_path / branch_name
+    resolved_dirname = dirname.resolve(strict=False)
+
+    repo_dir = git_helpers.git_setup(current)
+    existing_worktrees = git_helpers.worktree_list(repo_dir, env=env)
+    for worktree in existing_worktrees:
+        if worktree.branch == branch_name and worktree.path.resolve(strict=False) == resolved_dirname:
+            if not existing_ok:
+                print(f"error: worktree already exists for branch '{branch_name}'")
+                raise SystemExit(1)
+            return dirname
+
+    git_helpers.fetch(repo_dir, env=env)
     git_helpers.worktree_add(
         repo_dir,
         dirname,
@@ -63,9 +64,8 @@ def worktree_checkout(
         create=create_branch,
         env=env,
     )
-    copy_config(target=dirname, cwd=current)
+    copy_config(project_dir=project_dir, target=dirname, cwd=current)
 
-    project_dir = detect_project_dir(dirname.resolve())
     setup_paths = [
         project_dir / "config" / "setup.sh",
         dirname / ".config" / "setup.sh",
@@ -73,10 +73,11 @@ def worktree_checkout(
     ]
     for setup_path in setup_paths:
         if setup_path.is_file() and os.access(setup_path, os.X_OK):
-            require_success([str(setup_path)], cwd=dirname, env=env)
+            require_success(["bash", str(setup_path)], cwd=dirname, env=env)
+    return dirname
 
 
-def worktree_remove(
+def remove_worktree(
     *,
     force: bool,
     branch: str,

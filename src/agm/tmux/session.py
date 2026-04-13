@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agm.tmux_layout import apply_layout
+from agm.tmux.layout import apply_layout
 
 SKIP_NAMES: set[str] = {
     "TMUX",

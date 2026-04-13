@@ -944,6 +944,19 @@ class TestDepNew:
 
         assert (project / "deps" / "some-lib").is_dir()
 
+    def test_clones_dependency_from_repo_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "mylib.git", env)
+        project = _make_project(tmp_path, bare_main, env)
+
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+
+        dep = project / "deps" / "mylib" / "main"
+        assert dep.is_dir()
+        assert (dep / "README.md").exists()
+
     def test_no_subcommand_shows_usage(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1128,6 +1141,22 @@ class TestFetch:
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/" in result.stdout
+
+    def test_fetch_from_repo_dir_uses_project_root(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "dep.git", env)
+
+        project = _make_project(tmp_path, bare_main, env)
+        dep_wt = project / "deps" / "mylib" / "main"
+        dep_wt.mkdir(parents=True)
+        make_working_repo(dep_wt, bare_dep, env)
+
+        result = run_agm(["fetch"], env=env, cwd=str(project / "repo"))
+        assert result.returncode == 0
+        assert "Fetching repo" in result.stdout
+        assert "Fetching deps/mylib/main" in result.stdout
 
     def test_no_deps_dir_ok(
         self, tmp_path: Path, env: dict[str, str]
@@ -1712,12 +1741,12 @@ class TestSandbox:
         assert _srt_command(result) == "echo hello"
 
 
-# ── agm open / new / co ─────────────────────────────────────────────────────
+# ── agm pm open / new / co ──────────────────────────────────────────────────
 
 
 @needs_zsh
 class TestPm:
-    """agm open / new / co: project session management."""
+    """agm pm open / new / co: project session management."""
 
     def test_open_default_branch(
         self, tmp_path: Path, env: dict[str, str]
@@ -1728,7 +1757,7 @@ class TestPm:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["open"], env=env, cwd=str(project))
+        run_agm(["pm", "open"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert "new-session" in log
@@ -1743,12 +1772,16 @@ class TestPm:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["open", "feat/x"], env=env, cwd=str(project))
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/x", "x.txt", env)
+
+        run_agm(["pm", "open", "feat/x"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert "new-session" in log
         assert "-s proj/feat/x" in log
-        # The worktrees/feat/x dir should have been mkdir -p'd.
+        assert (project / "worktrees" / "feat/x" / "x.txt").exists()
         assert (project / "worktrees" / "feat/x").is_dir()
 
     def test_open_specific_branch_in_simple_project(
@@ -1759,11 +1792,16 @@ class TestPm:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["open", "feat/x"], env=env, cwd=str(project))
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/x", "x.txt", env)
+
+        run_agm(["pm", "open", "feat/x"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert "new-session" in log
         assert "-s proj/feat/x" in log
+        assert (project / ".worktrees" / "feat/x" / "x.txt").exists()
         assert (project / ".worktrees" / "feat/x").is_dir()
 
     def test_open_with_pane_count(
@@ -1774,7 +1812,7 @@ class TestPm:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["open", "-n", "6"], env=env, cwd=str(project))
+        run_agm(["pm", "open", "-n", "6"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert log.count("split-window") == 5  # 6 panes = 5 splits
@@ -1787,7 +1825,7 @@ class TestPm:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["new", "feat/test"], env=env, cwd=str(project))
+        run_agm(["pm", "new", "feat/test"], env=env, cwd=str(project))
 
         # Worktree should exist.
         assert (project / "worktrees" / "feat/test").is_dir()
@@ -1805,7 +1843,7 @@ class TestPm:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["new", "-n", "2", "feat/n"], env=env, cwd=str(project))
+        run_agm(["pm", "new", "-n", "2", "feat/n"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert log.count("split-window") == 1  # 2 panes = 1 split
@@ -1831,7 +1869,7 @@ class TestPm:
         _git("commit", "-m", "dev", cwd=str(project / "worktrees" / "develop"), env=env)
 
         run_agm(
-            ["new", "-p", "develop", "feat/from-dev"],
+            ["pm", "new", "-p", "develop", "feat/from-dev"],
             env=env, cwd=str(project),
         )
 
@@ -1854,7 +1892,7 @@ class TestPm:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["co", "feat/z"], env=env, cwd=str(project))
+        run_agm(["pm", "co", "feat/z"], env=env, cwd=str(project))
 
         wt = project / "worktrees" / "feat/z"
         assert wt.is_dir()
@@ -1875,7 +1913,7 @@ class TestPm:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["co", "-n", "3", "feat/p"], env=env, cwd=str(project),
+            ["pm", "co", "-n", "3", "feat/p"], env=env, cwd=str(project),
         )
 
         log = tmux_log.read_text()
@@ -1894,7 +1932,7 @@ class TestPm:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["co", "-p", "main", "feat/q"], env=env, cwd=str(project),
+            ["pm", "co", "-p", "main", "feat/q"], env=env, cwd=str(project),
         )
 
         assert (project / "worktrees" / "feat/q" / "q.txt").exists()
@@ -1908,7 +1946,7 @@ class TestPm:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["new"], env=env, cwd=str(project), check=False,
+            ["pm", "new"], env=env, cwd=str(project), check=False,
         )
         assert result.returncode != 0
         assert "branch" in result.stderr.lower()
@@ -1922,7 +1960,7 @@ class TestPm:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["co"], env=env, cwd=str(project), check=False,
+            ["pm", "co"], env=env, cwd=str(project), check=False,
         )
         assert result.returncode != 0
         assert "branch" in result.stderr.lower()
@@ -1936,7 +1974,7 @@ class TestPm:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["open", "-n", "abc"], env=env, cwd=str(project), check=False,
+            ["pm", "open", "-n", "abc"], env=env, cwd=str(project), check=False,
         )
         assert result.returncode != 0
         assert "pane count must be a positive integer" in result.stderr
@@ -1964,7 +2002,7 @@ class TestPm:
             f'touch "{project}/env-sourced"\n'
         )
 
-        run_agm(["open"], env=env, cwd=str(project))
+        run_agm(["pm", "open"], env=env, cwd=str(project))
 
         assert (project / "env-sourced").exists()
 
@@ -1983,14 +2021,18 @@ class TestPm:
             f'touch "{project}/branch-env-sourced"\n'
         )
 
-        run_agm(["open", "mybranch"], env=env, cwd=str(project))
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "mybranch", "branch.txt", env)
+
+        run_agm(["pm", "open", "mybranch"], env=env, cwd=str(project))
 
         assert (project / "branch-env-sourced").exists()
 
     def test_checkout_alias(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """agm checkout should work identically to agm co."""
+        """agm pm checkout should work identically to agm pm co."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         clone = tmp_path / "tmp-clone"
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
@@ -2001,7 +2043,7 @@ class TestPm:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["checkout", "feat/alias"], env=env, cwd=str(project),
+            ["pm", "checkout", "feat/alias"], env=env, cwd=str(project),
         )
 
         wt = project / "worktrees" / "feat/alias"
@@ -2013,7 +2055,7 @@ class TestPm:
     def test_init_then_new_lifecycle(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Full workflow: agm init creates a project, agm new creates a branch."""
+        """Full workflow: agm init creates a project, agm pm new creates a branch."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
@@ -2023,7 +2065,7 @@ class TestPm:
         project = tmp_path / "myproj"
 
         # Step 2: create a new branch session.
-        run_agm(["new", "feat/lifecycle"], env=env, cwd=str(project))
+        run_agm(["pm", "new", "feat/lifecycle"], env=env, cwd=str(project))
 
         # Verify: worktree exists with correct branch and content.
         wt = project / "worktrees" / "feat/lifecycle"
@@ -2330,7 +2372,7 @@ class TestHelp:
         assert result.returncode == 0
         assert "agm - Agent Management Framework" in result.stdout
         assert "Commands:" in result.stdout
-        for cmd in ("open", "new", "checkout", "init", "fetch",
+        for cmd in ("pm", "init", "fetch",
                      "branch", "config", "worktree", "dep", "run",
                      "tmux", "help"):
             assert cmd in result.stdout, f"'{cmd}' missing from overview"
@@ -2339,7 +2381,7 @@ class TestHelp:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """Every canonical command has a detailed help entry."""
-        for cmd in ("open", "new", "checkout", "init", "fetch",
+        for cmd in ("pm", "init", "fetch",
                      "branch", "config", "worktree", "dep", "run",
                      "tmux", "help"):
             result = run_agm(["help", cmd], env=env, cwd=str(tmp_path))
@@ -2349,8 +2391,8 @@ class TestHelp:
     def test_help_aliases_resolve(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Aliases (br, wt, co) show help for the canonical command."""
-        alias_map = {"br": "branch", "wt": "worktree", "co": "checkout"}
+        """Aliases (br, wt) show help for the canonical command."""
+        alias_map = {"br": "branch", "wt": "worktree"}
         for alias, canonical in alias_map.items():
             result = run_agm(["help", alias], env=env, cwd=str(tmp_path))
             assert result.returncode == 0
@@ -2423,7 +2465,7 @@ class TestEdgeCases:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["open", "-n", "0"], env=env, cwd=str(project), check=False,
+            ["pm", "open", "-n", "0"], env=env, cwd=str(project), check=False,
         )
         assert result.returncode != 0
         assert "pane count must be a positive integer" in result.stderr
@@ -2439,7 +2481,7 @@ class TestEdgeCases:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["open", "-n", "-1"], env=env, cwd=str(project), check=False,
+            ["pm", "open", "-n", "-1"], env=env, cwd=str(project), check=False,
         )
         assert result.returncode != 0
 
@@ -2524,7 +2566,7 @@ class TestEdgeCases:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["open", "-n", "16"], env=env, cwd=str(project))
+        run_agm(["pm", "open", "-n", "16"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert log.count("split-window") == 15
@@ -2624,7 +2666,7 @@ class TestWorkflows:
     def test_init_then_open_then_new_sessions(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """init → open (main session) → new branch → verify both."""
+        """init → pm open (main session) → pm new branch → verify both."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
@@ -2634,12 +2676,12 @@ class TestWorkflows:
         project = tmp_path / "proj"
 
         # Step 2: open main session
-        run_agm(["open"], env=env, cwd=str(project))
+        run_agm(["pm", "open"], env=env, cwd=str(project))
         log = tmux_log.read_text()
         assert "-s proj" in log
 
         # Step 3: create a feature branch session
-        run_agm(["new", "feat/work"], env=env, cwd=str(project))
+        run_agm(["pm", "new", "feat/work"], env=env, cwd=str(project))
         log = tmux_log.read_text()
         assert "-s proj/feat/work" in log
         assert (project / "worktrees" / "feat/work" / "README.md").exists()

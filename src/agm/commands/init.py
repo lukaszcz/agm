@@ -1,23 +1,15 @@
-"""Project initialisation."""
+"""agm init."""
 
 from __future__ import annotations
 
-import os
+import argparse
 import sys
 from pathlib import Path
 
-from agm.shell import require_success
-
-
-def usage() -> None:
-    print("usage: pm-init.sh [-b branch] [project-name] [repo-url]", file=sys.stderr)
-    print("       pm-init.sh [-b branch] repo-url", file=sys.stderr)
-    raise SystemExit(1)
+from agm.utils.shell import require_success
 
 
 def looks_like_repo_url(value: str) -> bool:
-    """Return whether *value* looks like a git repository URL."""
-
     return (
         "://" in value
         or value.startswith("git@") and ":" in value
@@ -28,8 +20,6 @@ def looks_like_repo_url(value: str) -> bool:
 
 
 def derive_project_name(repo_url: str) -> str:
-    """Derive a project name from *repo_url*."""
-
     trimmed = repo_url.rstrip("/")
     name = Path(trimmed).name.removesuffix(".git")
     if name in {"", ".", "/"}:
@@ -42,24 +32,15 @@ def derive_project_name(repo_url: str) -> str:
 
 
 def write_file_if_missing(path: Path, content: str) -> None:
-    """Write *content* with a trailing newline if *path* is missing."""
-
     if path.exists():
         return
     path.write_text(f"{content}\n", encoding="utf-8")
 
 
-def init_project(
-    *,
-    branch: str | None,
-    positional: list[str],
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Initialise a project layout, optionally cloning a repo."""
-
+def run(args: argparse.Namespace) -> None:
+    positional: list[str] = args.positional
     if not positional or len(positional) > 2:
-        usage()
+        raise SystemExit(1)
 
     proj = ""
     repo_url = ""
@@ -73,11 +54,11 @@ def init_project(
         repo_url = positional[1]
 
     if not proj and not repo_url:
-        usage()
+        raise SystemExit(1)
     if not proj:
         proj = derive_project_name(repo_url)
 
-    base_dir = Path.cwd() if cwd is None else cwd.resolve()
+    base_dir = Path.cwd()
     project_dir = base_dir / proj
     for dirname in ("repo", "deps", "worktrees", "notes", "config"):
         (project_dir / dirname).mkdir(parents=True, exist_ok=True)
@@ -101,8 +82,8 @@ def init_project(
         print(f"error: {proj}/repo already exists and is not empty", file=sys.stderr)
         raise SystemExit(1)
 
-    args = ["git", "clone"]
-    if branch is not None:
-        args.extend(["--branch", branch])
-    args.extend([repo_url, str(repo_dir)])
-    require_success(args, env=env)
+    clone_args = ["git", "clone"]
+    if args.branch is not None:
+        clone_args.extend(["--branch", args.branch])
+    clone_args.extend([repo_url, str(repo_dir)])
+    require_success(clone_args)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.shell import require_success
+from agm.utils.shell import require_success
 
 
 def layout_checksum(layout: str) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.shell import run_foreground
+from agm.utils.shell import run_foreground
 
 CONFIG_FILES: list[str] = [
     ".setup.sh",
@@ -20,23 +20,27 @@ CONFIG_FILES: list[str] = [
 ]
 
 
-def detect_project_dir(cwd: Path | None = None) -> Path:
-    """Detect the current project root."""
+def _resolved_cwd(cwd: Path | None = None) -> Path:
+    return Path.cwd() if cwd is None else cwd.resolve()
 
-    current = Path.cwd() if cwd is None else cwd.resolve()
-    current_name = current.name
-    parent = current.parent
-    parent_name = parent.name
-    grandparent = parent.parent
 
-    if current_name == "repo" and (parent / "worktrees").is_dir():
-        return parent
-    if parent_name == "worktrees" and (grandparent / "repo").is_dir():
-        return grandparent
-    if parent_name == ".worktrees":
-        return grandparent
-    if (current / "repo").is_dir():
-        return current
+def current_project_dir(cwd: Path | None = None) -> Path:
+    """Return the current project directory (``PROJ_DIR``)."""
+
+    current = _resolved_cwd(cwd)
+
+    for candidate in (current, *current.parents):
+        if (candidate / "repo").is_dir():
+            return candidate
+        if candidate.name == "repo" and (
+            (candidate.parent / "worktrees").is_dir()
+            or (candidate.parent / ".worktrees").is_dir()
+        ):
+            return candidate.parent
+        if candidate.parent.name == ".worktrees":
+            return candidate.parent.parent
+        if candidate.parent.name == "worktrees" and (candidate.parent.parent / "repo").is_dir():
+            return candidate.parent.parent
     return current
 
 
@@ -61,6 +65,7 @@ def default_worktrees_dir(project_dir: Path) -> Path:
         return project_dir / "worktrees"
     return project_dir / ".worktrees"
 
+
 def copy_config(
     *,
     project_dir: Path | None = None,
@@ -69,8 +74,8 @@ def copy_config(
 ) -> None:
     """Copy known config files from cwd and project config/ into *target*."""
 
-    current = Path.cwd() if cwd is None else cwd.resolve()
-    proj_dir = detect_project_dir(current) if project_dir is None else project_dir.resolve()
+    current = _resolved_cwd(cwd)
+    proj_dir = current_project_dir(current) if project_dir is None else project_dir.resolve()
     resolved_target = target if target.is_absolute() else current / target
 
     run_foreground(["cp", "-r", *CONFIG_FILES, str(resolved_target)], cwd=current)

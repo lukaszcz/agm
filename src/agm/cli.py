@@ -14,9 +14,7 @@ import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.switch as dep_switch_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
-import agm.commands.pm.checkout as pm_checkout_command
-import agm.commands.pm.new as pm_new_command
-import agm.commands.pm.open as pm_open_command
+import agm.commands.open as open_command
 import agm.commands.run as run_command
 import agm.commands.tmux.layout as tmux_layout_command
 import agm.commands.tmux.new as tmux_new_command
@@ -26,27 +24,25 @@ import agm.commands.worktree.remove as worktree_remove_command
 
 
 _HELP_TEXTS: dict[str, str] = {
-    "pm": textwrap.dedent("""\
-        agm pm open     [-n PANES] [BRANCH]
-        agm pm new      [-n PANES] [-p PARENT] BRANCH
-        agm pm checkout [-n PANES] [-p PARENT] BRANCH
-        agm pm co       [-n PANES] [-p PARENT] BRANCH
+    "open": textwrap.dedent("""\
+        agm open [-n PANES] [-p PARENT] TARGET
 
-        Project session management commands.
+        Open a tmux session for a project checkout.
 
-        Subcommands:
-          open          Open a tmux session for a project branch. If BRANCH is
-                        omitted, the main repo session is opened.
-          new           Create a new branch worktree and open a detached tmux
-                        session for it.
-          checkout (co) Check out an existing branch into a worktree if needed
-                        and open a tmux session for it.
+        Behavior:
+          repo           Open the main repo session.
+          default branch Open the main repo session when TARGET matches the
+                         branch currently checked out in repo/.
+          existing wt    Open the tmux session for worktrees/BRANCH.
+          existing br    Check out BRANCH into a worktree, then open it.
+          missing br     Create BRANCH from PARENT/current branch, then open it.
 
         Examples:
-          agm pm open
-          agm pm open feat/login
-          agm pm new -p main feat/search
-          agm pm checkout feat/existing
+          agm open repo
+          agm open main
+          agm open feat/login
+          agm open -n 4 feat/login
+          agm open -p main feat/search
     """),
     "init": textwrap.dedent("""\
         agm init [-b BRANCH] [PROJECT_NAME] REPO_URL
@@ -111,7 +107,7 @@ _HELP_ALIASES: dict[str, str] = {
 }
 
 _COMMAND_OVERVIEW: list[tuple[str, str]] = [
-    ("pm", "Project session management (open, new, checkout)"),
+    ("open", "Open a project session, creating or checking out a branch as needed"),
     ("init", "Initialize a new project by cloning a repository"),
     ("fetch", "Fetch latest changes for the repo and all dependencies"),
     ("branch (br)", "Branch management (sync remote tracking branches)"),
@@ -156,6 +152,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     help_parser = subparsers.add_parser("help", help="Show help for a command")
     help_parser.add_argument("help_command", nargs="?", default=None, metavar="command")
+
+    open_parser = subparsers.add_parser("open", help="Open a tmux session for a project checkout")
+    open_parser.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
+    open_parser.add_argument("-p", dest="parent", metavar="parent", default=None)
+    open_parser.add_argument("branch", metavar="target")
 
     br_parser = subparsers.add_parser("br", help="Branch operations (alias for 'branch')")
     branch_parser = subparsers.add_parser("branch", help="Branch operations")
@@ -202,21 +203,6 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("-b", dest="branch", metavar="branch", default=None)
     init_parser.add_argument("positional", nargs="+", metavar="arg")
 
-    pm_parser = subparsers.add_parser("pm", help="Project session management")
-    pm_sub = pm_parser.add_subparsers(dest="pm_command", required=True)
-    pm_open = pm_sub.add_parser("open", help="Open a tmux session for a project branch")
-    pm_open.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
-    pm_open.add_argument("branch", nargs="?", default=None)
-    pm_new = pm_sub.add_parser("new", help="Create a branch worktree and open a tmux session")
-    pm_new.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
-    pm_new.add_argument("-p", dest="parent", metavar="parent", default=None)
-    pm_new.add_argument("branch")
-    for co_name in ("co", "checkout"):
-        current = pm_sub.add_parser(co_name, help="Check out a branch and open a tmux session")
-        current.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
-        current.add_argument("-p", dest="parent", metavar="parent", default=None)
-        current.add_argument("branch")
-
     run_parser = subparsers.add_parser("run", help="Run a command inside an Anthropic Sandbox Runtime")
     run_parser.add_argument("--no-patch", dest="no_patch", action="store_true", default=False)
     run_parser.add_argument("-f", dest="settings_file", metavar="settings.json", default=None)
@@ -247,6 +233,9 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
     if cmd in {"br", "branch"}:
         branch_sync_command.run(args)
         raise SystemExit(0)
+    if cmd == "open":
+        open_command.run(args)
+        raise SystemExit(0)
     if cmd == "config":
         config_copy_command.run(args)
         raise SystemExit(0)
@@ -269,14 +258,6 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
         raise SystemExit(0)
     if cmd == "init":
         init_command.run(args)
-        raise SystemExit(0)
-    if cmd == "pm":
-        if args.pm_command == "open":
-            pm_open_command.run(args)
-        elif args.pm_command == "new":
-            pm_new_command.run(args)
-        else:
-            pm_checkout_command.run(args)
         raise SystemExit(0)
     if cmd == "run":
         run_command.run(args)

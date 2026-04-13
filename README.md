@@ -38,32 +38,20 @@ Run `agm help` to list all commands, or `agm help <command>` for detailed help o
 
 ### `agm open` — Open a project session
 
-Open a tmux session for a project branch. If no branch is given, the current branch is used.
+Open a tmux session for a project checkout.
+
+- `agm open repo` opens the main `repo/` checkout.
+- `agm open <default-branch>` also opens `repo/`, where `<default-branch>` is the branch currently checked out in `repo/`.
+- `agm open <branch>` opens `worktrees/<branch>` if it already exists there.
+- If `<branch>` exists but is not checked out yet, `agm open` checks it out into a worktree and opens it.
+- If `<branch>` does not exist, `agm open` creates it from `-p PARENT` or the current `repo/` branch and opens it.
 
 ```bash
-agm open                      # open session for current branch
-agm open feat/login           # open session for feat/login
-agm open -n 4 feat/login      # open with 4 panes
-```
-
-### `agm new` — Create a branch and open a session
-
-Create a new branch worktree and immediately open a tmux session for it.
-
-```bash
-agm new feat/search
-agm new -p develop feat/search         # fork from 'develop'
-agm new -n 3 -p main feat/search      # 3 panes, fork from 'main'
-```
-
-### `agm checkout` — Check out a branch and open a session
-
-Check out an existing branch into a worktree (creating it if needed) and open a tmux session. Alias: `agm co`.
-
-```bash
-agm co feat/login
-agm checkout -n 4 feat/login
-agm co -p main feat/new-thing
+agm open repo
+agm open main
+agm open feat/login
+agm open -n 4 feat/login
+agm open -p develop feat/search
 ```
 
 ### `agm init` — Initialize a new project

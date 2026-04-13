@@ -184,62 +184,37 @@ class TestInit:
         assert_rejects(parser, ["init"])
 
 
-# ── pm ───────────────────────────────────────────────────────────────────────
+# ── open ─────────────────────────────────────────────────────────────────────
 
-class TestPm:
-    def test_pm_open_bare(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "open"])
-        assert ns.command == "pm"
-        assert ns.pm_command == "open"
+class TestOpen:
+    def test_open_missing_target(self, parser: argparse.ArgumentParser) -> None:
+        assert_rejects(parser, ["open"])
+
+    def test_open_repo(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "repo"])
+        assert ns.command == "open"
         assert ns.pane_count is None
-        assert ns.branch is None
+        assert ns.parent is None
+        assert ns.branch == "repo"
 
-    def test_pm_open_with_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "open", "feat/x"])
+    def test_open_with_branch(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "feat/x"])
         assert ns.branch == "feat/x"
 
-    def test_pm_open_with_pane_count(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "open", "-n", "6"])
+    def test_open_with_pane_count(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "-n", "6", "repo"])
         assert ns.pane_count == "6"
 
-    def test_pm_new_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "new", "feat/y"])
-        assert ns.command == "pm"
-        assert ns.pm_command == "new"
+    def test_open_with_parent_and_branch(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "-p", "main", "feat/y"])
         assert ns.branch == "feat/y"
-        assert ns.parent is None
-        assert ns.pane_count is None
-
-    def test_pm_new_with_parent(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "new", "-p", "main", "feat/y"])
         assert ns.parent == "main"
 
-    def test_pm_new_with_all(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "new", "-n", "2", "-p", "main", "feat/y"])
+    def test_open_with_all(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "-n", "2", "-p", "main", "feat/y"])
         assert ns.pane_count == "2"
         assert ns.parent == "main"
         assert ns.branch == "feat/y"
-
-    def test_pm_new_missing_branch(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["pm", "new"])
-
-    def test_pm_co_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "co", "feat/z"])
-        assert ns.command == "pm"
-        assert ns.pm_command == "co"
-        assert ns.branch == "feat/z"
-
-    def test_pm_checkout_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "checkout", "feat/z"])
-        assert ns.pm_command == "checkout"
-
-    def test_pm_co_with_all(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["pm", "co", "-n", "4", "-p", "dev", "feat/z"])
-        assert ns.pane_count == "4"
-        assert ns.parent == "dev"
-
-    def test_pm_co_missing_branch(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["pm", "co"])
 
 
 # ── run ──────────────────────────────────────────────────────────────────────
@@ -312,9 +287,9 @@ class TestHelp:
         assert ns.help_command is None
 
     def test_help_with_command(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["help", "pm"])
+        ns = parse(parser, ["help", "open"])
         assert ns.command == "help"
-        assert ns.help_command == "pm"
+        assert ns.help_command == "open"
 
     def test_help_with_alias(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["help", "br"])
@@ -344,7 +319,7 @@ class TestHelpTextCoverage:
     def test_every_canonical_command_has_help_text(self) -> None:
         from agm.cli import _HELP_TEXTS
         canonical_commands = {
-            "pm", "init", "fetch", "branch", "config", "worktree", "dep", "run", "tmux", "help",
+            "open", "init", "fetch", "branch", "config", "worktree", "dep", "run", "tmux", "help",
         }
         for cmd in canonical_commands:
             assert cmd in _HELP_TEXTS, f"missing help text for '{cmd}'"

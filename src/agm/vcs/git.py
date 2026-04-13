@@ -155,6 +155,18 @@ def local_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | No
     )
 
 
+def remote_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
+    """Return whether *origin/branch* exists locally."""
+
+    return (
+        run_foreground(
+            [*_git_args(repo_dir), "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
+            env=env,
+        )
+        == 0
+    )
+
+
 def remote_unmerged_branches(
     repo_dir: Path,
     *,

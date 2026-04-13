@@ -4,9 +4,7 @@
 
 | Command | Description |
 |---|---|
-| `agm open [-n PANES] [BRANCH]` | Open a tmux session for a project branch |
-| `agm new [-n PANES] [-p PARENT] BRANCH` | Create a new branch worktree and open a tmux session |
-| `agm checkout [-n PANES] [-p PARENT] BRANCH` | Check out a branch into a worktree and open a tmux session |
+| `agm open [-n PANES] [-p PARENT] TARGET` | Open `repo/`, an existing branch worktree, or create/check out the branch as needed |
 | `agm init [-b BRANCH] [PROJECT_NAME] REPO_URL` | Initialize a new project by cloning a repository |
 | `agm fetch` | Fetch latest changes for the repo and all dependencies |
 
@@ -46,7 +44,6 @@
 |---|---|
 | `agm br` | `agm branch` |
 | `agm wt` | `agm worktree` |
-| `agm co` | `agm checkout` |
 | `agm config cp` | `agm config copy` |
 | `agm wt co` | `agm worktree checkout` |
 | `agm wt rm` | `agm worktree remove` |

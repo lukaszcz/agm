@@ -7,6 +7,8 @@ AGM is an Agent Project Management CLI tool.
 - Python 3.12
 - Plumbum
 
+Use `uv run` for all Python tooling.
+
 ## Project Structure & Module Organization
 
 Production code lives in `src/agm/`, organized by area:

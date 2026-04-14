@@ -149,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Agent Management Framework",
         epilog="Run 'agm help <command>' for detailed help on a specific command.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
     help_parser = subparsers.add_parser("help", help="Show help for a command")
     help_parser.add_argument("help_command", nargs="?", default=None, metavar="command")
@@ -162,11 +162,11 @@ def build_parser() -> argparse.ArgumentParser:
     br_parser = subparsers.add_parser("br", help="Branch operations (alias for 'branch')")
     branch_parser = subparsers.add_parser("branch", help="Branch operations")
     for current in (br_parser, branch_parser):
-        current_sub = current.add_subparsers(dest="br_command", required=True)
+        current_sub = current.add_subparsers(dest="br_command")
         current_sub.add_parser("sync", help="Sync remote tracking branches")
 
     config_parser = subparsers.add_parser("config", help="Copy project configuration files")
-    config_sub = config_parser.add_subparsers(dest="config_command", required=True)
+    config_sub = config_parser.add_subparsers(dest="config_command")
     for name in ("cp", "copy"):
         current = config_sub.add_parser(name, help="Copy configuration files")
         current.add_argument("-d", dest="project_dir", metavar="project-dir", default=None)
@@ -174,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for wt_name in ("wt", "worktree"):
         wt_parser = subparsers.add_parser(wt_name, help="Git worktree management")
-        wt_sub = wt_parser.add_subparsers(dest="wt_command", required=True)
+        wt_sub = wt_parser.add_subparsers(dest="wt_command")
         for co_name in ("co", "checkout"):
             current = wt_sub.add_parser(co_name, help="Check out a branch into a worktree")
             current.add_argument("-b", dest="new_branch", metavar="branch-name", default=None)
@@ -189,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
             current.add_argument("branch")
 
     dep_parser = subparsers.add_parser("dep", help="Manage project dependency checkouts")
-    dep_sub = dep_parser.add_subparsers(dest="dep_command", required=True)
+    dep_sub = dep_parser.add_subparsers(dest="dep_command")
     dep_new = dep_sub.add_parser("new", help="Clone a new dependency")
     dep_new.add_argument("-b", dest="branch", metavar="branch", default=None)
     dep_new.add_argument("repo_url", metavar="repo-url")
@@ -215,7 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("run_command", nargs=argparse.REMAINDER, metavar="command")
 
     tmux_parser = subparsers.add_parser("tmux", help="Tmux session and layout management")
-    tmux_sub = tmux_parser.add_subparsers(dest="tmux_command", required=True)
+    tmux_sub = tmux_parser.add_subparsers(dest="tmux_command")
     tmux_new = tmux_sub.add_parser("new", help="Create a new tmux session")
     tmux_new.add_argument("-d", "--detach", dest="detach", action="store_true", default=False)
     tmux_new.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
@@ -229,7 +229,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def dispatch(args: argparse.Namespace) -> NoReturn:
-    cmd: str = args.command
+    cmd = args.command
+    if cmd is None:
+        _print_overview()
+        raise SystemExit(0)
     if cmd == "help":
         if args.help_command is None:
             _print_overview()
@@ -237,15 +240,24 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
             _print_command_help(args.help_command)
         raise SystemExit(0)
     if cmd in {"br", "branch"}:
+        if args.br_command is None:
+            _print_command_help(cmd)
+            raise SystemExit(0)
         branch_sync_command.run(args)
         raise SystemExit(0)
     if cmd == "open":
         open_command.run(args)
         raise SystemExit(0)
     if cmd == "config":
+        if args.config_command is None:
+            _print_command_help(cmd)
+            raise SystemExit(0)
         config_copy_command.run(args)
         raise SystemExit(0)
     if cmd in {"wt", "worktree"}:
+        if args.wt_command is None:
+            _print_command_help(cmd)
+            raise SystemExit(0)
         if args.wt_command in {"co", "checkout"}:
             worktree_checkout_command.run(args)
         elif args.wt_command == "new":
@@ -254,6 +266,9 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
             worktree_remove_command.run(args)
         raise SystemExit(0)
     if cmd == "dep":
+        if args.dep_command is None:
+            _print_command_help(cmd)
+            raise SystemExit(0)
         if args.dep_command == "new":
             dep_new_command.run(args)
         elif args.dep_command == "rm":
@@ -271,6 +286,9 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
         run_command.run(args)
         raise AssertionError("unreachable")
     if cmd == "tmux":
+        if args.tmux_command is None:
+            _print_command_help(cmd)
+            raise SystemExit(0)
         if args.tmux_command == "new":
             tmux_new_command.run(args)
         else:

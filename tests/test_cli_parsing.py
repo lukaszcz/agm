@@ -40,7 +40,9 @@ class TestBranchSync:
         assert ns.br_command == "sync"
 
     def test_br_without_subcommand(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["br"])
+        ns = parse(parser, ["br"])
+        assert ns.command == "br"
+        assert ns.br_command is None
 
 
 # ── config cp / copy ────────────────────────────────────────────────────────
@@ -164,7 +166,9 @@ class TestDep:
         assert_rejects(parser, ["dep", "rm"])
 
     def test_dep_missing_subcommand(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["dep"])
+        ns = parse(parser, ["dep"])
+        assert ns.command == "dep"
+        assert ns.dep_command is None
 
 
 # ── fetch ────────────────────────────────────────────────────────────────────
@@ -320,7 +324,8 @@ class TestHelp:
 
 class TestTopLevel:
     def test_no_command(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, [])
+        ns = parse(parser, [])
+        assert ns.command is None
 
     def test_unknown_command(self, parser: argparse.ArgumentParser) -> None:
         assert_rejects(parser, ["bogus"])

@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -210,11 +211,11 @@ def _make_project(
     return project
 
 
-def _srt_settings(result: subprocess.CompletedProcess[str]) -> dict:
+def _srt_settings(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     """Extract the JSON settings dict from fake srt stdout."""
     for line in result.stdout.splitlines():
         if line.startswith("SETTINGS:"):
-            return json.loads(line[len("SETTINGS:"):])
+            return cast(dict[str, Any], json.loads(line[len("SETTINGS:"):]))
     raise ValueError(f"No SETTINGS line in srt output:\n{result.stdout}")
 
 
@@ -957,14 +958,16 @@ class TestDepNew:
         assert dep.is_dir()
         assert (dep / "README.md").exists()
 
-    def test_no_subcommand_shows_usage(
+    def test_no_subcommand_shows_help(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         result = run_agm(
             ["dep"], env=env, cwd=str(tmp_path), check=False,
         )
-        assert result.returncode != 0
-        assert "usage" in result.stderr.lower()
+        expected = run_agm(["help", "dep"], env=env, cwd=str(tmp_path))
+        assert result.returncode == 0
+        assert result.stderr == ""
+        assert result.stdout == expected.stdout
 
 
 # ── agm dep switch ──────────────────────────────────────────────────────────
@@ -2022,14 +2025,16 @@ class TestOpen:
         assert result.returncode != 0
         assert "pane count must be a positive integer" in result.stderr
 
-    def test_no_subcommand_shows_usage(
+    def test_no_subcommand_shows_help(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         result = run_agm(
             [], env=env, cwd=str(tmp_path), check=False,
         )
-        assert result.returncode != 0
-        assert "usage" in result.stderr.lower()
+        expected = run_agm(["help"], env=env, cwd=str(tmp_path))
+        assert result.returncode == 0
+        assert result.stderr == ""
+        assert result.stdout == expected.stdout
 
     def test_sources_project_env_file(
         self, tmp_path: Path, env: dict[str, str]
@@ -2419,6 +2424,26 @@ class TestHelp:
         assert result.returncode == 1
         assert "unknown command" in result.stderr
         assert "bogus" in result.stderr
+
+    @pytest.mark.parametrize(
+        ("argv", "help_argv"),
+        [
+            (["br"], ["help", "br"]),
+            (["branch"], ["help", "branch"]),
+            (["config"], ["help", "config"]),
+            (["wt"], ["help", "wt"]),
+            (["worktree"], ["help", "worktree"]),
+            (["tmux"], ["help", "tmux"]),
+        ],
+    )
+    def test_missing_subcommand_matches_help(
+        self, argv: list[str], help_argv: list[str], tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(argv, env=env, cwd=str(tmp_path), check=False)
+        expected = run_agm(help_argv, env=env, cwd=str(tmp_path))
+        assert result.returncode == 0
+        assert result.stderr == ""
+        assert result.stdout == expected.stdout
 
 
 # ── edge cases ─────────────────────────────────────────────────────────────

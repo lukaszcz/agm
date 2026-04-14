@@ -1,4 +1,4 @@
-"""Shared helpers for project session commands."""
+"""Helpers for opening project tmux sessions."""
 
 from __future__ import annotations
 

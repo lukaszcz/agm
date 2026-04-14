@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from agm.commands.args import OpenArgs
-from agm.commands.pm.common import smart_open_session
+from agm.utils.project_session import smart_open_session
 
 
 def run(args: OpenArgs) -> None:

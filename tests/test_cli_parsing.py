@@ -4,6 +4,7 @@ options and rejects invalid ones."""
 from __future__ import annotations
 
 import argparse
+from typing import Protocol, cast
 
 import pytest
 
@@ -17,8 +18,12 @@ def parser() -> argparse.ArgumentParser:
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def parse(parser: argparse.ArgumentParser, argv: list[str]) -> argparse.Namespace:
-    return parser.parse_args(argv)
+class ParsedArgs(Protocol):
+    def __getattr__(self, name: str) -> object: ...
+
+
+def parse(parser: argparse.ArgumentParser, argv: list[str]) -> ParsedArgs:
+    return cast(ParsedArgs, parser.parse_args(argv))
 
 
 def assert_rejects(parser: argparse.ArgumentParser, argv: list[str]) -> None:

@@ -126,6 +126,36 @@ class _SrtSettings(TypedDict, total=False):
     enableWeakerNestedSandbox: bool
 
 
+def _network_settings(*allowed_domains: str) -> _SrtNetworkSettings:
+    return {"allowedDomains": list(allowed_domains)}
+
+
+def _filesystem_settings(*allow_write: str) -> _SrtFilesystemSettings:
+    return {"allowWrite": list(allow_write)}
+
+
+def _settings(
+    *,
+    network: _SrtNetworkSettings | None = None,
+    filesystem: _SrtFilesystemSettings | None = None,
+    ignore_violations: dict[str, bool] | None = None,
+    enabled: bool | None = None,
+    enable_weaker_nested_sandbox: bool | None = None,
+) -> _SrtSettings:
+    settings: _SrtSettings = {}
+    if network is not None:
+        settings["network"] = network
+    if filesystem is not None:
+        settings["filesystem"] = filesystem
+    if ignore_violations is not None:
+        settings["ignoreViolations"] = ignore_violations
+    if enabled is not None:
+        settings["enabled"] = enabled
+    if enable_weaker_nested_sandbox is not None:
+        settings["enableWeakerNestedSandbox"] = enable_weaker_nested_sandbox
+    return settings
+
+
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
 # ---------------------------------------------------------------------------
@@ -1599,7 +1629,7 @@ class TestSandbox:
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
         (sandbox_dir / "default.json").write_text(
-            json.dumps({"filesystem": {"allowWrite": ["."]}})
+            json.dumps(_settings(filesystem=_filesystem_settings(".")))
         )
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
@@ -1616,10 +1646,12 @@ class TestSandbox:
         home_sandbox = home / ".sandbox"
         home_sandbox.mkdir(parents=True)
         (home_sandbox / "default.json").write_text(
-            json.dumps({
-                "network": {"allowedDomains": ["home.com"]},
-                "filesystem": {"allowWrite": ["/home"]},
-            })
+            json.dumps(
+                _settings(
+                    network=_network_settings("home.com"),
+                    filesystem=_filesystem_settings("/home"),
+                )
+            )
         )
 
         work = tmp_path / "work"
@@ -1627,7 +1659,7 @@ class TestSandbox:
         local_sandbox = work / ".sandbox"
         local_sandbox.mkdir()
         (local_sandbox / "default.json").write_text(
-            json.dumps({"network": {"allowedDomains": ["local.com"]}})
+            json.dumps(_settings(network=_network_settings("local.com")))
         )
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
@@ -1646,18 +1678,22 @@ class TestSandbox:
         home = Path(env["HOME"])
         home_sandbox = home / ".sandbox"
         home_sandbox.mkdir(parents=True)
-        (home_sandbox / "default.json").write_text(json.dumps({
-            "ignoreViolations": {"ruleA": True},
-            "network": {"allowedDomains": []},
-        }))
+        (home_sandbox / "default.json").write_text(
+            json.dumps(
+                _settings(
+                    ignore_violations={"ruleA": True},
+                    network=_network_settings(),
+                )
+            )
+        )
 
         work = tmp_path / "work"
         work.mkdir()
         local_sandbox = work / ".sandbox"
         local_sandbox.mkdir()
-        (local_sandbox / "default.json").write_text(json.dumps({
-            "ignoreViolations": {"ruleB": True},
-        }))
+        (local_sandbox / "default.json").write_text(
+            json.dumps(_settings(ignore_violations={"ruleB": True}))
+        )
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         merged = _srt_settings(result)
@@ -1673,20 +1709,28 @@ class TestSandbox:
         home = Path(env["HOME"])
         home_sandbox = home / ".sandbox"
         home_sandbox.mkdir(parents=True)
-        (home_sandbox / "default.json").write_text(json.dumps({
-            "enabled": True,
-            "enableWeakerNestedSandbox": False,
-            "network": {"allowedDomains": []},
-        }))
+        (home_sandbox / "default.json").write_text(
+            json.dumps(
+                _settings(
+                    enabled=True,
+                    enable_weaker_nested_sandbox=False,
+                    network=_network_settings(),
+                )
+            )
+        )
 
         work = tmp_path / "work"
         work.mkdir()
         local_sandbox = work / ".sandbox"
         local_sandbox.mkdir()
-        (local_sandbox / "default.json").write_text(json.dumps({
-            "enabled": False,
-            "enableWeakerNestedSandbox": True,
-        }))
+        (local_sandbox / "default.json").write_text(
+            json.dumps(
+                _settings(
+                    enabled=False,
+                    enable_weaker_nested_sandbox=True,
+                )
+            )
+        )
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         merged = _srt_settings(result)
@@ -1701,7 +1745,7 @@ class TestSandbox:
         work = tmp_path / "work"
         work.mkdir()
         sf = work / "custom.json"
-        sf.write_text(json.dumps({"network": {"allowedDomains": ["custom.com"]}}))
+        sf.write_text(json.dumps(_settings(network=_network_settings("custom.com"))))
 
         result = run_agm(
             ["run", "-f", str(sf), "echo", "hi"], env=env, cwd=str(work),
@@ -1732,7 +1776,7 @@ class TestSandbox:
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
         (sandbox_dir / "default.json").write_text(
-            json.dumps({"filesystem": {"allowWrite": ["."]}})
+            json.dumps(_settings(filesystem=_filesystem_settings(".")))
         )
 
         env["PROJ_DIR"] = "/some/project/dir"
@@ -1752,7 +1796,7 @@ class TestSandbox:
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
         (sandbox_dir / "default.json").write_text(
-            json.dumps({"filesystem": {"allowWrite": ["."]}})
+            json.dumps(_settings(filesystem=_filesystem_settings(".")))
         )
 
         env["PROJ_DIR"] = str(work)
@@ -1784,7 +1828,7 @@ class TestSandbox:
         work = tmp_path / "work"
         work.mkdir()
         sf = work / "custom.json"
-        sf.write_text(json.dumps({"filesystem": {"allowWrite": ["/x"]}}))
+        sf.write_text(json.dumps(_settings(filesystem=_filesystem_settings("/x"))))
 
         env["PROJ_DIR"] = "/proj"
 
@@ -1807,7 +1851,7 @@ class TestSandbox:
         work.mkdir()
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
-        (sandbox_dir / "default.json").write_text(json.dumps({"enabled": True}))
+        (sandbox_dir / "default.json").write_text(json.dumps(_settings(enabled=True)))
 
         result = run_agm(
             ["run", "npm", "test", "--coverage"],
@@ -1826,7 +1870,7 @@ class TestSandbox:
         work.mkdir()
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
-        (sandbox_dir / "default.json").write_text(json.dumps({"enabled": True}))
+        (sandbox_dir / "default.json").write_text(json.dumps(_settings(enabled=True)))
 
         result = run_agm(
             ["run", "--", "echo", "hello"],

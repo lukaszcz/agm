@@ -52,7 +52,7 @@ def create_tmux_session(
     session_name: str | None,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
-) -> None:
+) -> str | None:
     """Create a tmux session matching tmux.sh semantics."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
@@ -158,15 +158,14 @@ def create_tmux_session(
             raise SystemExit(status)
         if switch_to_session:
             raise SystemExit(
-                subprocess.run(
-                    ["tmux", "switch-client", "-t", target_session],
+                focus_tmux_session(
+                    session_name=target_session,
                     cwd=current,
                     env=resolved_env,
-                    check=False,
-                ).returncode,
+                )
             )
         print(f"Detached tmux session {target_session} created")
-        return
+        return target_session
 
     layout_command = " ".join(
         [
@@ -187,3 +186,43 @@ def create_tmux_session(
         args.extend([";", "split-window", "-d", "-h", "-c", str(current)])
     args.extend([";", "run-shell", layout_command, ";", "select-pane", "-t", "0"])
     raise SystemExit(subprocess.run(args, cwd=current, env=resolved_env, check=False).returncode)
+
+
+def queue_command_in_session(
+    *,
+    session_name: str,
+    command: list[str],
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Queue a shell command in the first pane of a tmux session."""
+
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    resolved_env = dict(os.environ if env is None else env)
+    shell_command = " ".join(shlex.quote(part) for part in command)
+    status = subprocess.run(
+        ["tmux", "send-keys", "-t", f"{session_name}:0.0", shell_command, "C-m"],
+        cwd=current,
+        env=resolved_env,
+        check=False,
+    ).returncode
+    if status != 0:
+        raise SystemExit(status)
+
+
+def focus_tmux_session(
+    *,
+    session_name: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Attach or switch to an existing tmux session."""
+
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    resolved_env = dict(os.environ if env is None else env)
+    command = (
+        ["tmux", "switch-client", "-t", session_name]
+        if resolved_env.get("TMUX")
+        else ["tmux", "attach-session", "-t", session_name]
+    )
+    return subprocess.run(command, cwd=current, env=resolved_env, check=False).returncode

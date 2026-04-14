@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.tmux.session import create_tmux_session
+from agm.tmux.session import (
+    create_tmux_session,
+    focus_tmux_session,
+    queue_command_in_session,
+)
 from agm.utils.project import current_project_dir, default_worktrees_dir, main_repo_dir
-from agm.utils.shell import source_env_files
-from agm.utils.worktree import ensure_worktree
+from agm.utils.worktree import ensure_worktree, load_worktree_env
 
 
 def validate_pane_count(pane_count: str | None) -> None:
@@ -27,15 +29,6 @@ def branch_path(proj_dir: Path, branch: str) -> Path:
 
 def expected_branch_path(proj_dir: Path, branch: str) -> Path:
     return branch_path(proj_dir, branch).resolve(strict=False)
-
-
-def load_env(proj_dir: Path, branch: str | None, *, shell_cwd: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    env["PROJ_DIR"] = str(proj_dir)
-    env_files = [proj_dir / "config" / "env.sh"]
-    if branch:
-        env_files.append(proj_dir / "config" / branch / "env.sh")
-    return source_env_files(env_files, env, cwd=shell_cwd)
 
 
 def resolve_parent_checkout_dir(proj_dir: Path, parent: str | None, *, env: dict[str, str]) -> Path:
@@ -64,6 +57,31 @@ def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = N
     ) or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
 
 
+def queue_setup_and_focus_session(
+    *,
+    pane_count: str | None,
+    session_name: str,
+    repo_path: Path,
+    env: dict[str, str],
+) -> None:
+    created_session = create_tmux_session(
+        detach=True,
+        pane_count=pane_count,
+        session_name=session_name,
+        cwd=repo_path,
+        env=env,
+    )
+    if created_session is None:
+        raise AssertionError("detached tmux session creation did not return a session name")
+    queue_command_in_session(
+        session_name=created_session,
+        command=[sys.executable, "-m", "agm.cli", "wt", "setup"],
+        cwd=repo_path,
+        env=env,
+    )
+    raise SystemExit(focus_tmux_session(session_name=created_session, cwd=repo_path, env=env))
+
+
 def open_session(*, pane_count: str | None, branch: str | None, cwd: Path | None = None) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
@@ -80,7 +98,7 @@ def open_session(*, pane_count: str | None, branch: str | None, cwd: Path | None
                 file=sys.stderr,
             )
             raise SystemExit(1)
-    env = load_env(proj_dir, branch, shell_cwd=repo_path)
+    env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
     session_name = f"{proj_name}/{branch}" if branch else proj_name
     create_tmux_session(
         detach=False,
@@ -100,7 +118,7 @@ def new_session(
     proj_name = proj_dir.name
     repo_path = branch_path(proj_dir, branch)
     repo_path.mkdir(parents=True, exist_ok=True)
-    env = load_env(proj_dir, branch, shell_cwd=repo_path)
+    env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
         new_branch=branch,
@@ -110,11 +128,10 @@ def new_session(
         cwd=parent_dir,
         env=env,
     )
-    create_tmux_session(
-        detach=True,
+    queue_setup_and_focus_session(
         pane_count=pane_count,
         session_name=f"{proj_name}/{branch}",
-        cwd=repo_path,
+        repo_path=repo_path,
         env=env,
     )
 
@@ -128,7 +145,7 @@ def checkout_session(
     proj_name = proj_dir.name
     repo_path = branch_path(proj_dir, branch)
     repo_path.mkdir(parents=True, exist_ok=True)
-    env = load_env(proj_dir, branch, shell_cwd=repo_path)
+    env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
         new_branch=None,
@@ -138,11 +155,10 @@ def checkout_session(
         cwd=parent_dir,
         env=env,
     )
-    create_tmux_session(
-        detach=False,
+    queue_setup_and_focus_session(
         pane_count=pane_count,
         session_name=f"{proj_name}/{branch}",
-        cwd=repo_path,
+        repo_path=repo_path,
         env=env,
     )
 

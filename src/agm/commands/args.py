@@ -32,6 +32,10 @@ class WorktreeNewArgs(Protocol):
     branch: str
 
 
+class WorktreeSetupArgs(Protocol):
+    wt_command: str | None
+
+
 class WorktreeRemoveArgs(Protocol):
     force: bool
     branch: str

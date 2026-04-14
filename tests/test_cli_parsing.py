@@ -113,6 +113,12 @@ class TestWorktreeNew:
         assert_rejects(parser, ["wt", "new"])
 
 
+class TestWorktreeSetup:
+    def test_wt_setup(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["wt", "setup"])
+        assert ns.wt_command == "setup"
+
+
 # ── wt / worktree rm / remove ───────────────────────────────────────────────
 
 class TestWorktreeRemove:

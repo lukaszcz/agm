@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -57,6 +58,15 @@ needs_zsh = pytest.mark.skipif(not HAS_ZSH, reason="zsh is required")
 #   switch-client [-t TARGET]
 #     Switches the current client to another session.  The mock logs
 #     and exits 0.
+#
+#   attach-session [-t TARGET]
+#     Attaches the current client to another session. The mock logs and
+#     exits 0.
+#
+#   send-keys [-t TARGET] KEYS... [C-m]
+#     Sends keystrokes to a pane. The mock executes the command
+#     asynchronously when Enter is present so tests can verify that setup
+#     work is queued into the new session rather than run inline.
 #
 #   run-shell COMMAND
 #     Real tmux executes COMMAND in a shell.  The mock also executes the
@@ -104,6 +114,22 @@ case "$1" in
     # that tmux-apply-layout.sh can issue its own tmux select-layout.
     shift
     eval "$*"
+    ;;
+  send-keys)
+    shift
+    if [[ "${1:-}" == "-t" ]]; then
+      shift 2
+    fi
+    command=""
+    for arg in "$@"; do
+      if [[ "$arg" == "C-m" ]]; then
+        break
+      fi
+      command="$arg"
+    done
+    if [[ -n "$command" ]]; then
+      ( eval "$command" ) &
+    fi
     ;;
 esac
 exit 0
@@ -240,6 +266,15 @@ def _install_fake_tmux(bin_dir: Path, log_path: Path, env: dict[str, str]) -> No
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     env["PATH"] = str(bin_dir) + ":" + env["PATH"]
     env["TMUX_LOG"] = str(log_path)
+
+
+def _wait_for_path(path: Path, *, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {path}")
 
 
 def _make_project(
@@ -624,7 +659,7 @@ class TestMkWt:
         assert wt_path.is_dir()
         assert (wt_path / ".env").read_text() == "PROJ=1"
 
-    def test_runs_project_setup_script(
+    def test_wt_new_does_not_run_project_setup_script(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -636,9 +671,24 @@ class TestMkWt:
 
         run_agm(["wt", "new", "setup-test"], env=env, cwd=str(project / "repo"))
 
+        assert not (project / "worktrees" / "setup-test" / ".setup-ran").exists()
+
+    def test_wt_setup_runs_project_setup_script(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        setup = project / "config" / "setup.sh"
+        setup.write_text('#!/bin/bash\ntouch "$PWD/.setup-ran"\n')
+        setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
+
+        run_agm(["wt", "new", "setup-test"], env=env, cwd=str(project / "repo"))
+        run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "setup-test"))
+
         assert (project / "worktrees" / "setup-test" / ".setup-ran").exists()
 
-    def test_runs_dot_setup_sh(
+    def test_wt_setup_runs_dot_setup_sh(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """A .setup.sh copied into the worktree should be executed."""
@@ -650,10 +700,11 @@ class TestMkWt:
         dot_setup.chmod(dot_setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "dotsetup"], env=env, cwd=str(project / "repo"))
+        run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "dotsetup"))
 
         assert (project / "worktrees" / "dotsetup" / ".dot-setup-ran").exists()
 
-    def test_runs_dotconfig_setup_sh(
+    def test_wt_setup_runs_dotconfig_setup_sh(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """A .config/setup.sh copied into the worktree should be executed."""
@@ -668,6 +719,7 @@ class TestMkWt:
         setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "dc-setup"], env=env, cwd=str(project / "repo"))
+        run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "dc-setup"))
 
         assert (project / "worktrees" / "dc-setup" / ".dotconfig-setup-ran").exists()
 
@@ -1921,6 +1973,9 @@ class TestOpen:
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env, name="proj")
+        setup = project / "config" / "setup.sh"
+        setup.write_text('#!/bin/bash\ntouch "$PWD/.setup-ran"\n')
+        setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
@@ -1932,9 +1987,11 @@ class TestOpen:
 
         log = tmux_log.read_text()
         assert "new-session" in log
+        assert "send-keys" in log
         assert "-s proj/feat/x" in log
         assert (project / "worktrees" / "feat/x" / "x.txt").exists()
         assert (project / "worktrees" / "feat/x").is_dir()
+        _wait_for_path(project / "worktrees" / "feat/x" / ".setup-ran")
 
     def test_open_existing_worktree_in_simple_project(
         self, tmp_path: Path, env: dict[str, str]
@@ -1973,6 +2030,9 @@ class TestOpen:
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env, name="proj")
+        setup = project / "config" / "setup.sh"
+        setup.write_text('#!/bin/bash\ntouch "$PWD/.setup-ran"\n')
+        setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
@@ -1982,7 +2042,9 @@ class TestOpen:
         assert (project / "worktrees" / "feat/test" / "README.md").exists()
         log = tmux_log.read_text()
         assert "-dP" in log
+        assert "send-keys" in log
         assert "-s proj/feat/test" in log
+        _wait_for_path(project / "worktrees" / "feat/test" / ".setup-ran")
 
     def test_open_missing_branch_with_pane_count(
         self, tmp_path: Path, env: dict[str, str]

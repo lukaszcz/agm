@@ -22,6 +22,7 @@ import agm.commands.tmux.new as tmux_new_command
 import agm.commands.worktree.checkout as worktree_checkout_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
+import agm.commands.worktree.setup as worktree_setup_command
 from agm.commands.args import (
     ConfigCopyArgs,
     DepNewArgs,
@@ -35,6 +36,7 @@ from agm.commands.args import (
     WorktreeCheckoutArgs,
     WorktreeNewArgs,
     WorktreeRemoveArgs,
+    WorktreeSetupArgs,
 )
 
 
@@ -145,8 +147,9 @@ _HELP_TEXTS: dict[str, str] = {
     "worktree": textwrap.dedent("""\
         agm worktree checkout [-b BRANCH] [-d DIR] [BRANCH]
         agm worktree new      [-d DIR] BRANCH
+        agm worktree setup
         agm worktree remove   [-f] BRANCH
-        agm wt co | wt new | wt rm
+        agm wt co | wt new | wt setup | wt rm
 
         Low-level git worktree management.
     """),
@@ -306,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
         wt_new = wt_sub.add_parser("new", help="Create a new branch and its worktree")
         wt_new.add_argument("-d", dest="worktrees_dir", metavar="dir", default=None)
         wt_new.add_argument("branch")
+        wt_sub.add_parser("setup", help="Run setup scripts for the current checkout")
         for rm_name in ("rm", "remove"):
             current = wt_sub.add_parser(rm_name, help="Remove a worktree")
             current.add_argument("-f", dest="force", action="store_true", default=False)
@@ -403,6 +407,8 @@ def dispatch(args: _DispatchArgs) -> NoReturn:
             worktree_checkout_command.run(cast(WorktreeCheckoutArgs, args))
         elif args.wt_command == "new":
             worktree_new_command.run(cast(WorktreeNewArgs, args))
+        elif args.wt_command == "setup":
+            worktree_setup_command.run(cast(WorktreeSetupArgs, args))
         else:
             worktree_remove_command.run(cast(WorktreeRemoveArgs, args))
         raise SystemExit(0)

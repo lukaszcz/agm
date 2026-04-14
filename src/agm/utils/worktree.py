@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.utils.project import copy_config, current_project_dir, default_worktrees_dir
-from agm.utils.shell import require_success
+from agm.utils.project import copy_config, current_project_dir, default_worktrees_dir, main_repo_dir
+from agm.utils.shell import require_success, source_env_files
 
 
 def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -23,6 +23,43 @@ def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -
         local_branch = remote_branch.removeprefix("origin/")
         if not git_helpers.local_branch_exists(repo_dir, local_branch, env=env):
             git_helpers.create_tracking_branch(repo_dir, local_branch, remote_branch, env=env)
+
+
+def load_worktree_env(
+    project_dir: Path,
+    branch: str | None,
+    *,
+    shell_cwd: Path,
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return the sourced environment for a repo or worktree checkout."""
+
+    resolved_env = dict(os.environ if env is None else env)
+    resolved_env["PROJ_DIR"] = str(project_dir)
+    env_files = [project_dir / "config" / "env.sh"]
+    if branch is not None:
+        env_files.append(project_dir / "config" / branch / "env.sh")
+    return source_env_files(env_files, resolved_env, cwd=shell_cwd)
+
+
+def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+    """Run all configured setup scripts for the current checkout."""
+
+    checkout_dir = git_helpers.git_setup(cwd)
+    project_dir = current_project_dir(checkout_dir)
+    branch: str | None = None
+    if checkout_dir.resolve(strict=False) != main_repo_dir(project_dir).resolve(strict=False):
+        branch = git_helpers.current_branch(checkout_dir, env=env)
+    setup_env = load_worktree_env(project_dir, branch, shell_cwd=checkout_dir, env=env)
+
+    setup_paths = [
+        project_dir / "config" / "setup.sh",
+        checkout_dir / ".config" / "setup.sh",
+        checkout_dir / ".setup.sh",
+    ]
+    for setup_path in setup_paths:
+        if setup_path.is_file() and os.access(setup_path, os.X_OK):
+            require_success(["bash", str(setup_path)], cwd=checkout_dir, env=setup_env)
 
 
 def ensure_worktree(
@@ -72,15 +109,6 @@ def ensure_worktree(
         env=env,
     )
     copy_config(project_dir=project_dir, target=dirname, cwd=current)
-
-    setup_paths = [
-        project_dir / "config" / "setup.sh",
-        dirname / ".config" / "setup.sh",
-        dirname / ".setup.sh",
-    ]
-    for setup_path in setup_paths:
-        if setup_path.is_file() and os.access(setup_path, os.X_OK):
-            require_success(["bash", str(setup_path)], cwd=dirname, env=env)
     return dirname
 
 

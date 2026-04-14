@@ -28,7 +28,7 @@
 ## Configuration and sandbox
 
 By default, `agm run` loads sandbox settings from `$HOME/.agm/sandbox/default.json`
-and merges them with `$PROJ_DIR/sandbox/default.json` and `./.sandbox/default.json`
+and merges them with `$PROJ_DIR/config/sandbox/default.json` and `./.sandbox/default.json`
 when present, with more local files taking precedence.
 
 | Command | Description |

@@ -1699,8 +1699,8 @@ class TestSandbox:
         self._make_fake_srt(tmp_path / "bin", env)
 
         proj_dir = tmp_path / "project"
-        (proj_dir / "sandbox").mkdir(parents=True)
-        (proj_dir / "sandbox" / "default.json").write_text(
+        (proj_dir / "config" / "sandbox").mkdir(parents=True)
+        (proj_dir / "config" / "sandbox" / "default.json").write_text(
             json.dumps(_settings(network=_network_settings("proj.com")))
         )
 
@@ -1751,8 +1751,8 @@ class TestSandbox:
         self._make_fake_srt(tmp_path / "bin", env)
 
         proj_dir = tmp_path / "project"
-        (proj_dir / "sandbox").mkdir(parents=True)
-        (proj_dir / "sandbox" / "default.json").write_text(
+        (proj_dir / "config" / "sandbox").mkdir(parents=True)
+        (proj_dir / "config" / "sandbox" / "default.json").write_text(
             json.dumps(
                 _settings(
                     network=_network_settings("proj.com"),

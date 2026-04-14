@@ -171,7 +171,7 @@ def _default_settings_candidates(current: Path, resolved_env: dict[str, str]) ->
     candidates = [Path(resolved_env["HOME"]) / ".agm" / "sandbox" / "default.json"]
     proj_dir = resolved_env.get("PROJ_DIR")
     if proj_dir:
-        candidates.append(Path(proj_dir) / "sandbox" / "default.json")
+        candidates.append(Path(proj_dir) / "config" / "sandbox" / "default.json")
     candidates.append(current / ".sandbox" / "default.json")
     return candidates
 

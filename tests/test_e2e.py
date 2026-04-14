@@ -1997,7 +1997,6 @@ class TestOpen:
         assert (project / "worktrees" / "feat/x").is_dir()
         _wait_for_path(project / "worktrees" / "feat/x" / ".setup-ran")
         assert "Detached tmux session proj/feat/x created" in result.stdout
-        assert "Setup queued in tmux session proj/feat/x" in result.stdout
         assert "true" not in result.stdout
 
     def test_open_existing_worktree_in_simple_project(
@@ -2054,7 +2053,6 @@ class TestOpen:
         assert "-s proj/feat/test" in log
         _wait_for_path(project / "worktrees" / "feat/test" / ".setup-ran")
         assert "Detached tmux session proj/feat/test created" in result.stdout
-        assert "Setup queued in tmux session proj/feat/test" in result.stdout
         assert "true" not in result.stdout
         assert "cannot stat" not in result.stderr
 
@@ -2079,7 +2077,6 @@ class TestOpen:
         assert "attach-session" not in log
         assert "switch-client" not in log
         assert "Detached tmux session proj/feat/detached created" in result.stdout
-        assert "Setup queued in tmux session proj/feat/detached" in result.stdout
 
     def test_open_missing_branch_with_pane_count(
         self, tmp_path: Path, env: dict[str, str]

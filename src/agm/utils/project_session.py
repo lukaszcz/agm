@@ -80,7 +80,6 @@ def queue_setup_and_focus_session(
         cwd=repo_path,
         env=env,
     )
-    print(f"Setup queued in tmux session {created_session}")
     if detached:
         return
     raise SystemExit(focus_tmux_session(session_name=created_session, cwd=repo_path, env=env))

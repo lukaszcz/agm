@@ -20,6 +20,15 @@ CONFIG_FILES: list[str] = [
 ]
 
 
+def _copy_existing_config_files(source_dir: Path, target_dir: Path) -> None:
+    existing_paths = [
+        str(source_dir / name) for name in CONFIG_FILES if (source_dir / name).exists()
+    ]
+    if not existing_paths:
+        return
+    run_foreground(["cp", "-r", *existing_paths, str(target_dir)])
+
+
 def _resolved_cwd(cwd: Path | None = None) -> Path:
     return Path.cwd() if cwd is None else cwd.resolve()
 
@@ -77,9 +86,11 @@ def copy_config(
     current = _resolved_cwd(cwd)
     proj_dir = current_project_dir(current) if project_dir is None else project_dir.resolve()
     resolved_target = target if target.is_absolute() else current / target
+    if not resolved_target.is_dir():
+        return
 
-    run_foreground(["cp", "-r", *CONFIG_FILES, str(resolved_target)], cwd=current)
+    _copy_existing_config_files(current, resolved_target)
 
     config_dir = proj_dir / "config"
     if config_dir.is_dir():
-        run_foreground(["cp", "-r", *CONFIG_FILES, str(resolved_target)], cwd=config_dir)
+        _copy_existing_config_files(config_dir, resolved_target)

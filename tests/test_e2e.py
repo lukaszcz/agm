@@ -2056,6 +2056,7 @@ class TestOpen:
         assert "Detached tmux session proj/feat/test created" in result.stdout
         assert "Setup queued in tmux session proj/feat/test" in result.stdout
         assert "true" not in result.stdout
+        assert "cannot stat" not in result.stderr
 
     def test_open_missing_branch_detached_keeps_current_session(
         self, tmp_path: Path, env: dict[str, str]

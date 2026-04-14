@@ -24,12 +24,9 @@ def _git_args(repo_dir: Path | None = None) -> list[str]:
 def is_git_repo(path: Path) -> bool:
     """Return whether *path* is inside a git work tree."""
 
-    return (
-        run_foreground(
-            ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
-        )
-        == 0
-    )
+    return run_capture(
+        ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+    )[0] == 0
 
 
 def git_setup(cwd: Path | None = None) -> Path:

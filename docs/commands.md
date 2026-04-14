@@ -4,7 +4,7 @@
 
 | Command | Description |
 |---|---|
-| `agm open [-n PANES] [-p PARENT] TARGET` | Open `repo/`, an existing branch worktree, or create/check out the branch as needed |
+| `agm open [-d] [-n PANES] [-p PARENT] TARGET` | Open `repo/`, an existing branch worktree, or create/check out the branch as needed |
 | `agm init [-b BRANCH] [PROJECT_NAME] REPO_URL` | Initialize a new project by cloning a repository |
 | `agm fetch` | Fetch latest changes for the repo and all dependencies |
 

@@ -102,7 +102,7 @@ class _HelpTextArgumentParser(argparse.ArgumentParser):
 
 _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
-        agm open [-n PANES] [-p PARENT] TARGET
+        agm open [-d] [-n PANES] [-p PARENT] TARGET
 
         Open a tmux session for a project checkout.
 
@@ -116,6 +116,7 @@ _HELP_TEXTS: dict[str, str] = {
 
         Examples:
           agm open repo
+          agm open -d repo
           agm open main
           agm open feat/login
           agm open -n 4 feat/login
@@ -258,6 +259,9 @@ def build_parser() -> argparse.ArgumentParser:
         "open",
         help="Open a tmux session for a project checkout",
         help_text=_HELP_TEXTS["open"],
+    )
+    open_parser.add_argument(
+        "-d", "--detached", dest="detached", action="store_true", default=False
     )
     open_parser.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
     open_parser.add_argument("-p", dest="parent", metavar="parent", default=None)

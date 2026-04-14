@@ -59,6 +59,7 @@ def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = N
 
 def queue_setup_and_focus_session(
     *,
+    detached: bool,
     pane_count: str | None,
     session_name: str,
     repo_path: Path,
@@ -79,10 +80,19 @@ def queue_setup_and_focus_session(
         cwd=repo_path,
         env=env,
     )
+    print(f"Setup queued in tmux session {created_session}")
+    if detached:
+        return
     raise SystemExit(focus_tmux_session(session_name=created_session, cwd=repo_path, env=env))
 
 
-def open_session(*, pane_count: str | None, branch: str | None, cwd: Path | None = None) -> None:
+def open_session(
+    *,
+    detached: bool,
+    pane_count: str | None,
+    branch: str | None,
+    cwd: Path | None = None,
+) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
@@ -101,7 +111,7 @@ def open_session(*, pane_count: str | None, branch: str | None, cwd: Path | None
     env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
     session_name = f"{proj_name}/{branch}" if branch else proj_name
     create_tmux_session(
-        detach=False,
+        detach=detached,
         pane_count=pane_count,
         session_name=session_name,
         cwd=repo_path,
@@ -110,7 +120,12 @@ def open_session(*, pane_count: str | None, branch: str | None, cwd: Path | None
 
 
 def new_session(
-    *, pane_count: str | None, parent: str | None, branch: str, cwd: Path | None = None
+    *,
+    detached: bool,
+    pane_count: str | None,
+    parent: str | None,
+    branch: str,
+    cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
@@ -129,6 +144,7 @@ def new_session(
         env=env,
     )
     queue_setup_and_focus_session(
+        detached=detached,
         pane_count=pane_count,
         session_name=f"{proj_name}/{branch}",
         repo_path=repo_path,
@@ -137,7 +153,12 @@ def new_session(
 
 
 def checkout_session(
-    *, pane_count: str | None, parent: str | None, branch: str, cwd: Path | None = None
+    *,
+    detached: bool,
+    pane_count: str | None,
+    parent: str | None,
+    branch: str,
+    cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
@@ -156,6 +177,7 @@ def checkout_session(
         env=env,
     )
     queue_setup_and_focus_session(
+        detached=detached,
         pane_count=pane_count,
         session_name=f"{proj_name}/{branch}",
         repo_path=repo_path,
@@ -165,6 +187,7 @@ def checkout_session(
 
 def smart_open_session(
     *,
+    detached: bool,
     pane_count: str | None,
     parent: str | None,
     branch: str,
@@ -176,14 +199,26 @@ def smart_open_session(
 
     repo_dir = main_repo_dir(proj_dir)
     if branch in {"repo", git_helpers.current_branch(repo_dir)}:
-        open_session(pane_count=pane_count, branch=None, cwd=current)
+        open_session(detached=detached, pane_count=pane_count, branch=None, cwd=current)
         return
 
     git_helpers.fetch(repo_dir)
     if has_expected_worktree(proj_dir, branch):
-        open_session(pane_count=pane_count, branch=branch, cwd=current)
+        open_session(detached=detached, pane_count=pane_count, branch=branch, cwd=current)
         return
     if branch_exists(repo_dir, branch):
-        checkout_session(pane_count=pane_count, parent=parent, branch=branch, cwd=current)
+        checkout_session(
+            detached=detached,
+            pane_count=pane_count,
+            parent=parent,
+            branch=branch,
+            cwd=current,
+        )
         return
-    new_session(pane_count=pane_count, parent=parent, branch=branch, cwd=current)
+    new_session(
+        detached=detached,
+        pane_count=pane_count,
+        parent=parent,
+        branch=branch,
+        cwd=current,
+    )

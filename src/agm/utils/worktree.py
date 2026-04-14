@@ -50,6 +50,9 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
     branch: str | None = None
     if checkout_dir.resolve(strict=False) != main_repo_dir(project_dir).resolve(strict=False):
         branch = git_helpers.current_branch(checkout_dir, env=env)
+    target_name = (
+        f"{project_dir.name}/{branch}" if branch is not None else f"{project_dir.name}/repo"
+    )
     setup_env = load_worktree_env(project_dir, branch, shell_cwd=checkout_dir, env=env)
 
     setup_paths = [
@@ -57,9 +60,27 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
         checkout_dir / ".config" / "setup.sh",
         checkout_dir / ".setup.sh",
     ]
-    for setup_path in setup_paths:
-        if setup_path.is_file() and os.access(setup_path, os.X_OK):
-            require_success(["bash", str(setup_path)], cwd=checkout_dir, env=setup_env)
+    runnable_paths = [
+        setup_path
+        for setup_path in setup_paths
+        if setup_path.is_file() and os.access(setup_path, os.X_OK)
+    ]
+    if not runnable_paths:
+        print(f"No setup scripts found for {target_name}.")
+        return
+
+    print(f"Running setup for {target_name}...")
+    for setup_path in runnable_paths:
+        try:
+            setup_label = setup_path.relative_to(checkout_dir)
+        except ValueError:
+            try:
+                setup_label = setup_path.relative_to(project_dir)
+            except ValueError:
+                setup_label = setup_path
+        print(f"Running {setup_label}...")
+        require_success(["bash", str(setup_path)], cwd=checkout_dir, env=setup_env)
+    print(f"Setup complete for {target_name}.")
 
 
 def ensure_worktree(

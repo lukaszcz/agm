@@ -223,6 +223,7 @@ class TestOpen:
     def test_open_repo(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["open", "repo"])
         assert ns.command == "open"
+        assert ns.detached is False
         assert ns.pane_count is None
         assert ns.parent is None
         assert ns.branch == "repo"
@@ -244,6 +245,11 @@ class TestOpen:
         ns = parse(parser, ["open", "-n", "2", "-p", "main", "feat/y"])
         assert ns.pane_count == "2"
         assert ns.parent == "main"
+        assert ns.branch == "feat/y"
+
+    def test_open_detached(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "-d", "feat/y"])
+        assert ns.detached is True
         assert ns.branch == "feat/y"
 
 

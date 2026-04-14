@@ -684,9 +684,12 @@ class TestMkWt:
         setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "setup-test"], env=env, cwd=str(project / "repo"))
-        run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "setup-test"))
+        result = run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "setup-test"))
 
         assert (project / "worktrees" / "setup-test" / ".setup-ran").exists()
+        assert "Running setup for" in result.stdout
+        assert "Setup complete" in result.stdout
+        assert "true" not in result.stdout
 
     def test_wt_setup_runs_dot_setup_sh(
         self, tmp_path: Path, env: dict[str, str]
@@ -1983,15 +1986,19 @@ class TestOpen:
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
         _push_branch(clone, bare, "feat/x", "x.txt", env)
 
-        run_agm(["open", "feat/x"], env=env, cwd=str(project))
+        result = run_agm(["open", "feat/x"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
         assert "new-session" in log
+        assert "attach-session" in log
         assert "send-keys" in log
         assert "-s proj/feat/x" in log
         assert (project / "worktrees" / "feat/x" / "x.txt").exists()
         assert (project / "worktrees" / "feat/x").is_dir()
         _wait_for_path(project / "worktrees" / "feat/x" / ".setup-ran")
+        assert "Detached tmux session proj/feat/x created" in result.stdout
+        assert "Setup queued in tmux session proj/feat/x" in result.stdout
+        assert "true" not in result.stdout
 
     def test_open_existing_worktree_in_simple_project(
         self, tmp_path: Path, env: dict[str, str]
@@ -2036,15 +2043,42 @@ class TestOpen:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(["open", "feat/test"], env=env, cwd=str(project))
+        result = run_agm(["open", "feat/test"], env=env, cwd=str(project))
 
         assert (project / "worktrees" / "feat/test").is_dir()
         assert (project / "worktrees" / "feat/test" / "README.md").exists()
         log = tmux_log.read_text()
         assert "-dP" in log
+        assert "attach-session" in log
         assert "send-keys" in log
         assert "-s proj/feat/test" in log
         _wait_for_path(project / "worktrees" / "feat/test" / ".setup-ran")
+        assert "Detached tmux session proj/feat/test created" in result.stdout
+        assert "Setup queued in tmux session proj/feat/test" in result.stdout
+        assert "true" not in result.stdout
+
+    def test_open_missing_branch_detached_keeps_current_session(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        setup = project / "config" / "setup.sh"
+        setup.write_text('#!/bin/bash\ntouch "$PWD/.setup-ran"\n')
+        setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        result = run_agm(["open", "-d", "feat/detached"], env=env, cwd=str(project))
+
+        assert (project / "worktrees" / "feat/detached").is_dir()
+        _wait_for_path(project / "worktrees" / "feat/detached" / ".setup-ran")
+        log = tmux_log.read_text()
+        assert "-dP" in log
+        assert "send-keys" in log
+        assert "attach-session" not in log
+        assert "switch-client" not in log
+        assert "Detached tmux session proj/feat/detached created" in result.stdout
+        assert "Setup queued in tmux session proj/feat/detached" in result.stdout
 
     def test_open_missing_branch_with_pane_count(
         self, tmp_path: Path, env: dict[str, str]

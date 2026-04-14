@@ -58,6 +58,7 @@ class DepSwitchArgs(Protocol):
 
 
 class OpenArgs(Protocol):
+    detached: bool
     pane_count: str | None
     parent: str | None
     branch: str

@@ -6,7 +6,7 @@ import argparse
 import sys
 import textwrap
 from collections.abc import Sequence
-from typing import NoReturn
+from typing import NoReturn, Protocol, cast
 
 import agm.commands.branch.sync as branch_sync_command
 import agm.commands.config.copy as config_copy_command
@@ -22,6 +22,81 @@ import agm.commands.tmux.new as tmux_new_command
 import agm.commands.worktree.checkout as worktree_checkout_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
+from agm.commands.args import (
+    ConfigCopyArgs,
+    DepNewArgs,
+    DepRemoveArgs,
+    DepSwitchArgs,
+    InitArgs,
+    OpenArgs,
+    RunArgs,
+    TmuxLayoutArgs,
+    TmuxNewArgs,
+    WorktreeCheckoutArgs,
+    WorktreeNewArgs,
+    WorktreeRemoveArgs,
+)
+
+
+class _Writeable(Protocol):
+    def write(self, data: str) -> object: ...
+
+
+class _DispatchArgs(Protocol):
+    command: str | None
+    help_command: str | None
+    br_command: str | None
+    config_command: str | None
+    wt_command: str | None
+    dep_command: str | None
+    tmux_command: str | None
+
+
+class _HelpTextArgumentParser(argparse.ArgumentParser):
+    def __init__(
+        self,
+        prog: str | None = None,
+        usage: str | None = None,
+        description: str | None = None,
+        epilog: str | None = None,
+        parents: Sequence[argparse.ArgumentParser] = (),
+        formatter_class: type[argparse.HelpFormatter] = argparse.HelpFormatter,
+        prefix_chars: str = "-",
+        fromfile_prefix_chars: str | None = None,
+        argument_default: object | None = None,
+        conflict_handler: str = "error",
+        add_help: bool = True,
+        allow_abbrev: bool = True,
+        exit_on_error: bool = True,
+        *,
+        help_text: str | None = None,
+    ) -> None:
+        self._help_text = help_text
+        super().__init__(
+            prog=prog,
+            usage=usage,
+            description=description,
+            epilog=epilog,
+            parents=parents,
+            formatter_class=formatter_class,
+            prefix_chars=prefix_chars,
+            fromfile_prefix_chars=fromfile_prefix_chars,
+            argument_default=argument_default,
+            conflict_handler=conflict_handler,
+            add_help=add_help,
+            allow_abbrev=allow_abbrev,
+            exit_on_error=exit_on_error,
+        )
+
+    def format_help(self) -> str:
+        if self._help_text is not None:
+            return self._help_text
+        return super().format_help()
+
+    def print_help(self, file: _Writeable | None = None) -> None:
+        if file is None:
+            file = sys.stdout
+        print(self.format_help(), end="", file=file)
 
 _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
@@ -121,21 +196,38 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
 ]
 
 
-def _print_overview() -> None:
-    print("agm - Agent Management Framework\n")
-    print("Usage: agm <command> [options] [args]\n")
-    print("Commands:")
+def _overview_text() -> str:
+    lines = [
+        "agm - Agent Management Framework",
+        "",
+        "Usage: agm <command> [options] [args]",
+        "",
+        "Commands:",
+    ]
     width = max(len(name) for name, _ in _COMMAND_OVERVIEW)
     for name, desc in _COMMAND_OVERVIEW:
-        print(f"  {name:<{width + 2}} {desc}")
-    print()
-    print("Run 'agm help <command>' for detailed help on a specific command.")
-    print("Run 'agm <command> --help' for option summary.")
+        lines.append(f"  {name:<{width + 2}} {desc}")
+    lines.extend(
+        [
+            "",
+            "Run 'agm help <command>' for detailed help on a specific command.",
+            "Run 'agm <command> --help' for option summary.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _help_text_for(command: str) -> str | None:
+    canonical = _HELP_ALIASES.get(command, command)
+    return _HELP_TEXTS.get(canonical)
+
+
+def _print_overview() -> None:
+    print(_overview_text(), end="")
 
 
 def _print_command_help(command: str) -> None:
-    canonical = _HELP_ALIASES.get(command, command)
-    text = _HELP_TEXTS.get(canonical)
+    text = _help_text_for(command)
     if text is None:
         print(f"agm: unknown command '{command}'", file=sys.stderr)
         print("\nRun 'agm help' to see available commands.", file=sys.stderr)
@@ -144,37 +236,68 @@ def _print_command_help(command: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _HelpTextArgumentParser(
         prog="agm",
         description="Agent Management Framework",
         epilog="Run 'agm help <command>' for detailed help on a specific command.",
+        help_text=_overview_text(),
     )
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", parser_class=_HelpTextArgumentParser)
 
-    help_parser = subparsers.add_parser("help", help="Show help for a command")
+    help_parser = subparsers.add_parser(
+        "help",
+        help="Show help for a command",
+        help_text=_HELP_TEXTS["help"],
+    )
     help_parser.add_argument("help_command", nargs="?", default=None, metavar="command")
 
-    open_parser = subparsers.add_parser("open", help="Open a tmux session for a project checkout")
+    open_parser = subparsers.add_parser(
+        "open",
+        help="Open a tmux session for a project checkout",
+        help_text=_HELP_TEXTS["open"],
+    )
     open_parser.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
     open_parser.add_argument("-p", dest="parent", metavar="parent", default=None)
     open_parser.add_argument("branch", metavar="target")
 
-    br_parser = subparsers.add_parser("br", help="Branch operations (alias for 'branch')")
-    branch_parser = subparsers.add_parser("branch", help="Branch operations")
+    br_parser = subparsers.add_parser(
+        "br",
+        help="Branch operations (alias for 'branch')",
+        help_text=_help_text_for("br"),
+    )
+    branch_parser = subparsers.add_parser(
+        "branch",
+        help="Branch operations",
+        help_text=_help_text_for("branch"),
+    )
     for current in (br_parser, branch_parser):
-        current_sub = current.add_subparsers(dest="br_command")
+        current_sub = current.add_subparsers(
+            dest="br_command",
+            parser_class=_HelpTextArgumentParser,
+        )
         current_sub.add_parser("sync", help="Sync remote tracking branches")
 
-    config_parser = subparsers.add_parser("config", help="Copy project configuration files")
-    config_sub = config_parser.add_subparsers(dest="config_command")
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Copy project configuration files",
+        help_text=_help_text_for("config"),
+    )
+    config_sub = config_parser.add_subparsers(
+        dest="config_command",
+        parser_class=_HelpTextArgumentParser,
+    )
     for name in ("cp", "copy"):
         current = config_sub.add_parser(name, help="Copy configuration files")
         current.add_argument("-d", dest="project_dir", metavar="project-dir", default=None)
         current.add_argument("dirname")
 
     for wt_name in ("wt", "worktree"):
-        wt_parser = subparsers.add_parser(wt_name, help="Git worktree management")
-        wt_sub = wt_parser.add_subparsers(dest="wt_command")
+        wt_parser = subparsers.add_parser(
+            wt_name,
+            help="Git worktree management",
+            help_text=_help_text_for(wt_name),
+        )
+        wt_sub = wt_parser.add_subparsers(dest="wt_command", parser_class=_HelpTextArgumentParser)
         for co_name in ("co", "checkout"):
             current = wt_sub.add_parser(co_name, help="Check out a branch into a worktree")
             current.add_argument("-b", dest="new_branch", metavar="branch-name", default=None)
@@ -188,8 +311,12 @@ def build_parser() -> argparse.ArgumentParser:
             current.add_argument("-f", dest="force", action="store_true", default=False)
             current.add_argument("branch")
 
-    dep_parser = subparsers.add_parser("dep", help="Manage project dependency checkouts")
-    dep_sub = dep_parser.add_subparsers(dest="dep_command")
+    dep_parser = subparsers.add_parser(
+        "dep",
+        help="Manage project dependency checkouts",
+        help_text=_help_text_for("dep"),
+    )
+    dep_sub = dep_parser.add_subparsers(dest="dep_command", parser_class=_HelpTextArgumentParser)
     dep_new = dep_sub.add_parser("new", help="Clone a new dependency")
     dep_new.add_argument("-b", dest="branch", metavar="branch", default=None)
     dep_new.add_argument("repo_url", metavar="repo-url")
@@ -201,21 +328,35 @@ def build_parser() -> argparse.ArgumentParser:
     dep_rm.add_argument("--all", dest="all", action="store_true", default=False)
     dep_rm.add_argument("target")
 
-    subparsers.add_parser("fetch", help="Fetch the repo and dependencies")
+    subparsers.add_parser(
+        "fetch",
+        help="Fetch the repo and dependencies",
+        help_text=_help_text_for("fetch"),
+    )
 
-    init_parser = subparsers.add_parser("init", help="Initialize a new project")
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize a new project",
+        help_text=_help_text_for("init"),
+    )
     init_parser.add_argument("-b", dest="branch", metavar="branch", default=None)
     init_parser.add_argument("positional", nargs="+", metavar="arg")
 
     run_parser = subparsers.add_parser(
-        "run", help="Run a command inside an Anthropic Sandbox Runtime"
+        "run",
+        help="Run a command inside an Anthropic Sandbox Runtime",
+        help_text=_help_text_for("run"),
     )
     run_parser.add_argument("--no-patch", dest="no_patch", action="store_true", default=False)
     run_parser.add_argument("-f", dest="settings_file", metavar="settings.json", default=None)
     run_parser.add_argument("run_command", nargs=argparse.REMAINDER, metavar="command")
 
-    tmux_parser = subparsers.add_parser("tmux", help="Tmux session and layout management")
-    tmux_sub = tmux_parser.add_subparsers(dest="tmux_command")
+    tmux_parser = subparsers.add_parser(
+        "tmux",
+        help="Tmux session and layout management",
+        help_text=_help_text_for("tmux"),
+    )
+    tmux_sub = tmux_parser.add_subparsers(dest="tmux_command", parser_class=_HelpTextArgumentParser)
     tmux_new = tmux_sub.add_parser("new", help="Create a new tmux session")
     tmux_new.add_argument("-d", "--detach", dest="detach", action="store_true", default=False)
     tmux_new.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
@@ -228,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def dispatch(args: argparse.Namespace) -> NoReturn:
+def dispatch(args: _DispatchArgs) -> NoReturn:
     cmd = args.command
     if cmd is None:
         _print_overview()
@@ -246,53 +387,53 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
         branch_sync_command.run(args)
         raise SystemExit(0)
     if cmd == "open":
-        open_command.run(args)
+        open_command.run(cast(OpenArgs, args))
         raise SystemExit(0)
     if cmd == "config":
         if args.config_command is None:
             _print_command_help(cmd)
             raise SystemExit(0)
-        config_copy_command.run(args)
+        config_copy_command.run(cast(ConfigCopyArgs, args))
         raise SystemExit(0)
     if cmd in {"wt", "worktree"}:
         if args.wt_command is None:
             _print_command_help(cmd)
             raise SystemExit(0)
         if args.wt_command in {"co", "checkout"}:
-            worktree_checkout_command.run(args)
+            worktree_checkout_command.run(cast(WorktreeCheckoutArgs, args))
         elif args.wt_command == "new":
-            worktree_new_command.run(args)
+            worktree_new_command.run(cast(WorktreeNewArgs, args))
         else:
-            worktree_remove_command.run(args)
+            worktree_remove_command.run(cast(WorktreeRemoveArgs, args))
         raise SystemExit(0)
     if cmd == "dep":
         if args.dep_command is None:
             _print_command_help(cmd)
             raise SystemExit(0)
         if args.dep_command == "new":
-            dep_new_command.run(args)
+            dep_new_command.run(cast(DepNewArgs, args))
         elif args.dep_command == "rm":
-            dep_remove_command.run(args)
+            dep_remove_command.run(cast(DepRemoveArgs, args))
         else:
-            dep_switch_command.run(args)
+            dep_switch_command.run(cast(DepSwitchArgs, args))
         raise SystemExit(0)
     if cmd == "fetch":
         fetch_command.run(args)
         raise SystemExit(0)
     if cmd == "init":
-        init_command.run(args)
+        init_command.run(cast(InitArgs, args))
         raise SystemExit(0)
     if cmd == "run":
-        run_command.run(args)
+        run_command.run(cast(RunArgs, args))
         raise AssertionError("unreachable")
     if cmd == "tmux":
         if args.tmux_command is None:
             _print_command_help(cmd)
             raise SystemExit(0)
         if args.tmux_command == "new":
-            tmux_new_command.run(args)
+            tmux_new_command.run(cast(TmuxNewArgs, args))
         else:
-            tmux_layout_command.run(args)
+            tmux_layout_command.run(cast(TmuxLayoutArgs, args))
         raise SystemExit(0)
     raise SystemExit(0)
 
@@ -300,7 +441,7 @@ def dispatch(args: argparse.Namespace) -> NoReturn:
 def main(argv: Sequence[str] | None = None) -> NoReturn:
     parser = build_parser()
     args = parser.parse_args(argv)
-    dispatch(args)
+    dispatch(cast(_DispatchArgs, args))
 
 
 if __name__ == "__main__":

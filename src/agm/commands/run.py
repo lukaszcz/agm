@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shutil
@@ -12,7 +11,15 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import cast
 
+from agm.commands.args import RunArgs
+
 JsonDict = dict[str, object]
+
+
+def _json_dict(value: object) -> JsonDict:
+    if isinstance(value, dict):
+        return cast(JsonDict, value)
+    return {}
 
 
 def merge_settings(home_data: JsonDict, local_data: JsonDict) -> JsonDict:
@@ -47,14 +54,18 @@ def merge_settings(home_data: JsonDict, local_data: JsonDict) -> JsonDict:
 
 def patch_for_proj_dir(settings: JsonDict, proj_dir: str) -> JsonDict:
     patched = dict(settings)
-    filesystem = patched.get("filesystem")
-    if not isinstance(filesystem, dict):
+    filesystem_value = patched.get("filesystem")
+    if isinstance(filesystem_value, dict):
+        filesystem = cast(JsonDict, filesystem_value)
+    else:
         filesystem = {}
         patched["filesystem"] = filesystem
-    allow_write = filesystem.get("allowWrite")
-    if not isinstance(allow_write, list):
+    allow_write_value = filesystem.get("allowWrite")
+    if isinstance(allow_write_value, list):
+        allow_write = [entry for entry in allow_write_value if isinstance(entry, str)]
+    else:
         allow_write = []
-        filesystem["allowWrite"] = allow_write
+    filesystem["allowWrite"] = allow_write
     if proj_dir not in allow_write:
         allow_write.append(proj_dir)
     return patched
@@ -87,8 +98,8 @@ def _first_missing_component(target: Path, cwd: Path) -> Path | None:
 
 def track_bwrap_artifacts(settings_path: Path, cwd: Path) -> list[Path]:
     with settings_path.open("r", encoding="utf-8") as handle:
-        raw_data = json.load(handle)
-    data = cast(JsonDict, raw_data) if isinstance(raw_data, dict) else {}
+        raw_data: object = json.load(handle)
+    data = _json_dict(raw_data)
 
     mandatory_deny_paths = [
         ".gitconfig",
@@ -109,13 +120,15 @@ def track_bwrap_artifacts(settings_path: Path, cwd: Path) -> list[Path]:
         mandatory_deny_paths.extend([".git/hooks", ".git/config"])
 
     deny_write: list[str] = []
-    filesystem = data.get("filesystem")
-    if isinstance(filesystem, dict):
+    filesystem_value = data.get("filesystem")
+    if isinstance(filesystem_value, dict):
+        filesystem = cast(JsonDict, filesystem_value)
         raw_deny_write = filesystem.get("denyWrite")
         if isinstance(raw_deny_write, list):
+            deny_write_candidates = cast(list[object], raw_deny_write)
             deny_write = [
                 entry
-                for entry in raw_deny_write
+                for entry in deny_write_candidates
                 if isinstance(entry, str) and not any(ch in entry for ch in "*?[]")
             ]
 
@@ -155,10 +168,11 @@ def _cleanup(temp_files: list[Path], tracked_artifacts: list[Path]) -> None:
             pass
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: RunArgs) -> None:
     current = Path.cwd()
     resolved_env = dict(os.environ)
-    run_command = list(args.run_command)
+    run_args = args
+    run_command = list(run_args.run_command)
     if run_command[:1] == ["--"]:
         run_command = run_command[1:]
     if not run_command:
@@ -172,10 +186,13 @@ def run(args: argparse.Namespace) -> None:
     temp_files: list[Path] = []
     tracked_artifacts: list[Path] = []
     try:
-        if args.settings_file is not None:
-            selected_settings = Path(args.settings_file)
+        if run_args.settings_file is not None:
+            selected_settings = Path(run_args.settings_file)
             if not selected_settings.is_file():
-                print(f"Error: settings file not found: {args.settings_file}", file=sys.stderr)
+                print(
+                    f"Error: settings file not found: {run_args.settings_file}",
+                    file=sys.stderr,
+                )
                 raise SystemExit(1)
         else:
             home_settings = Path(resolved_env["HOME"]) / ".sandbox" / "default.json"
@@ -189,23 +206,19 @@ def run(args: argparse.Namespace) -> None:
                 selected_settings = found_settings[0]
             else:
                 with home_settings.open("r", encoding="utf-8") as handle:
-                    raw_home_data = json.load(handle)
+                    raw_home_data: object = json.load(handle)
                 with local_settings.open("r", encoding="utf-8") as handle:
-                    raw_local_data = json.load(handle)
-                home_data = cast(JsonDict, raw_home_data) if isinstance(raw_home_data, dict) else {}
-                local_data = (
-                    cast(JsonDict, raw_local_data) if isinstance(raw_local_data, dict) else {}
-                )
+                    raw_local_data: object = json.load(handle)
+                home_data = _json_dict(raw_home_data)
+                local_data = _json_dict(raw_local_data)
                 selected_settings = _write_json_temp(
                     merge_settings(home_data, local_data), temp_files
                 )
 
-        if not args.no_patch and resolved_env.get("PROJ_DIR"):
+        if not run_args.no_patch and resolved_env.get("PROJ_DIR"):
             with selected_settings.open("r", encoding="utf-8") as handle:
-                raw_settings_data = json.load(handle)
-            settings_data = (
-                cast(JsonDict, raw_settings_data) if isinstance(raw_settings_data, dict) else {}
-            )
+                raw_settings_data: object = json.load(handle)
+            settings_data = _json_dict(raw_settings_data)
             selected_settings = _write_json_temp(
                 patch_for_proj_dir(settings_data, resolved_env["PROJ_DIR"]),
                 temp_files,

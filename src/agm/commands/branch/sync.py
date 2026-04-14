@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import argparse
-
 from agm.utils.worktree import branch_sync
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: object) -> None:
     del args
     branch_sync()

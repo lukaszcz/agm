@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
-
+from agm.commands.args import WorktreeCheckoutArgs
 from agm.utils.worktree import ensure_worktree
 
 _USAGE = "usage: agm worktree checkout [-b branch-name] [-d dir] [branch-name]"
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: WorktreeCheckoutArgs) -> None:
     branch_name = args.new_branch if args.new_branch is not None else args.branch
     if branch_name is None:
         print(_USAGE)

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import argparse
-
+from agm.commands.args import OpenArgs
 from agm.commands.pm.common import smart_open_session
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: OpenArgs) -> None:
     smart_open_session(
         pane_count=args.pane_count,
         parent=args.parent,

@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 
+from agm.commands.args import DepNewArgs
 from agm.commands.dep.common import default_branch_from_remote, derive_dep_name
 from agm.utils.project import current_project_dir
 from agm.utils.shell import run_foreground
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: DepNewArgs) -> None:
     project_dir = current_project_dir()
     dep = derive_dep_name(args.repo_url)
     dep_dir = project_dir / "deps" / dep

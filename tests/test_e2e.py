@@ -18,7 +18,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import TypedDict, cast
 
 import pytest
 
@@ -108,6 +108,22 @@ case "$1" in
 esac
 exit 0
 """
+
+
+class _SrtNetworkSettings(TypedDict):
+    allowedDomains: list[str]
+
+
+class _SrtFilesystemSettings(TypedDict):
+    allowWrite: list[str]
+
+
+class _SrtSettings(TypedDict, total=False):
+    network: _SrtNetworkSettings
+    filesystem: _SrtFilesystemSettings
+    ignoreViolations: dict[str, bool]
+    enabled: bool
+    enableWeakerNestedSandbox: bool
 
 
 # ---------------------------------------------------------------------------
@@ -211,11 +227,14 @@ def _make_project(
     return project
 
 
-def _srt_settings(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+def _srt_settings(result: subprocess.CompletedProcess[str]) -> _SrtSettings:
     """Extract the JSON settings dict from fake srt stdout."""
     for line in result.stdout.splitlines():
         if line.startswith("SETTINGS:"):
-            return cast(dict[str, Any], json.loads(line[len("SETTINGS:"):]))
+            raw: object = json.loads(line[len("SETTINGS:"):])
+            if not isinstance(raw, dict):
+                raise ValueError(f"Expected JSON object in srt output:\n{result.stdout}")
+            return cast(_SrtSettings, raw)
     raise ValueError(f"No SETTINGS line in srt output:\n{result.stdout}")
 
 
@@ -2414,6 +2433,33 @@ class TestHelp:
             result = run_agm(["help", alias], env=env, cwd=str(tmp_path))
             assert result.returncode == 0
             assert f"agm {canonical}" in result.stdout
+
+    @pytest.mark.parametrize(
+        ("argv", "help_argv"),
+        [
+            (["-h"], ["help"]),
+            (["help", "-h"], ["help", "help"]),
+            (["open", "-h"], ["help", "open"]),
+            (["init", "-h"], ["help", "init"]),
+            (["fetch", "-h"], ["help", "fetch"]),
+            (["branch", "-h"], ["help", "branch"]),
+            (["br", "-h"], ["help", "br"]),
+            (["config", "-h"], ["help", "config"]),
+            (["wt", "-h"], ["help", "wt"]),
+            (["worktree", "-h"], ["help", "worktree"]),
+            (["dep", "-h"], ["help", "dep"]),
+            (["run", "-h"], ["help", "run"]),
+            (["tmux", "-h"], ["help", "tmux"]),
+        ],
+    )
+    def test_help_flag_matches_help_command(
+        self, argv: list[str], help_argv: list[str], tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(argv, env=env, cwd=str(tmp_path))
+        expected = run_agm(help_argv, env=env, cwd=str(tmp_path))
+        assert result.returncode == 0
+        assert result.stdout == expected.stdout
+        assert result.stderr == expected.stderr
 
     def test_help_unknown_command(
         self, tmp_path: Path, env: dict[str, str]

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
+from agm.commands.args import InitArgs
 from agm.utils.shell import require_success
 
 
@@ -37,7 +37,7 @@ def write_file_if_missing(path: Path, content: str) -> None:
     path.write_text(f"{content}\n", encoding="utf-8")
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: InitArgs) -> None:
     positional: list[str] = args.positional
     if not positional or len(positional) > 2:
         raise SystemExit(1)

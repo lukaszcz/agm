@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
@@ -20,7 +19,7 @@ def _fetch_repo(project_dir: Path, repo_path: Path) -> None:
     require_success(["git", "-C", str(repo_path), "fetch"])
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: object) -> None:
     del args
     project_dir = current_project_dir()
     repo_dir = project_dir / "repo"

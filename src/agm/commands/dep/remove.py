@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
 import shutil
 import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.commands.args import DepRemoveArgs
 from agm.commands.dep.common import main_dep_repo
 from agm.utils.project import current_project_dir
 from agm.utils.worktree import remove_worktree_from_repo
@@ -45,7 +45,7 @@ def _remove_dep_dir(dep_dir: Path) -> None:
     shutil.rmtree(dep_dir)
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: DepRemoveArgs) -> None:
     dep, ref = _parse_target(args.target, remove_all=args.all)
     project_dir = current_project_dir()
     dep_dir = project_dir / "deps" / dep

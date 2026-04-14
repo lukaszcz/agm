@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 
 import agm.vcs.git as git_helpers
+from agm.commands.args import DepSwitchArgs
 from agm.commands.dep.common import default_branch_from_repo, main_dep_repo
 from agm.utils.project import current_project_dir
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: DepSwitchArgs) -> None:
     project_dir = current_project_dir()
     dep_dir = project_dir / "deps" / args.dep
     if not dep_dir.is_dir():

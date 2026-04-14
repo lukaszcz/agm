@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
+from agm.commands.args import ConfigCopyArgs
 from agm.utils.project import copy_config
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: ConfigCopyArgs) -> None:
     copy_config(
         project_dir=Path(args.project_dir) if args.project_dir is not None else None,
         target=Path(args.dirname),

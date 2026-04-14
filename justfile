@@ -10,15 +10,15 @@ setup:
 
 # Run the test suite
 test:
-    .venv/bin/python -m pytest tests/ -q
+    uv run python -m pytest tests/ -q
 
 # Lint with ruff
 lint:
-    .venv/bin/ruff check src/ tests/
+    uv run ruff check src/ tests/
 
 # Type-check with mypy
 typecheck:
-    MYPYPATH=src:stubs mypy src/agm/ --strict --python-version 3.12
+    MYPYPATH=src:stubs uv run mypy src/agm/ --strict --python-version 3.12
 
 # Run linting, tests, and type-checking
 check: lint test typecheck

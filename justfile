@@ -28,7 +28,7 @@ install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
 install p=prefix: install-agm
-    @sandbox_dir="$HOME/.sandbox"; \
+    @sandbox_dir="$HOME/.agm/sandbox"; \
     mkdir -p "$sandbox_dir"; \
     for sandbox_src in "{{justfile_directory()}}"/sandbox/*; do \
       [ -f "$sandbox_src" ] || continue; \

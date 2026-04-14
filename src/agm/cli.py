@@ -239,6 +239,10 @@ def _print_command_help(command: str) -> None:
     print(text, end="")
 
 
+def _has_run_command(args: RunArgs) -> bool:
+    return bool(run_command.normalize_run_command(list(args.run_command)))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _HelpTextArgumentParser(
         prog="agm",
@@ -434,7 +438,11 @@ def dispatch(args: _DispatchArgs) -> NoReturn:
         init_command.run(cast(InitArgs, args))
         raise SystemExit(0)
     if cmd == "run":
-        run_command.run(cast(RunArgs, args))
+        run_args = cast(RunArgs, args)
+        if not _has_run_command(run_args):
+            _print_command_help(cmd)
+            raise SystemExit(0)
+        run_command.run(run_args)
         raise AssertionError("unreachable")
     if cmd == "tmux":
         if args.tmux_command is None:

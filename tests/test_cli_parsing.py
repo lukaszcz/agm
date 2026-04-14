@@ -273,7 +273,7 @@ class TestRun:
         assert ns.run_command == ["echo", "hi"]
 
     def test_run_no_command(self, parser: argparse.ArgumentParser) -> None:
-        # REMAINDER allows empty list – sandbox.sh will handle the error
+        # REMAINDER allows an empty list; dispatch decides whether to show help.
         ns = parse(parser, ["run"])
         assert ns.run_command == []
 

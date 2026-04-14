@@ -22,6 +22,21 @@ def _json_dict(value: object) -> JsonDict:
     return {}
 
 
+def normalize_run_command(run_command: list[str]) -> list[str]:
+    if run_command[:1] == ["--"]:
+        return run_command[1:]
+    return run_command
+
+
+def merge_settings_chain(settings_list: list[JsonDict]) -> JsonDict:
+    if not settings_list:
+        return {}
+    merged = settings_list[0]
+    for settings in settings_list[1:]:
+        merged = merge_settings(merged, settings)
+    return merged
+
+
 def merge_settings(home_data: JsonDict, local_data: JsonDict) -> JsonDict:
     merged = dict(home_data)
     if "enabled" in local_data and local_data["enabled"] is not None:
@@ -152,6 +167,15 @@ def _write_json_temp(data: JsonDict, temp_files: list[Path]) -> Path:
     return path
 
 
+def _default_settings_candidates(current: Path, resolved_env: dict[str, str]) -> list[Path]:
+    candidates = [Path(resolved_env["HOME"]) / ".agm" / "sandbox" / "default.json"]
+    proj_dir = resolved_env.get("PROJ_DIR")
+    if proj_dir:
+        candidates.append(Path(proj_dir) / "sandbox" / "default.json")
+    candidates.append(current / ".sandbox" / "default.json")
+    return candidates
+
+
 def _cleanup(temp_files: list[Path], tracked_artifacts: list[Path]) -> None:
     for temp_file in temp_files:
         try:
@@ -172,9 +196,7 @@ def run(args: RunArgs) -> None:
     current = Path.cwd()
     resolved_env = dict(os.environ)
     run_args = args
-    run_command = list(run_args.run_command)
-    if run_command[:1] == ["--"]:
-        run_command = run_command[1:]
+    run_command = normalize_run_command(list(run_args.run_command))
     if not run_command:
         print("Error: command is required.", file=sys.stderr)
         raise SystemExit(1)
@@ -195,32 +217,33 @@ def run(args: RunArgs) -> None:
                 )
                 raise SystemExit(1)
         else:
-            home_settings = Path(resolved_env["HOME"]) / ".sandbox" / "default.json"
-            local_settings = current / ".sandbox" / "default.json"
-            found_settings = [path for path in (home_settings, local_settings) if path.is_file()]
+            settings_candidates = _default_settings_candidates(current, resolved_env)
+            found_settings = [path for path in settings_candidates if path.is_file()]
             if not found_settings:
                 print("Error: no sandbox settings file found.", file=sys.stderr)
-                print(f"Checked: {home_settings} and {local_settings}", file=sys.stderr)
+                print(
+                    "Checked: " + ", ".join(str(path) for path in settings_candidates),
+                    file=sys.stderr,
+                )
                 raise SystemExit(1)
             if len(found_settings) == 1:
                 selected_settings = found_settings[0]
             else:
-                with home_settings.open("r", encoding="utf-8") as handle:
-                    raw_home_data: object = json.load(handle)
-                with local_settings.open("r", encoding="utf-8") as handle:
-                    raw_local_data: object = json.load(handle)
-                home_data = _json_dict(raw_home_data)
-                local_data = _json_dict(raw_local_data)
+                settings_data: list[JsonDict] = []
+                for settings_path in found_settings:
+                    with settings_path.open("r", encoding="utf-8") as handle:
+                        raw_settings_data: object = json.load(handle)
+                    settings_data.append(_json_dict(raw_settings_data))
                 selected_settings = _write_json_temp(
-                    merge_settings(home_data, local_data), temp_files
+                    merge_settings_chain(settings_data), temp_files
                 )
 
         if not run_args.no_patch and resolved_env.get("PROJ_DIR"):
             with selected_settings.open("r", encoding="utf-8") as handle:
-                raw_settings_data: object = json.load(handle)
-            settings_data = _json_dict(raw_settings_data)
+                raw_selected_settings_data: object = json.load(handle)
+            selected_settings_data = _json_dict(raw_selected_settings_data)
             selected_settings = _write_json_temp(
-                patch_for_proj_dir(settings_data, resolved_env["PROJ_DIR"]),
+                patch_for_proj_dir(selected_settings_data, resolved_env["PROJ_DIR"]),
                 temp_files,
             )
 

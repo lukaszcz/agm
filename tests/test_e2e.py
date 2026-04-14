@@ -1631,7 +1631,7 @@ class TestSandbox:
         assert result.returncode != 0
         assert "srt is not installed" in result.stderr
 
-    def test_error_when_command_missing(
+    def test_help_when_command_missing(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
@@ -1639,8 +1639,9 @@ class TestSandbox:
         result = run_agm(
             ["run"], env=env, cwd=str(tmp_path), check=False,
         )
-        assert result.returncode != 0
-        assert "command is required" in result.stderr.lower()
+        assert result.returncode == 0
+        assert result.stderr == ""
+        assert "agm run [--no-patch] [-f SETTINGS] COMMAND [ARGS...]" in result.stdout
 
     def test_error_when_no_settings_file(
         self, tmp_path: Path, env: dict[str, str]
@@ -1661,7 +1662,7 @@ class TestSandbox:
         self._make_fake_srt(tmp_path / "bin", env)
 
         home = Path(env["HOME"])
-        sandbox_dir = home / ".sandbox"
+        sandbox_dir = home / ".agm" / "sandbox"
         sandbox_dir.mkdir(parents=True)
         settings = {"network": {"allowedDomains": ["example.com"]}}
         (sandbox_dir / "default.json").write_text(json.dumps(settings))
@@ -1692,13 +1693,33 @@ class TestSandbox:
         parsed = _srt_settings(result)
         assert parsed["filesystem"]["allowWrite"] == ["."]
 
+    def test_uses_proj_dir_sandbox_settings(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        proj_dir = tmp_path / "project"
+        (proj_dir / "sandbox").mkdir(parents=True)
+        (proj_dir / "sandbox" / "default.json").write_text(
+            json.dumps(_settings(network=_network_settings("proj.com")))
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        env["PROJ_DIR"] = str(proj_dir)
+
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        parsed = _srt_settings(result)
+        assert parsed["network"]["allowedDomains"] == ["proj.com"]
+
     def test_merges_home_and_local_settings(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         home = Path(env["HOME"])
-        home_sandbox = home / ".sandbox"
+        home_sandbox = home / ".agm" / "sandbox"
         home_sandbox.mkdir(parents=True)
         (home_sandbox / "default.json").write_text(
             json.dumps(
@@ -1724,6 +1745,38 @@ class TestSandbox:
         assert merged["network"]["allowedDomains"] == ["local.com"]
         assert merged["filesystem"]["allowWrite"] == ["/home"]
 
+    def test_merges_proj_dir_and_cwd_settings(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        proj_dir = tmp_path / "project"
+        (proj_dir / "sandbox").mkdir(parents=True)
+        (proj_dir / "sandbox" / "default.json").write_text(
+            json.dumps(
+                _settings(
+                    network=_network_settings("proj.com"),
+                    filesystem=_filesystem_settings("/proj"),
+                )
+            )
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        local_sandbox = work / ".sandbox"
+        local_sandbox.mkdir()
+        (local_sandbox / "default.json").write_text(
+            json.dumps(_settings(network=_network_settings("local.com")))
+        )
+        env["PROJ_DIR"] = str(proj_dir)
+
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+
+        merged = _srt_settings(result)
+        assert merged["network"]["allowedDomains"] == ["local.com"]
+        assert merged["filesystem"]["allowWrite"] == ["/proj", str(proj_dir)]
+
     def test_merge_overrides_ignore_violations(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1731,7 +1784,7 @@ class TestSandbox:
         self._make_fake_srt(tmp_path / "bin", env)
 
         home = Path(env["HOME"])
-        home_sandbox = home / ".sandbox"
+        home_sandbox = home / ".agm" / "sandbox"
         home_sandbox.mkdir(parents=True)
         (home_sandbox / "default.json").write_text(
             json.dumps(
@@ -1762,7 +1815,7 @@ class TestSandbox:
         self._make_fake_srt(tmp_path / "bin", env)
 
         home = Path(env["HOME"])
-        home_sandbox = home / ".sandbox"
+        home_sandbox = home / ".agm" / "sandbox"
         home_sandbox.mkdir(parents=True)
         (home_sandbox / "default.json").write_text(
             json.dumps(
@@ -2615,6 +2668,8 @@ class TestHelp:
             (["br"], ["help", "br"]),
             (["branch"], ["help", "branch"]),
             (["config"], ["help", "config"]),
+            (["run"], ["help", "run"]),
+            (["run", "--"], ["help", "run"]),
             (["wt"], ["help", "wt"]),
             (["worktree"], ["help", "worktree"]),
             (["tmux"], ["help", "tmux"]),

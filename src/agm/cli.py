@@ -165,6 +165,27 @@ _HELP_TEXTS: dict[str, str] = {
         agm run [--no-patch] [-f SETTINGS] COMMAND [ARGS...]
 
         Run a command inside an Anthropic Sandbox Runtime container.
+
+        Options:
+          -f SETTINGS  Use this settings file directly instead of discovering
+                       and combining the default sandbox settings files.
+          --no-patch   Do not append $PROJ_DIR to filesystem.allowWrite after
+                       loading the selected settings.
+
+        Settings resolution:
+          default      Load the existing files in this order:
+                         1. $HOME/.agm/sandbox/default.json
+                         2. $PROJ_DIR/config/sandbox/default.json
+                         3. ./.sandbox/default.json
+                       Later files override earlier ones. network and
+                       filesystem are merged by key; ignoreViolations replaces
+                       the earlier value; enabled and
+                       enableWeakerNestedSandbox are overridden when set.
+          -f SETTINGS  Skip default discovery and use SETTINGS as-is.
+
+        Automatic patching:
+          Unless --no-patch is set, agm adds $PROJ_DIR to
+          filesystem.allowWrite when PROJ_DIR is set.
     """),
     "tmux": textwrap.dedent("""\
         agm tmux new    [-d] [-n PANES] [SESSION]

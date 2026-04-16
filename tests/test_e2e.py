@@ -2615,6 +2615,20 @@ class TestHelp:
             assert result.returncode == 0, f"help {cmd} failed"
             assert f"agm {cmd}" in result.stdout, f"help {cmd} missing header"
 
+    def test_run_help_describes_options_and_settings_merge(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(["help", "run"], env=env, cwd=str(tmp_path))
+        assert result.returncode == 0
+        assert "-f SETTINGS" in result.stdout
+        assert "Use this settings file directly" in result.stdout
+        assert "--no-patch" in result.stdout
+        assert "Do not append $PROJ_DIR" in result.stdout
+        assert "$HOME/.agm/sandbox/default.json" in result.stdout
+        assert "$PROJ_DIR/config/sandbox/default.json" in result.stdout
+        assert "./.sandbox/default.json" in result.stdout
+        assert "Later files override earlier ones." in result.stdout
+
     def test_help_aliases_resolve(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

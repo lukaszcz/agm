@@ -31,6 +31,10 @@ By default, `agm run` loads sandbox settings from `$HOME/.agm/sandbox/default.js
 and merges them with `$PROJ_DIR/config/sandbox/default.json` and `./.sandbox/default.json`
 when present, with more local files taking precedence.
 
+`-f SETTINGS` skips that discovery and uses the given settings file directly.
+Unless `--no-patch` is set, `agm run` also adds `$PROJ_DIR` to
+`filesystem.allowWrite` after loading the selected settings.
+
 | Command | Description |
 |---|---|
 | `agm config copy [-d PROJECT_DIR] DIRNAME` | Copy project configuration files |

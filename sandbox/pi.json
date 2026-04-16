@@ -7,10 +7,17 @@
       "openrouter.ai",
       "api.fireworks.ai",
       "api.friendli.ai",
+      "pypi.org",
+      "files.pythonhosted.org",
+      "registry.npmjs.org",
       "github.com",
-      "*.github.com",
       "api.github.com",
-      "raw.githubusercontent.com"
+      "gist.github.com",
+      "uploads.github.com",
+      "release-assets.githubusercontent.com",
+      "raw.githubusercontent.com",
+      "gitlab.com",
+      "bitbucket.org"
     ],
     "deniedDomains": []
   },

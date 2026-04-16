@@ -5,6 +5,8 @@
       "platform.claude.com",
       "api.anthropic.com",
       "openrouter.ai",
+      "api.fireworks.ai",
+      "api.friendli.ai",
       "github.com",
       "*.github.com",
       "api.github.com",

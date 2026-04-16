@@ -17,6 +17,8 @@ Production code lives in `src/agm/`, organized by area:
 - `vcs/` for git integration,
 - `tmux/` for session/layout logic.
 
+The directory structure of `src/agm/commands` must reflect the CLI command tree structure exactly.
+
 Tests live in `tests/`. Use `test_cli_parsing.py` for parser coverage, `test_project_utils.py` for focused utilities, and `test_e2e.py` for full CLI workflows.
 
 Project notes and command docs are in `docs/`.

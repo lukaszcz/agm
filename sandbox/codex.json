@@ -1,0 +1,21 @@
+{
+  "network": {
+    "allowedDomains": [
+      "api.openai.com"
+    ],
+    "deniedDomains": []
+  },
+  "filesystem": {
+    "denyRead": [
+      "~/.ssh",
+      "~/.aws",
+      "~/.gnupg"
+    ],
+    "allowWrite": [
+      ".",
+      "/tmp",
+      "~/.codex"
+    ],
+    "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
+  }
+}

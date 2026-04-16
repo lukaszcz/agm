@@ -81,8 +81,9 @@ def patch_for_proj_dir(settings: JsonDict, proj_dir: str) -> JsonDict:
     else:
         allow_write = []
     filesystem["allowWrite"] = allow_write
-    if proj_dir not in allow_write:
-        allow_write.append(proj_dir)
+    for path in (f"{proj_dir}/notes", f"{proj_dir}/deps"):
+        if path not in allow_write:
+            allow_write.append(path)
     return patched
 
 

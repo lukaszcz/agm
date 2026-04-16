@@ -1775,7 +1775,11 @@ class TestSandbox:
 
         merged = _srt_settings(result)
         assert merged["network"]["allowedDomains"] == ["local.com"]
-        assert merged["filesystem"]["allowWrite"] == ["/proj", str(proj_dir)]
+        assert merged["filesystem"]["allowWrite"] == [
+            "/proj",
+            str(proj_dir / "notes"),
+            str(proj_dir / "deps"),
+        ]
 
     def test_merge_overrides_ignore_violations(
         self, tmp_path: Path, env: dict[str, str]
@@ -1892,7 +1896,9 @@ class TestSandbox:
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
         parsed = _srt_settings(result)
-        assert "/some/project/dir" in parsed["filesystem"]["allowWrite"]
+        assert "/some/project/dir/notes" in parsed["filesystem"]["allowWrite"]
+        assert "/some/project/dir/deps" in parsed["filesystem"]["allowWrite"]
+        assert "/some/project/dir" not in parsed["filesystem"]["allowWrite"]
 
     def test_no_patch_flag(
         self, tmp_path: Path, env: dict[str, str]
@@ -1915,6 +1921,8 @@ class TestSandbox:
         assert result.returncode == 0
         parsed = _srt_settings(result)
         assert str(work) not in parsed["filesystem"]["allowWrite"]
+        assert str(work / "notes") not in parsed["filesystem"]["allowWrite"]
+        assert str(work / "deps") not in parsed["filesystem"]["allowWrite"]
 
     def test_invalid_option(
         self, tmp_path: Path, env: dict[str, str]
@@ -1947,7 +1955,8 @@ class TestSandbox:
         assert result.returncode == 0
         parsed = _srt_settings(result)
         assert parsed["filesystem"]["allowWrite"] == ["/x"]
-        assert "/proj" not in parsed["filesystem"]["allowWrite"]
+        assert "/proj/notes" not in parsed["filesystem"]["allowWrite"]
+        assert "/proj/deps" not in parsed["filesystem"]["allowWrite"]
 
     def test_run_forwards_command_to_srt(
         self, tmp_path: Path, env: dict[str, str]
@@ -2623,11 +2632,13 @@ class TestHelp:
         assert "-f SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout
-        assert "Do not append $PROJ_DIR" in result.stdout
+        assert "Do not append $PROJ_DIR/notes and $PROJ_DIR/deps" in result.stdout
         assert "$HOME/.agm/sandbox/default.json" in result.stdout
         assert "$PROJ_DIR/config/sandbox/default.json" in result.stdout
         assert "./.sandbox/default.json" in result.stdout
         assert "Later files override earlier ones." in result.stdout
+        assert "$PROJ_DIR/notes" in result.stdout
+        assert "$PROJ_DIR/deps" in result.stdout
 
     def test_help_aliases_resolve(
         self, tmp_path: Path, env: dict[str, str]

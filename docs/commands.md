@@ -32,8 +32,9 @@ and merges them with `$PROJ_DIR/config/sandbox/default.json` and `./.sandbox/def
 when present, with more local files taking precedence.
 
 `-f SETTINGS` skips that discovery and uses the given settings file directly.
-Unless `--no-patch` is set, `agm run` also adds `$PROJ_DIR` to
-`filesystem.allowWrite` after loading the selected settings.
+Unless `--no-patch` is set, `agm run` also adds `$PROJ_DIR/notes` and
+`$PROJ_DIR/deps` to `filesystem.allowWrite` after loading the selected
+settings.
 
 | Command | Description |
 |---|---|

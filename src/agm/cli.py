@@ -169,8 +169,9 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           -f SETTINGS  Use this settings file directly instead of discovering
                        and combining the default sandbox settings files.
-          --no-patch   Do not append $PROJ_DIR to filesystem.allowWrite after
-                       loading the selected settings.
+          --no-patch   Do not append $PROJ_DIR/notes and $PROJ_DIR/deps to
+                       filesystem.allowWrite after loading the selected
+                       settings.
 
         Settings resolution:
           default      Load the existing files in this order:
@@ -184,8 +185,8 @@ _HELP_TEXTS: dict[str, str] = {
           -f SETTINGS  Skip default discovery and use SETTINGS as-is.
 
         Automatic patching:
-          Unless --no-patch is set, agm adds $PROJ_DIR to
-          filesystem.allowWrite when PROJ_DIR is set.
+          Unless --no-patch is set, agm adds $PROJ_DIR/notes and
+          $PROJ_DIR/deps to filesystem.allowWrite when PROJ_DIR is set.
     """),
     "tmux": textwrap.dedent("""\
         agm tmux new    [-d] [-n PANES] [SESSION]

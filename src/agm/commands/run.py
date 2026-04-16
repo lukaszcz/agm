@@ -168,12 +168,30 @@ def _write_json_temp(data: JsonDict, temp_files: list[Path]) -> Path:
     return path
 
 
-def _default_settings_candidates(current: Path, resolved_env: dict[str, str]) -> list[Path]:
-    candidates = [Path(resolved_env["HOME"]) / ".agm" / "sandbox" / "default.json"]
+def sandbox_settings_path(settings_dir: Path, executable_path: str) -> Path:
+    executable_name = Path(executable_path).name or executable_path
+    command_settings = settings_dir / f"{executable_name}.json"
+    if command_settings.is_file():
+        return command_settings
+    return settings_dir / "default.json"
+
+
+def _default_settings_candidates(
+    current: Path, resolved_env: dict[str, str], executable_path: str
+) -> list[Path]:
+    candidates = [
+        sandbox_settings_path(
+            Path(resolved_env["HOME"]) / ".agm" / "sandbox", executable_path
+        )
+    ]
     proj_dir = resolved_env.get("PROJ_DIR")
     if proj_dir:
-        candidates.append(Path(proj_dir) / "config" / "sandbox" / "default.json")
-    candidates.append(current / ".sandbox" / "default.json")
+        candidates.append(
+            sandbox_settings_path(
+                Path(proj_dir) / "config" / "sandbox", executable_path
+            )
+        )
+    candidates.append(sandbox_settings_path(current / ".sandbox", executable_path))
     return candidates
 
 
@@ -218,7 +236,9 @@ def run(args: RunArgs) -> None:
                 )
                 raise SystemExit(1)
         else:
-            settings_candidates = _default_settings_candidates(current, resolved_env)
+            settings_candidates = _default_settings_candidates(
+                current, resolved_env, run_command[0]
+            )
             found_settings = [path for path in settings_candidates if path.is_file()]
             if not found_settings:
                 print("Error: no sandbox settings file found.", file=sys.stderr)

@@ -1665,7 +1665,7 @@ class TestSandbox:
         sandbox_dir = home / ".agm" / "sandbox"
         sandbox_dir.mkdir(parents=True)
         settings = {"network": {"allowedDomains": ["example.com"]}}
-        (sandbox_dir / "default.json").write_text(json.dumps(settings))
+        (sandbox_dir / "echo.json").write_text(json.dumps(settings))
 
         work = tmp_path / "work"
         work.mkdir()
@@ -1676,6 +1676,24 @@ class TestSandbox:
         assert parsed["network"]["allowedDomains"] == ["example.com"]
 
     def test_uses_local_settings(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(
+            json.dumps(_settings(filesystem=_filesystem_settings(".")))
+        )
+
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        parsed = _srt_settings(result)
+        assert parsed["filesystem"]["allowWrite"] == ["."]
+
+    def test_falls_back_to_default_when_command_settings_missing(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
@@ -1700,7 +1718,7 @@ class TestSandbox:
 
         proj_dir = tmp_path / "project"
         (proj_dir / "config" / "sandbox").mkdir(parents=True)
-        (proj_dir / "config" / "sandbox" / "default.json").write_text(
+        (proj_dir / "config" / "sandbox" / "echo.json").write_text(
             json.dumps(_settings(network=_network_settings("proj.com")))
         )
 
@@ -1721,7 +1739,7 @@ class TestSandbox:
         home = Path(env["HOME"])
         home_sandbox = home / ".agm" / "sandbox"
         home_sandbox.mkdir(parents=True)
-        (home_sandbox / "default.json").write_text(
+        (home_sandbox / "echo.json").write_text(
             json.dumps(
                 _settings(
                     network=_network_settings("home.com"),
@@ -1734,7 +1752,7 @@ class TestSandbox:
         work.mkdir()
         local_sandbox = work / ".sandbox"
         local_sandbox.mkdir()
-        (local_sandbox / "default.json").write_text(
+        (local_sandbox / "echo.json").write_text(
             json.dumps(_settings(network=_network_settings("local.com")))
         )
 
@@ -1752,7 +1770,7 @@ class TestSandbox:
 
         proj_dir = tmp_path / "project"
         (proj_dir / "config" / "sandbox").mkdir(parents=True)
-        (proj_dir / "config" / "sandbox" / "default.json").write_text(
+        (proj_dir / "config" / "sandbox" / "echo.json").write_text(
             json.dumps(
                 _settings(
                     network=_network_settings("proj.com"),
@@ -1765,7 +1783,7 @@ class TestSandbox:
         work.mkdir()
         local_sandbox = work / ".sandbox"
         local_sandbox.mkdir()
-        (local_sandbox / "default.json").write_text(
+        (local_sandbox / "echo.json").write_text(
             json.dumps(_settings(network=_network_settings("local.com")))
         )
         env["PROJ_DIR"] = str(proj_dir)
@@ -1790,7 +1808,7 @@ class TestSandbox:
         home = Path(env["HOME"])
         home_sandbox = home / ".agm" / "sandbox"
         home_sandbox.mkdir(parents=True)
-        (home_sandbox / "default.json").write_text(
+        (home_sandbox / "echo.json").write_text(
             json.dumps(
                 _settings(
                     ignore_violations={"ruleA": True},
@@ -1803,7 +1821,7 @@ class TestSandbox:
         work.mkdir()
         local_sandbox = work / ".sandbox"
         local_sandbox.mkdir()
-        (local_sandbox / "default.json").write_text(
+        (local_sandbox / "echo.json").write_text(
             json.dumps(_settings(ignore_violations={"ruleB": True}))
         )
 
@@ -1821,7 +1839,7 @@ class TestSandbox:
         home = Path(env["HOME"])
         home_sandbox = home / ".agm" / "sandbox"
         home_sandbox.mkdir(parents=True)
-        (home_sandbox / "default.json").write_text(
+        (home_sandbox / "echo.json").write_text(
             json.dumps(
                 _settings(
                     enabled=True,
@@ -1835,7 +1853,7 @@ class TestSandbox:
         work.mkdir()
         local_sandbox = work / ".sandbox"
         local_sandbox.mkdir()
-        (local_sandbox / "default.json").write_text(
+        (local_sandbox / "echo.json").write_text(
             json.dumps(
                 _settings(
                     enabled=False,
@@ -1887,7 +1905,7 @@ class TestSandbox:
         work.mkdir()
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
-        (sandbox_dir / "default.json").write_text(
+        (sandbox_dir / "echo.json").write_text(
             json.dumps(_settings(filesystem=_filesystem_settings(".")))
         )
 
@@ -1909,7 +1927,7 @@ class TestSandbox:
         work.mkdir()
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
-        (sandbox_dir / "default.json").write_text(
+        (sandbox_dir / "echo.json").write_text(
             json.dumps(_settings(filesystem=_filesystem_settings(".")))
         )
 
@@ -1968,7 +1986,7 @@ class TestSandbox:
         work.mkdir()
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
-        (sandbox_dir / "default.json").write_text(json.dumps(_settings(enabled=True)))
+        (sandbox_dir / "npm.json").write_text(json.dumps(_settings(enabled=True)))
 
         result = run_agm(
             ["run", "npm", "test", "--coverage"],
@@ -1987,7 +2005,7 @@ class TestSandbox:
         work.mkdir()
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
-        (sandbox_dir / "default.json").write_text(json.dumps(_settings(enabled=True)))
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
 
         result = run_agm(
             ["run", "--", "echo", "hello"],
@@ -1995,6 +2013,44 @@ class TestSandbox:
         )
         assert result.returncode == 0
         assert _srt_command(result) == "echo hello"
+
+    def test_prefers_command_settings_over_default_at_same_level(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "default.json").write_text(
+            json.dumps(_settings(network=_network_settings("default.com")))
+        )
+        (sandbox_dir / "echo.json").write_text(
+            json.dumps(_settings(network=_network_settings("echo.com")))
+        )
+
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        parsed = _srt_settings(result)
+        assert parsed["network"]["allowedDomains"] == ["echo.com"]
+
+    def test_uses_command_basename_for_settings_lookup(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(
+            ["run", "/bin/echo", "hello"], env=env, cwd=str(work),
+        )
+        assert result.returncode == 0
+        assert _srt_command(result) == "/bin/echo hello"
 
 
 # ── agm open ────────────────────────────────────────────────────────────────
@@ -2633,8 +2689,11 @@ class TestHelp:
         assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout
         assert "Do not append $PROJ_DIR/notes and $PROJ_DIR/deps" in result.stdout
+        assert "$HOME/.agm/sandbox/<command>.json" in result.stdout
         assert "$HOME/.agm/sandbox/default.json" in result.stdout
+        assert "$PROJ_DIR/config/sandbox/<command>.json" in result.stdout
         assert "$PROJ_DIR/config/sandbox/default.json" in result.stdout
+        assert "./.sandbox/<command>.json" in result.stdout
         assert "./.sandbox/default.json" in result.stdout
         assert "Later files override earlier ones." in result.stdout
         assert "$PROJ_DIR/notes" in result.stdout
@@ -2796,7 +2855,7 @@ class TestEdgeCases:
         work.mkdir()
         sandbox_dir = work / ".sandbox"
         sandbox_dir.mkdir()
-        (sandbox_dir / "default.json").write_text("{invalid json")
+        (sandbox_dir / "echo.json").write_text("{invalid json")
 
         result = run_agm(
             ["run", "echo", "hi"], env=env, cwd=str(work), check=False,

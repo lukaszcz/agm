@@ -174,10 +174,15 @@ _HELP_TEXTS: dict[str, str] = {
                        settings.
 
         Settings resolution:
-          default      Load the existing files in this order:
-                         1. $HOME/.agm/sandbox/default.json
-                         2. $PROJ_DIR/config/sandbox/default.json
-                         3. ./.sandbox/default.json
+          default      For each directory below, load <command>.json when it
+                       exists there; otherwise fall back to default.json.
+                       Then merge the existing files in this order:
+                         1. $HOME/.agm/sandbox/<command>.json
+                            fallback: $HOME/.agm/sandbox/default.json
+                         2. $PROJ_DIR/config/sandbox/<command>.json
+                            fallback: $PROJ_DIR/config/sandbox/default.json
+                         3. ./.sandbox/<command>.json
+                            fallback: ./.sandbox/default.json
                        Later files override earlier ones. network and
                        filesystem are merged by key; ignoreViolations replaces
                        the earlier value; enabled and

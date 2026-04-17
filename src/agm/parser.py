@@ -177,9 +177,9 @@ _HELP_TEXTS: dict[str, str] = {
         Tmux session and layout management.
     """),
     "help": textwrap.dedent("""\
-        agm help [COMMAND]
+        agm help [COMMAND...]
 
-        Show help information for top-level commands.
+        Show help information for commands and subcommands.
     """),
 }
 
@@ -291,7 +291,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show help for a command",
         help_text=_HELP_TEXTS["help"],
     )
-    help_parser.add_argument("help_command", nargs="?", default=None, metavar="command")
+    empty_help_command: list[str] = []
+    help_parser.add_argument(
+        "help_command",
+        nargs="*",
+        default=empty_help_command,
+        metavar="command",
+    )
 
     open_parser = subparsers.add_parser(
         "open",

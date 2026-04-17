@@ -2813,6 +2813,32 @@ class TestHelp:
             assert f"agm {canonical}" in result.stdout
 
     @pytest.mark.parametrize(
+        ("argv", "help_argv", "expected_text"),
+        [
+            (["help", "wt", "new"], ["wt", "new", "-h"], "agm wt new"),
+            (["help", "worktree", "remove"], ["worktree", "remove", "-h"], "agm worktree remove"),
+            (["help", "config", "cp"], ["config", "cp", "-h"], "agm config cp"),
+            (["help", "dep", "switch"], ["dep", "switch", "-h"], "agm dep switch"),
+            (["help", "tmux", "layout"], ["tmux", "layout", "-h"], "agm tmux layout"),
+        ],
+    )
+    def test_help_for_subcommands(
+        self,
+        argv: list[str],
+        help_argv: list[str],
+        expected_text: str,
+        tmp_path: Path,
+        env: dict[str, str],
+    ) -> None:
+        result = run_agm(argv, env=env, cwd=str(tmp_path))
+        expected = run_agm(help_argv, env=env, cwd=str(tmp_path))
+
+        assert result.returncode == 0
+        assert expected_text in result.stdout
+        assert result.stdout == expected.stdout
+        assert result.stderr == expected.stderr
+
+    @pytest.mark.parametrize(
         ("argv", "help_argv"),
         [
             (["-h"], ["help"]),
@@ -2823,11 +2849,16 @@ class TestHelp:
             (["branch", "-h"], ["help", "branch"]),
             (["br", "-h"], ["help", "br"]),
             (["config", "-h"], ["help", "config"]),
+            (["config", "cp", "-h"], ["help", "config", "cp"]),
             (["wt", "-h"], ["help", "wt"]),
+            (["wt", "new", "-h"], ["help", "wt", "new"]),
             (["worktree", "-h"], ["help", "worktree"]),
+            (["worktree", "remove", "-h"], ["help", "worktree", "remove"]),
             (["dep", "-h"], ["help", "dep"]),
+            (["dep", "switch", "-h"], ["help", "dep", "switch"]),
             (["run", "-h"], ["help", "run"]),
             (["tmux", "-h"], ["help", "tmux"]),
+            (["tmux", "layout", "-h"], ["help", "tmux", "layout"]),
         ],
     )
     def test_help_flag_matches_help_command(

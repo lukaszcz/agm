@@ -7,7 +7,7 @@ from typing import Protocol
 
 class HelpArgs(Protocol):
     command: str | None
-    help_command: str | None
+    help_command: list[str]
 
 
 class BranchSyncArgs(Protocol):

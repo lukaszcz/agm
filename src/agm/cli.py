@@ -37,6 +37,7 @@ from agm.commands.args import (
 
 build_parser = parser_helpers.build_parser
 print_command_help = parser_helpers.print_command_help
+print_help_for_command_path = parser_helpers.print_help_for_command_path
 print_overview = parser_helpers.print_overview
 _HELP_TEXTS = parser_helpers._HELP_TEXTS
 _HELP_ALIASES = parser_helpers._HELP_ALIASES
@@ -45,7 +46,7 @@ _COMMAND_OVERVIEW = parser_helpers._COMMAND_OVERVIEW
 
 class _DispatchArgs(Protocol):
     command: str | None
-    help_command: str | None
+    help_command: list[str]
     br_command: str | None
     config_command: str | None
     wt_command: str | None
@@ -63,10 +64,13 @@ def dispatch(args: _DispatchArgs) -> NoReturn:
         print_overview()
         raise SystemExit(0)
     if cmd == "help":
-        if args.help_command is None:
+        if not args.help_command:
             print_overview()
         else:
-            print_command_help(args.help_command)
+            try:
+                print_help_for_command_path(args.help_command)
+            except ValueError:
+                print_command_help(" ".join(args.help_command))
         raise SystemExit(0)
     if cmd in {"br", "branch"}:
         if args.br_command is None:

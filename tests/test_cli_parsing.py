@@ -300,21 +300,25 @@ class TestHelp:
     def test_help_bare(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["help"])
         assert ns.command == "help"
-        assert ns.help_command is None
+        assert ns.help_command == []
 
     def test_help_with_command(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["help", "open"])
         assert ns.command == "help"
-        assert ns.help_command == "open"
+        assert ns.help_command == ["open"]
+
+    def test_help_with_subcommand_path(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["help", "wt", "new"])
+        assert ns.help_command == ["wt", "new"]
 
     def test_help_with_alias(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["help", "br"])
-        assert ns.help_command == "br"
+        assert ns.help_command == ["br"]
 
     def test_help_with_unknown(self, parser: argparse.ArgumentParser) -> None:
         # argparse accepts any string; validation is in dispatch
         ns = parse(parser, ["help", "bogus"])
-        assert ns.help_command == "bogus"
+        assert ns.help_command == ["bogus"]
 
 
 # ── top-level ────────────────────────────────────────────────────────────────

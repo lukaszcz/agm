@@ -47,6 +47,12 @@ class TestConfigCopy:
         assert ns.project_dir == "/some/dir"
         assert ns.dirname == "target"
 
+    def test_config_copy_with_dir_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["config", "copy", "--dir", "/some/dir", "target"])
+        assert ns.config_command == "copy"
+        assert ns.project_dir == "/some/dir"
+        assert ns.dirname == "target"
+
     def test_config_cp_missing_dirname(self, parser: argparse.ArgumentParser) -> None:
         assert_rejects(parser, ["config", "cp"])
 
@@ -61,6 +67,11 @@ class TestWorktreeNew:
 
     def test_wt_new_with_d(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["wt", "new", "-d", "/custom", "feat/z"])
+        assert ns.worktrees_dir == "/custom"
+        assert ns.branch == "feat/z"
+
+    def test_wt_new_with_dir_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["wt", "new", "--dir", "/custom", "feat/z"])
         assert ns.worktrees_dir == "/custom"
         assert ns.branch == "feat/z"
 
@@ -94,6 +105,11 @@ class TestWorktreeRemove:
         assert ns.force is True
         assert ns.branch == "old-branch"
 
+    def test_worktree_remove_force_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["worktree", "remove", "--force", "old-branch"])
+        assert ns.force is True
+        assert ns.branch == "old-branch"
+
     def test_wt_rm_missing_branch(self, parser: argparse.ArgumentParser) -> None:
         assert_rejects(parser, ["wt", "rm"])
 
@@ -111,6 +127,10 @@ class TestDep:
         ns = parse(parser, ["dep", "new", "-b", "main", "https://github.com/org/repo.git"])
         assert ns.branch == "main"
 
+    def test_dep_new_with_branch_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["dep", "new", "--branch", "main", "https://github.com/org/repo.git"])
+        assert ns.branch == "main"
+
     def test_dep_switch(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["dep", "switch", "mylib", "feat/x"])
         assert ns.dep_command == "switch"
@@ -120,6 +140,10 @@ class TestDep:
 
     def test_dep_switch_create(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["dep", "switch", "-b", "mylib", "feat/x"])
+        assert ns.create_branch is True
+
+    def test_dep_switch_create_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["dep", "switch", "--branch", "mylib", "feat/x"])
         assert ns.create_branch is True
 
     def test_dep_rm(self, parser: argparse.ArgumentParser) -> None:
@@ -173,6 +197,11 @@ class TestInit:
         assert ns.branch == "dev"
         assert ns.positional == ["myproj"]
 
+    def test_init_with_branch_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["init", "--branch", "dev", "myproj"])
+        assert ns.branch == "dev"
+        assert ns.positional == ["myproj"]
+
     def test_init_with_embedded(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["init", "--embedded", "myproj"])
         assert ns.embedded is True
@@ -209,8 +238,17 @@ class TestOpen:
         ns = parse(parser, ["open", "-n", "6", "repo"])
         assert ns.pane_count == "6"
 
+    def test_open_with_num_panes_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "--num-panes", "6", "repo"])
+        assert ns.pane_count == "6"
+
     def test_open_with_parent_and_branch(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["open", "-p", "main", "feat/y"])
+        assert ns.branch == "feat/y"
+        assert ns.parent == "main"
+
+    def test_open_with_parent_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "--parent", "main", "feat/y"])
         assert ns.branch == "feat/y"
         assert ns.parent == "main"
 
@@ -222,6 +260,11 @@ class TestOpen:
 
     def test_open_detached(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["open", "-d", "feat/y"])
+        assert ns.detached is True
+        assert ns.branch == "feat/y"
+
+    def test_open_detach_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["open", "--detach", "feat/y"])
         assert ns.detached is True
         assert ns.branch == "feat/y"
 
@@ -249,6 +292,11 @@ class TestRun:
 
     def test_run_with_f(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["run", "-f", "ci.json", "make"])
+        assert ns.settings_file == "ci.json"
+        assert ns.run_command == ["make"]
+
+    def test_run_with_file_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["run", "--file", "ci.json", "make"])
         assert ns.settings_file == "ci.json"
         assert ns.run_command == ["make"]
 
@@ -283,6 +331,11 @@ class TestTmuxOpen:
         ns = parse(parser, ["tmux", "open", "--detach"])
         assert ns.detach is True
 
+    def test_tmux_open_num_panes_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["tmux", "open", "--num-panes", "8", "mysession"])
+        assert ns.pane_count == "8"
+        assert ns.session_name == "mysession"
+
 
 class TestTmuxClose:
     def test_tmux_close(self, parser: argparse.ArgumentParser) -> None:
@@ -305,6 +358,12 @@ class TestTmuxLayout:
 
     def test_tmux_layout_with_explicit_window(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["tmux", "layout", "4", "--window", "@1"])
+        assert ns.tmux_command == "layout"
+        assert ns.pane_count == "4"
+        assert ns.window_id == "@1"
+
+    def test_tmux_layout_with_window_short(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["tmux", "layout", "4", "-w", "@1"])
         assert ns.tmux_command == "layout"
         assert ns.pane_count == "4"
         assert ns.window_id == "@1"

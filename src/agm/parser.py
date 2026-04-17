@@ -73,15 +73,15 @@ class _HelpTextArgumentParser(argparse.ArgumentParser):
 
 _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
-        agm open [-d] [-n PANES] [-p PARENT] TARGET
+        agm open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
 
         Open a tmux session for a project checkout.
 
         Options:
-          -d          Create the tmux session without attaching to it.
-          -n PANES    Create the session with PANES panes.
-          -p PARENT   Base a newly created branch worktree on PARENT instead of
-                      the main checkout's current branch.
+          -d, --detach            Create the tmux session without attaching to it.
+          -n, --num-panes PANES   Create the session with PANES panes.
+          -p, --parent PARENT     Base a newly created branch worktree on PARENT instead of
+                                  the main checkout's current branch.
 
         Behavior:
           repo           Open the main checkout session.
@@ -96,8 +96,8 @@ _HELP_TEXTS: dict[str, str] = {
           agm open -d repo
           agm open main
           agm open feat/login
-          agm open -n 4 feat/login
-          agm open -p main feat/search
+          agm open --num-panes 4 feat/login
+          agm open --parent main feat/search
     """),
     "close": textwrap.dedent("""\
         agm close BRANCH
@@ -111,8 +111,8 @@ _HELP_TEXTS: dict[str, str] = {
                          removed with this command.
     """),
     "init": textwrap.dedent("""\
-        agm init [--embedded | --workspace] [-b BRANCH] PROJECT_NAME
-        agm init [--embedded | --workspace] [-b BRANCH] [PROJECT_NAME] REPO_URL
+        agm init [--embedded | --workspace] [-b|--branch BRANCH] PROJECT_NAME
+        agm init [--embedded | --workspace] [-b|--branch BRANCH] [PROJECT_NAME] REPO_URL
 
         Initialize a new project directory. When REPO_URL is provided, agm also
         clones it into repo/ by default, or into the project root with
@@ -125,7 +125,8 @@ _HELP_TEXTS: dict[str, str] = {
           --embedded   Force the embedded layout with AGM data under .agm/.
           --workspace  Force the workspace layout with repo/, deps/, notes/,
                        worktrees/, and config/ under the project root.
-          -b BRANCH    Clone this branch when REPO_URL is provided.
+          -b, --branch BRANCH
+                       Clone this branch when REPO_URL is provided.
     """),
     "fetch": textwrap.dedent("""\
         agm fetch
@@ -135,44 +136,45 @@ _HELP_TEXTS: dict[str, str] = {
         origin/main in each repo.
     """),
     "config": textwrap.dedent("""\
-        agm config copy [-d PROJECT_DIR] DIRNAME
-        agm config cp   [-d PROJECT_DIR] DIRNAME
+        agm config copy [-d|--dir PROJECT_DIR] DIRNAME
+        agm config cp   [-d|--dir PROJECT_DIR] DIRNAME
 
         Copy project configuration files into an existing target directory.
 
         Options:
-          -d PROJECT_DIR  Read shared config files from this project instead of
+          -d, --dir PROJECT_DIR
+                          Read shared config files from this project instead of
                           auto-detecting the current project.
     """),
     "worktree": textwrap.dedent("""\
-        agm worktree new      [-d DIR] BRANCH
+        agm worktree new      [-d|--dir DIR] BRANCH
         agm worktree setup
-        agm worktree remove   [-f] BRANCH
+        agm worktree remove   [-f|--force] BRANCH
         agm wt new | wt setup | wt rm
 
         Low-level git worktree management.
 
         Options:
-          agm worktree new -d DIR
+          agm worktree new --dir DIR
               Create the worktree under DIR instead of the default project
               worktrees directory.
-          agm worktree remove -f
+          agm worktree remove --force
               Force removal even when git reports uncommitted or locked state.
     """),
     "dep": textwrap.dedent("""\
-        agm dep new    [-b BRANCH] REPO_URL
+        agm dep new    [-b|--branch BRANCH] REPO_URL
         agm dep rm     [--all] DEP | DEP/BRANCH | DEP/repo | DEP/MAIN_BRANCH
-        agm dep switch [-b] DEP BRANCH
+        agm dep switch [-b|--branch] DEP BRANCH
 
         Manage project dependency checkouts under the project's dependency directory.
 
         Options:
-          agm dep new -b BRANCH
+          agm dep new --branch BRANCH
               Clone BRANCH instead of the dependency's default branch.
           agm dep rm --all
               Remove the entire dependency directory, including the main repo
               checkout and any linked worktrees.
-          agm dep switch -b
+          agm dep switch --branch
               Create BRANCH from the dependency's default branch before adding
               the new worktree.
 
@@ -182,7 +184,7 @@ _HELP_TEXTS: dict[str, str] = {
           DEP/MAIN_BRANCH Remove the main dependency checkout by branch name.
     """),
     "run": textwrap.dedent("""\
-        agm run [--no-patch] [-f SETTINGS] COMMAND [ARGS...]
+        agm run [--no-patch] [-f|--file SETTINGS] COMMAND [ARGS...]
 
         Run a command inside an Anthropic Sandbox Runtime container.
 
@@ -193,7 +195,8 @@ _HELP_TEXTS: dict[str, str] = {
           "agm run <command>" execute <other-command> instead.
 
         Options:
-          -f SETTINGS  Use this settings file directly instead of discovering
+          -f, --file SETTINGS
+                       Use this settings file directly instead of discovering
                        and combining the default sandbox settings files.
           --no-patch   Do not append the project notes and deps directories to
                        filesystem.allowWrite after loading the selected
@@ -213,23 +216,24 @@ _HELP_TEXTS: dict[str, str] = {
                        filesystem are merged by key; ignoreViolations replaces
                        the earlier value; enabled and
                        enableWeakerNestedSandbox are overridden when set.
-          -f SETTINGS  Skip default discovery and use SETTINGS as-is.
+          -f, --file SETTINGS
+                       Skip default discovery and use SETTINGS as-is.
 
         Automatic patching:
           Unless --no-patch is set, agm adds the project notes and deps
           directories to filesystem.allowWrite when PROJ_DIR is set.
     """),
     "tmux": textwrap.dedent("""\
-        agm tmux open   [-d] [-n PANES] [SESSION]
+        agm tmux open   [-d|--detach] [-n|--num-panes PANES] [SESSION]
         agm tmux close  SESSION
-        agm tmux layout PANES [--window WINDOW_ID]
+        agm tmux layout PANES [-w|--window WINDOW_ID]
 
         Tmux session and layout management.
 
         Options:
-          agm tmux open -d
+          agm tmux open --detach
               Create the session without attaching to it.
-          agm tmux open -n PANES
+          agm tmux open --num-panes PANES
               Create the session with PANES panes.
     """),
     "help": textwrap.dedent("""\
@@ -364,6 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     open_parser.add_argument(
         "-d",
+        "--detach",
         "--detached",
         dest="detached",
         action="store_true",
@@ -372,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     open_parser.add_argument(
         "-n",
+        "--num-panes",
         dest="pane_count",
         metavar="pane_count",
         default=None,
@@ -379,6 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     open_parser.add_argument(
         "-p",
+        "--parent",
         dest="parent",
         metavar="parent",
         default=None,
@@ -417,6 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         current.add_argument(
             "-d",
+            "--dir",
             dest="project_dir",
             metavar="project-dir",
             default=None,
@@ -441,6 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         wt_new.add_argument(
             "-d",
+            "--dir",
             dest="worktrees_dir",
             metavar="dir",
             default=None,
@@ -460,6 +469,7 @@ def build_parser() -> argparse.ArgumentParser:
             )
             current.add_argument(
                 "-f",
+                "--force",
                 dest="force",
                 action="store_true",
                 default=False,
@@ -480,6 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dep_new.add_argument(
         "-b",
+        "--branch",
         dest="branch",
         metavar="branch",
         default=None,
@@ -493,6 +504,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dep_switch.add_argument(
         "-b",
+        "--branch",
         dest="create_branch",
         action="store_true",
         default=False,
@@ -548,6 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_parser.add_argument(
         "-b",
+        "--branch",
         dest="branch",
         metavar="branch",
         default=None,
@@ -574,6 +587,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "-f",
+        "--file",
         dest="settings_file",
         metavar="settings.json",
         default=None,
@@ -607,6 +621,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tmux_open.add_argument(
         "-n",
+        "--num-panes",
         dest="pane_count",
         metavar="pane_count",
         default=None,

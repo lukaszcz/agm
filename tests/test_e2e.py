@@ -1895,7 +1895,7 @@ class TestSandbox:
         )
         assert result.returncode == 0
         assert result.stderr == ""
-        assert "agm run [--no-patch] [-f SETTINGS] COMMAND [ARGS...]" in result.stdout
+        assert "agm run [--no-patch] [-f|--file SETTINGS] COMMAND [ARGS...]" in result.stdout
 
     def test_error_when_no_settings_file(
         self, tmp_path: Path, env: dict[str, str]
@@ -3075,7 +3075,7 @@ class TestHelp:
         assert "the project config.toml" in result.stdout
         assert "./.agm/config.toml" in result.stdout
         assert '[run.<command>] alias = "<other-command>"' in result.stdout
-        assert "-f SETTINGS" in result.stdout
+        assert "-f, --file SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout
         assert "Do not append the project notes and deps directories" in result.stdout

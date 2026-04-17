@@ -31,42 +31,6 @@ def assert_rejects(parser: argparse.ArgumentParser, argv: list[str]) -> None:
         parser.parse_args(argv)
 
 
-# ── br / branch sync ────────────────────────────────────────────────────────
-
-class TestBranchSync:
-    def test_br_sync(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["br", "sync"])
-        assert ns.command == "br"
-        assert ns.br_command == "sync"
-
-    def test_branch_sync(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["branch", "sync"])
-        assert ns.command == "branch"
-        assert ns.br_command == "sync"
-
-    def test_br_without_subcommand(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["br"])
-        assert ns.command == "br"
-        assert ns.br_command is None
-
-    @pytest.mark.parametrize("argv", [["br", "sync", "--help"], ["branch", "sync", "--help"]])
-    def test_sync_help_text(
-        self,
-        parser: argparse.ArgumentParser,
-        capsys: pytest.CaptureFixture[str],
-        argv: list[str],
-    ) -> None:
-        with pytest.raises(SystemExit):
-            parser.parse_args(argv)
-
-        captured = capsys.readouterr()
-        normalized = " ".join(captured.out.split())
-        assert (
-            "Create local tracking branches for origin branches not merged into origin/main."
-            in normalized
-        )
-
-
 # ── config cp / copy ────────────────────────────────────────────────────────
 
 class TestConfigCopy:
@@ -354,10 +318,6 @@ class TestHelp:
         ns = parse(parser, ["help", "wt", "new"])
         assert ns.help_command == ["wt", "new"]
 
-    def test_help_with_alias(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["help", "br"])
-        assert ns.help_command == ["br"]
-
     def test_help_with_unknown(self, parser: argparse.ArgumentParser) -> None:
         # argparse accepts any string; validation is in dispatch
         ns = parse(parser, ["help", "bogus"])
@@ -383,7 +343,7 @@ class TestHelpTextCoverage:
     def test_every_canonical_command_has_help_text(self) -> None:
         from agm.cli import _HELP_TEXTS
         canonical_commands = {
-            "open", "close", "init", "fetch", "branch", "config",
+            "open", "close", "init", "fetch", "config",
             "worktree", "dep", "run", "tmux", "help",
         }
         for cmd in canonical_commands:

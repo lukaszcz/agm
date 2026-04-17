@@ -88,8 +88,8 @@ _HELP_TEXTS: dict[str, str] = {
           default branch Open the main repo session when TARGET matches the
                          branch currently checked out in repo/.
           existing wt    Open the tmux session for worktrees/BRANCH.
-          existing br    Check out BRANCH into a worktree, then open it.
-          missing br     Create BRANCH from PARENT/current branch, then open it.
+          existing branch Check out BRANCH into a worktree, then open it.
+          missing branch  Create BRANCH from PARENT/current branch, then open it.
 
         Examples:
           agm open repo
@@ -124,13 +124,9 @@ _HELP_TEXTS: dict[str, str] = {
     "fetch": textwrap.dedent("""\
         agm fetch
 
-        Fetch the main repository and all checked-out dependencies.
-    """),
-    "branch": textwrap.dedent("""\
-        agm branch sync
-        agm br     sync
-
-        Branch management commands.
+        Fetch the main repository and all checked-out dependencies, then create
+        missing local tracking branches for origin branches not merged into
+        origin/main in each repo.
     """),
     "config": textwrap.dedent("""\
         agm config copy [-d PROJECT_DIR] DIRNAME
@@ -239,24 +235,20 @@ _HELP_TEXTS: dict[str, str] = {
 }
 
 _HELP_ALIASES: dict[str, str] = {
-    "br": "branch",
     "wt": "worktree",
     "cp": "config",
     "copy": "config",
 }
 
-_BRANCH_SYNC_HELP = (
-    "Create local tracking branches for origin branches not merged into "
-    "origin/main"
-)
-_BRANCH_SYNC_DESCRIPTION = f"{_BRANCH_SYNC_HELP}."
-
 _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("open", "Open a project session, creating or checking out a branch as needed"),
     ("close", "Remove a branch worktree and kill its tmux session"),
     ("init", "Initialize a new project by cloning a repository"),
-    ("fetch", "Fetch latest changes for the repo and all dependencies"),
-    ("branch (br)", f"Branch management ({_BRANCH_SYNC_HELP.lower()})"),
+    (
+        "fetch",
+        "Fetch latest changes and create missing tracking branches for the repo "
+        "and all dependencies",
+    ),
     ("config", "Copy project configuration files"),
     ("worktree (wt)", "Low-level git worktree management"),
     ("dep", "Manage project dependency checkouts"),
@@ -403,27 +395,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="branch whose worktree should be removed and tmux session stopped",
     )
 
-    br_parser = subparsers.add_parser(
-        "br",
-        help="Branch operations (alias for 'branch')",
-        help_text=help_text_for("br"),
-    )
-    branch_parser = subparsers.add_parser(
-        "branch",
-        help="Branch operations",
-        help_text=help_text_for("branch"),
-    )
-    for current in (br_parser, branch_parser):
-        current_sub = current.add_subparsers(
-            dest="br_command",
-            parser_class=_HelpTextArgumentParser,
-        )
-        current_sub.add_parser(
-            "sync",
-            help=_BRANCH_SYNC_HELP,
-            description=_BRANCH_SYNC_DESCRIPTION,
-        )
-
     config_parser = subparsers.add_parser(
         "config",
         help="Copy project configuration files",
@@ -546,7 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "fetch",
-        help="Fetch the repo and dependencies",
+        help="Fetch the repo and dependencies, then create missing tracking branches",
         help_text=help_text_for("fetch"),
     )
 

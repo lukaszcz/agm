@@ -311,74 +311,6 @@ def _srt_command(result: subprocess.CompletedProcess[str]) -> str:
     return ""
 
 
-# ── agm br sync ─────────────────────────────────────────────────────────────
-
-
-class TestBranchSync:
-    """agm br sync: sync remote tracking branches."""
-
-    def test_creates_tracking_branches_for_unmerged_remote(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
-
-        _push_branch(work, bare, "feat/a", "a.txt", env)
-        _git("branch", "-D", "feat/a", cwd=str(work), env=env)
-
-        run_agm(["br", "sync"], env=env, cwd=str(work))
-
-        branches = _git("branch", cwd=str(work), env=env).stdout
-        assert "feat/a" in branches
-
-    def test_skips_already_existing_local_branches(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
-
-        _push_branch(work, bare, "feat/b", "b.txt", env)
-        # Local branch still exists — brsync must not fail.
-        run_agm(["br", "sync"], env=env, cwd=str(work))
-
-    def test_ignores_merged_branches(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
-
-        _git("checkout", "-b", "merged-feat", cwd=str(work), env=env)
-        (work / "m.txt").write_text("m")
-        _git("add", ".", cwd=str(work), env=env)
-        _git("commit", "-m", "merged feat", cwd=str(work), env=env)
-        _git("checkout", "main", cwd=str(work), env=env)
-        _git("merge", "merged-feat", cwd=str(work), env=env)
-        _git("push", cwd=str(work), env=env)
-        _git("push", "origin", "merged-feat", cwd=str(work), env=env)
-        _git("branch", "-d", "merged-feat", cwd=str(work), env=env)
-
-        run_agm(["br", "sync"], env=env, cwd=str(work))
-
-        branches = _git("branch", cwd=str(work), env=env).stdout
-        assert "merged-feat" not in branches
-
-    def test_creates_multiple_tracking_branches(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
-
-        for name in ("feat/x", "feat/y"):
-            _push_branch(work, bare, name, f"{name.split('/')[-1]}.txt", env)
-            _git("branch", "-D", name, cwd=str(work), env=env)
-
-        run_agm(["br", "sync"], env=env, cwd=str(work))
-
-        branches = _git("branch", cwd=str(work), env=env).stdout
-        assert "feat/x" in branches
-        assert "feat/y" in branches
-
-
 # ── agm config cp ───────────────────────────────────────────────────────────
 
 
@@ -1486,6 +1418,45 @@ class TestFetch:
         ).stdout
         assert "new commit" in log
 
+    def test_creates_tracking_branches_for_main_repo(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        other = make_working_repo(tmp_path / "other", bare, env)
+        _push_branch(other, bare, "feat/main-sync", "main-sync.txt", env)
+
+        branches_before = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/main-sync" not in branches_before
+
+        run_agm(["fetch"], env=env, cwd=str(project))
+
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/main-sync" in branches
+
+    def test_creates_tracking_branches_for_dependency_repos(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "dep.git", env)
+
+        project = _make_project(tmp_path, bare_main, env)
+        dep_wt = project / "deps" / "mylib" / "main"
+        dep_wt.mkdir(parents=True)
+        make_working_repo(dep_wt, bare_dep, env)
+
+        other = make_working_repo(tmp_path / "dep-other", bare_dep, env)
+        _push_branch(other, bare_dep, "feat/dep-sync", "dep-sync.txt", env)
+
+        branches_before = _git("branch", cwd=str(dep_wt), env=env).stdout
+        assert "feat/dep-sync" not in branches_before
+
+        run_agm(["fetch"], env=env, cwd=str(project))
+
+        branches = _git("branch", cwd=str(dep_wt), env=env).stdout
+        assert "feat/dep-sync" in branches
+
     def test_fetches_multiple_dependencies(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1509,6 +1480,57 @@ class TestFetch:
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/dep1" in result.stdout
         assert "Fetching deps/dep2" in result.stdout
+
+    def test_prunes_non_origin_remote_tracking_refs(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_mirror = make_bare_repo(tmp_path / "mirror.git", env)
+        project = _make_project(tmp_path, bare, env)
+        repo_dir = project / "repo"
+
+        _git("remote", "add", "mirror", str(bare_mirror), cwd=str(repo_dir), env=env)
+
+        mirror_work = make_working_repo(tmp_path / "mirror-work", bare_mirror, env)
+        _push_branch(mirror_work, bare_mirror, "feat/mirror-prune", "mirror.txt", env)
+
+        _git("fetch", "mirror", cwd=str(repo_dir), env=env)
+        assert (
+            _git(
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/remotes/mirror/feat/mirror-prune",
+                cwd=str(repo_dir),
+                env=env,
+                check=False,
+            ).returncode
+            == 0
+        )
+
+        _git(
+            "push",
+            "origin",
+            "--delete",
+            "feat/mirror-prune",
+            cwd=str(mirror_work),
+            env=env,
+        )
+
+        run_agm(["fetch"], env=env, cwd=str(project))
+
+        assert (
+            _git(
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/remotes/mirror/feat/mirror-prune",
+                cwd=str(repo_dir),
+                env=env,
+                check=False,
+            ).returncode
+            != 0
+        )
 
 
 # ── agm init ────────────────────────────────────────────────────────────────
@@ -2908,7 +2930,7 @@ class TestHelp:
     ) -> None:
         """Every canonical command has a detailed help entry."""
         for cmd in ("open", "init", "fetch",
-                     "close", "branch", "config", "worktree", "dep", "run",
+                     "close", "config", "worktree", "dep", "run",
                      "tmux", "help"):
             result = run_agm(["help", cmd], env=env, cwd=str(tmp_path))
             assert result.returncode == 0, f"help {cmd} failed"
@@ -2941,8 +2963,8 @@ class TestHelp:
     def test_help_aliases_resolve(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Aliases (br, wt) show help for the canonical command."""
-        alias_map = {"br": "branch", "wt": "worktree"}
+        """Aliases show help for the canonical command."""
+        alias_map = {"wt": "worktree"}
         for alias, canonical in alias_map.items():
             result = run_agm(["help", alias], env=env, cwd=str(tmp_path))
             assert result.returncode == 0
@@ -2983,8 +3005,6 @@ class TestHelp:
             (["close", "-h"], ["help", "close"]),
             (["init", "-h"], ["help", "init"]),
             (["fetch", "-h"], ["help", "fetch"]),
-            (["branch", "-h"], ["help", "branch"]),
-            (["br", "-h"], ["help", "br"]),
             (["config", "-h"], ["help", "config"]),
             (["config", "cp", "-h"], ["help", "config", "cp"]),
             (["wt", "-h"], ["help", "wt"]),
@@ -3020,8 +3040,6 @@ class TestHelp:
     @pytest.mark.parametrize(
         ("argv", "help_argv"),
         [
-            (["br"], ["help", "br"]),
-            (["branch"], ["help", "branch"]),
             (["config"], ["help", "config"]),
             (["run"], ["help", "run"]),
             (["run", "--"], ["help", "run"]),
@@ -3207,18 +3225,6 @@ class TestEdgeCases:
 
         assert (tmp_path / "my-cool-project" / "repo").is_dir()
 
-    def test_br_sync_in_non_git_repo(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        """br sync in a non-git directory should fail."""
-        not_git = tmp_path / "not-git"
-        not_git.mkdir()
-
-        result = run_agm(
-            ["br", "sync"], env=env, cwd=str(not_git), check=False,
-        )
-        assert result.returncode != 0
-
     @needs_zsh
     def test_large_pane_count(
         self, tmp_path: Path, env: dict[str, str]
@@ -3380,10 +3386,10 @@ class TestWorkflows:
         assert head_a == "branch-a"
         assert head_b == "branch-b"
 
-    def test_branch_sync_then_checkout(
+    def test_fetch_then_checkout(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """br sync discovers remote branches, then wt new checks one out."""
+        """fetch discovers remote branches, then wt new checks one out."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -3391,8 +3397,8 @@ class TestWorkflows:
         other = make_working_repo(tmp_path / "other", bare, env)
         _push_branch(other, bare, "feat/synced", "synced.txt", env)
 
-        # Sync to discover the remote branch.
-        run_agm(["br", "sync"], env=env, cwd=str(project / "repo"))
+        # Fetch to discover the remote branch.
+        run_agm(["fetch"], env=env, cwd=str(project / "repo"))
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/synced" in branches
 

@@ -6,8 +6,8 @@ import sys
 from pathlib import Path
 
 from agm.utils.project import current_project_dir
-from agm.utils.shell import require_success
-from agm.vcs.git import find_first_git_repo
+from agm.utils.worktree import sync_remote_tracking_branches
+from agm.vcs.git import fetch_prune_all, find_first_git_repo
 
 
 def _fetch_repo(project_dir: Path, repo_path: Path) -> None:
@@ -16,7 +16,8 @@ def _fetch_repo(project_dir: Path, repo_path: Path) -> None:
     if display_path.startswith(prefix):
         display_path = display_path[len(prefix):]
     print(f"Fetching {display_path}")
-    require_success(["git", "-C", str(repo_path), "fetch"])
+    fetch_prune_all(repo_path)
+    sync_remote_tracking_branches(repo_path)
 
 
 def run(args: object) -> None:

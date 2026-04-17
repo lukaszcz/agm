@@ -17,11 +17,11 @@ from agm.utils.project import (
 from agm.utils.shell import require_success, source_env_files
 
 
-def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+def sync_remote_tracking_branches(
+    repo_dir: Path, *, env: dict[str, str] | None = None
+) -> None:
     """Create local tracking branches for origin branches not merged into origin/main."""
 
-    repo_dir = git_helpers.git_setup(cwd)
-    git_helpers.fetch_prune_origin(repo_dir, env=env)
     for remote_branch in git_helpers.remote_unmerged_branches(
         repo_dir, base_ref="origin/main", env=env
     ):
@@ -30,6 +30,14 @@ def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -
         local_branch = remote_branch.removeprefix("origin/")
         if not git_helpers.local_branch_exists(repo_dir, local_branch, env=env):
             git_helpers.create_tracking_branch(repo_dir, local_branch, remote_branch, env=env)
+
+
+def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+    """Create local tracking branches for origin branches not merged into origin/main."""
+
+    repo_dir = git_helpers.git_setup(cwd)
+    git_helpers.fetch_prune_origin(repo_dir, env=env)
+    sync_remote_tracking_branches(repo_dir, env=env)
 
 
 def load_worktree_env(

@@ -10,10 +10,6 @@ class HelpArgs(Protocol):
     help_command: list[str]
 
 
-class BranchSyncArgs(Protocol):
-    br_command: str | None
-
-
 class ConfigCopyArgs(Protocol):
     config_command: str | None
     project_dir: str | None

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import NoReturn, Protocol, cast
 
-import agm.commands.branch.sync as branch_sync_command
 import agm.commands.close as close_command
 import agm.commands.config.copy as config_copy_command
 import agm.commands.dep.new as dep_new_command
@@ -51,7 +50,6 @@ _COMMAND_OVERVIEW = parser_helpers._COMMAND_OVERVIEW
 class _DispatchArgs(Protocol):
     command: str | None
     help_command: list[str]
-    br_command: str | None
     config_command: str | None
     wt_command: str | None
     dep_command: str | None
@@ -75,12 +73,6 @@ def dispatch(args: _DispatchArgs) -> NoReturn:
                 print_help_for_command_path(args.help_command)
             except ValueError:
                 print_command_help(" ".join(args.help_command))
-        raise SystemExit(0)
-    if cmd in {"br", "branch"}:
-        if args.br_command is None:
-            print_command_help(cmd)
-            raise SystemExit(0)
-        branch_sync_command.run(args)
         raise SystemExit(0)
     if cmd == "open":
         open_command.run(cast(OpenArgs, args))

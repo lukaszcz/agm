@@ -57,6 +57,12 @@ def fetch(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
     require_success([*_git_args(repo_dir), "fetch"], env=env)
 
 
+def fetch_prune_all(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
+    """Run git fetch --all --prune."""
+
+    require_success([*_git_args(repo_dir), "fetch", "--all", "--prune"], env=env)
+
+
 def fetch_prune_origin(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
     """Run git fetch --prune origin."""
 

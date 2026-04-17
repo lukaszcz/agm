@@ -7,7 +7,7 @@
 | `agm open [-d] [-n PANES] [-p PARENT] TARGET` | Open `repo/`, an existing branch worktree, or create/check out the branch as needed |
 | `agm init [-b BRANCH] PROJECT_NAME` | Initialize a new project directory without cloning a repository |
 | `agm init [-b BRANCH] [PROJECT_NAME] REPO_URL` | Initialize a new project directory and clone the repository into `repo/` |
-| `agm fetch` | Fetch latest changes for the repo and all dependencies |
+| `agm fetch` | Fetch latest changes and create missing tracking branches for the repo and all dependencies |
 
 `agm open` options:
 - `-d` creates the tmux session without attaching to it.
@@ -21,7 +21,6 @@
 
 | Command | Description |
 |---|---|
-| `agm branch sync` | Fetch/prune origin and create local tracking branches |
 | `agm worktree new [-d DIR] BRANCH` | Create a new branch worktree or check out an existing branch |
 | `agm worktree setup` | Run setup scripts for the current repo or worktree checkout |
 | `agm worktree remove [-f] BRANCH` | Remove a worktree and delete the local branch |
@@ -95,7 +94,6 @@ settings.
 
 | Alias | Canonical form |
 |---|---|
-| `agm br` | `agm branch` |
 | `agm wt` | `agm worktree` |
 | `agm config cp` | `agm config copy` |
 | `agm wt rm` | `agm worktree remove` |

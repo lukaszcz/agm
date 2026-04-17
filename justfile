@@ -27,5 +27,5 @@ check: lint test typecheck
 install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
-install p=prefix *args: install-agm
+install *args: install-agm
     uv run python tools/install_agm_config.py {{args}}

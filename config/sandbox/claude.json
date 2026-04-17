@@ -27,6 +27,7 @@
     "allowWrite": [
       ".",
       "/tmp",
+      "~/.cache",
       "~/.claude"
     ],
     "denyWrite": [".env", ".env.*", "*.pem", "*.key"]

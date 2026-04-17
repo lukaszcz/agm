@@ -27,15 +27,5 @@ check: lint test typecheck
 install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
-install p=prefix: install-agm
-    @agm_config_dir="$HOME/.agm"; \
-    sandbox_dir="$agm_config_dir/sandbox"; \
-    mkdir -p "$sandbox_dir"; \
-    install -m 0644 "{{justfile_directory()}}/config/config.toml" "$agm_config_dir/config.toml"; \
-    echo "Installed $agm_config_dir/config.toml"; \
-    for sandbox_src in "{{justfile_directory()}}"/config/sandbox/*; do \
-      [ -f "$sandbox_src" ] || continue; \
-      sandbox_dst="$sandbox_dir/$(basename "$sandbox_src")"; \
-      install -m 0644 "$sandbox_src" "$sandbox_dst"; \
-      echo "Installed $sandbox_dst"; \
-    done
+install p=prefix *args: install-agm
+    uv run python tools/install_agm_config.py {{args}}

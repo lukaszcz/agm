@@ -21,6 +21,13 @@ just install
 This also installs `config/config.toml` to `$HOME/.agm/config.toml` and all files from
 `config/sandbox/` to `$HOME/.agm/sandbox/`.
 
+If files already exist under `$HOME/.agm/`, `just install` leaves them in place and skips
+overwriting them. To overwrite existing config files, use:
+
+```bash
+just install --force
+```
+
 Install to a custom prefix:
 
 ```bash

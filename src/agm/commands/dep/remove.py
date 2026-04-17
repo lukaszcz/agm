@@ -9,8 +9,8 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.commands.args import DepRemoveArgs
 from agm.commands.dep.common import main_dep_repo
-from agm.utils.project import current_project_dir, is_main_checkout_branch
-from agm.utils.worktree import remove_worktree_from_repo
+from agm.project.layout import current_project_dir, is_main_checkout_branch
+from agm.project.worktree import remove_worktree_from_repo
 
 
 def _parse_target(target: str, *, remove_all: bool) -> tuple[str, str | None]:

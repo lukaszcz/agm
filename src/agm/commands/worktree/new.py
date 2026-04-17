@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from agm.commands.args import WorktreeNewArgs
-from agm.utils.worktree import ensure_worktree
+from agm.project.worktree import ensure_worktree
 
 
 def run(args: WorktreeNewArgs) -> None:

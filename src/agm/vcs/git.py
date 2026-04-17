@@ -6,7 +6,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.utils.shell import require_capture, require_success, run_capture, run_foreground
+from agm.core.process import require_capture, require_success, run_capture, run_foreground
 
 
 @dataclass(frozen=True)

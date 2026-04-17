@@ -5,8 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from agm.utils.project import current_project_dir
-from agm.utils.worktree import sync_remote_tracking_branches
+from agm.project.layout import current_project_dir
+from agm.project.worktree import sync_remote_tracking_branches
 from agm.vcs.git import fetch_prune_all, find_first_git_repo
 
 

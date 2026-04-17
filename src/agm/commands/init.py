@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from agm.commands.args import InitArgs
-from agm.utils.shell import require_success
+from agm.core.process import require_success
 
 
 def looks_like_repo_url(value: str) -> bool:

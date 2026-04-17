@@ -7,7 +7,7 @@ import sys
 import agm.vcs.git as git_helpers
 from agm.commands.args import DepSwitchArgs
 from agm.commands.dep.common import default_branch_from_repo, main_dep_repo
-from agm.utils.project import current_project_dir
+from agm.project.layout import current_project_dir
 
 
 def run(args: DepSwitchArgs) -> None:

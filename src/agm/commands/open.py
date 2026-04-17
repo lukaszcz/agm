@@ -8,20 +8,21 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.commands.args import OpenArgs
 from agm.parser import exit_with_usage_error
-from agm.tmux.session import (
-    create_tmux_session,
-    focus_tmux_session,
-    queue_command_in_session,
-)
-from agm.tmux.session import validate_pane_count as validate_tmux_pane_count
-from agm.utils.project import (
+from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
     current_project_dir,
     is_main_checkout_branch,
     main_repo_dir,
 )
-from agm.utils.worktree import ensure_worktree, load_worktree_env
+from agm.project.setup import load_worktree_env
+from agm.project.worktree import ensure_worktree
+from agm.tmux.session import (
+    create_tmux_session,
+    focus_tmux_session,
+    queue_command_in_session,
+)
+from agm.tmux.session import validate_pane_count as validate_tmux_pane_count
 
 
 def validate_pane_count(pane_count: str | None) -> None:

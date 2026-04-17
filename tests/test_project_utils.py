@@ -7,8 +7,8 @@ from typing import Never
 
 import pytest
 
-import agm.utils.project as project_helpers
-from agm.utils.project import (
+import agm.project.layout as project_helpers
+from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
     current_project_dir,

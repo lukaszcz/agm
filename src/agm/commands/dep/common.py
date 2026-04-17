@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.utils.shell import run_capture
+from agm.core.process import run_capture
 
 
 def derive_dep_name(repo_url: str) -> str:

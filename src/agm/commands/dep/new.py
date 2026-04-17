@@ -6,8 +6,8 @@ import sys
 
 from agm.commands.args import DepNewArgs
 from agm.commands.dep.common import default_branch_from_remote, derive_dep_name
-from agm.utils.project import current_project_dir
-from agm.utils.shell import run_foreground
+from agm.core.process import run_foreground
+from agm.project.layout import current_project_dir
 
 
 def run(args: DepNewArgs) -> None:

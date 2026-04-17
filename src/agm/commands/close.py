@@ -7,14 +7,15 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.commands.args import CloseArgs
-from agm.tmux.session import close_tmux_session
-from agm.utils.project import (
+from agm.project.layout import (
     branch_session_name,
     current_project_dir,
     is_main_checkout_branch,
     main_repo_dir,
 )
-from agm.utils.worktree import load_worktree_env, remove_worktree
+from agm.project.setup import load_worktree_env
+from agm.project.worktree import remove_worktree
+from agm.tmux.session import close_tmux_session
 
 
 def close_session(*, branch: str, cwd: Path | None = None) -> None:

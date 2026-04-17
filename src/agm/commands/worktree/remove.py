@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from agm.commands.args import WorktreeRemoveArgs
-from agm.utils.worktree import remove_worktree
+from agm.project.worktree import remove_worktree
 
 
 def run(args: WorktreeRemoveArgs) -> None:

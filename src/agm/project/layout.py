@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.utils.shell import run_foreground
+from agm.core.process import run_foreground
 
 CONFIG_FILES: list[str] = [
     ".setup.sh",

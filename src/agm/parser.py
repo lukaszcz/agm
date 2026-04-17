@@ -99,6 +99,17 @@ _HELP_TEXTS: dict[str, str] = {
           agm open -n 4 feat/login
           agm open -p main feat/search
     """),
+    "close": textwrap.dedent("""\
+        agm close BRANCH
+
+        Remove a branch worktree and kill its tmux session.
+
+        Behavior:
+          BRANCH         Remove the branch worktree via agm wt rm, then kill
+                         the corresponding tmux session.
+          repo/current   Refers to the main repo checkout/session and cannot be
+                         removed with this command.
+    """),
     "init": textwrap.dedent("""\
         agm init [-b BRANCH] PROJECT_NAME
         agm init [-b BRANCH] [PROJECT_NAME] REPO_URL
@@ -235,6 +246,7 @@ _HELP_ALIASES: dict[str, str] = {
 
 _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("open", "Open a project session, creating or checking out a branch as needed"),
+    ("close", "Remove a branch worktree and kill its tmux session"),
     ("init", "Initialize a new project by cloning a repository"),
     ("fetch", "Fetch latest changes for the repo and all dependencies"),
     ("branch (br)", "Branch management (sync remote tracking branches)"),
@@ -373,6 +385,16 @@ def build_parser() -> argparse.ArgumentParser:
         "branch",
         metavar="target",
         help="repo, an existing branch, or a branch name to create and open",
+    )
+
+    close_parser = subparsers.add_parser(
+        "close",
+        help="Remove a branch worktree and kill its tmux session",
+        help_text=_HELP_TEXTS["close"],
+    )
+    close_parser.add_argument(
+        "branch",
+        help="branch whose worktree should be removed and tmux session stopped",
     )
 
     br_parser = subparsers.add_parser(

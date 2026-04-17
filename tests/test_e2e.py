@@ -846,6 +846,32 @@ class TestMkWt:
 
         assert (project / ".worktrees" / "simple-auto").is_dir()
 
+    def test_rejects_repo_alias_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        result = run_agm(
+            ["wt", "new", "repo"], env=env, cwd=str(project / "repo"), check=False,
+        )
+
+        assert result.returncode != 0
+        assert "repo checkout" in (result.stdout + result.stderr).lower()
+
+    def test_rejects_main_repo_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        result = run_agm(
+            ["wt", "new", "main"], env=env, cwd=str(project / "repo"), check=False,
+        )
+
+        assert result.returncode != 0
+        assert "repo checkout" in (result.stdout + result.stderr).lower()
+
     def test_wt_new_checks_out_existing_remote_branch(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -999,6 +1025,62 @@ class TestRmWt:
         assert not (wt_dir / "long-rm").exists()
         branches = _git("branch", cwd=str(work), env=env).stdout
         assert "long-rm" not in branches
+
+    def test_rejects_removing_repo_alias_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        result = run_agm(["wt", "rm", "repo"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert "repo checkout" in (result.stdout + result.stderr).lower()
+
+    def test_rejects_removing_main_repo_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        result = run_agm(["wt", "rm", "main"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert "repo checkout" in (result.stdout + result.stderr).lower()
+
+
+# ── agm close ────────────────────────────────────────────────────────────────
+
+
+class TestClose:
+    """agm close: remove worktrees and stop matching tmux sessions."""
+
+    def test_removes_worktree_and_kills_tmux_session(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/close-me"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/close-me"
+        assert worktree.is_dir()
+
+        run_agm(["close", "feat/close-me"], env=env, cwd=str(project))
+
+        assert not worktree.exists()
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/close-me" not in branches
+        log = tmux_log.read_text()
+        assert "kill-session -t proj/feat/close-me" in log
+
+    def test_requires_branch_argument(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(["close"], env=env, cwd=str(tmp_path), check=False)
+        assert result.returncode != 0
+        assert "usage" in result.stderr.lower()
 
 
 # ── agm dep new ─────────────────────────────────────────────────────────────
@@ -2763,7 +2845,7 @@ class TestHelp:
         assert "agm - Agent Management Framework" in result.stdout
         assert "Commands:" in result.stdout
         for cmd in ("open", "init", "fetch",
-                     "branch", "config", "worktree", "dep", "run",
+                     "close", "branch", "config", "worktree", "dep", "run",
                      "tmux", "help"):
             assert cmd in result.stdout, f"'{cmd}' missing from overview"
 
@@ -2772,7 +2854,7 @@ class TestHelp:
     ) -> None:
         """Every canonical command has a detailed help entry."""
         for cmd in ("open", "init", "fetch",
-                     "branch", "config", "worktree", "dep", "run",
+                     "close", "branch", "config", "worktree", "dep", "run",
                      "tmux", "help"):
             result = run_agm(["help", cmd], env=env, cwd=str(tmp_path))
             assert result.returncode == 0, f"help {cmd} failed"
@@ -2844,6 +2926,7 @@ class TestHelp:
             (["-h"], ["help"]),
             (["help", "-h"], ["help", "help"]),
             (["open", "-h"], ["help", "open"]),
+            (["close", "-h"], ["help", "close"]),
             (["init", "-h"], ["help", "init"]),
             (["fetch", "-h"], ["help", "fetch"]),
             (["branch", "-h"], ["help", "branch"]),

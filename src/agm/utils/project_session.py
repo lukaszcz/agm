@@ -10,10 +10,17 @@ from agm.parser import exit_with_usage_error
 from agm.tmux.session import (
     create_tmux_session,
     focus_tmux_session,
+    kill_tmux_session,
     queue_command_in_session,
 )
-from agm.utils.project import current_project_dir, default_worktrees_dir, main_repo_dir
-from agm.utils.worktree import ensure_worktree, load_worktree_env
+from agm.utils.project import (
+    branch_session_name,
+    branch_worktree_path,
+    current_project_dir,
+    is_main_checkout_branch,
+    main_repo_dir,
+)
+from agm.utils.worktree import ensure_worktree, load_worktree_env, remove_worktree
 
 
 def validate_pane_count(pane_count: str | None) -> None:
@@ -27,7 +34,11 @@ def validate_pane_count(pane_count: str | None) -> None:
 
 
 def branch_path(proj_dir: Path, branch: str) -> Path:
-    return default_worktrees_dir(proj_dir) / branch
+    return branch_worktree_path(
+        proj_dir,
+        branch,
+        repo_branch=git_helpers.current_branch(main_repo_dir(proj_dir)),
+    )
 
 
 def expected_branch_path(proj_dir: Path, branch: str) -> Path:
@@ -98,20 +109,21 @@ def open_session(
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
-    proj_name = proj_dir.name
+    repo_branch = git_helpers.current_branch(main_repo_dir(proj_dir))
 
     if branch is None:
         repo_path = main_repo_dir(proj_dir)
+        session_name = proj_dir.name
     else:
-        repo_path = branch_path(proj_dir, branch)
+        repo_path = branch_worktree_path(proj_dir, branch, repo_branch=repo_branch)
         if not has_expected_worktree(proj_dir, branch):
             print(
                 f"error: branch '{branch}' is not checked out at {repo_path}",
                 file=sys.stderr,
             )
             raise SystemExit(1)
+        session_name = branch_session_name(proj_dir, branch, repo_branch=repo_branch)
     env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
-    session_name = f"{proj_name}/{branch}" if branch else proj_name
     create_tmux_session(
         detach=detached,
         pane_count=pane_count,
@@ -132,7 +144,6 @@ def new_session(
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
-    proj_name = proj_dir.name
     repo_path = branch_path(proj_dir, branch)
     repo_path.mkdir(parents=True, exist_ok=True)
     env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
@@ -148,7 +159,11 @@ def new_session(
     queue_setup_and_focus_session(
         detached=detached,
         pane_count=pane_count,
-        session_name=f"{proj_name}/{branch}",
+        session_name=branch_session_name(
+            proj_dir,
+            branch,
+            repo_branch=git_helpers.current_branch(main_repo_dir(proj_dir), env=env),
+        ),
         repo_path=repo_path,
         env=env,
     )
@@ -165,7 +180,6 @@ def checkout_session(
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
-    proj_name = proj_dir.name
     repo_path = branch_path(proj_dir, branch)
     repo_path.mkdir(parents=True, exist_ok=True)
     env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
@@ -181,7 +195,11 @@ def checkout_session(
     queue_setup_and_focus_session(
         detached=detached,
         pane_count=pane_count,
-        session_name=f"{proj_name}/{branch}",
+        session_name=branch_session_name(
+            proj_dir,
+            branch,
+            repo_branch=git_helpers.current_branch(main_repo_dir(proj_dir), env=env),
+        ),
         repo_path=repo_path,
         env=env,
     )
@@ -200,7 +218,11 @@ def smart_open_session(
     proj_dir = current_project_dir(current)
 
     repo_dir = main_repo_dir(proj_dir)
-    if branch in {"repo", git_helpers.current_branch(repo_dir)}:
+    if is_main_checkout_branch(
+        proj_dir,
+        branch,
+        repo_branch=git_helpers.current_branch(repo_dir),
+    ):
         open_session(detached=detached, pane_count=pane_count, branch=None, cwd=current)
         return
 
@@ -224,3 +246,26 @@ def smart_open_session(
         branch=branch,
         cwd=current,
     )
+
+
+def close_session(*, branch: str, cwd: Path | None = None) -> None:
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    proj_dir = current_project_dir(current)
+    repo_dir = main_repo_dir(proj_dir)
+    env = load_worktree_env(proj_dir, None, shell_cwd=repo_dir)
+    repo_branch = git_helpers.current_branch(repo_dir, env=env)
+    if is_main_checkout_branch(proj_dir, branch, repo_branch=repo_branch):
+        print(
+            (
+                f"error: '{branch}' resolves to the main repo checkout at "
+                f"{repo_dir} and cannot be removed"
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    remove_worktree(force=False, branch=branch, cwd=current, env=env)
+    session_name = branch_session_name(proj_dir, branch, repo_branch=repo_branch)
+    status = kill_tmux_session(session_name=session_name, cwd=repo_dir, env=env)
+    if status != 0:
+        raise SystemExit(status)

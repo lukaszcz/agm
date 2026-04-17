@@ -57,6 +57,10 @@ class OpenArgs(Protocol):
     branch: str
 
 
+class CloseArgs(Protocol):
+    branch: str
+
+
 class InitArgs(Protocol):
     positional: list[str]
     branch: str | None

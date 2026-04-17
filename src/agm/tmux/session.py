@@ -216,3 +216,21 @@ def focus_tmux_session(
         else ["tmux", "attach-session", "-t", session_name]
     )
     return subprocess.run(command, cwd=current, env=resolved_env, check=False).returncode
+
+
+def kill_tmux_session(
+    *,
+    session_name: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Kill an existing tmux session."""
+
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    resolved_env = dict(os.environ if env is None else env)
+    return subprocess.run(
+        ["tmux", "kill-session", "-t", session_name],
+        cwd=current,
+        env=resolved_env,
+        check=False,
+    ).returncode

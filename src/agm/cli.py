@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import NoReturn, Protocol, cast
 
 import agm.commands.branch.sync as branch_sync_command
+import agm.commands.close as close_command
 import agm.commands.config.copy as config_copy_command
 import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
@@ -21,6 +22,7 @@ import agm.commands.worktree.remove as worktree_remove_command
 import agm.commands.worktree.setup as worktree_setup_command
 from agm import parser as parser_helpers
 from agm.commands.args import (
+    CloseArgs,
     ConfigCopyArgs,
     DepNewArgs,
     DepRemoveArgs,
@@ -80,6 +82,9 @@ def dispatch(args: _DispatchArgs) -> NoReturn:
         raise SystemExit(0)
     if cmd == "open":
         open_command.run(cast(OpenArgs, args))
+        raise SystemExit(0)
+    if cmd == "close":
+        close_command.run(cast(CloseArgs, args))
         raise SystemExit(0)
     if cmd == "config":
         if args.config_command is None:

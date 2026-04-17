@@ -9,7 +9,7 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.commands.args import DepRemoveArgs
 from agm.commands.dep.common import main_dep_repo
-from agm.utils.project import current_project_dir
+from agm.utils.project import current_project_dir, is_main_checkout_branch
 from agm.utils.worktree import remove_worktree_from_repo
 
 
@@ -69,7 +69,7 @@ def run(args: DepRemoveArgs) -> None:
 
     assert ref is not None
     main_branch = git_helpers.current_branch(repo_path)
-    if ref == "repo" or ref == main_branch:
+    if is_main_checkout_branch(dep_dir, ref, repo_branch=main_branch):
         if linked_worktrees:
             print(
                 f"error: cannot remove deps/{dep} while other worktrees exist",

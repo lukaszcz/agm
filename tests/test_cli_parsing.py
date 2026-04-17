@@ -233,6 +233,18 @@ class TestOpen:
         assert ns.branch == "feat/y"
 
 
+# ── close ────────────────────────────────────────────────────────────────────
+
+class TestClose:
+    def test_close_branch(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["close", "feat/x"])
+        assert ns.command == "close"
+        assert ns.branch == "feat/x"
+
+    def test_close_missing_branch(self, parser: argparse.ArgumentParser) -> None:
+        assert_rejects(parser, ["close"])
+
+
 # ── run ──────────────────────────────────────────────────────────────────────
 
 class TestRun:
@@ -340,7 +352,8 @@ class TestHelpTextCoverage:
     def test_every_canonical_command_has_help_text(self) -> None:
         from agm.cli import _HELP_TEXTS
         canonical_commands = {
-            "open", "init", "fetch", "branch", "config", "worktree", "dep", "run", "tmux", "help",
+            "open", "close", "init", "fetch", "branch", "config",
+            "worktree", "dep", "run", "tmux", "help",
         }
         for cmd in canonical_commands:
             assert cmd in _HELP_TEXTS, f"missing help text for '{cmd}'"

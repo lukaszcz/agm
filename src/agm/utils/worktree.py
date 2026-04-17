@@ -6,7 +6,14 @@ import os
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.utils.project import copy_config, current_project_dir, default_worktrees_dir, main_repo_dir
+from agm.utils.project import (
+    branch_session_name,
+    copy_config,
+    current_project_dir,
+    default_worktrees_dir,
+    exit_if_main_checkout_branch,
+    main_repo_dir,
+)
 from agm.utils.shell import require_success, source_env_files
 
 
@@ -48,11 +55,13 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
     checkout_dir = git_helpers.git_setup(cwd)
     project_dir = current_project_dir(checkout_dir)
     branch: str | None = None
-    if checkout_dir.resolve(strict=False) != main_repo_dir(project_dir).resolve(strict=False):
+    repo_dir = main_repo_dir(project_dir)
+    repo_branch = git_helpers.current_branch(repo_dir, env=env)
+    if checkout_dir.resolve(strict=False) != repo_dir.resolve(strict=False):
         branch = git_helpers.current_branch(checkout_dir, env=env)
-    target_name = (
-        f"{project_dir.name}/{branch}" if branch is not None else f"{project_dir.name}/repo"
-    )
+        target_name = branch_session_name(project_dir, branch, repo_branch=repo_branch)
+    else:
+        target_name = branch_session_name(project_dir, repo_branch, repo_branch=repo_branch)
     setup_env = load_worktree_env(project_dir, branch, shell_cwd=checkout_dir, env=env)
 
     setup_paths = [
@@ -102,6 +111,9 @@ def ensure_worktree(
         raise SystemExit(1)
 
     project_dir = current_project_dir(current)
+    repo_dir = git_helpers.git_setup(current)
+    repo_branch = git_helpers.current_branch(repo_dir, env=env)
+    exit_if_main_checkout_branch(project_dir, branch_name, repo_branch=repo_branch)
     worktrees_path = (
         default_worktrees_dir(project_dir) if worktrees_dir is None else Path(worktrees_dir)
     )
@@ -110,7 +122,6 @@ def ensure_worktree(
     dirname = worktrees_path / branch_name
     resolved_dirname = dirname.resolve(strict=False)
 
-    repo_dir = git_helpers.git_setup(current)
     git_helpers.fetch(repo_dir, env=env)
     if create_branch and reuse_existing_branch:
         branch_exists = git_helpers.local_branch_exists(
@@ -166,6 +177,10 @@ def remove_worktree_from_repo(
     env: dict[str, str] | None = None,
 ) -> None:
     """Remove a worktree from *repo_dir* and delete its branch."""
+
+    project_dir = current_project_dir(repo_dir)
+    repo_branch = git_helpers.current_branch(repo_dir, env=env)
+    exit_if_main_checkout_branch(project_dir, branch, repo_branch=repo_branch)
 
     worktree_path: Path | None = None
     worktrees = git_helpers.worktree_list(repo_dir, env=env)

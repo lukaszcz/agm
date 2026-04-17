@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from agm.utils.shell import run_foreground
@@ -73,6 +74,43 @@ def default_worktrees_dir(project_dir: Path) -> Path:
     if (project_dir / "worktrees").is_dir():
         return project_dir / "worktrees"
     return project_dir / ".worktrees"
+
+
+def is_main_checkout_branch(project_dir: Path, branch: str, *, repo_branch: str) -> bool:
+    """Return whether *branch* resolves to the main repo checkout."""
+
+    return branch in {"repo", repo_branch}
+
+
+def branch_worktree_path(project_dir: Path, branch: str, *, repo_branch: str) -> Path:
+    """Return the checkout path corresponding to *branch*."""
+
+    if is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
+        return main_repo_dir(project_dir)
+    return default_worktrees_dir(project_dir) / branch
+
+
+def branch_session_name(project_dir: Path, branch: str, *, repo_branch: str) -> str:
+    """Return the tmux session name corresponding to *branch*."""
+
+    if is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
+        return project_dir.name
+    return f"{project_dir.name}/{branch}"
+
+
+def exit_if_main_checkout_branch(project_dir: Path, branch: str, *, repo_branch: str) -> None:
+    """Exit when *branch* resolves to the main repo checkout."""
+
+    if not is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
+        return
+    print(
+        (
+            f"error: '{branch}' resolves to the main repo checkout at "
+            f"{main_repo_dir(project_dir)} and cannot be managed as a branch worktree"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def copy_config(

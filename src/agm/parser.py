@@ -245,12 +245,18 @@ _HELP_ALIASES: dict[str, str] = {
     "copy": "config",
 }
 
+_BRANCH_SYNC_HELP = (
+    "Create local tracking branches for origin branches not merged into "
+    "origin/main"
+)
+_BRANCH_SYNC_DESCRIPTION = f"{_BRANCH_SYNC_HELP}."
+
 _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("open", "Open a project session, creating or checking out a branch as needed"),
     ("close", "Remove a branch worktree and kill its tmux session"),
     ("init", "Initialize a new project by cloning a repository"),
     ("fetch", "Fetch latest changes for the repo and all dependencies"),
-    ("branch (br)", "Branch management (sync remote tracking branches)"),
+    ("branch (br)", f"Branch management ({_BRANCH_SYNC_HELP.lower()})"),
     ("config", "Copy project configuration files"),
     ("worktree (wt)", "Low-level git worktree management"),
     ("dep", "Manage project dependency checkouts"),
@@ -412,7 +418,11 @@ def build_parser() -> argparse.ArgumentParser:
             dest="br_command",
             parser_class=_HelpTextArgumentParser,
         )
-        current_sub.add_parser("sync", help="Sync remote tracking branches")
+        current_sub.add_parser(
+            "sync",
+            help=_BRANCH_SYNC_HELP,
+            description=_BRANCH_SYNC_DESCRIPTION,
+        )
 
     config_parser = subparsers.add_parser(
         "config",

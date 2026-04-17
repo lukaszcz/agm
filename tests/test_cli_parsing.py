@@ -49,6 +49,23 @@ class TestBranchSync:
         assert ns.command == "br"
         assert ns.br_command is None
 
+    @pytest.mark.parametrize("argv", [["br", "sync", "--help"], ["branch", "sync", "--help"]])
+    def test_sync_help_text(
+        self,
+        parser: argparse.ArgumentParser,
+        capsys: pytest.CaptureFixture[str],
+        argv: list[str],
+    ) -> None:
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+
+        captured = capsys.readouterr()
+        normalized = " ".join(captured.out.split())
+        assert (
+            "Create local tracking branches for origin branches not merged into origin/main."
+            in normalized
+        )
+
 
 # ── config cp / copy ────────────────────────────────────────────────────────
 

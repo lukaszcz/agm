@@ -18,7 +18,7 @@ from agm.utils.shell import require_success, source_env_files
 
 
 def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-    """Sync remote tracking branches."""
+    """Create local tracking branches for origin branches not merged into origin/main."""
 
     repo_dir = git_helpers.git_setup(cwd)
     git_helpers.fetch_prune_origin(repo_dir, env=env)

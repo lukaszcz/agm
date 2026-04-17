@@ -275,7 +275,6 @@ def _overview_text() -> str:
         [
             "",
             "Run 'agm help <command>' for detailed help on a specific command.",
-            "Run 'agm <command> --help' for option summary.",
         ]
     )
     return "\n".join(lines) + "\n"

@@ -392,22 +392,39 @@ class TestCpConfig:
 
         assert (dest / ".env").read_text() == "FROM_WT=1"
 
-    def test_auto_detects_simple_project_from_dot_worktrees_subdir(
+    def test_auto_detects_embedded_project_from_dot_worktrees_subdir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
-        (project / "config").mkdir()
-        (project / "config" / ".env").write_text("FROM_SIMPLE=1")
+        (project / ".agm" / "config").mkdir(parents=True)
+        (project / ".agm" / "config" / ".env").write_text("FROM_EMBEDDED=1")
 
-        wt = project / ".worktrees" / "feat-x"
+        wt = project / ".agm" / "worktrees" / "feat-x"
         wt.mkdir(parents=True)
         dest = tmp_path / "dest"
         dest.mkdir()
 
         run_agm(["config", "cp", str(dest)], env=env, cwd=str(wt))
 
-        assert (dest / ".env").read_text() == "FROM_SIMPLE=1"
+        assert (dest / ".env").read_text() == "FROM_EMBEDDED=1"
+
+    def test_auto_detects_embedded_project_from_repo_subdir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+        src = project / "src"
+        src.mkdir()
+        (project / ".agm" / "config").mkdir(parents=True)
+        (project / ".agm" / "config" / ".env").write_text("FROM_EMBEDDED_SUBDIR=1")
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        run_agm(["config", "cp", str(dest)], env=env, cwd=str(src))
+
+        assert (dest / ".env").read_text() == "FROM_EMBEDDED_SUBDIR=1"
 
     def test_auto_detects_project_from_project_root(
         self, tmp_path: Path, env: dict[str, str]
@@ -768,15 +785,29 @@ class TestMkWt:
 
         assert (project / "worktrees" / "auto-dir").is_dir()
 
-    def test_default_worktrees_dir_for_simple_project(
+    def test_default_worktrees_dir_for_embedded_project(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
+        (project / ".agm").mkdir()
 
-        run_agm(["wt", "new", "simple-auto"], env=env, cwd=str(project))
+        run_agm(["wt", "new", "embedded-auto"], env=env, cwd=str(project))
 
-        assert (project / ".worktrees" / "simple-auto").is_dir()
+        assert (project / ".agm" / "worktrees" / "embedded-auto").is_dir()
+
+    def test_default_worktrees_dir_for_embedded_project_from_repo_subdir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+        (project / ".agm").mkdir()
+        src = project / "src"
+        src.mkdir()
+
+        run_agm(["wt", "new", "embedded-subdir"], env=env, cwd=str(src))
+
+        assert (project / ".agm" / "worktrees" / "embedded-subdir").is_dir()
 
     def test_rejects_repo_alias_branch(
         self, tmp_path: Path, env: dict[str, str]
@@ -1014,6 +1045,27 @@ class TestClose:
         result = run_agm(["close"], env=env, cwd=str(tmp_path), check=False)
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
+
+    def test_removes_embedded_project_worktree_from_repo_subdir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        (project / ".agm").mkdir()
+
+        run_agm(["wt", "new", "feat/close-embedded"], env=env, cwd=str(project))
+        worktree = project / ".agm" / "worktrees" / "feat/close-embedded"
+        src = project / "src"
+        src.mkdir()
+
+        result = run_agm(["close", "feat/close-embedded"], env=env, cwd=str(src))
+
+        assert not worktree.exists()
+        branches = _git("branch", cwd=str(project), env=env).stdout
+        assert "feat/close-embedded" not in branches
+        assert "Closed session proj/feat/close-embedded" in result.stdout
 
 
 # ── agm dep new ─────────────────────────────────────────────────────────────
@@ -1387,6 +1439,17 @@ class TestFetch:
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
 
+    def test_fetches_embedded_project_main_repo(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+
+        result = run_agm(["fetch"], env=env, cwd=str(project))
+
+        assert result.returncode == 0
+        assert "Fetching ." in result.stdout
+
     def test_error_when_repo_missing(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1644,6 +1707,70 @@ class TestInit:
         for d in ("repo", "deps", "worktrees", "notes", "config"):
             assert (proj / d).is_dir()
         assert not list((proj / "repo").iterdir())
+
+    def test_init_auto_detects_embedded_layout_for_existing_git_repo(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "proj.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+
+        result = run_agm(["init", "proj"], env=env, cwd=str(tmp_path))
+
+        assert "git repo detected, choosing embedded layout" in result.stdout.lower()
+        assert (project / ".agm" / "config").is_dir()
+        assert (project / ".agm" / "deps").is_dir()
+        assert (project / ".agm" / "notes").is_dir()
+        assert (project / ".agm" / "worktrees").is_dir()
+        assert not (project / "config").exists()
+        assert not (project / "deps").exists()
+
+    def test_init_workspace_overrides_existing_git_repo(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "proj.git", env)
+        project = make_working_repo(tmp_path / "proj", bare, env)
+
+        result = run_agm(["init", "--workspace", "proj"], env=env, cwd=str(tmp_path))
+
+        assert "git repo detected" not in result.stdout.lower()
+        assert (project / "repo").is_dir()
+        assert (project / "config").is_dir()
+
+    def test_init_embedded_with_url_only(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "embedded.git", env)
+
+        run_agm(["init", "--embedded", str(bare)], env=env, cwd=str(tmp_path))
+
+        proj = tmp_path / "embedded"
+        assert (proj / ".git").is_dir()
+        assert (proj / ".agm").is_dir()
+        assert (proj / ".agm" / "config").is_dir()
+        assert (proj / ".agm" / "deps").is_dir()
+        assert (proj / ".agm" / "notes").is_dir()
+        assert (proj / ".agm" / "worktrees").is_dir()
+        assert ".agm" in (proj / ".gitignore").read_text().splitlines()
+        assert (proj / "README.md").exists()
+        assert (proj / "config").exists() is False
+        assert (proj / "deps").exists() is False
+
+    def test_init_embedded_without_url_creates_structure_only(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        run_agm(["init", "--embedded", "myproj"], env=env, cwd=str(tmp_path))
+
+        proj = tmp_path / "myproj"
+        assert proj.is_dir()
+        assert (proj / ".agm").is_dir()
+        assert (proj / ".agm" / "deps").is_dir()
+        assert (proj / ".agm" / "notes").is_dir()
+        assert (proj / ".agm" / "config").is_dir()
+        assert (proj / ".agm" / "worktrees").is_dir()
+        assert ".agm" in (proj / ".gitignore").read_text().splitlines()
+        assert not (proj / "repo").exists()
+        assert not (proj / "worktrees").exists()
+        assert not (proj / "config").exists()
 
     def test_error_no_args(
         self, tmp_path: Path, env: dict[str, str]
@@ -2320,15 +2447,16 @@ class TestOpen:
         assert "Detached tmux session proj/feat/x created" in result.stdout
         assert "true" not in result.stdout
 
-    def test_open_existing_worktree_in_simple_project(
+    def test_open_existing_worktree_in_embedded_project(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
+        (project / ".agm").mkdir()
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        wt = project / ".worktrees" / "feat/x"
+        wt = project / ".agm" / "worktrees" / "feat/x"
         wt.parent.mkdir(parents=True, exist_ok=True)
         _git("worktree", "add", "-b", "feat/x", str(wt), cwd=str(project), env=env)
 
@@ -2944,23 +3072,21 @@ class TestHelp:
         result = run_agm(["help", "run"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
         assert "$HOME/.agm/config.toml" in result.stdout
-        assert "$PROJ_DIR/config/config.toml" in result.stdout
+        assert "the project config.toml" in result.stdout
         assert "./.agm/config.toml" in result.stdout
         assert '[run.<command>] alias = "<other-command>"' in result.stdout
         assert "-f SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout
-        assert "Do not append $PROJ_DIR/notes and $PROJ_DIR/deps" in result.stdout
+        assert "Do not append the project notes and deps directories" in result.stdout
         assert "$HOME/.agm/sandbox/<command>.json" in result.stdout
         assert "$HOME/.agm/sandbox/default.json" in result.stdout
-        assert "$PROJ_DIR/config/sandbox/<command>.json" in result.stdout
-        assert "$PROJ_DIR/config/sandbox/default.json" in result.stdout
+        assert "the project sandbox config directory" in result.stdout
         assert "./.sandbox/<command>.json" in result.stdout
         assert "./.sandbox/default.json" in result.stdout
         assert "try the aliased command's" in result.stdout
         assert "Later files override earlier ones." in result.stdout
-        assert "$PROJ_DIR/notes" in result.stdout
-        assert "$PROJ_DIR/deps" in result.stdout
+        assert "agm adds the project notes and deps" in result.stdout
 
     def test_help_aliases_resolve(
         self, tmp_path: Path, env: dict[str, str]

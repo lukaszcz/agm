@@ -7,12 +7,12 @@ import sys
 import agm.vcs.git as git_helpers
 from agm.commands.args import DepSwitchArgs
 from agm.commands.dep.common import default_branch_from_repo, main_dep_repo
-from agm.project.layout import current_project_dir
+from agm.project.layout import current_project_dir, project_deps_dir
 
 
 def run(args: DepSwitchArgs) -> None:
     project_dir = current_project_dir()
-    dep_dir = project_dir / "deps" / args.dep
+    dep_dir = project_deps_dir(project_dir) / args.dep
     if not dep_dir.is_dir():
         print(f"error: deps/{args.dep} does not exist", file=sys.stderr)
         raise SystemExit(1)

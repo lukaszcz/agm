@@ -81,13 +81,13 @@ _HELP_TEXTS: dict[str, str] = {
           -d          Create the tmux session without attaching to it.
           -n PANES    Create the session with PANES panes.
           -p PARENT   Base a newly created branch worktree on PARENT instead of
-                      the repo/ checkout's current branch.
+                      the main checkout's current branch.
 
         Behavior:
-          repo           Open the main repo session.
-          default branch Open the main repo session when TARGET matches the
-                         branch currently checked out in repo/.
-          existing wt    Open the tmux session for worktrees/BRANCH.
+          repo           Open the main checkout session.
+          default branch Open the main checkout session when TARGET matches the
+                         branch currently checked out in the main checkout.
+          existing wt    Open the tmux session for an existing branch worktree.
           existing branch Check out BRANCH into a worktree, then open it.
           missing branch  Create BRANCH from PARENT/current branch, then open it.
 
@@ -111,15 +111,21 @@ _HELP_TEXTS: dict[str, str] = {
                          removed with this command.
     """),
     "init": textwrap.dedent("""\
-        agm init [-b BRANCH] PROJECT_NAME
-        agm init [-b BRANCH] [PROJECT_NAME] REPO_URL
+        agm init [--embedded | --workspace] [-b BRANCH] PROJECT_NAME
+        agm init [--embedded | --workspace] [-b BRANCH] [PROJECT_NAME] REPO_URL
 
         Initialize a new project directory. When REPO_URL is provided, agm also
-        clones it into repo/. If PROJECT_NAME is omitted in that form, it is
-        derived from the repo URL.
+        clones it into repo/ by default, or into the project root with
+        --embedded. If PROJECT_NAME is omitted in that form, it is derived from
+        the repo URL. Without an explicit layout flag, agm chooses the embedded
+        layout when the target project directory is already a git repo;
+        otherwise it chooses the workspace layout.
 
         Options:
-          -b BRANCH  Clone this branch when REPO_URL is provided.
+          --embedded   Force the embedded layout with AGM data under .agm/.
+          --workspace  Force the workspace layout with repo/, deps/, notes/,
+                       worktrees/, and config/ under the project root.
+          -b BRANCH    Clone this branch when REPO_URL is provided.
     """),
     "fetch": textwrap.dedent("""\
         agm fetch
@@ -148,8 +154,8 @@ _HELP_TEXTS: dict[str, str] = {
 
         Options:
           agm worktree new -d DIR
-              Create the worktree under DIR instead of the default worktrees/
-              or .worktrees/ directory.
+              Create the worktree under DIR instead of the default project
+              worktrees directory.
           agm worktree remove -f
               Force removal even when git reports uncommitted or locked state.
     """),
@@ -158,7 +164,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm dep rm     [--all] DEP | DEP/BRANCH | DEP/repo | DEP/MAIN_BRANCH
         agm dep switch [-b] DEP BRANCH
 
-        Manage project dependency checkouts under deps/.
+        Manage project dependency checkouts under the project's dependency directory.
 
         Options:
           agm dep new -b BRANCH
@@ -181,7 +187,7 @@ _HELP_TEXTS: dict[str, str] = {
         Run a command inside an Anthropic Sandbox Runtime container.
 
         Command config:
-          $HOME/.agm/config.toml, $PROJ_DIR/config/config.toml, and
+          $HOME/.agm/config.toml, the project config.toml, and
           ./.agm/config.toml are loaded in that order when present.
           [run.<command>] alias = "<other-command>" makes
           "agm run <command>" execute <other-command> instead.
@@ -189,7 +195,7 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           -f SETTINGS  Use this settings file directly instead of discovering
                        and combining the default sandbox settings files.
-          --no-patch   Do not append $PROJ_DIR/notes and $PROJ_DIR/deps to
+          --no-patch   Do not append the project notes and deps directories to
                        filesystem.allowWrite after loading the selected
                        settings.
 
@@ -200,8 +206,7 @@ _HELP_TEXTS: dict[str, str] = {
                        Then merge the existing files in this order:
                          1. $HOME/.agm/sandbox/<command>.json
                             fallback: $HOME/.agm/sandbox/default.json
-                         2. $PROJ_DIR/config/sandbox/<command>.json
-                            fallback: $PROJ_DIR/config/sandbox/default.json
+                         2. the project sandbox config directory
                          3. ./.sandbox/<command>.json
                             fallback: ./.sandbox/default.json
                        Later files override earlier ones. network and
@@ -211,8 +216,8 @@ _HELP_TEXTS: dict[str, str] = {
           -f SETTINGS  Skip default discovery and use SETTINGS as-is.
 
         Automatic patching:
-          Unless --no-patch is set, agm adds $PROJ_DIR/notes and
-          $PROJ_DIR/deps to filesystem.allowWrite when PROJ_DIR is set.
+          Unless --no-patch is set, agm adds the project notes and deps
+          directories to filesystem.allowWrite when PROJ_DIR is set.
     """),
     "tmux": textwrap.dedent("""\
         agm tmux open   [-d] [-n PANES] [SESSION]
@@ -525,6 +530,21 @@ def build_parser() -> argparse.ArgumentParser:
         "init",
         help="Initialize a new project",
         help_text=help_text_for("init"),
+    )
+    init_layout_group = init_parser.add_mutually_exclusive_group()
+    init_layout_group.add_argument(
+        "--embedded",
+        dest="embedded",
+        action="store_true",
+        default=False,
+        help="create an embedded project layout rooted at the main checkout",
+    )
+    init_layout_group.add_argument(
+        "--workspace",
+        dest="workspace",
+        action="store_true",
+        default=False,
+        help="force the workspace project layout with a repo/ checkout",
     )
     init_parser.add_argument(
         "-b",

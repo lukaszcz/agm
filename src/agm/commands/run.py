@@ -114,7 +114,7 @@ def run(args: RunArgs) -> None:
         if not run_args.no_patch and resolved_env.get("PROJ_DIR"):
             selected_settings_data = load_settings(selected_settings)
             selected_settings = _write_json_temp(
-                patch_for_proj_dir(selected_settings_data, resolved_env["PROJ_DIR"]),
+                patch_for_proj_dir(selected_settings_data, Path(resolved_env["PROJ_DIR"])),
                 temp_files,
             )
 

@@ -13,6 +13,7 @@ from agm.project.layout import (
     branch_worktree_path,
     current_project_dir,
     is_main_checkout_branch,
+    main_repo_dir,
 )
 
 
@@ -49,10 +50,28 @@ def test_current_project_dir_from_worktree_dir(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
-    branch_dir = project / ".worktrees" / "feat" / "branch"
+    branch_dir = project / ".agm" / "worktrees" / "feat" / "branch"
     branch_dir.mkdir(parents=True)
 
     assert current_project_dir(branch_dir) == project
+
+
+def test_current_project_dir_from_embedded_project_subdir(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / ".agm").mkdir()
+    subdir = project / "src"
+    subdir.mkdir()
+
+    assert current_project_dir(subdir) == project
+
+
+def test_main_repo_dir_for_embedded_project(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / ".agm").mkdir()
+
+    assert main_repo_dir(project) == project
 
 
 def test_main_checkout_branch_helpers_for_repo_name(tmp_path: Path) -> None:

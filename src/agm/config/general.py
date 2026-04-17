@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from agm.project.layout import project_config_dir
+
 TomlDict = dict[str, object]
 
 
@@ -36,7 +38,7 @@ def _load_config_file(path: Path) -> TomlDict:
 def config_file_candidates(*, home: Path, proj_dir: Path | None, cwd: Path) -> list[Path]:
     candidates = [home / ".agm" / "config.toml"]
     if proj_dir is not None:
-        candidates.append(proj_dir / "config" / "config.toml")
+        candidates.append(project_config_dir(proj_dir) / "config.toml")
     candidates.append(cwd / ".agm" / "config.toml")
     return candidates
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.commands.args import DepRemoveArgs
 from agm.commands.dep.common import main_dep_repo
-from agm.project.layout import current_project_dir, is_main_checkout_branch
+from agm.project.layout import current_project_dir, is_main_checkout_branch, project_deps_dir
 from agm.project.worktree import remove_worktree_from_repo
 
 
@@ -48,7 +48,7 @@ def _remove_dep_dir(dep_dir: Path) -> None:
 def run(args: DepRemoveArgs) -> None:
     dep, ref = _parse_target(args.target, remove_all=args.all)
     project_dir = current_project_dir()
-    dep_dir = project_dir / "deps" / dep
+    dep_dir = project_deps_dir(project_dir) / dep
     if not dep_dir.is_dir():
         print(f"error: deps/{dep} does not exist", file=sys.stderr)
         raise SystemExit(1)

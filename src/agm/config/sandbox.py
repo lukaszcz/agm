@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import cast
 
+from agm.project.layout import project_config_dir, project_deps_dir, project_notes_dir
+
 JsonDict = dict[str, object]
 
 
@@ -61,7 +63,7 @@ def merge_settings(home_data: JsonDict, local_data: JsonDict) -> JsonDict:
     return merged
 
 
-def patch_for_proj_dir(settings: JsonDict, proj_dir: str) -> JsonDict:
+def patch_for_proj_dir(settings: JsonDict, proj_dir: Path) -> JsonDict:
     patched = dict(settings)
     filesystem_value = patched.get("filesystem")
     if isinstance(filesystem_value, dict):
@@ -75,9 +77,10 @@ def patch_for_proj_dir(settings: JsonDict, proj_dir: str) -> JsonDict:
     else:
         allow_write = []
     filesystem["allowWrite"] = allow_write
-    for path in (f"{proj_dir}/notes", f"{proj_dir}/deps"):
-        if path not in allow_write:
-            allow_write.append(path)
+    for path in (project_notes_dir(proj_dir), project_deps_dir(proj_dir)):
+        path_str = str(path)
+        if path_str not in allow_write:
+            allow_write.append(path_str)
     return patched
 
 
@@ -108,7 +111,7 @@ def sandbox_settings_candidates(
     if proj_dir is not None:
         candidates.append(
             sandbox_settings_path(
-                proj_dir / "config" / "sandbox", command_name, alias_command_name
+                project_config_dir(proj_dir) / "sandbox", command_name, alias_command_name
             )
         )
     candidates.append(sandbox_settings_path(cwd / ".sandbox", command_name, alias_command_name))

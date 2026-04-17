@@ -13,7 +13,7 @@ from agm.project.layout import (
     branch_worktree_path,
     current_project_dir,
     is_main_checkout_branch,
-    main_repo_dir,
+    project_repo_dir,
 )
 from agm.project.setup import load_worktree_env
 from agm.project.worktree import ensure_worktree
@@ -38,7 +38,7 @@ def branch_path(proj_dir: Path, branch: str) -> Path:
     return branch_worktree_path(
         proj_dir,
         branch,
-        repo_branch=git_helpers.current_branch(main_repo_dir(proj_dir)),
+        repo_branch=git_helpers.current_branch(project_repo_dir(proj_dir)),
     )
 
 
@@ -47,7 +47,7 @@ def expected_branch_path(proj_dir: Path, branch: str) -> Path:
 
 
 def resolve_parent_checkout_dir(proj_dir: Path, parent: str | None, *, env: dict[str, str]) -> Path:
-    repo_dir = main_repo_dir(proj_dir)
+    repo_dir = project_repo_dir(proj_dir)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     resolved_parent = parent or repo_branch
     if resolved_parent == repo_branch:
@@ -58,7 +58,7 @@ def resolve_parent_checkout_dir(proj_dir: Path, parent: str | None, *, env: dict
 def has_expected_worktree(
     proj_dir: Path, branch: str, *, env: dict[str, str] | None = None
 ) -> bool:
-    repo_dir = main_repo_dir(proj_dir)
+    repo_dir = project_repo_dir(proj_dir)
     expected_path = expected_branch_path(proj_dir, branch)
     for worktree in git_helpers.worktree_list(repo_dir, env=env):
         if worktree.branch == branch and worktree.path.resolve(strict=False) == expected_path:
@@ -110,10 +110,10 @@ def open_session(
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
-    repo_branch = git_helpers.current_branch(main_repo_dir(proj_dir))
+    repo_branch = git_helpers.current_branch(project_repo_dir(proj_dir))
 
     if branch is None:
-        repo_path = main_repo_dir(proj_dir)
+        repo_path = project_repo_dir(proj_dir)
         session_name = proj_dir.name
     else:
         repo_path = branch_worktree_path(proj_dir, branch, repo_branch=repo_branch)
@@ -210,7 +210,7 @@ def smart_open_session(
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
 
-    repo_dir = main_repo_dir(proj_dir)
+    repo_dir = project_repo_dir(proj_dir)
     if is_main_checkout_branch(
         proj_dir,
         branch,

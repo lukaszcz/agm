@@ -60,6 +60,8 @@ class CloseArgs(Protocol):
 class InitArgs(Protocol):
     positional: list[str]
     branch: str | None
+    embedded: bool
+    workspace: bool
 
 
 class RunArgs(Protocol):

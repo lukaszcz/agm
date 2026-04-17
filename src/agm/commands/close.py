@@ -11,7 +11,7 @@ from agm.project.layout import (
     branch_session_name,
     current_project_dir,
     is_main_checkout_branch,
-    main_repo_dir,
+    project_repo_dir,
 )
 from agm.project.setup import load_worktree_env
 from agm.project.worktree import remove_worktree
@@ -21,7 +21,7 @@ from agm.tmux.session import close_tmux_session
 def close_session(*, branch: str, cwd: Path | None = None) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     proj_dir = current_project_dir(current)
-    repo_dir = main_repo_dir(proj_dir)
+    repo_dir = project_repo_dir(proj_dir)
     env = load_worktree_env(proj_dir, None, shell_cwd=repo_dir)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     if is_main_checkout_branch(proj_dir, branch, repo_branch=repo_branch):

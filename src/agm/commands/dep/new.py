@@ -7,13 +7,13 @@ import sys
 from agm.commands.args import DepNewArgs
 from agm.commands.dep.common import default_branch_from_remote, derive_dep_name
 from agm.core.process import run_foreground
-from agm.project.layout import current_project_dir
+from agm.project.layout import current_project_dir, project_deps_dir
 
 
 def run(args: DepNewArgs) -> None:
     project_dir = current_project_dir()
     dep = derive_dep_name(args.repo_url)
-    dep_dir = project_dir / "deps" / dep
+    dep_dir = project_deps_dir(project_dir) / dep
     if dep_dir.exists():
         print(f"error: deps/{dep} already exists", file=sys.stderr)
         raise SystemExit(1)

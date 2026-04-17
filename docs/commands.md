@@ -4,18 +4,21 @@
 
 | Command | Description |
 |---|---|
-| `agm open [-d] [-n PANES] [-p PARENT] TARGET` | Open `repo/`, an existing branch worktree, or create/check out the branch as needed |
-| `agm init [-b BRANCH] PROJECT_NAME` | Initialize a new project directory without cloning a repository |
-| `agm init [-b BRANCH] [PROJECT_NAME] REPO_URL` | Initialize a new project directory and clone the repository into `repo/` |
+| `agm open [-d] [-n PANES] [-p PARENT] TARGET` | Open the main checkout, an existing branch worktree, or create/check out the branch as needed |
+| `agm init [--embedded | --workspace] [-b BRANCH] PROJECT_NAME` | Initialize a new project directory without cloning a repository |
+| `agm init [--embedded | --workspace] [-b BRANCH] [PROJECT_NAME] REPO_URL` | Initialize a new project directory and clone the repository into `repo/` or the project root |
 | `agm fetch` | Fetch latest changes and create missing tracking branches for the repo and all dependencies |
 
 `agm open` options:
 - `-d` creates the tmux session without attaching to it.
 - `-n PANES` creates the session with `PANES` panes.
-- `-p PARENT` bases a newly created branch worktree on `PARENT` instead of the current branch in `repo/`.
+- `-p PARENT` bases a newly created branch worktree on `PARENT` instead of the current branch in the main checkout.
 
 `agm init` options:
+- `--embedded` forces the embedded layout rooted at the main checkout, with AGM data under `.agm/`.
+- `--workspace` forces the workspace layout with `repo/`, `deps/`, `notes/`, `worktrees/`, and `config/` under the project root.
 - `-b BRANCH` clones `BRANCH` when `REPO_URL` is provided.
+- Without either layout flag, `agm init` chooses the embedded layout when the target project directory is already a git repo; otherwise it chooses the workspace layout.
 
 ## Branch and worktree management
 
@@ -26,7 +29,7 @@
 | `agm worktree remove [-f] BRANCH` | Remove a worktree and delete the local branch |
 
 `agm worktree new` options:
-- `-d DIR` creates the worktree under `DIR` instead of the default `worktrees/` or `.worktrees/` directory.
+- `-d DIR` creates the worktree under `DIR` instead of the default project worktrees directory.
 
 `agm worktree remove` options:
 - `-f` forces worktree removal even when git reports uncommitted or locked state.
@@ -56,15 +59,15 @@
 ## Configuration and sandbox
 
 By default, `agm run` derives the sandbox settings filename from the command
-basename. In each of `$HOME/.agm/sandbox`, `$PROJ_DIR/config/sandbox`, and
-`./.sandbox`, it prefers `<command>.json` and falls back to `default.json` only
-when `<command>.json` does not exist in that directory. Existing files are then
-merged in that order, with more local files taking precedence.
+basename. In each of `$HOME/.agm/sandbox`, the project sandbox config
+directory, and `./.sandbox`, it prefers `<command>.json` and falls back to
+`default.json` only when `<command>.json` does not exist in that directory.
+Existing files are then merged in that order, with more local files taking
+precedence.
 
 `-f SETTINGS` skips that discovery and uses the given settings file directly.
-Unless `--no-patch` is set, `agm run` also adds `$PROJ_DIR/notes` and
-`$PROJ_DIR/deps` to `filesystem.allowWrite` after loading the selected
-settings.
+Unless `--no-patch` is set, `agm run` also adds the project notes and deps
+directories to `filesystem.allowWrite` after loading the selected settings.
 
 | Command | Description |
 |---|---|
@@ -76,7 +79,7 @@ settings.
 
 `agm run` options:
 - `-f SETTINGS` skips default sandbox settings discovery and uses `SETTINGS` directly.
-- `--no-patch` skips adding `$PROJ_DIR/notes` and `$PROJ_DIR/deps` to `filesystem.allowWrite`.
+- `--no-patch` skips adding the project notes and deps directories to `filesystem.allowWrite`.
 
 ## Tmux
 

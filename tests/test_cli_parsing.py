@@ -161,6 +161,8 @@ class TestInit:
         ns = parse(parser, ["init", "myproj", "https://github.com/org/repo.git"])
         assert ns.positional == ["myproj", "https://github.com/org/repo.git"]
         assert ns.branch is None
+        assert ns.embedded is False
+        assert ns.workspace is False
 
     def test_init_url_only(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["init", "https://github.com/org/repo.git"])
@@ -169,6 +171,16 @@ class TestInit:
     def test_init_with_branch(self, parser: argparse.ArgumentParser) -> None:
         ns = parse(parser, ["init", "-b", "dev", "myproj"])
         assert ns.branch == "dev"
+        assert ns.positional == ["myproj"]
+
+    def test_init_with_embedded(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["init", "--embedded", "myproj"])
+        assert ns.embedded is True
+        assert ns.positional == ["myproj"]
+
+    def test_init_with_workspace(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["init", "--workspace", "myproj"])
+        assert ns.workspace is True
         assert ns.positional == ["myproj"]
 
     def test_init_missing_args(self, parser: argparse.ArgumentParser) -> None:

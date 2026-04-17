@@ -77,6 +77,12 @@ _HELP_TEXTS: dict[str, str] = {
 
         Open a tmux session for a project checkout.
 
+        Options:
+          -d          Create the tmux session without attaching to it.
+          -n PANES    Create the session with PANES panes.
+          -p PARENT   Base a newly created branch worktree on PARENT instead of
+                      the repo/ checkout's current branch.
+
         Behavior:
           repo           Open the main repo session.
           default branch Open the main repo session when TARGET matches the
@@ -94,10 +100,15 @@ _HELP_TEXTS: dict[str, str] = {
           agm open -p main feat/search
     """),
     "init": textwrap.dedent("""\
+        agm init [-b BRANCH] PROJECT_NAME
         agm init [-b BRANCH] [PROJECT_NAME] REPO_URL
 
-        Initialize a new project by cloning a repository. If PROJECT_NAME is
-        omitted it is derived from the repo URL.
+        Initialize a new project directory. When REPO_URL is provided, agm also
+        clones it into repo/. If PROJECT_NAME is omitted in that form, it is
+        derived from the repo URL.
+
+        Options:
+          -b BRANCH  Clone this branch when REPO_URL is provided.
     """),
     "fetch": textwrap.dedent("""\
         agm fetch
@@ -114,7 +125,11 @@ _HELP_TEXTS: dict[str, str] = {
         agm config copy [-d PROJECT_DIR] DIRNAME
         agm config cp   [-d PROJECT_DIR] DIRNAME
 
-        Copy project configuration files into a target directory.
+        Copy project configuration files into an existing target directory.
+
+        Options:
+          -d PROJECT_DIR  Read shared config files from this project instead of
+                          auto-detecting the current project.
     """),
     "worktree": textwrap.dedent("""\
         agm worktree new      [-d DIR] BRANCH
@@ -123,13 +138,35 @@ _HELP_TEXTS: dict[str, str] = {
         agm wt new | wt setup | wt rm
 
         Low-level git worktree management.
+
+        Options:
+          agm worktree new -d DIR
+              Create the worktree under DIR instead of the default worktrees/
+              or .worktrees/ directory.
+          agm worktree remove -f
+              Force removal even when git reports uncommitted or locked state.
     """),
     "dep": textwrap.dedent("""\
         agm dep new    [-b BRANCH] REPO_URL
-        agm dep rm     [--all] DEP | DEP/BRANCH
+        agm dep rm     [--all] DEP | DEP/BRANCH | DEP/repo | DEP/MAIN_BRANCH
         agm dep switch [-b] DEP BRANCH
 
         Manage project dependency checkouts under deps/.
+
+        Options:
+          agm dep new -b BRANCH
+              Clone BRANCH instead of the dependency's default branch.
+          agm dep rm --all
+              Remove the entire dependency directory, including the main repo
+              checkout and any linked worktrees.
+          agm dep switch -b
+              Create BRANCH from the dependency's default branch before adding
+              the new worktree.
+
+        Targets:
+          DEP/BRANCH      Remove a dependency worktree for BRANCH.
+          DEP/repo        Remove the main dependency checkout.
+          DEP/MAIN_BRANCH Remove the main dependency checkout by branch name.
     """),
     "run": textwrap.dedent("""\
         agm run [--no-patch] [-f SETTINGS] COMMAND [ARGS...]
@@ -175,6 +212,12 @@ _HELP_TEXTS: dict[str, str] = {
         agm tmux layout PANES WINDOW_ID WIDTH HEIGHT
 
         Tmux session and layout management.
+
+        Options:
+          agm tmux new -d
+              Create the session without attaching to it.
+          agm tmux new -n PANES
+              Create the session with PANES panes.
     """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]
@@ -305,11 +348,32 @@ def build_parser() -> argparse.ArgumentParser:
         help_text=_HELP_TEXTS["open"],
     )
     open_parser.add_argument(
-        "-d", "--detached", dest="detached", action="store_true", default=False
+        "-d",
+        "--detached",
+        dest="detached",
+        action="store_true",
+        default=False,
+        help="create the tmux session without attaching to it",
     )
-    open_parser.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
-    open_parser.add_argument("-p", dest="parent", metavar="parent", default=None)
-    open_parser.add_argument("branch", metavar="target")
+    open_parser.add_argument(
+        "-n",
+        dest="pane_count",
+        metavar="pane_count",
+        default=None,
+        help="create the session with this many panes",
+    )
+    open_parser.add_argument(
+        "-p",
+        dest="parent",
+        metavar="parent",
+        default=None,
+        help="base a newly created branch worktree on this checkout instead of repo/",
+    )
+    open_parser.add_argument(
+        "branch",
+        metavar="target",
+        help="repo, an existing branch, or a branch name to create and open",
+    )
 
     br_parser = subparsers.add_parser(
         "br",
@@ -338,9 +402,22 @@ def build_parser() -> argparse.ArgumentParser:
         parser_class=_HelpTextArgumentParser,
     )
     for name in ("cp", "copy"):
-        current = config_sub.add_parser(name, help="Copy configuration files")
-        current.add_argument("-d", dest="project_dir", metavar="project-dir", default=None)
-        current.add_argument("dirname")
+        current = config_sub.add_parser(
+            name,
+            help="Copy configuration files",
+            description="Copy known project config files into an existing target directory.",
+        )
+        current.add_argument(
+            "-d",
+            dest="project_dir",
+            metavar="project-dir",
+            default=None,
+            help="read shared config from this project instead of auto-detecting it",
+        )
+        current.add_argument(
+            "dirname",
+            help="existing target directory that will receive copied config files",
+        )
 
     for wt_name in ("wt", "worktree"):
         wt_parser = subparsers.add_parser(
@@ -352,14 +429,35 @@ def build_parser() -> argparse.ArgumentParser:
         wt_new = wt_sub.add_parser(
             "new",
             help="Create a new branch worktree or check out an existing branch",
+            description="Create a branch worktree under the default worktrees directory or DIR.",
         )
-        wt_new.add_argument("-d", dest="worktrees_dir", metavar="dir", default=None)
-        wt_new.add_argument("branch")
-        wt_sub.add_parser("setup", help="Run setup scripts for the current checkout")
+        wt_new.add_argument(
+            "-d",
+            dest="worktrees_dir",
+            metavar="dir",
+            default=None,
+            help="create the worktree under DIR instead of the default worktrees location",
+        )
+        wt_new.add_argument("branch", help="branch name to create or check out")
+        wt_sub.add_parser(
+            "setup",
+            help="Run setup scripts for the current checkout",
+            description="Run configured setup scripts for the current repo or worktree checkout.",
+        )
         for rm_name in ("rm", "remove"):
-            current = wt_sub.add_parser(rm_name, help="Remove a worktree")
-            current.add_argument("-f", dest="force", action="store_true", default=False)
-            current.add_argument("branch")
+            current = wt_sub.add_parser(
+                rm_name,
+                help="Remove a worktree",
+                description="Remove a worktree and delete its local branch.",
+            )
+            current.add_argument(
+                "-f",
+                dest="force",
+                action="store_true",
+                default=False,
+                help="force removal even when git reports uncommitted or locked state",
+            )
+            current.add_argument("branch", help="branch whose worktree should be removed")
 
     dep_parser = subparsers.add_parser(
         "dep",
@@ -367,16 +465,52 @@ def build_parser() -> argparse.ArgumentParser:
         help_text=help_text_for("dep"),
     )
     dep_sub = dep_parser.add_subparsers(dest="dep_command", parser_class=_HelpTextArgumentParser)
-    dep_new = dep_sub.add_parser("new", help="Clone a new dependency")
-    dep_new.add_argument("-b", dest="branch", metavar="branch", default=None)
-    dep_new.add_argument("repo_url", metavar="repo-url")
-    dep_switch = dep_sub.add_parser("switch", help="Switch a dependency branch")
-    dep_switch.add_argument("-b", dest="create_branch", action="store_true", default=False)
-    dep_switch.add_argument("dep")
-    dep_switch.add_argument("branch")
-    dep_rm = dep_sub.add_parser("rm", help="Remove a dependency worktree or repo")
-    dep_rm.add_argument("--all", dest="all", action="store_true", default=False)
-    dep_rm.add_argument("target")
+    dep_new = dep_sub.add_parser(
+        "new",
+        help="Clone a new dependency",
+        description="Clone a dependency into deps/ using its default branch or BRANCH.",
+    )
+    dep_new.add_argument(
+        "-b",
+        dest="branch",
+        metavar="branch",
+        default=None,
+        help="clone BRANCH instead of the dependency's default branch",
+    )
+    dep_new.add_argument("repo_url", metavar="repo-url", help="git URL for the dependency")
+    dep_switch = dep_sub.add_parser(
+        "switch",
+        help="Switch a dependency branch",
+        description="Add a dependency worktree for BRANCH under deps/DEP/.",
+    )
+    dep_switch.add_argument(
+        "-b",
+        dest="create_branch",
+        action="store_true",
+        default=False,
+        help="create BRANCH from the dependency's default branch before adding the worktree",
+    )
+    dep_switch.add_argument("dep", help="dependency name under deps/")
+    dep_switch.add_argument("branch", help="branch to check out or create")
+    dep_rm = dep_sub.add_parser(
+        "rm",
+        help="Remove a dependency worktree or repo",
+        description=(
+            "Remove a dependency worktree by DEP/BRANCH, or remove the main checkout "
+            "with DEP/repo, DEP/MAIN_BRANCH, or --all DEP."
+        ),
+    )
+    dep_rm.add_argument(
+        "--all",
+        dest="all",
+        action="store_true",
+        default=False,
+        help="remove the entire dependency directory; target must be DEP",
+    )
+    dep_rm.add_argument(
+        "target",
+        help="dependency target: DEP/BRANCH, DEP/repo, DEP/MAIN_BRANCH, or DEP with --all",
+    )
 
     subparsers.add_parser(
         "fetch",
@@ -389,17 +523,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Initialize a new project",
         help_text=help_text_for("init"),
     )
-    init_parser.add_argument("-b", dest="branch", metavar="branch", default=None)
-    init_parser.add_argument("positional", nargs="+", metavar="arg")
+    init_parser.add_argument(
+        "-b",
+        dest="branch",
+        metavar="branch",
+        default=None,
+        help="clone BRANCH when a repository URL is provided",
+    )
+    init_parser.add_argument(
+        "positional",
+        nargs="+",
+        metavar="arg",
+        help="PROJECT_NAME, or PROJECT_NAME plus REPO_URL, or REPO_URL alone",
+    )
 
     run_parser = subparsers.add_parser(
         "run",
         help="Run a command inside an Anthropic Sandbox Runtime",
         help_text=help_text_for("run"),
     )
-    run_parser.add_argument("--no-patch", dest="no_patch", action="store_true", default=False)
-    run_parser.add_argument("-f", dest="settings_file", metavar="settings.json", default=None)
-    run_parser.add_argument("run_command", nargs=argparse.REMAINDER, metavar="command")
+    run_parser.add_argument(
+        "--no-patch",
+        dest="no_patch",
+        action="store_true",
+        default=False,
+        help="skip appending $PROJ_DIR/notes and $PROJ_DIR/deps to allowWrite",
+    )
+    run_parser.add_argument(
+        "-f",
+        dest="settings_file",
+        metavar="settings.json",
+        default=None,
+        help="use this sandbox settings file directly instead of default discovery",
+    )
+    run_parser.add_argument(
+        "run_command",
+        nargs=argparse.REMAINDER,
+        metavar="command",
+        help="command and arguments to execute inside the sandbox",
+    )
 
     tmux_parser = subparsers.add_parser(
         "tmux",
@@ -407,13 +569,39 @@ def build_parser() -> argparse.ArgumentParser:
         help_text=help_text_for("tmux"),
     )
     tmux_sub = tmux_parser.add_subparsers(dest="tmux_command", parser_class=_HelpTextArgumentParser)
-    tmux_new = tmux_sub.add_parser("new", help="Create a new tmux session")
-    tmux_new.add_argument("-d", "--detach", dest="detach", action="store_true", default=False)
-    tmux_new.add_argument("-n", dest="pane_count", metavar="pane_count", default=None)
-    tmux_new.add_argument("session_name", nargs="?", default=None)
-    tmux_layout = tmux_sub.add_parser("layout", help="Apply a tiled pane layout")
-    tmux_layout.add_argument("pane_count")
-    tmux_layout.add_argument("window_id")
-    tmux_layout.add_argument("width")
-    tmux_layout.add_argument("height")
+    tmux_new = tmux_sub.add_parser(
+        "new",
+        help="Create a new tmux session",
+        description="Create a tmux session, optionally detached and with a chosen pane count.",
+    )
+    tmux_new.add_argument(
+        "-d",
+        "--detach",
+        dest="detach",
+        action="store_true",
+        default=False,
+        help="create the session without attaching to it",
+    )
+    tmux_new.add_argument(
+        "-n",
+        dest="pane_count",
+        metavar="pane_count",
+        default=None,
+        help="create the session with this many panes",
+    )
+    tmux_new.add_argument(
+        "session_name",
+        nargs="?",
+        default=None,
+        help="optional tmux session name",
+    )
+    tmux_layout = tmux_sub.add_parser(
+        "layout",
+        help="Apply a tiled pane layout",
+        description="Apply AGM's tiled pane layout to an existing tmux window.",
+    )
+    tmux_layout.add_argument("pane_count", help="number of panes to arrange")
+    tmux_layout.add_argument("window_id", help="tmux window id, for example @1")
+    tmux_layout.add_argument("width", help="window width in cells")
+    tmux_layout.add_argument("height", help="window height in cells")
     return parser

@@ -1,0 +1,5 @@
+[run.claude]
+alias = "claude --dangerously-skip-permissions"
+
+[run.codex]
+alias = "codex --yolo"

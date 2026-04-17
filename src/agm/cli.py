@@ -166,6 +166,12 @@ _HELP_TEXTS: dict[str, str] = {
 
         Run a command inside an Anthropic Sandbox Runtime container.
 
+        Command config:
+          $HOME/.agm/config.toml, $PROJ_DIR/config/config.toml, and
+          ./.agm/config.toml are loaded in that order when present.
+          [run.<command>] alias = "<other-command>" makes
+          "agm run <command>" execute <other-command> instead.
+
         Options:
           -f SETTINGS  Use this settings file directly instead of discovering
                        and combining the default sandbox settings files.
@@ -175,7 +181,8 @@ _HELP_TEXTS: dict[str, str] = {
 
         Settings resolution:
           default      For each directory below, load <command>.json when it
-                       exists there; otherwise fall back to default.json.
+                       exists there; otherwise try the aliased command's
+                       settings file, then fall back to default.json.
                        Then merge the existing files in this order:
                          1. $HOME/.agm/sandbox/<command>.json
                             fallback: $HOME/.agm/sandbox/default.json

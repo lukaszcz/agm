@@ -2052,6 +2052,82 @@ class TestSandbox:
         assert result.returncode == 0
         assert _srt_command(result) == "/bin/echo hello"
 
+    def test_run_uses_global_alias_for_command_execution(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "printf"\n')
+        (home / ".agm" / "sandbox").mkdir(parents=True)
+        (home / ".agm" / "sandbox" / "printf.json").write_text(
+            json.dumps(_settings(network=_network_settings("printf.com")))
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["run", "echo", "hello"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        assert _srt_command(result) == "printf hello"
+        assert _srt_settings(result)["network"]["allowedDomains"] == ["printf.com"]
+
+    def test_local_run_config_overrides_global_alias(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "printf"\n')
+        (home / ".agm" / "sandbox").mkdir(parents=True)
+        (home / ".agm" / "sandbox" / "printf.json").write_text(
+            json.dumps(_settings(network=_network_settings("printf.com")))
+        )
+
+        proj_dir = tmp_path / "project"
+        (proj_dir / "config").mkdir(parents=True)
+        (proj_dir / "config" / "config.toml").write_text('[run.echo]\nalias = "cat"\n')
+        (proj_dir / "config" / "sandbox").mkdir(parents=True)
+        (proj_dir / "config" / "sandbox" / "cat.json").write_text(
+            json.dumps(_settings(network=_network_settings("cat.com")))
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        env["PROJ_DIR"] = str(proj_dir)
+
+        result = run_agm(["run", "echo", "hello"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        assert _srt_command(result) == "cat hello"
+        assert _srt_settings(result)["network"]["allowedDomains"] == ["cat.com"]
+
+    def test_prefers_original_command_settings_before_alias_settings(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "printf"\n')
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(
+            json.dumps(_settings(network=_network_settings("echo.com")))
+        )
+        (sandbox_dir / "printf.json").write_text(
+            json.dumps(_settings(network=_network_settings("printf.com")))
+        )
+
+        result = run_agm(["run", "echo", "hello"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        assert _srt_command(result) == "printf hello"
+        assert _srt_settings(result)["network"]["allowedDomains"] == ["echo.com"]
+
 
 # ── agm open ────────────────────────────────────────────────────────────────
 
@@ -2685,6 +2761,10 @@ class TestHelp:
     ) -> None:
         result = run_agm(["help", "run"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
+        assert "$HOME/.agm/config.toml" in result.stdout
+        assert "$PROJ_DIR/config/config.toml" in result.stdout
+        assert "./.agm/config.toml" in result.stdout
+        assert '[run.<command>] alias = "<other-command>"' in result.stdout
         assert "-f SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout
@@ -2695,6 +2775,7 @@ class TestHelp:
         assert "$PROJ_DIR/config/sandbox/default.json" in result.stdout
         assert "./.sandbox/<command>.json" in result.stdout
         assert "./.sandbox/default.json" in result.stdout
+        assert "try the aliased command's" in result.stdout
         assert "Later files override earlier ones." in result.stdout
         assert "$PROJ_DIR/notes" in result.stdout
         assert "$PROJ_DIR/deps" in result.stdout

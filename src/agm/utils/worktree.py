@@ -67,9 +67,9 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     if checkout_dir.resolve(strict=False) != repo_dir.resolve(strict=False):
         branch = git_helpers.current_branch(checkout_dir, env=env)
-        target_name = branch_session_name(project_dir, branch, repo_branch=repo_branch)
+        target_name = branch_session_name(project_dir, branch)
     else:
-        target_name = branch_session_name(project_dir, repo_branch, repo_branch=repo_branch)
+        target_name = branch_session_name(project_dir, repo_branch)
     setup_env = load_worktree_env(project_dir, branch, shell_cwd=checkout_dir, env=env)
 
     setup_paths = [

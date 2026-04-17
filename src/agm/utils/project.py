@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import agm.vcs.git as git_helpers
 from agm.utils.shell import run_foreground
 
 CONFIG_FILES: list[str] = [
@@ -90,9 +91,13 @@ def branch_worktree_path(project_dir: Path, branch: str, *, repo_branch: str) ->
     return default_worktrees_dir(project_dir) / branch
 
 
-def branch_session_name(project_dir: Path, branch: str, *, repo_branch: str) -> str:
+def branch_session_name(project_dir: Path, branch: str) -> str:
     """Return the tmux session name corresponding to *branch*."""
 
+    if branch == "repo":
+        return project_dir.name
+
+    repo_branch = git_helpers.current_branch(main_repo_dir(project_dir))
     if is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
         return project_dir.name
     return f"{project_dir.name}/{branch}"

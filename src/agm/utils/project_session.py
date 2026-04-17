@@ -122,7 +122,7 @@ def open_session(
                 file=sys.stderr,
             )
             raise SystemExit(1)
-        session_name = branch_session_name(proj_dir, branch, repo_branch=repo_branch)
+        session_name = branch_session_name(proj_dir, branch)
     env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
     create_tmux_session(
         detach=detached,
@@ -159,11 +159,7 @@ def new_session(
     queue_setup_and_focus_session(
         detached=detached,
         pane_count=pane_count,
-        session_name=branch_session_name(
-            proj_dir,
-            branch,
-            repo_branch=git_helpers.current_branch(main_repo_dir(proj_dir), env=env),
-        ),
+        session_name=branch_session_name(proj_dir, branch),
         repo_path=repo_path,
         env=env,
     )
@@ -195,11 +191,7 @@ def checkout_session(
     queue_setup_and_focus_session(
         detached=detached,
         pane_count=pane_count,
-        session_name=branch_session_name(
-            proj_dir,
-            branch,
-            repo_branch=git_helpers.current_branch(main_repo_dir(proj_dir), env=env),
-        ),
+        session_name=branch_session_name(proj_dir, branch),
         repo_path=repo_path,
         env=env,
     )
@@ -265,7 +257,7 @@ def close_session(*, branch: str, cwd: Path | None = None) -> None:
         raise SystemExit(1)
 
     remove_worktree(force=False, branch=branch, cwd=current, env=env)
-    session_name = branch_session_name(proj_dir, branch, repo_branch=repo_branch)
+    session_name = branch_session_name(proj_dir, branch)
     status = kill_tmux_session(session_name=session_name, cwd=repo_dir, env=env)
     if status != 0:
         raise SystemExit(status)

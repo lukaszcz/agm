@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Never
 
+import pytest
+
+import agm.utils.project as project_helpers
 from agm.utils.project import (
     branch_session_name,
     branch_worktree_path,
@@ -59,25 +63,41 @@ def test_main_checkout_branch_helpers_for_repo_name(tmp_path: Path) -> None:
 
     assert is_main_checkout_branch(project, "repo", repo_branch="main") is True
     assert branch_worktree_path(project, "repo", repo_branch="main") == project / "repo"
-    assert branch_session_name(project, "repo", repo_branch="main") == "proj"
+    assert branch_session_name(project, "repo") == "proj"
 
 
-def test_main_checkout_branch_helpers_for_repo_current_branch(tmp_path: Path) -> None:
+def test_main_checkout_branch_helpers_for_repo_current_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
     (project / "worktrees").mkdir()
+
+    def fake_current_branch(_repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
+        del env
+        return "main"
+
+    monkeypatch.setattr(project_helpers.git_helpers, "current_branch", fake_current_branch)
 
     assert is_main_checkout_branch(project, "main", repo_branch="main") is True
     assert branch_worktree_path(project, "main", repo_branch="main") == project / "repo"
-    assert branch_session_name(project, "main", repo_branch="main") == "proj"
+    assert branch_session_name(project, "main") == "proj"
 
 
-def test_branch_helpers_for_worktree_branch(tmp_path: Path) -> None:
+def test_branch_helpers_for_worktree_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
     (project / "worktrees").mkdir()
+
+    def fake_current_branch(_repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
+        del env
+        return "main"
+
+    monkeypatch.setattr(project_helpers.git_helpers, "current_branch", fake_current_branch)
 
     assert is_main_checkout_branch(project, "feat/x", repo_branch="main") is False
     assert branch_worktree_path(
@@ -85,4 +105,21 @@ def test_branch_helpers_for_worktree_branch(tmp_path: Path) -> None:
         "feat/x",
         repo_branch="main",
     ) == project / "worktrees" / "feat/x"
-    assert branch_session_name(project, "feat/x", repo_branch="main") == "proj/feat/x"
+    assert branch_session_name(project, "feat/x") == "proj/feat/x"
+
+
+def test_branch_session_name_for_repo_name_does_not_need_repo_branch_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "repo").mkdir()
+    (project / "worktrees").mkdir()
+
+    def fail_current_branch(_repo_dir: Path, *, env: dict[str, str] | None = None) -> Never:
+        del env
+        raise AssertionError("current_branch should not be called for repo alias")
+
+    monkeypatch.setattr(project_helpers.git_helpers, "current_branch", fail_current_branch)
+
+    assert branch_session_name(project, "repo") == "proj"

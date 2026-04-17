@@ -18,7 +18,8 @@ Install the `agm` CLI and sandbox configuration (default CLI install location: `
 just install
 ```
 
-This also installs all files from `sandbox/` to `$HOME/.sandbox/`.
+This also installs `config/config.toml` to `$HOME/.agm/config.toml` and all files from
+`config/sandbox/` to `$HOME/.agm/sandbox/`.
 
 Install to a custom prefix:
 
@@ -124,7 +125,7 @@ agm dep switch -b mylib feat/new-thing    # create the branch
 
 ### `agm run` — Run a command in a sandbox
 
-Run a command inside an [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime) container. Settings are loaded from `~/.sandbox/default.json` and/or `./.sandbox/default.json` (local overrides global with section-aware merging).
+Run a command inside an [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime) container. Settings are discovered from `$HOME/.agm/sandbox/`, `$PROJ_DIR/config/sandbox/`, and `./.sandbox/` (later files override earlier ones with section-aware merging).
 
 ```bash
 agm run npm test

@@ -28,9 +28,12 @@ install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
 install p=prefix: install-agm
-    @sandbox_dir="$HOME/.agm/sandbox"; \
+    @agm_config_dir="$HOME/.agm"; \
+    sandbox_dir="$agm_config_dir/sandbox"; \
     mkdir -p "$sandbox_dir"; \
-    for sandbox_src in "{{justfile_directory()}}"/sandbox/*; do \
+    install -m 0644 "{{justfile_directory()}}/config/config.toml" "$agm_config_dir/config.toml"; \
+    echo "Installed $agm_config_dir/config.toml"; \
+    for sandbox_src in "{{justfile_directory()}}"/config/sandbox/*; do \
       [ -f "$sandbox_src" ] || continue; \
       sandbox_dst="$sandbox_dir/$(basename "$sandbox_src")"; \
       install -m 0644 "$sandbox_src" "$sandbox_dst"; \

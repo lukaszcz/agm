@@ -238,3 +238,17 @@ def kill_tmux_session(
         env=resolved_env,
         check=False,
     ).returncode
+
+
+def close_tmux_session(
+    *,
+    session_name: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Kill an existing tmux session and report success."""
+
+    status = kill_tmux_session(session_name=session_name, cwd=cwd, env=env)
+    if status != 0:
+        raise SystemExit(status)
+    print(f"Closed session {session_name}")

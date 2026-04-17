@@ -21,6 +21,7 @@ class ConfigCopyArgs(Protocol):
 
 
 class WorktreeCheckoutArgs(Protocol):
+    command: str | None
     wt_command: str | None
     new_branch: str | None
     worktrees_dir: str | None
@@ -76,6 +77,8 @@ class RunArgs(Protocol):
 
 
 class TmuxNewArgs(Protocol):
+    command: str | None
+    tmux_command: str | None
     detach: bool
     pane_count: str | None
     session_name: str | None

@@ -799,7 +799,8 @@ class TestMkWt:
 
         result = run_agm(["wt", "co"], env=env, cwd=str(work), check=False)
         assert result.returncode != 0
-        assert "usage" in result.stdout.lower()
+        assert "branch name is required" in result.stderr.lower()
+        assert "usage" in result.stderr.lower()
 
     def test_wt_co_with_b_flag(
         self, tmp_path: Path, env: dict[str, str]
@@ -2848,6 +2849,43 @@ class TestHelp:
         assert result.returncode == 0
         assert result.stderr == ""
         assert result.stdout == expected.stdout
+
+    @pytest.mark.parametrize(
+        ("argv", "help_argv", "error_text"),
+        [
+            (["init"], ["init", "-h"], "error: the following arguments are required"),
+            (
+                ["config", "cp"],
+                ["config", "cp", "-h"],
+                "error: the following arguments are required",
+            ),
+            (
+                ["wt", "co"],
+                ["wt", "co", "-h"],
+                "error: branch name is required unless -b is provided",
+            ),
+            (
+                ["open", "-n", "abc", "repo"],
+                ["open", "-h"],
+                "error: pane count must be a positive integer",
+            ),
+            (["tmux", "new", "-n", "abc"], ["tmux", "new", "-h"], "invalid pane count"),
+        ],
+    )
+    def test_incorrect_usage_includes_full_help(
+        self,
+        argv: list[str],
+        help_argv: list[str],
+        error_text: str,
+        tmp_path: Path,
+        env: dict[str, str],
+    ) -> None:
+        result = run_agm(argv, env=env, cwd=str(tmp_path), check=False)
+        expected = run_agm(help_argv, env=env, cwd=str(tmp_path))
+
+        assert result.returncode != 0
+        assert error_text in result.stderr.lower()
+        assert expected.stdout in result.stderr
 
 
 # ── edge cases ─────────────────────────────────────────────────────────────

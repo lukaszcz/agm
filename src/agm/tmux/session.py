@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agm.parser import exit_with_usage_error
 from agm.tmux.layout import apply_layout
 
 SKIP_NAMES: set[str] = {
@@ -24,15 +25,6 @@ SKIP_NAMES: set[str] = {
 }
 
 SKIP_PREFIXES: tuple[str, ...] = ("TMUX_", "TERM_", "SSH_", "DBUS_", "XDG_")
-
-
-def _usage(fd: int = 1) -> None:
-    stream = sys.stdout if fd == 1 else sys.stderr
-    print(
-        "Usage: tmux.sh [-h|--help] [-d|--detach] [-n pane_count] [session_name]",
-        file=stream,
-    )
-
 
 def _filter_env(env: dict[str, str]) -> list[tuple[str, str]]:
     filtered: list[tuple[str, str]] = []
@@ -60,9 +52,7 @@ def create_tmux_session(
     pane_total = 4
     if pane_count is not None:
         if not pane_count.isdigit() or int(pane_count) < 1:
-            print(f"Invalid pane count: {pane_count}", file=sys.stderr)
-            _usage(2)
-            raise SystemExit(1)
+            exit_with_usage_error(["tmux", "new"], f"Invalid pane count: {pane_count}")
         pane_total = int(pane_count)
 
     tmux_env_args: list[str] = []

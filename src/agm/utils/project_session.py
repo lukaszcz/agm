@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.parser import exit_with_usage_error
 from agm.tmux.session import (
     create_tmux_session,
     focus_tmux_session,
@@ -19,8 +20,10 @@ def validate_pane_count(pane_count: str | None) -> None:
     if pane_count is None:
         return
     if not pane_count.isdigit() or int(pane_count) < 1:
-        print("error: pane count must be a positive integer", file=sys.stderr)
-        raise SystemExit(1)
+        exit_with_usage_error(
+            ["open"],
+            "error: pane count must be a positive integer",
+        )
 
 
 def branch_path(proj_dir: Path, branch: str) -> Path:

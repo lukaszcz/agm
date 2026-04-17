@@ -117,11 +117,10 @@ _HELP_TEXTS: dict[str, str] = {
         Copy project configuration files into a target directory.
     """),
     "worktree": textwrap.dedent("""\
-        agm worktree checkout [-b BRANCH] [-d DIR] [BRANCH]
         agm worktree new      [-d DIR] BRANCH
         agm worktree setup
         agm worktree remove   [-f] BRANCH
-        agm wt co | wt new | wt setup | wt rm
+        agm wt new | wt setup | wt rm
 
         Low-level git worktree management.
     """),
@@ -344,12 +343,10 @@ def build_parser() -> argparse.ArgumentParser:
             help_text=help_text_for(wt_name),
         )
         wt_sub = wt_parser.add_subparsers(dest="wt_command", parser_class=_HelpTextArgumentParser)
-        for co_name in ("co", "checkout"):
-            current = wt_sub.add_parser(co_name, help="Check out a branch into a worktree")
-            current.add_argument("-b", dest="new_branch", metavar="branch-name", default=None)
-            current.add_argument("-d", dest="worktrees_dir", metavar="dir", default=None)
-            current.add_argument("branch", nargs="?", default=None)
-        wt_new = wt_sub.add_parser("new", help="Create a new branch and its worktree")
+        wt_new = wt_sub.add_parser(
+            "new",
+            help="Create a new branch worktree or check out an existing branch",
+        )
         wt_new.add_argument("-d", dest="worktrees_dir", metavar="dir", default=None)
         wt_new.add_argument("branch")
         wt_sub.add_parser("setup", help="Run setup scripts for the current checkout")

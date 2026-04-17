@@ -70,32 +70,6 @@ class TestConfigCopy:
         assert_rejects(parser, ["config", "cp"])
 
 
-# ── wt / worktree co / checkout ─────────────────────────────────────────────
-
-class TestWorktreeCheckout:
-    def test_wt_co_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "co", "feat/x"])
-        assert ns.command == "wt"
-        assert ns.wt_command == "co"
-        assert ns.branch == "feat/x"
-        assert ns.new_branch is None
-
-    def test_worktree_checkout_with_b(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["worktree", "checkout", "-b", "new-br"])
-        assert ns.new_branch == "new-br"
-        assert ns.branch is None
-
-    def test_wt_co_with_d(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "co", "-d", "/wt", "br"])
-        assert ns.worktrees_dir == "/wt"
-        assert ns.branch == "br"
-
-    def test_wt_co_with_b_and_d(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "co", "-b", "new-br", "-d", "/wt"])
-        assert ns.new_branch == "new-br"
-        assert ns.worktrees_dir == "/wt"
-
-
 # ── wt / worktree new ───────────────────────────────────────────────────────
 
 class TestWorktreeNew:
@@ -111,6 +85,12 @@ class TestWorktreeNew:
 
     def test_wt_new_missing_branch(self, parser: argparse.ArgumentParser) -> None:
         assert_rejects(parser, ["wt", "new"])
+
+    def test_wt_co_is_rejected(self, parser: argparse.ArgumentParser) -> None:
+        assert_rejects(parser, ["wt", "co", "feat/x"])
+
+    def test_worktree_checkout_is_rejected(self, parser: argparse.ArgumentParser) -> None:
+        assert_rejects(parser, ["worktree", "checkout", "feat/x"])
 
 
 class TestWorktreeSetup:

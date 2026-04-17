@@ -561,13 +561,13 @@ class TestCpConfig:
         assert (dest / ".env").read_text() == "ALIAS=1"
 
 
-# ── agm wt co / wt new ──────────────────────────────────────────────────────
+# ── agm wt new ───────────────────────────────────────────────────────────────
 
 
 class TestMkWt:
-    """agm wt co / wt new: create / checkout git worktrees."""
+    """agm wt new: create or check out git worktrees."""
 
-    def test_checkout_existing_branch(
+    def test_new_checks_out_existing_branch(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -579,7 +579,7 @@ class TestMkWt:
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
 
-        run_agm(["wt", "co", "-d", str(wt_dir), "feat/x"], env=env, cwd=str(work))
+        run_agm(["wt", "new", "-d", str(wt_dir), "feat/x"], env=env, cwd=str(work))
 
         assert (wt_dir / "feat/x").is_dir()
         assert (wt_dir / "feat/x" / "x.txt").read_text() == "x.txt"
@@ -613,6 +613,61 @@ class TestMkWt:
             cwd=str(wt_dir / "new-branch"), env=env,
         ).stdout.strip()
         assert head == "new-branch"
+
+    def test_existing_local_branch_checks_out_worktree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        work = make_working_repo(tmp_path / "work", bare, env)
+
+        _git("checkout", "-b", "existing-local", cwd=str(work), env=env)
+        (work / "local.txt").write_text("local\n")
+        _git("add", "local.txt", cwd=str(work), env=env)
+        _git("commit", "-m", "add local branch file", cwd=str(work), env=env)
+        _git("checkout", "main", cwd=str(work), env=env)
+
+        wt_dir = tmp_path / "worktrees"
+        wt_dir.mkdir()
+
+        run_agm(
+            ["wt", "new", "-d", str(wt_dir), "existing-local"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert (wt_dir / "existing-local" / "local.txt").read_text() == "local\n"
+        head = _git(
+            "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=str(wt_dir / "existing-local"),
+            env=env,
+        ).stdout.strip()
+        assert head == "existing-local"
+
+    def test_existing_remote_branch_checks_out_worktree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        work = make_working_repo(tmp_path / "work", bare, env)
+
+        _push_branch(work, bare, "existing-remote", "remote.txt", env)
+        _git("branch", "-D", "existing-remote", cwd=str(work), env=env)
+
+        wt_dir = tmp_path / "worktrees"
+        wt_dir.mkdir()
+
+        run_agm(
+            ["wt", "new", "-d", str(wt_dir), "existing-remote"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert (wt_dir / "existing-remote" / "remote.txt").read_text() == "remote.txt"
+        head = _git(
+            "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=str(wt_dir / "existing-remote"),
+            env=env,
+        ).stdout.strip()
+        assert head == "existing-remote"
 
     def test_new_branch_contains_same_files(
         self, tmp_path: Path, env: dict[str, str]
@@ -791,44 +846,10 @@ class TestMkWt:
 
         assert (project / ".worktrees" / "simple-auto").is_dir()
 
-    def test_checkout_without_b_or_branch_fails(
+    def test_wt_new_checks_out_existing_remote_branch(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
-
-        result = run_agm(["wt", "co"], env=env, cwd=str(work), check=False)
-        assert result.returncode != 0
-        assert "branch name is required" in result.stderr.lower()
-        assert "usage" in result.stderr.lower()
-
-    def test_wt_co_with_b_flag(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        """agm wt co -b creates a new branch via the checkout subcommand."""
-        bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
-
-        wt_dir = tmp_path / "worktrees"
-        wt_dir.mkdir()
-
-        run_agm(
-            ["wt", "co", "-b", "co-created", "-d", str(wt_dir)],
-            env=env, cwd=str(work),
-        )
-
-        assert (wt_dir / "co-created").is_dir()
-        assert (wt_dir / "co-created" / "README.md").exists()
-        head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(wt_dir / "co-created"), env=env,
-        ).stdout.strip()
-        assert head == "co-created"
-
-    def test_worktree_checkout_long_alias(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        """'worktree checkout' works identically to 'wt co'."""
+        """``wt new`` checks out an existing remote branch into a worktree."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         work = make_working_repo(tmp_path / "work", bare, env)
 
@@ -839,7 +860,7 @@ class TestMkWt:
         wt_dir.mkdir()
 
         run_agm(
-            ["worktree", "checkout", "-d", str(wt_dir), "feat/long"],
+            ["wt", "new", "-d", str(wt_dir), "feat/long"],
             env=env, cwd=str(work),
         )
 
@@ -2860,11 +2881,6 @@ class TestHelp:
                 "error: the following arguments are required",
             ),
             (
-                ["wt", "co"],
-                ["wt", "co", "-h"],
-                "error: branch name is required unless -b is provided",
-            ),
-            (
                 ["open", "-n", "abc", "repo"],
                 ["open", "-h"],
                 "error: pane count must be a positive integer",
@@ -2985,7 +3001,7 @@ class TestEdgeCases:
     def test_worktree_already_exists(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Creating a worktree for a branch that already has one should fail."""
+        """An existing branch worktree is reused by ``wt new``."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -2996,7 +3012,7 @@ class TestEdgeCases:
             ["wt", "new", "dupe-branch"],
             env=env, cwd=str(project / "repo"), check=False,
         )
-        assert result.returncode != 0
+        assert result.returncode == 0
 
     def test_config_copy_destination_does_not_exist(
         self, tmp_path: Path, env: dict[str, str]
@@ -3199,7 +3215,7 @@ class TestWorkflows:
     def test_branch_sync_then_checkout(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """br sync discovers remote branches, then wt co checks one out."""
+        """br sync discovers remote branches, then wt new checks one out."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -3214,7 +3230,7 @@ class TestWorkflows:
 
         # Check out the synced branch into a worktree.
         run_agm(
-            ["wt", "co", "feat/synced"],
+            ["wt", "new", "feat/synced"],
             env=env, cwd=str(project / "repo"),
         )
         wt = project / "worktrees" / "feat/synced"

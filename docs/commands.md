@@ -13,8 +13,7 @@
 | Command | Description |
 |---|---|
 | `agm branch sync` | Fetch/prune origin and create local tracking branches |
-| `agm worktree checkout [-b BRANCH] [-d DIR] [BRANCH]` | Check out a branch into a worktree |
-| `agm worktree new [-d DIR] BRANCH` | Create a new branch and its worktree |
+| `agm worktree new [-d DIR] BRANCH` | Create a new branch worktree or check out an existing branch |
 | `agm worktree setup` | Run setup scripts for the current repo or worktree checkout |
 | `agm worktree remove [-f] BRANCH` | Remove a worktree and delete the local branch |
 
@@ -57,5 +56,4 @@ settings.
 | `agm br` | `agm branch` |
 | `agm wt` | `agm worktree` |
 | `agm config cp` | `agm config copy` |
-| `agm wt co` | `agm worktree checkout` |
 | `agm wt rm` | `agm worktree remove` |

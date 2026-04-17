@@ -16,7 +16,6 @@ import agm.commands.open as open_command
 import agm.commands.run as run_command
 import agm.commands.tmux.layout as tmux_layout_command
 import agm.commands.tmux.new as tmux_new_command
-import agm.commands.worktree.checkout as worktree_checkout_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 import agm.commands.worktree.setup as worktree_setup_command
@@ -31,7 +30,6 @@ from agm.commands.args import (
     RunArgs,
     TmuxLayoutArgs,
     TmuxNewArgs,
-    WorktreeCheckoutArgs,
     WorktreeNewArgs,
     WorktreeRemoveArgs,
     WorktreeSetupArgs,
@@ -89,9 +87,7 @@ def dispatch(args: _DispatchArgs) -> NoReturn:
         if args.wt_command is None:
             print_command_help(cmd)
             raise SystemExit(0)
-        if args.wt_command in {"co", "checkout"}:
-            worktree_checkout_command.run(cast(WorktreeCheckoutArgs, args))
-        elif args.wt_command == "new":
+        if args.wt_command == "new":
             worktree_new_command.run(cast(WorktreeNewArgs, args))
         elif args.wt_command == "setup":
             worktree_setup_command.run(cast(WorktreeSetupArgs, args))

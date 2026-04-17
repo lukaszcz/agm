@@ -12,4 +12,5 @@ def run(args: WorktreeNewArgs) -> None:
         worktrees_dir=args.worktrees_dir,
         branch=None,
         existing_ok=False,
+        reuse_existing_branch=True,
     )

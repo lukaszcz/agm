@@ -20,14 +20,6 @@ class ConfigCopyArgs(Protocol):
     dirname: str
 
 
-class WorktreeCheckoutArgs(Protocol):
-    command: str | None
-    wt_command: str | None
-    new_branch: str | None
-    worktrees_dir: str | None
-    branch: str | None
-
-
 class WorktreeNewArgs(Protocol):
     worktrees_dir: str | None
     branch: str

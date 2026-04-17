@@ -89,6 +89,7 @@ def ensure_worktree(
     worktrees_dir: str | None,
     branch: str | None,
     existing_ok: bool = False,
+    reuse_existing_branch: bool = False,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Path:
@@ -110,6 +111,14 @@ def ensure_worktree(
     resolved_dirname = dirname.resolve(strict=False)
 
     repo_dir = git_helpers.git_setup(current)
+    git_helpers.fetch(repo_dir, env=env)
+    if create_branch and reuse_existing_branch:
+        branch_exists = git_helpers.local_branch_exists(
+            repo_dir, branch_name, env=env
+        ) or git_helpers.remote_branch_exists(repo_dir, branch_name, env=env)
+        if branch_exists:
+            create_branch = False
+            existing_ok = True
     existing_worktrees = git_helpers.worktree_list(repo_dir, env=env)
     for worktree in existing_worktrees:
         if (
@@ -121,7 +130,6 @@ def ensure_worktree(
                 raise SystemExit(1)
             return dirname
 
-    git_helpers.fetch(repo_dir, env=env)
     git_helpers.worktree_add(
         repo_dir,
         dirname,

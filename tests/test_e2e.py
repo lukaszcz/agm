@@ -999,11 +999,12 @@ class TestClose:
         worktree = project / "worktrees" / "feat/close-me"
         assert worktree.is_dir()
 
-        run_agm(["close", "feat/close-me"], env=env, cwd=str(project))
+        result = run_agm(["close", "feat/close-me"], env=env, cwd=str(project))
 
         assert not worktree.exists()
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/close-me" not in branches
+        assert "Closed session proj/feat/close-me" in result.stdout
         log = tmux_log.read_text()
         assert "kill-session -t proj/feat/close-me" in log
 
@@ -2713,8 +2714,9 @@ class TestTmuxCloseSession:
         work = tmp_path / "work"
         work.mkdir()
 
-        run_agm(["tmux", "close", "my-session"], env=env, cwd=str(work))
+        result = run_agm(["tmux", "close", "my-session"], env=env, cwd=str(work))
 
+        assert "Closed session my-session" in result.stdout
         log = tmux_log.read_text()
         assert "kill-session -t my-session" in log
 

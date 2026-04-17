@@ -28,10 +28,16 @@ overwriting them. To overwrite existing config files, use:
 just install --force
 ```
 
-Install to a custom prefix:
+Install AGM config files to a custom prefix:
 
 ```bash
 just install /usr/local
+```
+
+Combine a custom prefix with overwriting existing files:
+
+```bash
+just install /usr/local --force
 ```
 
 ## Usage

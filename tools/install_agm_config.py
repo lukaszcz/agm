@@ -11,6 +11,7 @@ from typing import Protocol, cast
 
 class _InstallArgs(Protocol):
     force: bool
+    prefix: str | None
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,15 @@ class InstallUserConfigResult:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python tools/install_agm_config.py")
     parser.add_argument(
+        "prefix",
+        nargs="?",
+        help="Install AGM config files under PREFIX/.agm instead of $HOME/.agm.",
+    )
+    parser.add_argument(
         "-f",
         "--force",
         action="store_true",
-        help="Overwrite existing files under ~/.agm.",
+        help="Overwrite existing config files at the destination.",
     )
     return parser
 
@@ -40,10 +46,10 @@ def _install_file(*, source: Path, destination: Path, force: bool) -> bool:
 def install_user_config(
     *,
     repo_root: Path,
-    home: Path,
+    install_root: Path,
     force: bool = False,
 ) -> InstallUserConfigResult:
-    agm_config_dir = home / ".agm"
+    agm_config_dir = install_root / ".agm"
     sandbox_dir = agm_config_dir / "sandbox"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
 
@@ -73,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     args = cast(_InstallArgs, build_parser().parse_args(argv))
     result = install_user_config(
         repo_root=Path(__file__).resolve().parents[1],
-        home=Path.home(),
+        install_root=Path.home() if args.prefix is None else Path(args.prefix),
         force=args.force,
     )
     for path in result.installed:

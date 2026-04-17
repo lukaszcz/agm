@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.utils.shell import require_success
+from agm.utils.shell import require_capture, require_success
 
 
 def layout_checksum(layout: str) -> str:
@@ -77,6 +77,25 @@ def layout_for_window(pane_count: int, width: int, height: int) -> str:
     cols = (pane_count + rows - 1) // rows
     layout_body = build_window_layout(width, height, pane_count, cols, rows)
     return f"{layout_checksum(layout_body)},{layout_body}"
+
+
+def tmux_display(format_string: str, *, target: str | None = None) -> str:
+    """Return one tmux format value."""
+
+    cmd = ["tmux", "display-message", "-p"]
+    if target is not None:
+        cmd.extend(["-t", target])
+    cmd.append(format_string)
+    return require_capture(cmd).strip()
+
+
+def resolve_window_layout_target(window_id: str | None = None) -> tuple[str, int, int]:
+    """Return the target window id and current dimensions in cells."""
+
+    resolved_window_id = window_id or tmux_display("#{window_id}")
+    width = int(tmux_display("#{window_width}", target=resolved_window_id))
+    height = int(tmux_display("#{window_height}", target=resolved_window_id))
+    return resolved_window_id, width, height
 
 
 def apply_layout(*, pane_count: int, window_id: str, width: int, height: int) -> None:

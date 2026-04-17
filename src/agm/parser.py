@@ -221,7 +221,7 @@ _HELP_TEXTS: dict[str, str] = {
     "tmux": textwrap.dedent("""\
         agm tmux open   [-d] [-n PANES] [SESSION]
         agm tmux close  SESSION
-        agm tmux layout PANES WINDOW_ID WIDTH HEIGHT
+        agm tmux layout PANES [--window WINDOW_ID]
 
         Tmux session and layout management.
 
@@ -627,10 +627,13 @@ def build_parser() -> argparse.ArgumentParser:
     tmux_layout = tmux_sub.add_parser(
         "layout",
         help="Apply a tiled pane layout",
-        description="Apply AGM's tiled pane layout to an existing tmux window.",
+        description="Apply AGM's tiled pane layout to the current tmux window.",
     )
     tmux_layout.add_argument("pane_count", help="number of panes to arrange")
-    tmux_layout.add_argument("window_id", help="tmux window id, for example @1")
-    tmux_layout.add_argument("width", help="window width in cells")
-    tmux_layout.add_argument("height", help="window height in cells")
+    tmux_layout.add_argument(
+        "-w",
+        "--window",
+        dest="window_id",
+        help="tmux window id to target explicitly, for example @1",
+    )
     return parser

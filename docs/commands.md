@@ -85,7 +85,7 @@ settings.
 |---|---|
 | `agm tmux open [-d] [-n PANES] [SESSION]` | Open a tmux session |
 | `agm tmux close SESSION` | Kill a tmux session by name |
-| `agm tmux layout PANES WINDOW_ID WIDTH HEIGHT` | Apply a tiled pane layout to a tmux window |
+| `agm tmux layout PANES [--window WINDOW_ID]` | Apply a tiled pane layout to the current tmux window |
 
 `agm tmux open` options:
 - `-d` creates the session without attaching to it.

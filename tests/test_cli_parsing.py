@@ -305,15 +305,19 @@ class TestTmuxClose:
 
 class TestTmuxLayout:
     def test_tmux_layout(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "layout", "4", "@1", "200", "50"])
+        ns = parse(parser, ["tmux", "layout", "4"])
+        assert ns.tmux_command == "layout"
+        assert ns.pane_count == "4"
+        assert ns.window_id is None
+
+    def test_tmux_layout_with_explicit_window(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["tmux", "layout", "4", "--window", "@1"])
         assert ns.tmux_command == "layout"
         assert ns.pane_count == "4"
         assert ns.window_id == "@1"
-        assert ns.width == "200"
-        assert ns.height == "50"
 
     def test_tmux_layout_missing_args(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["tmux", "layout", "4", "@1"])
+        assert_rejects(parser, ["tmux", "layout"])
 
 
 # ── help ─────────────────────────────────────────────────────────────────────

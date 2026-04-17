@@ -172,9 +172,6 @@ def create_tmux_session(
             "tmux",
             "layout",
             str(pane_total),
-            "'#{window_id}'",
-            "'#{window_width}'",
-            "'#{window_height}'",
         ],
     )
 

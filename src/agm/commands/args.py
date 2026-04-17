@@ -88,6 +88,4 @@ class TmuxCloseArgs(Protocol):
 
 class TmuxLayoutArgs(Protocol):
     pane_count: str
-    window_id: str
-    width: str
-    height: str
+    window_id: str | None

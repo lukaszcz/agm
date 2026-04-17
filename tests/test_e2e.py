@@ -2645,6 +2645,23 @@ class TestTmuxOpenSession:
         log = tmux_log.read_text()
         assert "-s my-custom-name" in log
 
+    def test_non_detached_open_uses_user_facing_layout_interface(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        work = tmp_path / "work"
+        work.mkdir()
+
+        run_agm(["tmux", "open", "-n", "4"], env=env, cwd=str(work))
+
+        log = tmux_log.read_text()
+        assert "run-shell" in log
+        assert "agm.cli tmux layout 4" in log
+        assert "#{window_id}" not in log
+        assert "#{window_width}" not in log
+        assert "#{window_height}" not in log
+
     def test_detach_with_custom_pane_count_and_name(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -2727,7 +2744,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["tmux", "layout", "1", "@0", "200", "50"],
+            ["tmux", "layout", "1"],
             env=env, cwd=str(tmp_path),
         )
 
@@ -2744,7 +2761,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["tmux", "layout", "4", "@1", "200", "50"],
+            ["tmux", "layout", "4", "--window", "@1"],
             env=env, cwd=str(tmp_path),
         )
 
@@ -2762,7 +2779,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["tmux", "layout", "9", "@0", "300", "90"],
+            ["tmux", "layout", "9"],
             env=env, cwd=str(tmp_path),
         )
 
@@ -2778,7 +2795,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["tmux", "layout", "2", "@0", "200", "50"],
+            ["tmux", "layout", "2"],
             env=env, cwd=str(tmp_path),
         )
 
@@ -2796,7 +2813,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["tmux", "layout", "4", "@0", "200", "50"],
+            ["tmux", "layout", "4"],
             env=env, cwd=str(tmp_path),
         )
 
@@ -2812,7 +2829,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["tmux", "layout", "4"], env=env, cwd=str(tmp_path), check=False,
+            ["tmux", "layout"], env=env, cwd=str(tmp_path), check=False,
         )
         assert result.returncode != 0
         assert "usage" in result.stderr.lower() or "argument" in result.stderr.lower()
@@ -2825,7 +2842,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["tmux", "layout", "5", "@0", "200", "50"],
+            ["tmux", "layout", "5"],
             env=env, cwd=str(tmp_path),
         )
 
@@ -2842,7 +2859,7 @@ class TestTmuxLayout:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["tmux", "layout", "7", "@0", "200", "50"],
+            ["tmux", "layout", "7"],
             env=env, cwd=str(tmp_path),
         )
 
@@ -2850,6 +2867,22 @@ class TestTmuxLayout:
         assert "select-layout" in log
         for idx in range(7):
             assert f",{idx}" in log
+
+    def test_queries_current_window_dimensions(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(
+            ["tmux", "layout", "4"],
+            env=env, cwd=str(tmp_path),
+        )
+
+        log = tmux_log.read_text()
+        assert "display-message -p #{window_id}" in log
+        assert "display-message -p -t @0 #{window_width}" in log
+        assert "display-message -p -t @0 #{window_height}" in log
 
 
 # ── help system ────────────────────────────────────────────────────────────

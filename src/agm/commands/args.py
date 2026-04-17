@@ -72,12 +72,18 @@ class RunArgs(Protocol):
     settings_file: str | None
 
 
-class TmuxNewArgs(Protocol):
+class TmuxOpenArgs(Protocol):
     command: str | None
     tmux_command: str | None
     detach: bool
     pane_count: str | None
     session_name: str | None
+
+
+class TmuxCloseArgs(Protocol):
+    command: str | None
+    tmux_command: str | None
+    session_name: str
 
 
 class TmuxLayoutArgs(Protocol):

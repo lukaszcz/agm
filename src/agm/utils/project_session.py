@@ -13,6 +13,7 @@ from agm.tmux.session import (
     kill_tmux_session,
     queue_command_in_session,
 )
+from agm.tmux.session import validate_pane_count as validate_tmux_pane_count
 from agm.utils.project import (
     branch_session_name,
     branch_worktree_path,
@@ -24,13 +25,12 @@ from agm.utils.worktree import ensure_worktree, load_worktree_env, remove_worktr
 
 
 def validate_pane_count(pane_count: str | None) -> None:
-    if pane_count is None:
-        return
-    if not pane_count.isdigit() or int(pane_count) < 1:
-        exit_with_usage_error(
-            ["open"],
-            "error: pane count must be a positive integer",
-        )
+    try:
+        validate_tmux_pane_count(["open"], pane_count)
+    except SystemExit as exc:
+        if exc.code != 1:
+            raise
+        exit_with_usage_error(["open"], "error: pane count must be a positive integer")
 
 
 def branch_path(proj_dir: Path, branch: str) -> Path:

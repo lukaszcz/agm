@@ -83,10 +83,11 @@ settings.
 
 | Command | Description |
 |---|---|
-| `agm tmux new [-d] [-n PANES] [SESSION]` | Create a new tmux session |
+| `agm tmux open [-d] [-n PANES] [SESSION]` | Open a tmux session |
+| `agm tmux close SESSION` | Kill a tmux session by name |
 | `agm tmux layout PANES WINDOW_ID WIDTH HEIGHT` | Apply a tiled pane layout to a tmux window |
 
-`agm tmux new` options:
+`agm tmux open` options:
 - `-d` creates the session without attaching to it.
 - `-n PANES` creates the session with `PANES` panes.
 

@@ -219,15 +219,16 @@ _HELP_TEXTS: dict[str, str] = {
           $PROJ_DIR/deps to filesystem.allowWrite when PROJ_DIR is set.
     """),
     "tmux": textwrap.dedent("""\
-        agm tmux new    [-d] [-n PANES] [SESSION]
+        agm tmux open   [-d] [-n PANES] [SESSION]
+        agm tmux close  SESSION
         agm tmux layout PANES WINDOW_ID WIDTH HEIGHT
 
         Tmux session and layout management.
 
         Options:
-          agm tmux new -d
+          agm tmux open -d
               Create the session without attaching to it.
-          agm tmux new -n PANES
+          agm tmux open -n PANES
               Create the session with PANES panes.
     """),
     "help": textwrap.dedent("""\
@@ -591,12 +592,12 @@ def build_parser() -> argparse.ArgumentParser:
         help_text=help_text_for("tmux"),
     )
     tmux_sub = tmux_parser.add_subparsers(dest="tmux_command", parser_class=_HelpTextArgumentParser)
-    tmux_new = tmux_sub.add_parser(
-        "new",
-        help="Create a new tmux session",
+    tmux_open = tmux_sub.add_parser(
+        "open",
+        help="Open a tmux session",
         description="Create a tmux session, optionally detached and with a chosen pane count.",
     )
-    tmux_new.add_argument(
+    tmux_open.add_argument(
         "-d",
         "--detach",
         dest="detach",
@@ -604,19 +605,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="create the session without attaching to it",
     )
-    tmux_new.add_argument(
+    tmux_open.add_argument(
         "-n",
         dest="pane_count",
         metavar="pane_count",
         default=None,
         help="create the session with this many panes",
     )
-    tmux_new.add_argument(
+    tmux_open.add_argument(
         "session_name",
         nargs="?",
         default=None,
         help="optional tmux session name",
     )
+    tmux_close = tmux_sub.add_parser(
+        "close",
+        help="Close a tmux session",
+        description="Kill an existing tmux session by name.",
+    )
+    tmux_close.add_argument("session_name", help="tmux session name to kill")
     tmux_layout = tmux_sub.add_parser(
         "layout",
         help="Apply a tiled pane layout",

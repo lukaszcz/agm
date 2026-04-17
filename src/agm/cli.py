@@ -15,8 +15,9 @@ import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
 import agm.commands.open as open_command
 import agm.commands.run as run_command
+import agm.commands.tmux.close as tmux_close_command
 import agm.commands.tmux.layout as tmux_layout_command
-import agm.commands.tmux.new as tmux_new_command
+import agm.commands.tmux.open as tmux_open_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 import agm.commands.worktree.setup as worktree_setup_command
@@ -30,8 +31,9 @@ from agm.commands.args import (
     InitArgs,
     OpenArgs,
     RunArgs,
+    TmuxCloseArgs,
     TmuxLayoutArgs,
-    TmuxNewArgs,
+    TmuxOpenArgs,
     WorktreeNewArgs,
     WorktreeRemoveArgs,
     WorktreeSetupArgs,
@@ -131,8 +133,10 @@ def dispatch(args: _DispatchArgs) -> NoReturn:
         if args.tmux_command is None:
             print_command_help(cmd)
             raise SystemExit(0)
-        if args.tmux_command == "new":
-            tmux_new_command.run(cast(TmuxNewArgs, args))
+        if args.tmux_command == "open":
+            tmux_open_command.run(cast(TmuxOpenArgs, args))
+        elif args.tmux_command == "close":
+            tmux_close_command.run(cast(TmuxCloseArgs, args))
         else:
             tmux_layout_command.run(cast(TmuxLayoutArgs, args))
         raise SystemExit(0)

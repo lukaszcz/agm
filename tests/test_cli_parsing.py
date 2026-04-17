@@ -270,25 +270,35 @@ class TestRun:
         assert ns.run_command == []
 
 
-# ── tmux new ─────────────────────────────────────────────────────────────────
+# ── tmux open/close ──────────────────────────────────────────────────────────
 
-class TestTmuxNew:
-    def test_tmux_new_bare(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "new"])
-        assert ns.tmux_command == "new"
+class TestTmuxOpen:
+    def test_tmux_open_bare(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["tmux", "open"])
+        assert ns.tmux_command == "open"
         assert ns.detach is False
         assert ns.pane_count is None
         assert ns.session_name is None
 
-    def test_tmux_new_with_all(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "new", "-d", "-n", "8", "mysession"])
+    def test_tmux_open_with_all(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["tmux", "open", "-d", "-n", "8", "mysession"])
         assert ns.detach is True
         assert ns.pane_count == "8"
         assert ns.session_name == "mysession"
 
-    def test_tmux_new_detach_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "new", "--detach"])
+    def test_tmux_open_detach_long(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["tmux", "open", "--detach"])
         assert ns.detach is True
+
+
+class TestTmuxClose:
+    def test_tmux_close(self, parser: argparse.ArgumentParser) -> None:
+        ns = parse(parser, ["tmux", "close", "mysession"])
+        assert ns.tmux_command == "close"
+        assert ns.session_name == "mysession"
+
+    def test_tmux_close_missing_name(self, parser: argparse.ArgumentParser) -> None:
+        assert_rejects(parser, ["tmux", "close"])
 
 
 # ── tmux layout ──────────────────────────────────────────────────────────────

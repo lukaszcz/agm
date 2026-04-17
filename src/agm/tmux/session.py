@@ -26,6 +26,17 @@ SKIP_NAMES: set[str] = {
 
 SKIP_PREFIXES: tuple[str, ...] = ("TMUX_", "TERM_", "SSH_", "DBUS_", "XDG_")
 
+
+def validate_pane_count(command_path: list[str], pane_count: str | None) -> int:
+    """Validate an optional pane count and return the effective total."""
+
+    if pane_count is None:
+        return 4
+    if not pane_count.isdigit() or int(pane_count) < 1:
+        exit_with_usage_error(command_path, f"Invalid pane count: {pane_count}")
+    return int(pane_count)
+
+
 def _filter_env(env: dict[str, str]) -> list[tuple[str, str]]:
     filtered: list[tuple[str, str]] = []
     for name, value in env.items():
@@ -49,11 +60,7 @@ def create_tmux_session(
 
     current = Path.cwd() if cwd is None else cwd.resolve()
     resolved_env = dict(os.environ if env is None else env)
-    pane_total = 4
-    if pane_count is not None:
-        if not pane_count.isdigit() or int(pane_count) < 1:
-            exit_with_usage_error(["tmux", "new"], f"Invalid pane count: {pane_count}")
-        pane_total = int(pane_count)
+    pane_total = validate_pane_count(["tmux", "open"], pane_count)
 
     tmux_env_args: list[str] = []
     for name, value in _filter_env(resolved_env):

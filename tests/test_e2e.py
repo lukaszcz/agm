@@ -2553,12 +2553,12 @@ class TestOpen:
         assert "myproj/feat/lifecycle" in log
 
 
-# ── agm tmux new ────────────────────────────────────────────────────────────
+# ── agm tmux open/close ─────────────────────────────────────────────────────
 
 
 @needs_zsh
-class TestTmuxSession:
-    """agm tmux new: create tmux sessions with tiled pane layout."""
+class TestTmuxOpenSession:
+    """agm tmux open: create tmux sessions with tiled pane layout."""
 
     def test_creates_session_default_panes(
         self, tmp_path: Path, env: dict[str, str]
@@ -2569,7 +2569,7 @@ class TestTmuxSession:
         work = tmp_path / "work"
         work.mkdir()
 
-        run_agm(["tmux", "new"], env=env, cwd=str(work))
+        run_agm(["tmux", "open"], env=env, cwd=str(work))
 
         log = tmux_log.read_text()
         assert "new-session" in log
@@ -2584,7 +2584,7 @@ class TestTmuxSession:
         work = tmp_path / "work"
         work.mkdir()
 
-        run_agm(["tmux", "new", "-n", "6"], env=env, cwd=str(work))
+        run_agm(["tmux", "open", "-n", "6"], env=env, cwd=str(work))
 
         log = tmux_log.read_text()
         assert log.count("split-window") == 5
@@ -2597,7 +2597,7 @@ class TestTmuxSession:
         work = tmp_path / "work"
         work.mkdir()
 
-        run_agm(["tmux", "new", "-n", "1"], env=env, cwd=str(work))
+        run_agm(["tmux", "open", "-n", "1"], env=env, cwd=str(work))
 
         log = tmux_log.read_text()
         assert "new-session" in log
@@ -2611,7 +2611,7 @@ class TestTmuxSession:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["tmux", "new", "-d", "my-session"], env=env, cwd=str(work))
+        result = run_agm(["tmux", "open", "-d", "my-session"], env=env, cwd=str(work))
 
         log = tmux_log.read_text()
         assert "-dP" in log
@@ -2626,7 +2626,7 @@ class TestTmuxSession:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["tmux", "new", "--detach"], env=env, cwd=str(work))
+        result = run_agm(["tmux", "open", "--detach"], env=env, cwd=str(work))
 
         log = tmux_log.read_text()
         assert "-dP" in log
@@ -2640,7 +2640,7 @@ class TestTmuxSession:
         work = tmp_path / "work"
         work.mkdir()
 
-        run_agm(["tmux", "new", "my-custom-name"], env=env, cwd=str(work))
+        run_agm(["tmux", "open", "my-custom-name"], env=env, cwd=str(work))
 
         log = tmux_log.read_text()
         assert "-s my-custom-name" in log
@@ -2654,7 +2654,7 @@ class TestTmuxSession:
         work.mkdir()
 
         result = run_agm(
-            ["tmux", "new", "-d", "-n", "3", "sess"], env=env, cwd=str(work),
+            ["tmux", "open", "-d", "-n", "3", "sess"], env=env, cwd=str(work),
         )
 
         log = tmux_log.read_text()
@@ -2662,6 +2662,27 @@ class TestTmuxSession:
         assert "-s sess" in log
         assert log.count("split-window") == 2
         assert "Detached" in result.stdout
+
+
+@needs_zsh
+class TestTmuxCloseSession:
+    """agm tmux close: kill tmux sessions by name."""
+
+    def test_kills_named_session(self, tmp_path: Path, env: dict[str, str]) -> None:
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        work = tmp_path / "work"
+        work.mkdir()
+
+        run_agm(["tmux", "close", "my-session"], env=env, cwd=str(work))
+
+        log = tmux_log.read_text()
+        assert "kill-session -t my-session" in log
+
+
+@needs_zsh
+class TestTmuxOpenErrors:
+    """agm tmux open: argument validation."""
 
     def test_invalid_pane_count(
         self, tmp_path: Path, env: dict[str, str]
@@ -2672,7 +2693,7 @@ class TestTmuxSession:
         work.mkdir()
 
         result = run_agm(
-            ["tmux", "new", "-n", "abc"], env=env, cwd=str(work), check=False,
+            ["tmux", "open", "-n", "abc"], env=env, cwd=str(work), check=False,
         )
         assert result.returncode != 0
         assert "invalid pane count" in result.stderr.lower()
@@ -2686,7 +2707,7 @@ class TestTmuxSession:
         work.mkdir()
 
         result = run_agm(
-            ["tmux", "new", "a", "b"], env=env, cwd=str(work), check=False,
+            ["tmux", "open", "a", "b"], env=env, cwd=str(work), check=False,
         )
         assert result.returncode != 0
         assert "unrecognized" in result.stderr.lower()
@@ -2999,7 +3020,7 @@ class TestHelp:
                 ["open", "-h"],
                 "error: pane count must be a positive integer",
             ),
-            (["tmux", "new", "-n", "abc"], ["tmux", "new", "-h"], "invalid pane count"),
+            (["tmux", "open", "-n", "abc"], ["tmux", "open", "-h"], "invalid pane count"),
         ],
     )
     def test_incorrect_usage_includes_full_help(

@@ -1,6 +1,6 @@
-# agm
+# AgM
 
-Agent Management Framework — a unified CLI for managing worktrees, project dependencies, configuration, sandbox execution, and tmux sessions.
+Agent Project Management — a unified CLI for managing worktrees, project dependencies, configuration, sandbox execution, and tmux sessions.
 
 ## Requirements
 

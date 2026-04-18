@@ -12,18 +12,23 @@ Use `uv run` for all Python tooling.
 ## Project Structure & Module Organization
 
 Production code lives in `src/agm/`, organized by area:
-- `commands/` for subcommands,
-- `utils/` for shared helpers,
+- `commands/` for CLI entrypoints and command implementations,
+- `config/` for loading and resolving configuration,
+- `core/` for environment and process primitives shared across features,
+- `project/` for project/worktree setup and layout management,
 - `vcs/` for git integration,
-- `tmux/` for session/layout logic.
+- `tmux/` for tmux session and layout logic.
 
-The directory structure of `src/agm/commands` must reflect the CLI command tree structure exactly.
+The directory structure of `src/agm/commands` must reflect the CLI command tree structure exactly, including nested command groups (`branch/`, `config/`, `dep/`, `tmux/`, `worktree/`, etc.).
 
 Tests live in `tests/`. Use `test_cli_parsing.py` for parser coverage, `test_project_utils.py` for focused utilities, and `test_e2e.py` for full CLI workflows.
 
 Project notes and command docs are in `docs/`.
 
-Sandbox config templates live in `sandbox/`, and `stubs/` provides local typing support for third-party modules.
+Additional directories:
+- `config/` for config templates,
+- `stubs/` for local typing support for third-party modules,
+- `tools/` for repository tooling.
 
 ## Build, Test, and Development Commands
 

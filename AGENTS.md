@@ -21,6 +21,8 @@ Production code lives in `src/agm/`, organized by area:
 
 The directory structure of `src/agm/commands` must reflect the CLI command tree structure exactly, including nested command groups (`branch/`, `config/`, `dep/`, `tmux/`, `worktree/`, etc.).
 
+CLI arguments/options are defined in `src/agm/cli.py`. Custom argument-value completions for CLI parameters live in `src/agm/completion.py`.
+
 Tests live in `tests/`. Use `test_cli_parsing.py` for parser coverage, `test_project_utils.py` for focused utilities, and `test_e2e.py` for full CLI workflows.
 
 Project notes and command docs are in `docs/`.
@@ -63,10 +65,6 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 
 - Commit format: `type: subject` in imperative lowercase (e.g., `feat: add transfer flow`).
 - Keep commits focused; avoid mixing unrelated changes.
-
-## Security & Configuration Tips
-
-Do not commit machine-specific sandbox files or secrets. When changing `agm run` behavior, verify both repository-local `.sandbox/` settings and the installed files copied from `sandbox/`.
 
 ## Instructions
 

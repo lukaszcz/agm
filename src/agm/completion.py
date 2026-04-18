@@ -145,137 +145,173 @@ def _path_candidates(incomplete: str) -> list[str]:
 
 
 def complete_help_path(args: list[str], incomplete: str) -> list[str]:
-    path_key = args[0] if args else ""
-    return _match(_HELP_TREE.get(path_key, []), incomplete)
+    try:
+        path_key = args[0] if args else ""
+        return _match(_HELP_TREE.get(path_key, []), incomplete)
+    except (Exception, SystemExit):
+        return []
 
 
 def complete_open_target(incomplete: str) -> list[str]:
-    repo_dir = _resolve_project_repo_dir()
-    if repo_dir is None:
+    try:
+        repo_dir = _resolve_project_repo_dir()
+        if repo_dir is None:
+            return []
+        candidates = _branch_candidates(repo_dir)
+        candidates.add("repo")
+        return _match(candidates, incomplete)
+    except (Exception, SystemExit):
         return []
-    candidates = _branch_candidates(repo_dir)
-    candidates.add("repo")
-    return _match(candidates, incomplete)
 
 
 def complete_close_branch(incomplete: str) -> list[str]:
-    repo_dir = _resolve_project_repo_dir()
-    if repo_dir is None:
+    try:
+        repo_dir = _resolve_project_repo_dir()
+        if repo_dir is None:
+            return []
+        return _match(_worktree_branch_candidates(repo_dir), incomplete)
+    except (Exception, SystemExit):
         return []
-    return _match(_worktree_branch_candidates(repo_dir), incomplete)
 
 
 def complete_worktree_branch(incomplete: str) -> list[str]:
-    repo_dir = _resolve_project_repo_dir()
-    if repo_dir is None:
+    try:
+        repo_dir = _resolve_project_repo_dir()
+        if repo_dir is None:
+            return []
+        return _match(_branch_candidates(repo_dir), incomplete)
+    except (Exception, SystemExit):
         return []
-    return _match(_branch_candidates(repo_dir), incomplete)
 
 
 def complete_dep_name(incomplete: str) -> list[str]:
-    deps_dir = _resolve_project_deps_dir()
-    if deps_dir is None or not deps_dir.is_dir():
+    try:
+        deps_dir = _resolve_project_deps_dir()
+        if deps_dir is None or not deps_dir.is_dir():
+            return []
+        names = {path.name for path in deps_dir.iterdir() if path.is_dir()}
+        return _match(names, incomplete)
+    except (Exception, SystemExit):
         return []
-    names = {path.name for path in deps_dir.iterdir() if path.is_dir()}
-    return _match(names, incomplete)
 
 
 def complete_dep_branch(args: list[str], incomplete: str) -> list[str]:
-    dep_name = next((arg for arg in args if not arg.startswith("-")), "")
-    if not dep_name:
+    try:
+        dep_name = next((arg for arg in args if not arg.startswith("-")), "")
+        if not dep_name:
+            return []
+        repo_dir = _resolve_dep_repo(dep_name)
+        if repo_dir is None:
+            return []
+        return _match(_branch_candidates(repo_dir), incomplete)
+    except (Exception, SystemExit):
         return []
-    repo_dir = _resolve_dep_repo(dep_name)
-    if repo_dir is None:
-        return []
-    return _match(_branch_candidates(repo_dir), incomplete)
 
 
 def complete_dep_target(incomplete: str) -> list[str]:
-    deps_dir = _resolve_project_deps_dir()
-    if deps_dir is None or not deps_dir.is_dir():
-        return []
+    try:
+        deps_dir = _resolve_project_deps_dir()
+        if deps_dir is None or not deps_dir.is_dir():
+            return []
 
-    candidates: set[str] = set()
-    for dep_dir in (path for path in deps_dir.iterdir() if path.is_dir()):
-        dep_name = dep_dir.name
-        candidates.add(dep_name)
-        repo_dir = _resolve_dep_repo(dep_name)
-        if repo_dir is None:
-            continue
-        candidates.add(f"{dep_name}/repo")
-        for branch in _worktree_branch_candidates(repo_dir):
-            candidates.add(f"{dep_name}/{branch}")
-    return _match(candidates, incomplete)
+        candidates: set[str] = set()
+        for dep_dir in (path for path in deps_dir.iterdir() if path.is_dir()):
+            dep_name = dep_dir.name
+            candidates.add(dep_name)
+            repo_dir = _resolve_dep_repo(dep_name)
+            if repo_dir is None:
+                continue
+            candidates.add(f"{dep_name}/repo")
+            for branch in _worktree_branch_candidates(repo_dir):
+                candidates.add(f"{dep_name}/{branch}")
+        return _match(candidates, incomplete)
+    except (Exception, SystemExit):
+        return []
 
 
 def complete_run_command(args: list[str], incomplete: str) -> list[str]:
-    if args:
-        return _path_candidates(incomplete)
-
-    candidates: set[str] = set()
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        if not directory:
-            continue
-        path = Path(directory)
-        if not path.is_dir():
-            continue
-        for candidate in path.iterdir():
-            if (
-                candidate.is_file()
-                and os.access(candidate, os.X_OK)
-                and candidate.name.startswith(incomplete)
-            ):
-                candidates.add(candidate.name)
-
-    home = Path(os.environ.get("HOME", "~")).expanduser()
-    cwd = Path.cwd()
     try:
-        proj_dir = current_project_dir(cwd)
-    except (OSError, SystemExit):
-        proj_dir = None
-    try:
-        run_config = load_run_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    except OSError:
-        run_config = None
-    if run_config is not None:
-        candidates.update(
-            command_name
-            for command_name in run_config.aliases
-            if command_name.startswith(incomplete)
-        )
-    return sorted(candidates)
+        if args:
+            return _path_candidates(incomplete)
+
+        candidates: set[str] = set()
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            if not directory:
+                continue
+            path = Path(directory)
+            if not path.is_dir():
+                continue
+            for candidate in path.iterdir():
+                if (
+                    candidate.is_file()
+                    and os.access(candidate, os.X_OK)
+                    and candidate.name.startswith(incomplete)
+                ):
+                    candidates.add(candidate.name)
+
+        home = Path(os.environ.get("HOME", "~")).expanduser()
+        cwd = Path.cwd()
+        try:
+            proj_dir = current_project_dir(cwd)
+        except (OSError, SystemExit):
+            proj_dir = None
+        try:
+            run_config = load_run_config(home=home, proj_dir=proj_dir, cwd=cwd)
+        except OSError:
+            run_config = None
+        if run_config is not None:
+            candidates.update(
+                command_name
+                for command_name in run_config.aliases
+                if command_name.startswith(incomplete)
+            )
+        return sorted(candidates)
+    except (Exception, SystemExit):
+        return []
 
 
 def complete_tmux_session(incomplete: str) -> list[str]:
-    result = subprocess.run(
-        ["tmux", "list-sessions", "-F", "#{session_name}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
     if result.returncode != 0:
         return []
     return _match(set(result.stdout.splitlines()), incomplete)
 
 
 def complete_tmux_window(incomplete: str) -> list[str]:
-    result = subprocess.run(
-        ["tmux", "list-windows", "-F", "#{window_id}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["tmux", "list-windows", "-F", "#{window_id}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
     if result.returncode != 0:
         return []
     return _match(set(result.stdout.splitlines()), incomplete)
 
 
 def complete_pane_count(incomplete: str) -> list[str]:
-    return _match(_COMMON_PANE_COUNTS, incomplete)
+    try:
+        return _match(_COMMON_PANE_COUNTS, incomplete)
+    except (Exception, SystemExit):
+        return []
 
 
 def complete_path_argument(
     ctx: click.Context, args: list[str], incomplete: str
 ) -> list[str]:
     del ctx, args
-    return _path_candidates(incomplete)
+    try:
+        return _path_candidates(incomplete)
+    except (Exception, SystemExit):
+        return []

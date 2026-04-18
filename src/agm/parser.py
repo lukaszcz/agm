@@ -181,6 +181,10 @@ _HELP_TEXTS: dict[str, str] = {
         agm help [COMMAND...]
 
         Show help information for commands and subcommands.
+
+        Global options:
+          --install-completion  Install shell completion for the current shell.
+          --show-completion     Print the shell completion script.
     """),
 }
 
@@ -295,6 +299,10 @@ def _overview_text() -> str:
         lines.append(f"  {name:<{width + 2}} {desc}")
     lines.extend(
         [
+            "",
+            "Global options:",
+            "  --install-completion  Install shell completion for the current shell.",
+            "  --show-completion     Print the shell completion script.",
             "",
             "Run 'agm help <command>' for detailed help on a specific command.",
         ]

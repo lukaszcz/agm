@@ -45,6 +45,23 @@ def test_complete_open_target_includes_repo_and_branches(
     assert suggestions == ["feat/a", "feat/b", "feature/local", "feature/remote"]
 
 
+def test_complete_open_target_swallows_helper_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    monkeypatch.setattr(completion, "_resolve_project_repo_dir", lambda: repo_dir)
+    monkeypatch.setattr(git_helpers, "current_branch", lambda repo_dir: "main")
+    monkeypatch.setattr(git_helpers, "worktree_list", lambda repo_dir: [])
+    monkeypatch.setattr(
+        git_helpers,
+        "fetch_output",
+        lambda args, cwd=None, env=None: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    assert completion.complete_open_target("f") == []
+
+
 def test_complete_close_branch_only_returns_worktree_branches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -185,6 +202,19 @@ def test_complete_run_command_includes_config_aliases(
     assert completion.complete_run_command([], "ai") == ["ai-review"]
 
 
+def test_complete_run_command_swallows_config_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        completion,
+        "load_run_config",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("bad")),
+    )
+
+    assert completion.complete_run_command([], "x") == []
+
+
 def test_complete_tmux_session_reads_tmux_output(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         del args, kwargs
@@ -200,6 +230,16 @@ def test_complete_tmux_session_reads_tmux_output(monkeypatch: pytest.MonkeyPatch
     assert completion.complete_tmux_session("a") == ["alpha"]
 
 
+def test_complete_tmux_session_ignores_missing_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise FileNotFoundError("tmux")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert completion.complete_tmux_session("a") == []
+
+
 def test_complete_tmux_window_reads_tmux_output(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         del args, kwargs
@@ -213,6 +253,16 @@ def test_complete_tmux_window_reads_tmux_output(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert completion.complete_tmux_window("@") == ["@1", "@2"]
+
+
+def test_complete_tmux_window_ignores_missing_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise FileNotFoundError("tmux")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert completion.complete_tmux_window("@") == []
 
 
 def test_complete_pane_count_returns_common_values() -> None:

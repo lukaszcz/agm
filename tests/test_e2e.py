@@ -3050,6 +3050,8 @@ class TestHelp:
         assert result.returncode == 0
         assert "agm - Agent Management Framework" in result.stdout
         assert "Commands:" in result.stdout
+        assert "--install-completion" in result.stdout
+        assert "--show-completion" in result.stdout
         for cmd in ("open", "init", "fetch",
                      "close", "branch", "config", "worktree", "dep", "run",
                      "tmux", "help"):
@@ -3065,6 +3067,14 @@ class TestHelp:
             result = run_agm(["help", cmd], env=env, cwd=str(tmp_path))
             assert result.returncode == 0, f"help {cmd} failed"
             assert f"agm {cmd}" in result.stdout, f"help {cmd} missing header"
+
+    def test_help_help_mentions_completion_options(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(["help", "help"], env=env, cwd=str(tmp_path))
+        assert result.returncode == 0
+        assert "--install-completion" in result.stdout
+        assert "--show-completion" in result.stdout
 
     def test_run_help_describes_options_and_settings_merge(
         self, tmp_path: Path, env: dict[str, str]

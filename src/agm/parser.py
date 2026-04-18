@@ -43,13 +43,10 @@ _HELP_TEXTS: dict[str, str] = {
     "close": textwrap.dedent("""\
         agm close BRANCH
 
-        Close a project session, removing a branch worktree and killing its tmux session.
+        Close a project session for a branch worktree.
 
-        Behavior:
-          BRANCH         Remove the branch worktree via agm wt rm, then kill
-                         the corresponding tmux session.
-          repo/current   Refers to the main repo checkout/session and cannot be
-                         removed with this command.
+        Remove the branch worktree via agm wt rm, then kill
+        the corresponding tmux session.
     """),
     "init": textwrap.dedent("""\
         agm init [--embedded | --workspace] [-b|--branch BRANCH] PROJECT_NAME

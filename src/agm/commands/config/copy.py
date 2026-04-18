@@ -9,7 +9,4 @@ from agm.project.layout import copy_config
 
 
 def run(args: ConfigCopyArgs) -> None:
-    copy_config(
-        project_dir=Path(args.project_dir) if args.project_dir is not None else None,
-        target=Path(args.dirname),
-    )
+    copy_config(target=Path(args.dirname))

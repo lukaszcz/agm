@@ -45,27 +45,22 @@ class TestConfigCopy:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].dirname == "mydir"
-        assert calls[0].project_dir is None
 
-    def test_config_copy_with_d(
+    def test_config_copy_rejects_d_option(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.config_copy_command)
         result = invoke(runner, ["config", "copy", "-d", "/some/dir", "target"])
-        assert result.exit_code == 0
-        assert len(calls) == 1
-        assert calls[0].project_dir == "/some/dir"
-        assert calls[0].dirname == "target"
+        assert result.exit_code != 0
+        assert len(calls) == 0
 
-    def test_config_copy_with_dir_long(
+    def test_config_copy_rejects_dir_long_option(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.config_copy_command)
         result = invoke(runner, ["config", "copy", "--dir", "/some/dir", "target"])
-        assert result.exit_code == 0
-        assert len(calls) == 1
-        assert calls[0].project_dir == "/some/dir"
-        assert calls[0].dirname == "target"
+        assert result.exit_code != 0
+        assert len(calls) == 0
 
     def test_config_cp_missing_dirname(self, runner: CliRunner) -> None:
         result = invoke(runner, ["config", "cp"])

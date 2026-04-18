@@ -71,11 +71,8 @@ directories to `filesystem.allowWrite` after loading the selected settings.
 
 | Command | Description |
 |---|---|
-| `agm config copy [-d PROJECT_DIR] DIRNAME` | Copy project configuration files into an existing target directory |
+| `agm config copy DIRNAME` | Copy project configuration files into an existing target directory |
 | `agm run [--no-patch] [-f SETTINGS] COMMAND [ARGS...]` | Run a command in an Anthropic Sandbox Runtime |
-
-`agm config copy` options:
-- `-d PROJECT_DIR` reads shared config from `PROJECT_DIR` instead of auto-detecting the current project.
 
 `agm run` options:
 - `-f SETTINGS` skips default sandbox settings discovery and uses `SETTINGS` directly.

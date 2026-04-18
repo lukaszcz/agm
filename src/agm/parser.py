@@ -74,15 +74,10 @@ _HELP_TEXTS: dict[str, str] = {
         origin/main in each repo.
     """),
     "config": textwrap.dedent("""\
-        agm config copy [-d|--dir PROJECT_DIR] DIRNAME
-        agm config cp   [-d|--dir PROJECT_DIR] DIRNAME
+        agm config copy DIRNAME
+        agm config cp   DIRNAME
 
         Copy project configuration files into an existing target directory.
-
-        Options:
-          -d, --dir PROJECT_DIR
-                          Read shared config files from this project instead of
-                          auto-detecting the current project.
     """),
     "worktree": textwrap.dedent("""\
         agm worktree new      [-d|--dir DIR] BRANCH
@@ -209,12 +204,12 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
 
 _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("config", "cp"): textwrap.dedent("""\
-        agm config cp [-d|--dir PROJECT_DIR] DIRNAME
+        agm config cp DIRNAME
 
         Copy known project config files into an existing target directory.
     """),
     ("config", "copy"): textwrap.dedent("""\
-        agm config copy [-d|--dir PROJECT_DIR] DIRNAME
+        agm config copy DIRNAME
 
         Copy known project config files into an existing target directory.
     """),

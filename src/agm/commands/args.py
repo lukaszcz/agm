@@ -14,7 +14,6 @@ class HelpArgs:
 @dataclass(slots=True)
 class ConfigCopyArgs:
     config_command: str | None
-    project_dir: str | None
     dirname: str
 
 

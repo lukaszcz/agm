@@ -218,20 +218,12 @@ def config_cp(
         metavar="DIRNAME",
         autocompletion=completion.complete_path_argument,
     ),
-    project_dir: Path | None = typer.Option(
-        None,
-        "-d",
-        "--dir",
-        help="Read config from this project.",
-        autocompletion=completion.complete_path_argument,
-    ),
     _help: bool = _help_option(),
 ) -> None:
     del _help
     config_copy_command.run(
         ConfigCopyArgs(
             config_command="cp",
-            project_dir=str(project_dir) if project_dir is not None else None,
             dirname=_require_value(dirname, command_path=["config", "cp"], name="dirname"),
         )
     )
@@ -244,20 +236,12 @@ def config_copy(
         metavar="DIRNAME",
         autocompletion=completion.complete_path_argument,
     ),
-    project_dir: Path | None = typer.Option(
-        None,
-        "-d",
-        "--dir",
-        help="Read config from this project.",
-        autocompletion=completion.complete_path_argument,
-    ),
     _help: bool = _help_option(),
 ) -> None:
     del _help
     config_copy_command.run(
         ConfigCopyArgs(
             config_command="copy",
-            project_dir=str(project_dir) if project_dir is not None else None,
             dirname=_require_value(dirname, command_path=["config", "copy"], name="dirname"),
         )
     )

@@ -353,9 +353,7 @@ class TestCpConfig:
 
         assert (dest / ".env").read_text() == "FROM_CONFIG=1"
 
-    def test_d_option_overrides_project_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_d_option_is_rejected(self, tmp_path: Path, env: dict[str, str]) -> None:
         custom = tmp_path / "custom"
         custom.mkdir()
         (custom / "config").mkdir()
@@ -366,11 +364,15 @@ class TestCpConfig:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        run_agm(
-            ["config", "cp", "-d", str(custom), str(dest)], env=env, cwd=str(src)
+        result = run_agm(
+            ["config", "cp", "-d", str(custom), str(dest)],
+            env=env,
+            cwd=str(src),
+            check=False,
         )
+        assert result.returncode != 0
 
-        assert (dest / ".env").read_text() == "CUSTOM=1"
+        assert not (dest / ".env").exists()
 
     def test_auto_detects_project_from_worktrees_subdir(
         self, tmp_path: Path, env: dict[str, str]
@@ -3053,7 +3055,7 @@ class TestHelp:
         assert "--install-completion" in result.stdout
         assert "--show-completion" in result.stdout
         for cmd in ("open", "init", "fetch",
-                     "close", "branch", "config", "worktree", "dep", "run",
+                     "close", "config", "worktree", "dep", "run",
                      "tmux", "help"):
             assert cmd in result.stdout, f"'{cmd}' missing from overview"
 

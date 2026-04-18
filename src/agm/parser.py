@@ -16,7 +16,7 @@ _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
         agm open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
 
-        Open a tmux session for a project checkout.
+        Open a tmux session for a project worktree, creating or checking out a branch as needed.
 
         Options:
           -d, --detach            Create the tmux session without attaching to it.
@@ -43,7 +43,7 @@ _HELP_TEXTS: dict[str, str] = {
     "close": textwrap.dedent("""\
         agm close BRANCH
 
-        Remove a branch worktree and kill its tmux session.
+        Close a project session, removing a branch worktree and killing its tmux session.
 
         Behavior:
           BRANCH         Remove the branch worktree via agm wt rm, then kill
@@ -195,18 +195,17 @@ _HELP_ALIASES: dict[str, str] = {
 }
 
 _COMMAND_OVERVIEW: list[tuple[str, str]] = [
-    ("open", "Open a project session, creating or checking out a branch as needed"),
-    ("close", "Remove a branch worktree and kill its tmux session"),
-    ("init", "Initialize a new project by cloning a repository"),
+    ("open", "Open a project session"),
+    ("close", "Close a project session"),
+    ("init", "Initialize a new project"),
+    ("dep", "Manage project dependency checkouts"),
     (
         "fetch",
-        "Fetch latest changes and create missing tracking branches for the repo "
-        "and all dependencies",
+        "Fetch upstream changes for the repo and all dependencies",
     ),
-    ("config", "Copy project configuration files"),
-    ("worktree (wt)", "Low-level git worktree management"),
-    ("dep", "Manage project dependency checkouts"),
-    ("run", "Run a command inside an Anthropic Sandbox Runtime"),
+    ("run", "Run a command in a sandbox"),
+    ("config", "Manage project configuration files"),
+    ("worktree", "Git worktree management"),
     ("tmux", "Tmux session and layout management"),
     ("help", "Show help for a command"),
 ]

@@ -572,6 +572,10 @@ class TestTopLevel:
         result = invoke(runner, ["bogus"])
         assert result.exit_code != 0
 
+    def test_show_completion_is_available(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["--show-completion"])
+        assert result.exit_code == 0
+
 
 class TestHelpTextCoverage:
     def test_every_canonical_command_has_help_text(self) -> None:

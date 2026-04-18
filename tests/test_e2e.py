@@ -2879,7 +2879,7 @@ class TestTmuxOpenErrors:
             ["tmux", "open", "a", "b"], env=env, cwd=str(work), check=False,
         )
         assert result.returncode != 0
-        assert "unrecognized" in result.stderr.lower()
+        assert "unexpected extra argument" in result.stderr.lower()
 
 
 # ── agm tmux layout ────────────────────────────────────────────────────────

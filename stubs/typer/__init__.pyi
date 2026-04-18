@@ -6,6 +6,7 @@ from typing import ParamSpec, TypeVar
 CommandParam = ParamSpec("CommandParam")
 CommandReturn = TypeVar("CommandReturn")
 OptionValue = TypeVar("OptionValue")
+ArgumentValue = TypeVar("ArgumentValue")
 
 
 class Context:
@@ -56,4 +57,17 @@ def Option(
     expose_value: bool = ...,
     is_eager: bool = ...,
     help: str | None = ...,
+    autocompletion: Callable[..., object] | None = ...,
 ) -> OptionValue: ...
+
+
+def Argument(
+    default: ArgumentValue,
+    *,
+    callback: Callable[[Context, object, ArgumentValue], object] | None = ...,
+    metavar: str | None = ...,
+    expose_value: bool = ...,
+    is_eager: bool = ...,
+    help: str | None = ...,
+    autocompletion: Callable[..., object] | None = ...,
+) -> ArgumentValue: ...

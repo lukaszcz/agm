@@ -1,89 +1,100 @@
-"""Typed views over parsed CLI arguments."""
+"""Typed CLI argument containers."""
 
 from __future__ import annotations
 
-from typing import Protocol
+from dataclasses import dataclass
 
 
-class HelpArgs(Protocol):
+@dataclass(slots=True)
+class HelpArgs:
     command: str | None
     help_command: list[str]
 
 
-class ConfigCopyArgs(Protocol):
+@dataclass(slots=True)
+class ConfigCopyArgs:
     config_command: str | None
     project_dir: str | None
     dirname: str
 
 
-class WorktreeNewArgs(Protocol):
+@dataclass(slots=True)
+class WorktreeNewArgs:
     worktrees_dir: str | None
     branch: str
 
 
-class WorktreeSetupArgs(Protocol):
+@dataclass(slots=True)
+class WorktreeSetupArgs:
     wt_command: str | None
 
 
-class WorktreeRemoveArgs(Protocol):
+@dataclass(slots=True)
+class WorktreeRemoveArgs:
     force: bool
     branch: str
 
 
-class DepNewArgs(Protocol):
+@dataclass(slots=True)
+class DepNewArgs:
     branch: str | None
     repo_url: str
 
 
-class DepRemoveArgs(Protocol):
+@dataclass(slots=True)
+class DepRemoveArgs:
     all: bool
     target: str
 
 
-class DepSwitchArgs(Protocol):
+@dataclass(slots=True)
+class DepSwitchArgs:
     dep: str
     branch: str
     create_branch: bool
 
 
-class OpenArgs(Protocol):
+@dataclass(slots=True)
+class OpenArgs:
     detached: bool
     pane_count: str | None
     parent: str | None
     branch: str
 
 
-class CloseArgs(Protocol):
+@dataclass(slots=True)
+class CloseArgs:
     branch: str
 
 
-class InitArgs(Protocol):
+@dataclass(slots=True)
+class InitArgs:
     positional: list[str]
     branch: str | None
     embedded: bool
     workspace: bool
 
 
-class RunArgs(Protocol):
+@dataclass(slots=True)
+class RunArgs:
     run_command: list[str]
     no_patch: bool
     settings_file: str | None
 
 
-class TmuxOpenArgs(Protocol):
-    command: str | None
-    tmux_command: str | None
+@dataclass(slots=True)
+class TmuxOpenArgs:
     detach: bool
     pane_count: str | None
     session_name: str | None
 
 
-class TmuxCloseArgs(Protocol):
-    command: str | None
-    tmux_command: str | None
+@dataclass(slots=True)
+class TmuxCloseArgs:
     session_name: str
 
 
-class TmuxLayoutArgs(Protocol):
+@dataclass(slots=True)
+class TmuxLayoutArgs:
     pane_count: str
     window_id: str | None

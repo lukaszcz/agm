@@ -1,9 +1,10 @@
-"""AGM command-line interface."""
+"""AGM command-line interface implemented with Typer."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import NoReturn, Protocol, cast
+
+import typer
 
 import agm.commands.close as close_command
 import agm.commands.config.copy as config_copy_command
@@ -37,108 +38,472 @@ from agm.commands.args import (
     WorktreeRemoveArgs,
     WorktreeSetupArgs,
 )
+from agm.parser import (
+    exit_with_usage_error,
+    print_command_help,
+    print_help_for_command_path,
+    print_overview,
+)
 
-build_parser = parser_helpers.build_parser
-print_command_help = parser_helpers.print_command_help
-print_help_for_command_path = parser_helpers.print_help_for_command_path
-print_overview = parser_helpers.print_overview
 _HELP_TEXTS = parser_helpers._HELP_TEXTS
 _HELP_ALIASES = parser_helpers._HELP_ALIASES
 _COMMAND_OVERVIEW = parser_helpers._COMMAND_OVERVIEW
 
+_BASE_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {"help_option_names": []}
+_EXTRA_ARGS_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {
+    "help_option_names": [],
+    "allow_extra_args": True,
+    "ignore_unknown_options": False,
+}
+_RUN_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {
+    "help_option_names": [],
+    "allow_extra_args": True,
+    "ignore_unknown_options": True,
+}
 
-class _DispatchArgs(Protocol):
-    command: str | None
-    help_command: list[str]
-    config_command: str | None
-    wt_command: str | None
-    dep_command: str | None
-    tmux_command: str | None
+
+def _command_path_from_context(ctx: typer.Context) -> list[str]:
+    path: list[str] = []
+    current: typer.Context | None = ctx
+    while current is not None and current.parent is not None:
+        if current.info_name is not None:
+            path.append(current.info_name)
+        current = current.parent
+    path.reverse()
+    return path
 
 
-def _has_run_command(args: RunArgs) -> bool:
-    return bool(run_command.normalize_run_command(list(args.run_command)))
-
-
-def dispatch(args: _DispatchArgs) -> NoReturn:
-    cmd = args.command
-    if cmd is None:
+def _print_context_help(
+    ctx: typer.Context,
+    param: object,
+    value: bool,
+) -> None:
+    del param
+    if not value or ctx.resilient_parsing:
+        return
+    command_path = _command_path_from_context(ctx)
+    if command_path:
+        print_help_for_command_path(command_path)
+    else:
         print_overview()
-        raise SystemExit(0)
-    if cmd == "help":
-        if not args.help_command:
-            print_overview()
-        else:
-            try:
-                print_help_for_command_path(args.help_command)
-            except ValueError:
-                print_command_help(" ".join(args.help_command))
-        raise SystemExit(0)
-    if cmd == "open":
-        open_command.run(cast(OpenArgs, args))
-        raise SystemExit(0)
-    if cmd == "close":
-        close_command.run(cast(CloseArgs, args))
-        raise SystemExit(0)
-    if cmd == "config":
-        if args.config_command is None:
-            print_command_help(cmd)
-            raise SystemExit(0)
-        config_copy_command.run(cast(ConfigCopyArgs, args))
-        raise SystemExit(0)
-    if cmd in {"wt", "worktree"}:
-        if args.wt_command is None:
-            print_command_help(cmd)
-            raise SystemExit(0)
-        if args.wt_command == "new":
-            worktree_new_command.run(cast(WorktreeNewArgs, args))
-        elif args.wt_command == "setup":
-            worktree_setup_command.run(cast(WorktreeSetupArgs, args))
-        else:
-            worktree_remove_command.run(cast(WorktreeRemoveArgs, args))
-        raise SystemExit(0)
-    if cmd == "dep":
-        if args.dep_command is None:
-            print_command_help(cmd)
-            raise SystemExit(0)
-        if args.dep_command == "new":
-            dep_new_command.run(cast(DepNewArgs, args))
-        elif args.dep_command == "rm":
-            dep_remove_command.run(cast(DepRemoveArgs, args))
-        else:
-            dep_switch_command.run(cast(DepSwitchArgs, args))
-        raise SystemExit(0)
-    if cmd == "fetch":
-        fetch_command.run(args)
-        raise SystemExit(0)
-    if cmd == "init":
-        init_command.run(cast(InitArgs, args))
-        raise SystemExit(0)
-    if cmd == "run":
-        run_args = cast(RunArgs, args)
-        if not _has_run_command(run_args):
-            print_command_help(cmd)
-            raise SystemExit(0)
-        run_command.run(run_args)
-        raise AssertionError("unreachable")
-    if cmd == "tmux":
-        if args.tmux_command is None:
-            print_command_help(cmd)
-            raise SystemExit(0)
-        if args.tmux_command == "open":
-            tmux_open_command.run(cast(TmuxOpenArgs, args))
-        elif args.tmux_command == "close":
-            tmux_close_command.run(cast(TmuxCloseArgs, args))
-        else:
-            tmux_layout_command.run(cast(TmuxLayoutArgs, args))
-        raise SystemExit(0)
-    raise SystemExit(0)
+    raise typer.Exit()
 
 
-def main(argv: Sequence[str] | None = None) -> NoReturn:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    dispatch(cast(_DispatchArgs, args))
+def _help_option() -> bool:
+    return typer.Option(
+        False,
+        "-h",
+        "--help",
+        callback=_print_context_help,
+        expose_value=False,
+        is_eager=True,
+    )
+
+
+def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> None:
+    joined = ", ".join(names)
+    exit_with_usage_error(command_path, f"error: the following arguments are required: {joined}")
+
+
+def _unexpected_arguments(command_path: Sequence[str], args: Sequence[str]) -> None:
+    exit_with_usage_error(command_path, f"error: unrecognized arguments: {' '.join(args)}")
+
+
+def _single_required_arg(
+    ctx: typer.Context,
+    *,
+    command_path: Sequence[str],
+    name: str,
+) -> str:
+    extra_args = list(ctx.args)
+    if not extra_args:
+        _missing_arguments(command_path, [name])
+    if len(extra_args) > 1:
+        _unexpected_arguments(command_path, extra_args[1:])
+    return extra_args[0]
+
+
+def _one_or_two_args(
+    ctx: typer.Context,
+    *,
+    command_path: Sequence[str],
+    name: str,
+) -> list[str]:
+    extra_args = list(ctx.args)
+    if not extra_args:
+        _missing_arguments(command_path, [name])
+    if len(extra_args) > 2:
+        _unexpected_arguments(command_path, extra_args[2:])
+    return extra_args
+
+
+app = typer.Typer(
+    add_completion=False,
+    context_settings=_BASE_CONTEXT_SETTINGS,
+    invoke_without_command=True,
+)
+
+config_app = typer.Typer(
+    add_completion=False,
+    context_settings=_BASE_CONTEXT_SETTINGS,
+    invoke_without_command=True,
+)
+worktree_app = typer.Typer(
+    add_completion=False,
+    context_settings=_BASE_CONTEXT_SETTINGS,
+    invoke_without_command=True,
+)
+dep_app = typer.Typer(
+    add_completion=False,
+    context_settings=_BASE_CONTEXT_SETTINGS,
+    invoke_without_command=True,
+)
+tmux_app = typer.Typer(
+    add_completion=False,
+    context_settings=_BASE_CONTEXT_SETTINGS,
+    invoke_without_command=True,
+)
+
+
+@app.callback(invoke_without_command=True)
+def main_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    if ctx.invoked_subcommand is None:
+        print_overview()
+        raise typer.Exit()
+
+
+@app.command(context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def help(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    help_command = list(ctx.args)
+    if not help_command:
+        print_overview()
+        raise typer.Exit()
+    try:
+        print_help_for_command_path(help_command)
+    except ValueError:
+        print_command_help(" ".join(help_command))
+    raise typer.Exit()
+
+
+@app.command(context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def open(
+    ctx: typer.Context,
+    detached: bool = typer.Option(
+        False, "-d", "--detach", "--detached", help="Open the session detached."
+    ),
+    pane_count: str | None = typer.Option(
+        None, "-n", "--num-panes", help="Create the session with this many panes."
+    ),
+    parent: str | None = typer.Option(
+        None, "-p", "--parent", help="Base a new branch on this checkout."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    branch = _single_required_arg(ctx, command_path=["open"], name="target")
+    open_command.run(
+        OpenArgs(
+            detached=detached,
+            pane_count=pane_count,
+            parent=parent,
+            branch=branch,
+        )
+    )
+
+
+@app.command(context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def close(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    branch = _single_required_arg(ctx, command_path=["close"], name="branch")
+    close_command.run(CloseArgs(branch=branch))
+
+
+@config_app.callback(invoke_without_command=True)
+def config_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    if ctx.invoked_subcommand is None:
+        print_help_for_command_path(["config"])
+        raise typer.Exit()
+
+
+@config_app.command(name="cp", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def config_cp(
+    ctx: typer.Context,
+    project_dir: str | None = typer.Option(
+        None, "-d", "--dir", help="Read config from this project."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    dirname = _single_required_arg(ctx, command_path=["config", "cp"], name="dirname")
+    config_copy_command.run(
+        ConfigCopyArgs(config_command="cp", project_dir=project_dir, dirname=dirname)
+    )
+
+
+@config_app.command(name="copy", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def config_copy(
+    ctx: typer.Context,
+    project_dir: str | None = typer.Option(
+        None, "-d", "--dir", help="Read config from this project."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    dirname = _single_required_arg(ctx, command_path=["config", "copy"], name="dirname")
+    config_copy_command.run(
+        ConfigCopyArgs(config_command="copy", project_dir=project_dir, dirname=dirname)
+    )
+
+
+@worktree_app.callback(invoke_without_command=True)
+def worktree_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    if ctx.invoked_subcommand is None:
+        print_help_for_command_path([ctx.info_name or "worktree"])
+        raise typer.Exit()
+
+
+@worktree_app.command(context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def new(
+    ctx: typer.Context,
+    worktrees_dir: str | None = typer.Option(
+        None, "-d", "--dir", help="Create the worktree under DIR."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    command_path = _command_path_from_context(ctx)
+    branch = _single_required_arg(ctx, command_path=command_path, name="branch")
+    worktree_new_command.run(WorktreeNewArgs(worktrees_dir=worktrees_dir, branch=branch))
+
+
+@worktree_app.command(context_settings=_BASE_CONTEXT_SETTINGS)
+def setup(
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    worktree_setup_command.run(WorktreeSetupArgs(wt_command="setup"))
+
+
+@worktree_app.command(name="rm", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def worktree_rm(
+    ctx: typer.Context,
+    force: bool = typer.Option(
+        False, "-f", "--force", help="Force removal of locked or dirty worktrees."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    command_path = _command_path_from_context(ctx)
+    branch = _single_required_arg(ctx, command_path=command_path, name="branch")
+    worktree_remove_command.run(WorktreeRemoveArgs(force=force, branch=branch))
+
+
+@worktree_app.command(name="remove", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def worktree_remove(
+    ctx: typer.Context,
+    force: bool = typer.Option(
+        False, "-f", "--force", help="Force removal of locked or dirty worktrees."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    command_path = _command_path_from_context(ctx)
+    branch = _single_required_arg(ctx, command_path=command_path, name="branch")
+    worktree_remove_command.run(WorktreeRemoveArgs(force=force, branch=branch))
+
+
+@dep_app.callback(invoke_without_command=True)
+def dep_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    if ctx.invoked_subcommand is None:
+        print_help_for_command_path(["dep"])
+        raise typer.Exit()
+
+
+@dep_app.command(name="new", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def new_dep(
+    ctx: typer.Context,
+    branch: str | None = typer.Option(
+        None, "-b", "--branch", help="Clone BRANCH instead of the default branch."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    repo_url = _single_required_arg(ctx, command_path=["dep", "new"], name="repo-url")
+    dep_new_command.run(DepNewArgs(branch=branch, repo_url=repo_url))
+
+
+@dep_app.command(name="switch", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def dep_switch(
+    ctx: typer.Context,
+    create_branch: bool = typer.Option(
+        False, "-b", "--branch", help="Create the branch from the default branch."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    extra_args = list(ctx.args)
+    if len(extra_args) < 2:
+        _missing_arguments(["dep", "switch"], ["dep", "branch"])
+    if len(extra_args) > 2:
+        _unexpected_arguments(["dep", "switch"], extra_args[2:])
+    dep_switch_command.run(
+        DepSwitchArgs(dep=extra_args[0], branch=extra_args[1], create_branch=create_branch)
+    )
+
+
+@dep_app.command(name="rm", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def dep_rm(
+    ctx: typer.Context,
+    all: bool = typer.Option(False, "--all", help="Remove the entire dependency directory."),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    target = _single_required_arg(ctx, command_path=["dep", "rm"], name="target")
+    dep_remove_command.run(DepRemoveArgs(all=all, target=target))
+
+
+@app.command(context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def fetch(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    if ctx.args:
+        _unexpected_arguments(["fetch"], list(ctx.args))
+    fetch_command.run(object())
+
+
+@app.command(context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def init(
+    ctx: typer.Context,
+    embedded: bool = typer.Option(False, "--embedded", help="Force the embedded layout."),
+    workspace: bool = typer.Option(False, "--workspace", help="Force the workspace layout."),
+    branch: str | None = typer.Option(
+        None, "-b", "--branch", help="Clone this branch when a repository URL is provided."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    if embedded and workspace:
+        exit_with_usage_error(["init"], "error: --embedded and --workspace are mutually exclusive")
+    positional = _one_or_two_args(ctx, command_path=["init"], name="arg")
+    init_command.run(
+        InitArgs(
+            positional=positional,
+            branch=branch,
+            embedded=embedded,
+            workspace=workspace,
+        )
+    )
+
+
+@app.command(context_settings=_RUN_CONTEXT_SETTINGS)
+def run(
+    ctx: typer.Context,
+    no_patch: bool = typer.Option(
+        False, "--no-patch", help="Skip filesystem allowWrite patching."
+    ),
+    settings_file: str | None = typer.Option(
+        None, "-f", "--file", help="Use this settings file directly."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    extra_args = list(ctx.args)
+    if extra_args and extra_args[0].startswith("-") and extra_args[0] != "--":
+        _unexpected_arguments(["run"], extra_args)
+    run_args = RunArgs(run_command=extra_args, no_patch=no_patch, settings_file=settings_file)
+    if not run_command.normalize_run_command(list(run_args.run_command)):
+        print_help_for_command_path(["run"])
+        raise typer.Exit()
+    run_command.run(run_args)
+
+
+@tmux_app.callback(invoke_without_command=True)
+def tmux_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    if ctx.invoked_subcommand is None:
+        print_help_for_command_path(["tmux"])
+        raise typer.Exit()
+
+
+@tmux_app.command(name="open", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def tmux_open(
+    ctx: typer.Context,
+    detach: bool = typer.Option(False, "-d", "--detach", help="Create the session detached."),
+    pane_count: str | None = typer.Option(
+        None, "-n", "--num-panes", help="Create the session with this many panes."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    extra_args = list(ctx.args)
+    if len(extra_args) > 1:
+        _unexpected_arguments(["tmux", "open"], extra_args[1:])
+    session_name = extra_args[0] if extra_args else None
+    tmux_open_command.run(
+        TmuxOpenArgs(detach=detach, pane_count=pane_count, session_name=session_name)
+    )
+
+
+@tmux_app.command(name="close", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def tmux_close(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    session_name = _single_required_arg(ctx, command_path=["tmux", "close"], name="session")
+    tmux_close_command.run(TmuxCloseArgs(session_name=session_name))
+
+
+@tmux_app.command(name="layout", context_settings=_EXTRA_ARGS_CONTEXT_SETTINGS)
+def tmux_layout(
+    ctx: typer.Context,
+    window_id: str | None = typer.Option(
+        None, "-w", "--window", help="Target a specific tmux window id."
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    pane_count = _single_required_arg(ctx, command_path=["tmux", "layout"], name="panes")
+    tmux_layout_command.run(TmuxLayoutArgs(pane_count=pane_count, window_id=window_id))
+
+
+app.add_typer(config_app, name="config")
+app.add_typer(worktree_app, name="wt")
+app.add_typer(worktree_app, name="worktree")
+app.add_typer(dep_app, name="dep")
+app.add_typer(tmux_app, name="tmux")
+
+
+def main() -> None:
+    app()
 
 
 if __name__ == "__main__":

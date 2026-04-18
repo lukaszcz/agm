@@ -1,74 +1,15 @@
-"""Argument parser and help text utilities for AGM."""
+"""Help text and usage utilities for AGM's Typer CLI."""
 
 from __future__ import annotations
 
-import argparse
 import sys
 import textwrap
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, NoReturn, Protocol, cast
-
-if TYPE_CHECKING:
-    from argparse import _SubParsersAction as _SubParsersActionType
-
-    _SubParsersActionAlias = _SubParsersActionType[argparse.ArgumentParser]
-else:
-    _SubParsersActionAlias = argparse._SubParsersAction
+from typing import Protocol
 
 
 class _Writeable(Protocol):
     def write(self, data: str) -> object: ...
-
-
-class _HelpTextArgumentParser(argparse.ArgumentParser):
-    def __init__(
-        self,
-        prog: str | None = None,
-        usage: str | None = None,
-        description: str | None = None,
-        epilog: str | None = None,
-        parents: Sequence[argparse.ArgumentParser] = (),
-        formatter_class: type[argparse.HelpFormatter] = argparse.HelpFormatter,
-        prefix_chars: str = "-",
-        fromfile_prefix_chars: str | None = None,
-        argument_default: object | None = None,
-        conflict_handler: str = "error",
-        add_help: bool = True,
-        allow_abbrev: bool = True,
-        exit_on_error: bool = True,
-        *,
-        help_text: str | None = None,
-    ) -> None:
-        self._help_text = help_text
-        super().__init__(
-            prog=prog,
-            usage=usage,
-            description=description,
-            epilog=epilog,
-            parents=parents,
-            formatter_class=formatter_class,
-            prefix_chars=prefix_chars,
-            fromfile_prefix_chars=fromfile_prefix_chars,
-            argument_default=argument_default,
-            conflict_handler=conflict_handler,
-            add_help=add_help,
-            allow_abbrev=allow_abbrev,
-            exit_on_error=exit_on_error,
-        )
-
-    def format_help(self) -> str:
-        if self._help_text is not None:
-            return self._help_text
-        return super().format_help()
-
-    def print_help(self, file: _Writeable | None = None) -> None:
-        if file is None:
-            file = sys.stdout
-        print(self.format_help(), end="", file=file)
-
-    def error(self, message: str) -> NoReturn:
-        self.print_usage(sys.stderr)
-        self.exit(2, f"{self.prog}: error: {message}\n\n{self.format_help()}")
 
 
 _HELP_TEXTS: dict[str, str] = {
@@ -266,6 +207,80 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("help", "Show help for a command"),
 ]
 
+_PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
+    ("config", "cp"): textwrap.dedent("""\
+        agm config cp [-d|--dir PROJECT_DIR] DIRNAME
+
+        Copy known project config files into an existing target directory.
+    """),
+    ("config", "copy"): textwrap.dedent("""\
+        agm config copy [-d|--dir PROJECT_DIR] DIRNAME
+
+        Copy known project config files into an existing target directory.
+    """),
+    ("wt", "new"): textwrap.dedent("""\
+        agm wt new [-d|--dir DIR] BRANCH
+
+        Create a new branch worktree or check out an existing branch.
+    """),
+    ("wt", "setup"): textwrap.dedent("""\
+        agm wt setup
+
+        Run configured setup scripts for the current repo or worktree checkout.
+    """),
+    ("wt", "rm"): textwrap.dedent("""\
+        agm wt rm [-f|--force] BRANCH
+
+        Remove a worktree and delete its local branch.
+    """),
+    ("worktree", "new"): textwrap.dedent("""\
+        agm worktree new [-d|--dir DIR] BRANCH
+
+        Create a new branch worktree or check out an existing branch.
+    """),
+    ("worktree", "setup"): textwrap.dedent("""\
+        agm worktree setup
+
+        Run configured setup scripts for the current repo or worktree checkout.
+    """),
+    ("worktree", "remove"): textwrap.dedent("""\
+        agm worktree remove [-f|--force] BRANCH
+
+        Remove a worktree and delete its local branch.
+    """),
+    ("dep", "new"): textwrap.dedent("""\
+        agm dep new [-b|--branch BRANCH] REPO_URL
+
+        Clone a dependency into deps/ using its default branch or BRANCH.
+    """),
+    ("dep", "switch"): textwrap.dedent("""\
+        agm dep switch [-b|--branch] DEP BRANCH
+
+        Add a dependency worktree for BRANCH under deps/DEP/.
+    """),
+    ("dep", "rm"): textwrap.dedent("""\
+        agm dep rm [--all] TARGET
+
+        Remove a dependency worktree by DEP/BRANCH, or remove the main checkout
+        with DEP/repo, DEP/MAIN_BRANCH, or --all DEP.
+    """),
+    ("tmux", "open"): textwrap.dedent("""\
+        agm tmux open [-d|--detach] [-n|--num-panes PANES] [SESSION]
+
+        Create a tmux session, optionally detached and with a chosen pane count.
+    """),
+    ("tmux", "close"): textwrap.dedent("""\
+        agm tmux close SESSION
+
+        Kill an existing tmux session by name.
+    """),
+    ("tmux", "layout"): textwrap.dedent("""\
+        agm tmux layout PANES [-w|--window WINDOW_ID]
+
+        Apply AGM's tiled pane layout to the current tmux window.
+    """),
+}
+
 
 def _overview_text() -> str:
     lines = [
@@ -292,363 +307,54 @@ def help_text_for(command: str) -> str | None:
     return _HELP_TEXTS.get(canonical)
 
 
-def print_overview() -> None:
-    print(_overview_text(), end="")
+def print_overview(file: _Writeable | None = None) -> None:
+    output = sys.stdout if file is None else file
+    print(_overview_text(), end="", file=output)
 
 
-def print_command_help(command: str) -> None:
+def print_command_help(command: str, file: _Writeable | None = None) -> None:
     text = help_text_for(command)
     if text is None:
         print(f"agm: unknown command '{command}'", file=sys.stderr)
         print("\nRun 'agm help' to see available commands.", file=sys.stderr)
         raise SystemExit(1)
-    print(text, end="")
+    output = sys.stdout if file is None else file
+    print(text, end="", file=output)
 
 
-def _subparsers_action(
-    parser: argparse.ArgumentParser,
-) -> _SubParsersActionAlias | None:
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return cast(_SubParsersActionAlias, action)
-    return None
+def _canonical_command_path(command_path: Sequence[str]) -> tuple[str, ...]:
+    if len(command_path) == 1:
+        return (_HELP_ALIASES.get(command_path[0], command_path[0]),)
+    return tuple(command_path)
 
 
-def _resolve_parser(command_path: Sequence[str]) -> _HelpTextArgumentParser:
-    parser = cast(_HelpTextArgumentParser, build_parser())
-    current = parser
-    for command in command_path:
-        subparsers = _subparsers_action(current)
-        if subparsers is None or command not in subparsers.choices:
+def _help_text_for_path(command_path: Sequence[str]) -> str:
+    normalized = _canonical_command_path(command_path)
+    if len(normalized) == 1:
+        text = help_text_for(normalized[0])
+        if text is None:
             raise ValueError(f"unknown command path: {' '.join(command_path)}")
-        current = cast(_HelpTextArgumentParser, subparsers.choices[command])
-    return current
+        return text
+    text = _PATH_HELP_TEXTS.get(tuple(command_path))
+    if text is None:
+        raise ValueError(f"unknown command path: {' '.join(command_path)}")
+    return text
 
 
 def print_help_for_command_path(
     command_path: Sequence[str],
     file: _Writeable | None = None,
 ) -> None:
-    _resolve_parser(command_path).print_help(file)
+    output = sys.stdout if file is None else file
+    print(_help_text_for_path(command_path), end="", file=output)
 
 
 def exit_with_usage_error(command_path: Sequence[str], message: str, *, exit_code: int = 1) -> None:
+    help_text = _help_text_for_path(command_path)
+    usage_line, _, _ = help_text.partition("\n")
     print(message, file=sys.stderr)
     print(file=sys.stderr)
-    print_help_for_command_path(command_path, file=sys.stderr)
+    print(f"usage: {usage_line}", file=sys.stderr)
+    print(file=sys.stderr)
+    print(help_text, end="", file=sys.stderr)
     raise SystemExit(exit_code)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = _HelpTextArgumentParser(
-        prog="agm",
-        description="Agent Management Framework",
-        epilog="Run 'agm help <command>' for detailed help on a specific command.",
-        help_text=_overview_text(),
-    )
-    subparsers = parser.add_subparsers(dest="command", parser_class=_HelpTextArgumentParser)
-
-    help_parser = subparsers.add_parser(
-        "help",
-        help="Show help for a command",
-        help_text=_HELP_TEXTS["help"],
-    )
-    empty_help_command: list[str] = []
-    help_parser.add_argument(
-        "help_command",
-        nargs="*",
-        default=empty_help_command,
-        metavar="command",
-    )
-
-    open_parser = subparsers.add_parser(
-        "open",
-        help="Open a tmux session for a project checkout",
-        help_text=_HELP_TEXTS["open"],
-    )
-    open_parser.add_argument(
-        "-d",
-        "--detach",
-        "--detached",
-        dest="detached",
-        action="store_true",
-        default=False,
-        help="create the tmux session without attaching to it",
-    )
-    open_parser.add_argument(
-        "-n",
-        "--num-panes",
-        dest="pane_count",
-        metavar="pane_count",
-        default=None,
-        help="create the session with this many panes",
-    )
-    open_parser.add_argument(
-        "-p",
-        "--parent",
-        dest="parent",
-        metavar="parent",
-        default=None,
-        help="base a newly created branch worktree on this checkout instead of repo/",
-    )
-    open_parser.add_argument(
-        "branch",
-        metavar="target",
-        help="repo, an existing branch, or a branch name to create and open",
-    )
-
-    close_parser = subparsers.add_parser(
-        "close",
-        help="Remove a branch worktree and kill its tmux session",
-        help_text=_HELP_TEXTS["close"],
-    )
-    close_parser.add_argument(
-        "branch",
-        help="branch whose worktree should be removed and tmux session stopped",
-    )
-
-    config_parser = subparsers.add_parser(
-        "config",
-        help="Copy project configuration files",
-        help_text=help_text_for("config"),
-    )
-    config_sub = config_parser.add_subparsers(
-        dest="config_command",
-        parser_class=_HelpTextArgumentParser,
-    )
-    for name in ("cp", "copy"):
-        current = config_sub.add_parser(
-            name,
-            help="Copy configuration files",
-            description="Copy known project config files into an existing target directory.",
-        )
-        current.add_argument(
-            "-d",
-            "--dir",
-            dest="project_dir",
-            metavar="project-dir",
-            default=None,
-            help="read shared config from this project instead of auto-detecting it",
-        )
-        current.add_argument(
-            "dirname",
-            help="existing target directory that will receive copied config files",
-        )
-
-    for wt_name in ("wt", "worktree"):
-        wt_parser = subparsers.add_parser(
-            wt_name,
-            help="Git worktree management",
-            help_text=help_text_for(wt_name),
-        )
-        wt_sub = wt_parser.add_subparsers(dest="wt_command", parser_class=_HelpTextArgumentParser)
-        wt_new = wt_sub.add_parser(
-            "new",
-            help="Create a new branch worktree or check out an existing branch",
-            description="Create a branch worktree under the default worktrees directory or DIR.",
-        )
-        wt_new.add_argument(
-            "-d",
-            "--dir",
-            dest="worktrees_dir",
-            metavar="dir",
-            default=None,
-            help="create the worktree under DIR instead of the default worktrees location",
-        )
-        wt_new.add_argument("branch", help="branch name to create or check out")
-        wt_sub.add_parser(
-            "setup",
-            help="Run setup scripts for the current checkout",
-            description="Run configured setup scripts for the current repo or worktree checkout.",
-        )
-        for rm_name in ("rm", "remove"):
-            current = wt_sub.add_parser(
-                rm_name,
-                help="Remove a worktree",
-                description="Remove a worktree and delete its local branch.",
-            )
-            current.add_argument(
-                "-f",
-                "--force",
-                dest="force",
-                action="store_true",
-                default=False,
-                help="force removal even when git reports uncommitted or locked state",
-            )
-            current.add_argument("branch", help="branch whose worktree should be removed")
-
-    dep_parser = subparsers.add_parser(
-        "dep",
-        help="Manage project dependency checkouts",
-        help_text=help_text_for("dep"),
-    )
-    dep_sub = dep_parser.add_subparsers(dest="dep_command", parser_class=_HelpTextArgumentParser)
-    dep_new = dep_sub.add_parser(
-        "new",
-        help="Clone a new dependency",
-        description="Clone a dependency into deps/ using its default branch or BRANCH.",
-    )
-    dep_new.add_argument(
-        "-b",
-        "--branch",
-        dest="branch",
-        metavar="branch",
-        default=None,
-        help="clone BRANCH instead of the dependency's default branch",
-    )
-    dep_new.add_argument("repo_url", metavar="repo-url", help="git URL for the dependency")
-    dep_switch = dep_sub.add_parser(
-        "switch",
-        help="Switch a dependency branch",
-        description="Add a dependency worktree for BRANCH under deps/DEP/.",
-    )
-    dep_switch.add_argument(
-        "-b",
-        "--branch",
-        dest="create_branch",
-        action="store_true",
-        default=False,
-        help="create BRANCH from the dependency's default branch before adding the worktree",
-    )
-    dep_switch.add_argument("dep", help="dependency name under deps/")
-    dep_switch.add_argument("branch", help="branch to check out or create")
-    dep_rm = dep_sub.add_parser(
-        "rm",
-        help="Remove a dependency worktree or repo",
-        description=(
-            "Remove a dependency worktree by DEP/BRANCH, or remove the main checkout "
-            "with DEP/repo, DEP/MAIN_BRANCH, or --all DEP."
-        ),
-    )
-    dep_rm.add_argument(
-        "--all",
-        dest="all",
-        action="store_true",
-        default=False,
-        help="remove the entire dependency directory; target must be DEP",
-    )
-    dep_rm.add_argument(
-        "target",
-        help="dependency target: DEP/BRANCH, DEP/repo, DEP/MAIN_BRANCH, or DEP with --all",
-    )
-
-    subparsers.add_parser(
-        "fetch",
-        help="Fetch the repo and dependencies, then create missing tracking branches",
-        help_text=help_text_for("fetch"),
-    )
-
-    init_parser = subparsers.add_parser(
-        "init",
-        help="Initialize a new project",
-        help_text=help_text_for("init"),
-    )
-    init_layout_group = init_parser.add_mutually_exclusive_group()
-    init_layout_group.add_argument(
-        "--embedded",
-        dest="embedded",
-        action="store_true",
-        default=False,
-        help="create an embedded project layout rooted at the main checkout",
-    )
-    init_layout_group.add_argument(
-        "--workspace",
-        dest="workspace",
-        action="store_true",
-        default=False,
-        help="force the workspace project layout with a repo/ checkout",
-    )
-    init_parser.add_argument(
-        "-b",
-        "--branch",
-        dest="branch",
-        metavar="branch",
-        default=None,
-        help="clone BRANCH when a repository URL is provided",
-    )
-    init_parser.add_argument(
-        "positional",
-        nargs="+",
-        metavar="arg",
-        help="PROJECT_NAME, or PROJECT_NAME plus REPO_URL, or REPO_URL alone",
-    )
-
-    run_parser = subparsers.add_parser(
-        "run",
-        help="Run a command inside an Anthropic Sandbox Runtime",
-        help_text=help_text_for("run"),
-    )
-    run_parser.add_argument(
-        "--no-patch",
-        dest="no_patch",
-        action="store_true",
-        default=False,
-        help="skip appending $PROJ_DIR/notes and $PROJ_DIR/deps to allowWrite",
-    )
-    run_parser.add_argument(
-        "-f",
-        "--file",
-        dest="settings_file",
-        metavar="settings.json",
-        default=None,
-        help="use this sandbox settings file directly instead of default discovery",
-    )
-    run_parser.add_argument(
-        "run_command",
-        nargs=argparse.REMAINDER,
-        metavar="command",
-        help="command and arguments to execute inside the sandbox",
-    )
-
-    tmux_parser = subparsers.add_parser(
-        "tmux",
-        help="Tmux session and layout management",
-        help_text=help_text_for("tmux"),
-    )
-    tmux_sub = tmux_parser.add_subparsers(dest="tmux_command", parser_class=_HelpTextArgumentParser)
-    tmux_open = tmux_sub.add_parser(
-        "open",
-        help="Open a tmux session",
-        description="Create a tmux session, optionally detached and with a chosen pane count.",
-    )
-    tmux_open.add_argument(
-        "-d",
-        "--detach",
-        dest="detach",
-        action="store_true",
-        default=False,
-        help="create the session without attaching to it",
-    )
-    tmux_open.add_argument(
-        "-n",
-        "--num-panes",
-        dest="pane_count",
-        metavar="pane_count",
-        default=None,
-        help="create the session with this many panes",
-    )
-    tmux_open.add_argument(
-        "session_name",
-        nargs="?",
-        default=None,
-        help="optional tmux session name",
-    )
-    tmux_close = tmux_sub.add_parser(
-        "close",
-        help="Close a tmux session",
-        description="Kill an existing tmux session by name.",
-    )
-    tmux_close.add_argument("session_name", help="tmux session name to kill")
-    tmux_layout = tmux_sub.add_parser(
-        "layout",
-        help="Apply a tiled pane layout",
-        description="Apply AGM's tiled pane layout to the current tmux window.",
-    )
-    tmux_layout.add_argument("pane_count", help="number of panes to arrange")
-    tmux_layout.add_argument(
-        "-w",
-        "--window",
-        dest="window_id",
-        help="tmux window id to target explicitly, for example @1",
-    )
-    return parser

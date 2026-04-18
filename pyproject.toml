@@ -9,6 +9,7 @@ description = "Unified CLI for managing worktrees, project dependencies, configu
 requires-python = ">=3.12"
 dependencies = [
     "plumbum>=1.9.0",
+    "typer>=0.16.0",
 ]
 
 [project.scripts]

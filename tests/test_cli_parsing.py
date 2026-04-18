@@ -1,429 +1,601 @@
-"""Tests for argument parsing – ensures the CLI accepts exactly the right
-options and rejects invalid ones."""
+"""Tests for CLI argument handling through the Typer application."""
 
 from __future__ import annotations
 
-import argparse
-from typing import Protocol, cast
+from typing import Protocol
 
 import pytest
+from click.testing import CliRunner, Result
+from typer.main import get_command
 
-from agm.cli import build_parser
-
-
-@pytest.fixture()
-def parser() -> argparse.ArgumentParser:
-    return build_parser()
+import agm.cli as cli
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-class ParsedArgs(Protocol):
+class RecordedArgs(Protocol):
     def __getattr__(self, name: str) -> object: ...
 
 
-def parse(parser: argparse.ArgumentParser, argv: list[str]) -> ParsedArgs:
-    return cast(ParsedArgs, parser.parse_args(argv))
+@pytest.fixture()
+def runner() -> CliRunner:
+    return CliRunner()
 
 
-def assert_rejects(parser: argparse.ArgumentParser, argv: list[str]) -> None:
-    with pytest.raises(SystemExit):
-        parser.parse_args(argv)
+def invoke(runner: CliRunner, argv: list[str]) -> Result:
+    return runner.invoke(get_command(cli.app), argv, prog_name="agm")
 
 
-# ── config cp / copy ────────────────────────────────────────────────────────
+def make_recorder(
+    monkeypatch: pytest.MonkeyPatch,
+    target: object,
+    attribute: str = "run",
+) -> list[RecordedArgs]:
+    calls: list[RecordedArgs] = []
+
+    def record(args: RecordedArgs) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(target, attribute, record)
+    return calls
+
 
 class TestConfigCopy:
-    def test_config_cp(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["config", "cp", "mydir"])
-        assert ns.command == "config"
-        assert ns.config_command == "cp"
-        assert ns.dirname == "mydir"
-        assert ns.project_dir is None
+    def test_config_cp(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.config_copy_command)
+        result = invoke(runner, ["config", "cp", "mydir"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].dirname == "mydir"
+        assert calls[0].project_dir is None
 
-    def test_config_copy_with_d(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["config", "copy", "-d", "/some/dir", "target"])
-        assert ns.config_command == "copy"
-        assert ns.project_dir == "/some/dir"
-        assert ns.dirname == "target"
+    def test_config_copy_with_d(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.config_copy_command)
+        result = invoke(runner, ["config", "copy", "-d", "/some/dir", "target"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].project_dir == "/some/dir"
+        assert calls[0].dirname == "target"
 
-    def test_config_copy_with_dir_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["config", "copy", "--dir", "/some/dir", "target"])
-        assert ns.config_command == "copy"
-        assert ns.project_dir == "/some/dir"
-        assert ns.dirname == "target"
+    def test_config_copy_with_dir_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.config_copy_command)
+        result = invoke(runner, ["config", "copy", "--dir", "/some/dir", "target"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].project_dir == "/some/dir"
+        assert calls[0].dirname == "target"
 
-    def test_config_cp_missing_dirname(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["config", "cp"])
+    def test_config_cp_missing_dirname(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["config", "cp"])
+        assert result.exit_code != 0
 
-
-# ── wt / worktree new ───────────────────────────────────────────────────────
 
 class TestWorktreeNew:
-    def test_wt_new(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "new", "feat/y"])
-        assert ns.wt_command == "new"
-        assert ns.branch == "feat/y"
+    def test_wt_new(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.worktree_new_command)
+        result = invoke(runner, ["wt", "new", "feat/y"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "feat/y"
+        assert calls[0].worktrees_dir is None
 
-    def test_wt_new_with_d(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "new", "-d", "/custom", "feat/z"])
-        assert ns.worktrees_dir == "/custom"
-        assert ns.branch == "feat/z"
+    def test_wt_new_with_d(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.worktree_new_command)
+        result = invoke(runner, ["wt", "new", "-d", "/custom", "feat/z"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].worktrees_dir == "/custom"
+        assert calls[0].branch == "feat/z"
 
-    def test_wt_new_with_dir_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "new", "--dir", "/custom", "feat/z"])
-        assert ns.worktrees_dir == "/custom"
-        assert ns.branch == "feat/z"
+    def test_wt_new_with_dir_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.worktree_new_command)
+        result = invoke(runner, ["wt", "new", "--dir", "/custom", "feat/z"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].worktrees_dir == "/custom"
+        assert calls[0].branch == "feat/z"
 
-    def test_wt_new_missing_branch(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["wt", "new"])
+    def test_wt_new_missing_branch(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["wt", "new"])
+        assert result.exit_code != 0
 
-    def test_wt_co_is_rejected(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["wt", "co", "feat/x"])
+    def test_wt_co_is_rejected(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["wt", "co", "feat/x"])
+        assert result.exit_code != 0
 
-    def test_worktree_checkout_is_rejected(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["worktree", "checkout", "feat/x"])
+    def test_worktree_checkout_is_rejected(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["worktree", "checkout", "feat/x"])
+        assert result.exit_code != 0
 
 
 class TestWorktreeSetup:
-    def test_wt_setup(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "setup"])
-        assert ns.wt_command == "setup"
+    def test_wt_setup(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.worktree_setup_command)
+        result = invoke(runner, ["wt", "setup"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
 
-
-# ── wt / worktree rm / remove ───────────────────────────────────────────────
 
 class TestWorktreeRemove:
-    def test_wt_rm(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["wt", "rm", "old-branch"])
-        assert ns.wt_command == "rm"
-        assert ns.branch == "old-branch"
-        assert ns.force is False
+    def test_wt_rm(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.worktree_remove_command)
+        result = invoke(runner, ["wt", "rm", "old-branch"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "old-branch"
+        assert calls[0].force is False
 
-    def test_worktree_remove_force(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["worktree", "remove", "-f", "old-branch"])
-        assert ns.force is True
-        assert ns.branch == "old-branch"
+    def test_worktree_remove_force(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.worktree_remove_command)
+        result = invoke(runner, ["worktree", "remove", "-f", "old-branch"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].force is True
+        assert calls[0].branch == "old-branch"
 
-    def test_worktree_remove_force_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["worktree", "remove", "--force", "old-branch"])
-        assert ns.force is True
-        assert ns.branch == "old-branch"
+    def test_worktree_remove_force_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.worktree_remove_command)
+        result = invoke(runner, ["worktree", "remove", "--force", "old-branch"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].force is True
+        assert calls[0].branch == "old-branch"
 
-    def test_wt_rm_missing_branch(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["wt", "rm"])
+    def test_wt_rm_missing_branch(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["wt", "rm"])
+        assert result.exit_code != 0
 
-
-# ── dep ──────────────────────────────────────────────────────────────────────
 
 class TestDep:
-    def test_dep_new(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "new", "https://github.com/org/repo.git"])
-        assert ns.dep_command == "new"
-        assert ns.repo_url == "https://github.com/org/repo.git"
-        assert ns.branch is None
+    def test_dep_new(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_new_command)
+        result = invoke(runner, ["dep", "new", "https://github.com/org/repo.git"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].repo_url == "https://github.com/org/repo.git"
+        assert calls[0].branch is None
 
-    def test_dep_new_with_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "new", "-b", "main", "https://github.com/org/repo.git"])
-        assert ns.branch == "main"
+    def test_dep_new_with_branch(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_new_command)
+        result = invoke(runner, ["dep", "new", "-b", "main", "https://github.com/org/repo.git"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "main"
 
-    def test_dep_new_with_branch_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "new", "--branch", "main", "https://github.com/org/repo.git"])
-        assert ns.branch == "main"
+    def test_dep_new_with_branch_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_new_command)
+        result = invoke(
+            runner,
+            ["dep", "new", "--branch", "main", "https://github.com/org/repo.git"],
+        )
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "main"
 
-    def test_dep_switch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "switch", "mylib", "feat/x"])
-        assert ns.dep_command == "switch"
-        assert ns.dep == "mylib"
-        assert ns.branch == "feat/x"
-        assert ns.create_branch is False
+    def test_dep_switch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_switch_command)
+        result = invoke(runner, ["dep", "switch", "mylib", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].dep == "mylib"
+        assert calls[0].branch == "feat/x"
+        assert calls[0].create_branch is False
 
-    def test_dep_switch_create(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "switch", "-b", "mylib", "feat/x"])
-        assert ns.create_branch is True
+    def test_dep_switch_create(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_switch_command)
+        result = invoke(runner, ["dep", "switch", "-b", "mylib", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].create_branch is True
 
-    def test_dep_switch_create_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "switch", "--branch", "mylib", "feat/x"])
-        assert ns.create_branch is True
+    def test_dep_switch_create_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_switch_command)
+        result = invoke(runner, ["dep", "switch", "--branch", "mylib", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].create_branch is True
 
-    def test_dep_rm(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "rm", "mylib/feat/x"])
-        assert ns.dep_command == "rm"
-        assert ns.target == "mylib/feat/x"
-        assert ns.all is False
+    def test_dep_rm(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_remove_command)
+        result = invoke(runner, ["dep", "rm", "mylib/feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].target == "mylib/feat/x"
+        assert calls[0].all is False
 
-    def test_dep_rm_all(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep", "rm", "--all", "mylib"])
-        assert ns.dep_command == "rm"
-        assert ns.target == "mylib"
-        assert ns.all is True
+    def test_dep_rm_all(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_remove_command)
+        result = invoke(runner, ["dep", "rm", "--all", "mylib"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].target == "mylib"
+        assert calls[0].all is True
 
-    def test_dep_rm_missing_target(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["dep", "rm"])
+    def test_dep_rm_missing_target(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["dep", "rm"])
+        assert result.exit_code != 0
 
-    def test_dep_missing_subcommand(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["dep"])
-        assert ns.command == "dep"
-        assert ns.dep_command is None
+    def test_dep_missing_subcommand_shows_help(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["dep"])
+        assert result.exit_code == 0
+        assert "agm dep" in result.stdout
 
-
-# ── fetch ────────────────────────────────────────────────────────────────────
 
 class TestFetch:
-    def test_fetch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["fetch"])
-        assert ns.command == "fetch"
+    def test_fetch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.fetch_command)
+        result = invoke(runner, ["fetch"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
 
-    def test_fetch_rejects_args(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["fetch", "extra"])
+    def test_fetch_rejects_args(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["fetch", "extra"])
+        assert result.exit_code != 0
 
-
-# ── init ─────────────────────────────────────────────────────────────────────
 
 class TestInit:
-    def test_init_project_and_url(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["init", "myproj", "https://github.com/org/repo.git"])
-        assert ns.positional == ["myproj", "https://github.com/org/repo.git"]
-        assert ns.branch is None
-        assert ns.embedded is False
-        assert ns.workspace is False
+    def test_init_project_and_url(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "myproj", "https://github.com/org/repo.git"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].positional == ["myproj", "https://github.com/org/repo.git"]
+        assert calls[0].branch is None
+        assert calls[0].embedded is False
+        assert calls[0].workspace is False
 
-    def test_init_url_only(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["init", "https://github.com/org/repo.git"])
-        assert ns.positional == ["https://github.com/org/repo.git"]
+    def test_init_url_only(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "https://github.com/org/repo.git"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].positional == ["https://github.com/org/repo.git"]
 
-    def test_init_with_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["init", "-b", "dev", "myproj"])
-        assert ns.branch == "dev"
-        assert ns.positional == ["myproj"]
+    def test_init_with_branch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "-b", "dev", "myproj"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "dev"
+        assert calls[0].positional == ["myproj"]
 
-    def test_init_with_branch_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["init", "--branch", "dev", "myproj"])
-        assert ns.branch == "dev"
-        assert ns.positional == ["myproj"]
+    def test_init_with_branch_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "--branch", "dev", "myproj"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "dev"
+        assert calls[0].positional == ["myproj"]
 
-    def test_init_with_embedded(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["init", "--embedded", "myproj"])
-        assert ns.embedded is True
-        assert ns.positional == ["myproj"]
+    def test_init_with_embedded(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "--embedded", "myproj"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].embedded is True
+        assert calls[0].positional == ["myproj"]
 
-    def test_init_with_workspace(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["init", "--workspace", "myproj"])
-        assert ns.workspace is True
-        assert ns.positional == ["myproj"]
+    def test_init_with_workspace(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "--workspace", "myproj"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].workspace is True
+        assert calls[0].positional == ["myproj"]
 
-    def test_init_missing_args(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["init"])
+    def test_init_missing_args(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["init"])
+        assert result.exit_code != 0
 
-
-# ── open ─────────────────────────────────────────────────────────────────────
 
 class TestOpen:
-    def test_open_missing_target(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["open"])
+    def test_open_missing_target(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["open"])
+        assert result.exit_code != 0
 
-    def test_open_repo(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "repo"])
-        assert ns.command == "open"
-        assert ns.detached is False
-        assert ns.pane_count is None
-        assert ns.parent is None
-        assert ns.branch == "repo"
+    def test_open_repo(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "repo"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].detached is False
+        assert calls[0].pane_count is None
+        assert calls[0].parent is None
+        assert calls[0].branch == "repo"
 
-    def test_open_with_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "feat/x"])
-        assert ns.branch == "feat/x"
+    def test_open_with_branch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "feat/x"
 
-    def test_open_with_pane_count(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "-n", "6", "repo"])
-        assert ns.pane_count == "6"
+    def test_open_with_pane_count(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "-n", "6", "repo"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pane_count == "6"
 
-    def test_open_with_num_panes_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "--num-panes", "6", "repo"])
-        assert ns.pane_count == "6"
+    def test_open_with_num_panes_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "--num-panes", "6", "repo"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pane_count == "6"
 
-    def test_open_with_parent_and_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "-p", "main", "feat/y"])
-        assert ns.branch == "feat/y"
-        assert ns.parent == "main"
+    def test_open_with_parent_and_branch(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "-p", "main", "feat/y"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "feat/y"
+        assert calls[0].parent == "main"
 
-    def test_open_with_parent_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "--parent", "main", "feat/y"])
-        assert ns.branch == "feat/y"
-        assert ns.parent == "main"
+    def test_open_with_parent_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "--parent", "main", "feat/y"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "feat/y"
+        assert calls[0].parent == "main"
 
-    def test_open_with_all(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "-n", "2", "-p", "main", "feat/y"])
-        assert ns.pane_count == "2"
-        assert ns.parent == "main"
-        assert ns.branch == "feat/y"
+    def test_open_with_all(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "-n", "2", "-p", "main", "feat/y"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pane_count == "2"
+        assert calls[0].parent == "main"
+        assert calls[0].branch == "feat/y"
 
-    def test_open_detached(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "-d", "feat/y"])
-        assert ns.detached is True
-        assert ns.branch == "feat/y"
+    def test_open_detached(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "-d", "feat/y"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].detached is True
+        assert calls[0].branch == "feat/y"
 
-    def test_open_detach_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["open", "--detach", "feat/y"])
-        assert ns.detached is True
-        assert ns.branch == "feat/y"
+    def test_open_detach_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.open_command)
+        result = invoke(runner, ["open", "--detach", "feat/y"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].detached is True
+        assert calls[0].branch == "feat/y"
 
-
-# ── close ────────────────────────────────────────────────────────────────────
 
 class TestClose:
-    def test_close_branch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["close", "feat/x"])
-        assert ns.command == "close"
-        assert ns.branch == "feat/x"
+    def test_close_branch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.close_command)
+        result = invoke(runner, ["close", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "feat/x"
 
-    def test_close_missing_branch(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["close"])
+    def test_close_missing_branch(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["close"])
+        assert result.exit_code != 0
 
-
-# ── run ──────────────────────────────────────────────────────────────────────
 
 class TestRun:
-    def test_run_simple(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["run", "npm", "test"])
-        assert ns.run_command == ["npm", "test"]
-        assert ns.no_patch is False
-        assert ns.settings_file is None
+    def test_run_simple(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "npm", "test"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].run_command == ["npm", "test"]
+        assert calls[0].no_patch is False
+        assert calls[0].settings_file is None
 
-    def test_run_with_f(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["run", "-f", "ci.json", "make"])
-        assert ns.settings_file == "ci.json"
-        assert ns.run_command == ["make"]
+    def test_run_with_f(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "-f", "ci.json", "make"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].settings_file == "ci.json"
+        assert calls[0].run_command == ["make"]
 
-    def test_run_with_file_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["run", "--file", "ci.json", "make"])
-        assert ns.settings_file == "ci.json"
-        assert ns.run_command == ["make"]
+    def test_run_with_file_long(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "--file", "ci.json", "make"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].settings_file == "ci.json"
+        assert calls[0].run_command == ["make"]
 
-    def test_run_no_patch(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["run", "--no-patch", "echo", "hi"])
-        assert ns.no_patch is True
-        assert ns.run_command == ["echo", "hi"]
+    def test_run_no_patch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "--no-patch", "echo", "hi"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_patch is True
+        assert calls[0].run_command == ["echo", "hi"]
 
-    def test_run_no_command(self, parser: argparse.ArgumentParser) -> None:
-        # REMAINDER allows an empty list; dispatch decides whether to show help.
-        ns = parse(parser, ["run"])
-        assert ns.run_command == []
+    def test_run_no_command_shows_help(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["run"])
+        assert result.exit_code == 0
+        assert "agm run" in result.stdout
 
-
-# ── tmux open/close ──────────────────────────────────────────────────────────
 
 class TestTmuxOpen:
-    def test_tmux_open_bare(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "open"])
-        assert ns.tmux_command == "open"
-        assert ns.detach is False
-        assert ns.pane_count is None
-        assert ns.session_name is None
+    def test_tmux_open_bare(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_open_command)
+        result = invoke(runner, ["tmux", "open"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].detach is False
+        assert calls[0].pane_count is None
+        assert calls[0].session_name is None
 
-    def test_tmux_open_with_all(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "open", "-d", "-n", "8", "mysession"])
-        assert ns.detach is True
-        assert ns.pane_count == "8"
-        assert ns.session_name == "mysession"
+    def test_tmux_open_with_all(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_open_command)
+        result = invoke(runner, ["tmux", "open", "-d", "-n", "8", "mysession"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].detach is True
+        assert calls[0].pane_count == "8"
+        assert calls[0].session_name == "mysession"
 
-    def test_tmux_open_detach_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "open", "--detach"])
-        assert ns.detach is True
+    def test_tmux_open_detach_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_open_command)
+        result = invoke(runner, ["tmux", "open", "--detach"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].detach is True
 
-    def test_tmux_open_num_panes_long(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "open", "--num-panes", "8", "mysession"])
-        assert ns.pane_count == "8"
-        assert ns.session_name == "mysession"
+    def test_tmux_open_num_panes_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_open_command)
+        result = invoke(runner, ["tmux", "open", "--num-panes", "8", "mysession"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pane_count == "8"
+        assert calls[0].session_name == "mysession"
 
 
 class TestTmuxClose:
-    def test_tmux_close(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "close", "mysession"])
-        assert ns.tmux_command == "close"
-        assert ns.session_name == "mysession"
+    def test_tmux_close(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_close_command)
+        result = invoke(runner, ["tmux", "close", "mysession"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].session_name == "mysession"
 
-    def test_tmux_close_missing_name(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["tmux", "close"])
+    def test_tmux_close_missing_name(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["tmux", "close"])
+        assert result.exit_code != 0
 
-
-# ── tmux layout ──────────────────────────────────────────────────────────────
 
 class TestTmuxLayout:
-    def test_tmux_layout(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "layout", "4"])
-        assert ns.tmux_command == "layout"
-        assert ns.pane_count == "4"
-        assert ns.window_id is None
+    def test_tmux_layout(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_layout_command)
+        result = invoke(runner, ["tmux", "layout", "4"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pane_count == "4"
+        assert calls[0].window_id is None
 
-    def test_tmux_layout_with_explicit_window(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "layout", "4", "--window", "@1"])
-        assert ns.tmux_command == "layout"
-        assert ns.pane_count == "4"
-        assert ns.window_id == "@1"
+    def test_tmux_layout_with_explicit_window(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_layout_command)
+        result = invoke(runner, ["tmux", "layout", "4", "--window", "@1"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pane_count == "4"
+        assert calls[0].window_id == "@1"
 
-    def test_tmux_layout_with_window_short(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["tmux", "layout", "4", "-w", "@1"])
-        assert ns.tmux_command == "layout"
-        assert ns.pane_count == "4"
-        assert ns.window_id == "@1"
+    def test_tmux_layout_with_window_short(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.tmux_layout_command)
+        result = invoke(runner, ["tmux", "layout", "4", "-w", "@1"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].pane_count == "4"
+        assert calls[0].window_id == "@1"
 
-    def test_tmux_layout_missing_args(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["tmux", "layout"])
+    def test_tmux_layout_missing_args(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["tmux", "layout"])
+        assert result.exit_code != 0
 
-
-# ── help ─────────────────────────────────────────────────────────────────────
 
 class TestHelp:
-    def test_help_bare(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["help"])
-        assert ns.command == "help"
-        assert ns.help_command == []
+    def test_help_bare(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["help"])
+        assert result.exit_code == 0
+        assert "agm - Agent Management Framework" in result.stdout
 
-    def test_help_with_command(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["help", "open"])
-        assert ns.command == "help"
-        assert ns.help_command == ["open"]
+    def test_help_with_command(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["help", "open"])
+        assert result.exit_code == 0
+        assert "agm open" in result.stdout
 
-    def test_help_with_subcommand_path(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, ["help", "wt", "new"])
-        assert ns.help_command == ["wt", "new"]
+    def test_help_with_subcommand_path(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["help", "wt", "new"])
+        assert result.exit_code == 0
+        assert "agm wt new" in result.stdout
 
-    def test_help_with_unknown(self, parser: argparse.ArgumentParser) -> None:
-        # argparse accepts any string; validation is in dispatch
-        ns = parse(parser, ["help", "bogus"])
-        assert ns.help_command == ["bogus"]
+    def test_help_with_unknown(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["help", "bogus"])
+        assert result.exit_code != 0
 
-
-# ── top-level ────────────────────────────────────────────────────────────────
 
 class TestTopLevel:
-    def test_no_command(self, parser: argparse.ArgumentParser) -> None:
-        ns = parse(parser, [])
-        assert ns.command is None
+    def test_no_command(self, runner: CliRunner) -> None:
+        result = invoke(runner, [])
+        assert result.exit_code == 0
+        assert "agm - Agent Management Framework" in result.stdout
 
-    def test_unknown_command(self, parser: argparse.ArgumentParser) -> None:
-        assert_rejects(parser, ["bogus"])
+    def test_unknown_command(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["bogus"])
+        assert result.exit_code != 0
 
-
-# ── help text coverage ──────────────────────────────────────────────────────
 
 class TestHelpTextCoverage:
-    """Verify that _HELP_TEXTS and _HELP_ALIASES are complete and consistent."""
-
     def test_every_canonical_command_has_help_text(self) -> None:
         from agm.cli import _HELP_TEXTS
+
         canonical_commands = {
-            "open", "close", "init", "fetch", "config",
-            "worktree", "dep", "run", "tmux", "help",
+            "open",
+            "close",
+            "init",
+            "fetch",
+            "config",
+            "worktree",
+            "dep",
+            "run",
+            "tmux",
+            "help",
         }
         for cmd in canonical_commands:
             assert cmd in _HELP_TEXTS, f"missing help text for '{cmd}'"
 
     def test_every_overview_command_has_help_text(self) -> None:
         from agm.cli import _COMMAND_OVERVIEW, _HELP_TEXTS
+
         for name, _ in _COMMAND_OVERVIEW:
-            # Overview names may include aliases like "checkout (co)".
             canonical = name.split(" (")[0]
             assert canonical in _HELP_TEXTS, (
                 f"overview lists '{canonical}' but _HELP_TEXTS has no entry"
@@ -431,19 +603,20 @@ class TestHelpTextCoverage:
 
     def test_aliases_point_to_valid_commands(self) -> None:
         from agm.cli import _HELP_ALIASES, _HELP_TEXTS
+
         for alias, target in _HELP_ALIASES.items():
             assert target in _HELP_TEXTS, (
-                f"alias '{alias}' → '{target}' but '{target}' not in _HELP_TEXTS"
+                f"alias '{alias}' -> '{target}' but '{target}' not in _HELP_TEXTS"
             )
 
     def test_no_empty_help_texts(self) -> None:
         from agm.cli import _HELP_TEXTS
+
         for cmd, text in _HELP_TEXTS.items():
             assert text.strip(), f"help text for '{cmd}' is empty"
 
     def test_help_texts_contain_command_name(self) -> None:
         from agm.cli import _HELP_TEXTS
+
         for cmd, text in _HELP_TEXTS.items():
-            assert f"agm {cmd}" in text, (
-                f"help text for '{cmd}' doesn't mention 'agm {cmd}'"
-            )
+            assert f"agm {cmd}" in text, f"help text for '{cmd}' doesn't mention 'agm {cmd}'"

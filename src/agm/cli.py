@@ -474,6 +474,9 @@ def run(
         metavar="CMD",
         autocompletion=completion.complete_run_command,
     ),
+    no_sandbox: bool = typer.Option(
+        False, "--no-sandbox", help="Run the command directly without srt sandboxing."
+    ),
     no_patch: bool = typer.Option(
         False, "--no-patch", help="Skip filesystem allowWrite patching."
     ),
@@ -497,6 +500,7 @@ def run(
         exit_with_usage_error(["run"], f"error: unrecognized arguments: {' '.join(command)}")
     typed_args = RunArgs(
         run_command=command,
+        no_sandbox=no_sandbox,
         no_patch=no_patch,
         memory=memory,
         settings_file=str(settings_file) if settings_file is not None else None,

@@ -443,6 +443,14 @@ class TestRun:
         assert calls[0].no_patch is True
         assert calls[0].run_command == ["echo", "hi"]
 
+    def test_run_no_sandbox(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "--no-sandbox", "echo", "hi"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_sandbox is True
+        assert calls[0].run_command == ["echo", "hi"]
+
     def test_run_with_memory(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.run_command)
         result = invoke(runner, ["run", "--memory", "8G", "echo", "hi"])

@@ -2005,9 +2005,25 @@ class TestSandbox:
         assert result.returncode == 0
         assert result.stderr == ""
         assert (
-            "agm run [--no-patch] [--memory LIMIT] [-f|--file SETTINGS] COMMAND [ARGS...]"
+            "agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [-f|--file SETTINGS] "
+            "COMMAND [ARGS...]"
             in result.stdout
         )
+
+    def test_no_sandbox_runs_command_without_srt_or_settings(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["run", "--no-sandbox", "python3", "-c", 'print("hello")'],
+            env=env,
+            cwd=str(work),
+        )
+        assert result.returncode == 0
+        assert result.stdout.strip() == "hello"
+        assert result.stderr == ""
 
     def test_error_when_no_settings_file(
         self, tmp_path: Path, env: dict[str, str]

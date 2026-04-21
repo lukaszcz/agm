@@ -116,10 +116,6 @@ def run(args: RunArgs) -> None:
     if not run_command:
         print("Error: command is required.", file=sys.stderr)
         raise SystemExit(1)
-    if shutil.which("srt", path=resolved_env.get("PATH")) is None:
-        print("Error: srt is not installed or not in PATH.", file=sys.stderr)
-        print("Install it with: npm install -g @anthropic-ai/sandbox-runtime", file=sys.stderr)
-        raise SystemExit(1)
 
     run_config = load_run_config(
         home=Path(resolved_env["HOME"]),
@@ -129,10 +125,17 @@ def run(args: RunArgs) -> None:
     command_name = Path(run_command[0]).name or run_command[0]
     command_alias = run_config.alias_for(command_name)
     configured_memory_limit = run_config.memory_limit_for(command_name)
-    effective_memory_limit = run_args.memory or configured_memory_limit or DEFAULT_MEMORY_LIMIT
+    if run_args.no_sandbox:
+        effective_memory_limit = run_args.memory
+    else:
+        effective_memory_limit = run_args.memory or configured_memory_limit or DEFAULT_MEMORY_LIMIT
     effective_run_command = list(run_command)
     if command_alias is not None:
         effective_run_command[0] = command_alias
+    if not run_args.no_sandbox and shutil.which("srt", path=resolved_env.get("PATH")) is None:
+        print("Error: srt is not installed or not in PATH.", file=sys.stderr)
+        print("Install it with: npm install -g @anthropic-ai/sandbox-runtime", file=sys.stderr)
+        raise SystemExit(1)
     if _memory_limit_enabled(effective_memory_limit) and (
         shutil.which("systemd-run", path=resolved_env.get("PATH")) is None
     ):
@@ -142,53 +145,62 @@ def run(args: RunArgs) -> None:
     temp_files: list[Path] = []
     tracked_artifacts: list[Path] = []
     try:
-        if run_args.settings_file is not None:
-            selected_settings = Path(run_args.settings_file)
-            if not selected_settings.is_file():
-                print(
-                    f"Error: settings file not found: {run_args.settings_file}",
-                    file=sys.stderr,
-                )
-                raise SystemExit(1)
+        if run_args.no_sandbox:
+            subprocess_args = list(effective_run_command)
         else:
-            settings_candidates = sandbox_settings_candidates(
-                cwd=current,
-                home=Path(resolved_env["HOME"]),
-                proj_dir=Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None,
-                command_name=run_command[0],
-                alias_command_name=effective_run_command[0] if command_alias is not None else None,
-            )
-            found_settings = [path for path in settings_candidates if path.is_file()]
-            if not found_settings:
-                print("Error: no sandbox settings file found.", file=sys.stderr)
-                print(
-                    "Checked: " + ", ".join(str(path) for path in settings_candidates),
-                    file=sys.stderr,
-                )
-                raise SystemExit(1)
-            if len(found_settings) == 1:
-                selected_settings = found_settings[0]
+            if run_args.settings_file is not None:
+                selected_settings = Path(run_args.settings_file)
+                if not selected_settings.is_file():
+                    print(
+                        f"Error: settings file not found: {run_args.settings_file}",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1)
             else:
-                settings_data = [load_settings(settings_path) for settings_path in found_settings]
+                settings_candidates = sandbox_settings_candidates(
+                    cwd=current,
+                    home=Path(resolved_env["HOME"]),
+                    proj_dir=(
+                        Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None
+                    ),
+                    command_name=run_command[0],
+                    alias_command_name=(
+                        effective_run_command[0] if command_alias is not None else None
+                    ),
+                )
+                found_settings = [path for path in settings_candidates if path.is_file()]
+                if not found_settings:
+                    print("Error: no sandbox settings file found.", file=sys.stderr)
+                    print(
+                        "Checked: " + ", ".join(str(path) for path in settings_candidates),
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1)
+                if len(found_settings) == 1:
+                    selected_settings = found_settings[0]
+                else:
+                    settings_data = [
+                        load_settings(settings_path) for settings_path in found_settings
+                    ]
+                    selected_settings = _write_json_temp(
+                        merge_settings_chain(settings_data), temp_files
+                    )
+
+            if not run_args.no_patch and resolved_env.get("PROJ_DIR"):
+                selected_settings_data = load_settings(selected_settings)
                 selected_settings = _write_json_temp(
-                    merge_settings_chain(settings_data), temp_files
+                    patch_for_proj_dir(selected_settings_data, Path(resolved_env["PROJ_DIR"])),
+                    temp_files,
                 )
 
-        if not run_args.no_patch and resolved_env.get("PROJ_DIR"):
-            selected_settings_data = load_settings(selected_settings)
-            selected_settings = _write_json_temp(
-                patch_for_proj_dir(selected_settings_data, Path(resolved_env["PROJ_DIR"])),
-                temp_files,
-            )
-
-        tracked_artifacts = track_bwrap_artifacts(selected_settings, current)
-        subprocess_args = [
-            "srt",
-            "--settings",
-            str(selected_settings),
-            "--",
-            *effective_run_command,
-        ]
+            tracked_artifacts = track_bwrap_artifacts(selected_settings, current)
+            subprocess_args = [
+                "srt",
+                "--settings",
+                str(selected_settings),
+                "--",
+                *effective_run_command,
+            ]
         if _memory_limit_enabled(effective_memory_limit):
             assert effective_memory_limit is not None
             subprocess_args = [*_systemd_run_prefix(effective_memory_limit), *subprocess_args]

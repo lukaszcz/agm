@@ -77,6 +77,7 @@ class InitArgs:
 @dataclass(slots=True)
 class RunArgs:
     run_command: list[str]
+    no_sandbox: bool
     no_patch: bool
     memory: str | None
     settings_file: str | None

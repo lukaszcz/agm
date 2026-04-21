@@ -416,6 +416,7 @@ class TestRun:
         assert len(calls) == 1
         assert calls[0].run_command == ["npm", "test"]
         assert calls[0].no_patch is False
+        assert calls[0].memory is None
         assert calls[0].settings_file is None
 
     def test_run_with_f(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -440,6 +441,14 @@ class TestRun:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].no_patch is True
+        assert calls[0].run_command == ["echo", "hi"]
+
+    def test_run_with_memory(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "--memory", "8G", "echo", "hi"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].memory == "8G"
         assert calls[0].run_command == ["echo", "hi"]
 
     def test_run_no_command_shows_help(self, runner: CliRunner) -> None:

@@ -136,7 +136,7 @@ _HELP_TEXTS: dict[str, str] = {
           DEP/MAIN_BRANCH Remove the main dependency checkout by branch name.
     """),
     "run": textwrap.dedent("""\
-        agm run [--no-patch] [-f|--file SETTINGS] COMMAND [ARGS...]
+        agm run [--no-patch] [--memory LIMIT] [-f|--file SETTINGS] COMMAND [ARGS...]
 
         Run a command inside an Anthropic Sandbox Runtime container.
 
@@ -151,6 +151,10 @@ _HELP_TEXTS: dict[str, str] = {
           -f, --file SETTINGS
                        Use this settings file directly instead of discovering
                        and combining the default sandbox settings files.
+          --memory LIMIT
+                       Wrap srt in systemd-run --user --scope and set
+                       MemoryMax=LIMIT. The default is 20G. Values <= 0
+                       disable memory limiting.
           --no-patch   Do not append the project notes and deps directories to
                        filesystem.allowWrite after loading the selected
                        settings.

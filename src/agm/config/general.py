@@ -56,9 +56,14 @@ class RunConfig:
     """Resolved run-command configuration."""
 
     aliases: dict[str, str]
+    default_memory_limit: str | None
+    command_memory_limits: dict[str, str]
 
     def alias_for(self, command_name: str) -> str | None:
         return self.aliases.get(command_name)
+
+    def memory_limit_for(self, command_name: str) -> str | None:
+        return self.command_memory_limits.get(command_name, self.default_memory_limit)
 
 
 @dataclass(frozen=True)
@@ -81,12 +86,24 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     run_table = _toml_dict(merged.get("run"))
     aliases: dict[str, str] = {}
+    command_memory_limits: dict[str, str] = {}
+    default_memory = run_table.get("memory")
+    default_memory_limit = (
+        default_memory if isinstance(default_memory, str) and default_memory else None
+    )
     for command_name, command_config in run_table.items():
         config = _toml_dict(command_config)
         alias = config.get("alias")
         if isinstance(alias, str) and alias:
             aliases[command_name] = alias
-    return RunConfig(aliases=aliases)
+        memory = config.get("memory")
+        if isinstance(memory, str) and memory:
+            command_memory_limits[command_name] = memory
+    return RunConfig(
+        aliases=aliases,
+        default_memory_limit=default_memory_limit,
+        command_memory_limits=command_memory_limits,
+    )
 
 
 def load_loop_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> LoopConfig:

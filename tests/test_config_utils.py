@@ -17,8 +17,12 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
     (home / ".agm" / "config.toml").write_text(
         "\n".join(
             [
+                "[run]",
+                'memory = "20G"',
+                "",
                 "[run.echo]",
                 'alias = "printf"',
+                'memory = "10G"',
                 "",
                 "[run.keep]",
                 'alias = "cat"',
@@ -34,6 +38,7 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
             [
                 "[run.echo]",
                 'alias = "cat"',
+                'memory = "5G"',
                 "",
                 "[run.local]",
                 'alias = "sed"',
@@ -48,6 +53,10 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
     assert config.alias_for("keep") == "cat"
     assert config.alias_for("local") == "sed"
     assert config.alias_for("missing") is None
+    assert config.memory_limit_for("echo") == "5G"
+    assert config.memory_limit_for("keep") == "20G"
+    assert config.memory_limit_for("local") == "20G"
+    assert config.memory_limit_for("missing") == "20G"
 
 
 def test_load_run_config_prefers_dot_agm_config_after_project_config(tmp_path: Path) -> None:
@@ -110,6 +119,26 @@ def test_load_loop_config_reads_tasks_dir(tmp_path: Path) -> None:
 
     assert config.command == "claude -p"
     assert config.tasks_dir == "custom/tasks"
+
+
+def test_load_run_config_prefers_dot_agm_memory_after_project_config(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+
+    project = tmp_path / "project"
+    (project / "config").mkdir(parents=True)
+    (project / "config" / "config.toml").write_text(
+        '[run]\nmemory = "10G"\n[run.echo]\nmemory = "5G"\n'
+    )
+
+    work = tmp_path / "work"
+    (work / ".agm").mkdir(parents=True)
+    (work / ".agm" / "config.toml").write_text('[run.echo]\nmemory = "2G"\n')
+
+    config = load_run_config(home=home, proj_dir=project, cwd=work)
+
+    assert config.memory_limit_for("echo") == "2G"
+    assert config.memory_limit_for("other") == "10G"
 
 
 def test_sandbox_settings_candidates_fall_back_to_alias_command(tmp_path: Path) -> None:

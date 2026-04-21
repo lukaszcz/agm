@@ -338,6 +338,14 @@ def _srt_command(result: subprocess.CompletedProcess[str]) -> str:
     return ""
 
 
+def _systemd_run_command(result: subprocess.CompletedProcess[str]) -> str:
+    """Extract the forwarded systemd-run argument string from stdout."""
+    for line in result.stdout.splitlines():
+        if line.startswith("SYSTEMD_RUN:"):
+            return line[len("SYSTEMD_RUN:"):]
+    return ""
+
+
 # ── agm config cp ───────────────────────────────────────────────────────────
 
 
@@ -1898,6 +1906,7 @@ class TestSandbox:
           5. Exits 0.
         """
         directory.mkdir(parents=True, exist_ok=True)
+        TestSandbox._make_fake_systemd_run(directory, env)
         srt = directory / "srt"
         srt.write_text(
             "#!/bin/bash\n"
@@ -1927,6 +1936,32 @@ class TestSandbox:
             "exit 0\n"
         )
         srt.chmod(srt.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = str(directory) + ":" + env["PATH"]
+
+    @staticmethod
+    def _make_fake_systemd_run(directory: Path, env: dict[str, str]) -> None:
+        """Create a fake ``systemd-run`` that logs and forwards to the command."""
+        directory.mkdir(parents=True, exist_ok=True)
+        systemd_run = directory / "systemd-run"
+        systemd_run.write_text(
+            "#!/bin/bash\n"
+            'echo "SYSTEMD_RUN:$*"\n'
+            'while [[ $# -gt 0 ]]; do\n'
+            '  case "$1" in\n'
+            "    --user|--scope)\n"
+            "      shift\n"
+            "      ;;\n"
+            "    -p)\n"
+            "      shift 2\n"
+            "      ;;\n"
+            "    *)\n"
+            '      exec "$@"\n'
+            "      ;;\n"
+            "  esac\n"
+            "done\n"
+            "exit 0\n"
+        )
+        systemd_run.chmod(systemd_run.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = str(directory) + ":" + env["PATH"]
 
     def test_error_when_srt_missing(
@@ -1969,7 +2004,10 @@ class TestSandbox:
         )
         assert result.returncode == 0
         assert result.stderr == ""
-        assert "agm run [--no-patch] [-f|--file SETTINGS] COMMAND [ARGS...]" in result.stdout
+        assert (
+            "agm run [--no-patch] [--memory LIMIT] [-f|--file SETTINGS] COMMAND [ARGS...]"
+            in result.stdout
+        )
 
     def test_error_when_no_settings_file(
         self, tmp_path: Path, env: dict[str, str]
@@ -2308,6 +2346,7 @@ class TestSandbox:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """The command after agm run options is forwarded to srt."""
+        self._make_fake_systemd_run(tmp_path / "bin", env)
         self._make_fake_srt(tmp_path / "bin", env)
 
         work = tmp_path / "work"
@@ -2321,7 +2360,80 @@ class TestSandbox:
             env=env, cwd=str(work),
         )
         assert result.returncode == 0
+        assert _systemd_run_command(result) == (
+            f"--user --scope -p MemoryMax=20G srt --settings {work / '.sandbox' / 'npm.json'} "
+            "-- npm test --coverage"
+        )
         assert _srt_command(result) == "npm test --coverage"
+
+    def test_run_memory_flag_overrides_config(self, tmp_path: Path, env: dict[str, str]) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[run]\nmemory = "10G"\n[run.echo]\nmemory = "5G"\n'
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(["run", "--memory", "2G", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        assert _systemd_run_command(result) == (
+            f"--user --scope -p MemoryMax=2G srt --settings {work / '.sandbox' / 'echo.json'} "
+            "-- echo hi"
+        )
+
+    def test_run_command_memory_overrides_run_default(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[run]\nmemory = "10G"\n[run.echo]\nmemory = "5G"\n'
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        assert _systemd_run_command(result) == (
+            f"--user --scope -p MemoryMax=5G srt --settings {work / '.sandbox' / 'echo.json'} "
+            "-- echo hi"
+        )
+
+    def test_run_does_not_wrap_when_memory_limit_is_zero_or_less(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[run]\nmemory = "0"\n')
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        assert _systemd_run_command(result) == ""
+        assert _srt_command(result) == "echo hi"
 
     def test_run_with_double_dash_separator(
         self, tmp_path: Path, env: dict[str, str]
@@ -3367,6 +3479,9 @@ class TestHelp:
         assert "otherwise $HOME/.agm/config.toml is used" in result.stdout
         assert "project config.toml and ./.agm/config.toml" in result.stdout
         assert '[run.<command>] alias = "<other-command>"' in result.stdout
+        assert '[run] memory = "20G"' in result.stdout or "The default is 20G" in result.stdout
+        assert "--memory LIMIT" in result.stdout
+        assert "MemoryMax=LIMIT" in result.stdout
         assert "-f, --file SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout

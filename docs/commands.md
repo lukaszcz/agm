@@ -72,9 +72,10 @@ directories to `filesystem.allowWrite` after loading the selected settings.
 | Command | Description |
 |---|---|
 | `agm config copy DIRNAME` | Copy project configuration files into an existing target directory |
-| `agm run [--no-patch] [-f SETTINGS] COMMAND [ARGS...]` | Run a command in an Anthropic Sandbox Runtime |
+| `agm run [--no-patch] [--memory LIMIT] [-f SETTINGS] COMMAND [ARGS...]` | Run a command in an Anthropic Sandbox Runtime |
 
 `agm run` options:
+- `--memory LIMIT` wraps `srt` in `systemd-run --user --scope -p MemoryMax=LIMIT`. The default is `20G`; values `<= 0` disable memory limiting.
 - `-f SETTINGS` skips default sandbox settings discovery and uses `SETTINGS` directly.
 - `--no-patch` skips adding the project notes and deps directories to `filesystem.allowWrite`.
 

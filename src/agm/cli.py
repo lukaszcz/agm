@@ -484,6 +484,11 @@ def run(
         help="Use this settings file directly.",
         autocompletion=completion.complete_path_argument,
     ),
+    memory: str | None = typer.Option(
+        None,
+        "--memory",
+        help="Set MemoryMax; <= 0 disables memory limiting.",
+    ),
     _help: bool = _help_option(),
 ) -> None:
     del _help
@@ -493,6 +498,7 @@ def run(
     typed_args = RunArgs(
         run_command=command,
         no_patch=no_patch,
+        memory=memory,
         settings_file=str(settings_file) if settings_file is not None else None,
     )
     if not run_command.normalize_run_command(list(typed_args.run_command)):

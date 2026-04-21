@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.config.general import load_run_config
+import pytest
+
+from agm.config.general import load_loop_config, load_run_config
 from agm.config.sandbox import sandbox_settings_candidates
 
 
@@ -63,6 +65,51 @@ def test_load_run_config_prefers_dot_agm_config_after_project_config(tmp_path: P
     config = load_run_config(home=home, proj_dir=project, cwd=work)
 
     assert config.alias_for("echo") == "cat"
+
+
+def test_load_run_config_uses_install_prefix_before_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "prefix"
+    (prefix / ".agm").mkdir(parents=True)
+    (prefix / ".agm" / "config.toml").write_text('[run.echo]\nalias = "printf"\n')
+
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "cat"\n')
+
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+
+    config = load_run_config(home=home, proj_dir=None, cwd=tmp_path / "work")
+
+    assert config.alias_for("echo") == "printf"
+
+
+def test_load_run_config_falls_back_to_home_when_install_prefix_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "printf"\n')
+
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: tmp_path / "prefix")
+
+    config = load_run_config(home=home, proj_dir=None, cwd=tmp_path / "work")
+
+    assert config.alias_for("echo") == "printf"
+
+
+def test_load_loop_config_reads_tasks_dir(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\ncommand = "claude -p"\ntasks_dir = "custom/tasks"\n'
+    )
+
+    config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
+
+    assert config.command == "claude -p"
+    assert config.tasks_dir == "custom/tasks"
 
 
 def test_sandbox_settings_candidates_fall_back_to_alias_command(tmp_path: Path) -> None:

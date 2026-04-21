@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from agm.core.env import agm_installation_prefix
 from agm.project.layout import project_config_dir
 
 TomlDict = dict[str, object]
@@ -36,7 +37,14 @@ def _load_config_file(path: Path) -> TomlDict:
 
 
 def config_file_candidates(*, home: Path, proj_dir: Path | None, cwd: Path) -> list[Path]:
-    candidates = [home / ".agm" / "config.toml"]
+    install_prefix = agm_installation_prefix()
+    global_config = home / ".agm" / "config.toml"
+    if install_prefix is not None:
+        install_config = install_prefix / ".agm" / "config.toml"
+        if install_config.is_file():
+            global_config = install_config
+
+    candidates = [global_config]
     if proj_dir is not None:
         candidates.append(project_config_dir(proj_dir) / "config.toml")
     candidates.append(cwd / ".agm" / "config.toml")
@@ -58,6 +66,7 @@ class LoopConfig:
     """Resolved loop-command configuration."""
 
     command: str | None
+    tasks_dir: str | None
 
 
 def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
@@ -84,6 +93,7 @@ def load_loop_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> LoopCon
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     loop_table = _toml_dict(merged.get("loop"))
     command = loop_table.get("command")
-    if isinstance(command, str) and command.strip():
-        return LoopConfig(command=command)
-    return LoopConfig(command=None)
+    tasks_dir = loop_table.get("tasks_dir")
+    resolved_command = command if isinstance(command, str) and command.strip() else None
+    resolved_tasks_dir = tasks_dir if isinstance(tasks_dir, str) and tasks_dir.strip() else None
+    return LoopConfig(command=resolved_command, tasks_dir=resolved_tasks_dir)

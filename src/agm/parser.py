@@ -74,14 +74,16 @@ _HELP_TEXTS: dict[str, str] = {
         origin/main in each repo.
     """),
     "loop": textwrap.dedent("""\
-        agm loop [-c|--command COMMAND]
+        agm loop [-c|--command COMMAND] [--tasks-dir DIR]
 
         Repeatedly run a prompt command against ``loop.md`` until the command
         returns only ``COMPLETE`` after whitespace is removed.
 
         Command config:
           [loop] command = "claude -p" in config.toml sets the default command
-          prefix. ``agm loop --command "..."`` overrides that value.
+          prefix. [loop] tasks_dir = ".agent-files/tasks" sets the tasks
+          directory checked for ``PROGRESS.md``. ``agm loop --command "..."``
+          and ``agm loop --tasks-dir ...`` override those values.
 
         Behavior:
           Appends ``@<resolved-loop-prompt>`` as the final argument to the
@@ -139,8 +141,9 @@ _HELP_TEXTS: dict[str, str] = {
         Run a command inside an Anthropic Sandbox Runtime container.
 
         Command config:
-          $HOME/.agm/config.toml, the project config.toml, and
-          ./.agm/config.toml are loaded in that order when present.
+          <install-prefix>/.agm/config.toml is loaded when present,
+          otherwise $HOME/.agm/config.toml is used, followed by the
+          project config.toml and ./.agm/config.toml.
           [run.<command>] alias = "<other-command>" makes
           "agm run <command>" execute <other-command> instead.
 

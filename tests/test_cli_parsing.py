@@ -455,6 +455,7 @@ class TestLoop:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command is None
+        assert calls[0].tasks_dir is None
 
     def test_loop_with_command_short(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -473,6 +474,15 @@ class TestLoop:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command == "codex exec"
+
+    def test_loop_with_tasks_dir(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--tasks-dir", "custom/tasks"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].tasks_dir == "custom/tasks"
 
 
 class TestTmuxOpen:

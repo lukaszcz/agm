@@ -423,10 +423,20 @@ def loop(
         "--command",
         help="Override the configured loop command prefix.",
     ),
+    tasks_dir: Path | None = typer.Option(
+        None,
+        "--tasks-dir",
+        help="Override the configured tasks directory.",
+    ),
     _help: bool = _help_option(),
 ) -> None:
     del _help
-    loop_command.run(LoopArgs(command=command))
+    loop_command.run(
+        LoopArgs(
+            command=command,
+            tasks_dir=str(tasks_dir) if tasks_dir is not None else None,
+        )
+    )
 
 
 @app.command()

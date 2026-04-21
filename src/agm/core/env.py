@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 from agm.core.process import exit_with_output
+
+
+def agm_installation_prefix() -> Path | None:
+    """Return the AGM installation prefix inferred from the executable on PATH."""
+
+    agm_executable = shutil.which("agm")
+    if agm_executable is None:
+        return None
+    return Path(agm_executable).resolve().parent.parent
 
 
 def source_env_files(

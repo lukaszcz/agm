@@ -12,19 +12,18 @@ from pathlib import Path
 
 from agm.commands.args import LoopArgs
 from agm.config.general import load_loop_config
+from agm.core.env import agm_installation_prefix
 
 
-def _prompt_file_candidates() -> list[Path]:
+def _prompt_dir_candidates() -> list[Path]:
     candidates: list[Path] = []
 
-    agm_executable = shutil.which("agm")
-    if agm_executable is not None:
-        candidates.append(
-            Path(agm_executable).resolve().parent.parent / ".agm" / "prompts" / "loop.md"
-        )
+    install_prefix = agm_installation_prefix()
+    if install_prefix is not None:
+        candidates.append(install_prefix / ".agm" / "prompts")
 
     home = Path(os.environ["HOME"])
-    candidates.append(home / ".agm" / "prompts" / "loop.md")
+    candidates.append(home / ".agm" / "prompts")
 
     unique_candidates: list[Path] = []
     seen: set[Path] = set()
@@ -36,11 +35,21 @@ def _prompt_file_candidates() -> list[Path]:
     return unique_candidates
 
 
-def _prompt_file() -> Path:
-    for candidate in _prompt_file_candidates():
+def _prompt_file(filename: str) -> Path:
+    candidates = [prompt_dir / filename for prompt_dir in _prompt_dir_candidates()]
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
-    return _prompt_file_candidates()[-1]
+    return candidates[-1]
+
+
+def _configured_loop_settings() -> tuple[str | None, str | None]:
+    configured = load_loop_config(
+        home=Path(os.environ["HOME"]),
+        proj_dir=Path(os.environ["PROJ_DIR"]) if os.environ.get("PROJ_DIR") else None,
+        cwd=Path.cwd(),
+    )
+    return configured.command, configured.tasks_dir
 
 
 def _print_step_header(step: int) -> None:
@@ -52,18 +61,30 @@ def _print_step_header(step: int) -> None:
 
 
 def _loop_command(args: LoopArgs) -> list[str]:
-    configured = load_loop_config(
-        home=Path(os.environ["HOME"]),
-        proj_dir=Path(os.environ["PROJ_DIR"]) if os.environ.get("PROJ_DIR") else None,
-        cwd=Path.cwd(),
-    ).command
-    command = args.command if args.command is not None else configured
+    configured_command, _configured_tasks_dir = _configured_loop_settings()
+    command = args.command if args.command is not None else configured_command
     selected = "claude -p" if command is None else command
     return shlex.split(selected)
 
 
+def _tasks_dir(args: LoopArgs) -> Path:
+    _configured_command, configured_tasks_dir = _configured_loop_settings()
+    selected = args.tasks_dir if args.tasks_dir is not None else configured_tasks_dir
+    if selected is None:
+        return Path.cwd() / ".agent-files" / "tasks"
+
+    tasks_dir = Path(selected)
+    if tasks_dir.is_absolute():
+        return tasks_dir
+    return Path.cwd() / tasks_dir
+
+
+def _progress_file(args: LoopArgs) -> Path:
+    return _tasks_dir(args) / "PROGRESS.md"
+
+
 def run(args: LoopArgs) -> None:
-    prompt_file = _prompt_file()
+    prompt_file = _prompt_file("loop.md")
     if not prompt_file.is_file():
         print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
         raise SystemExit(1)
@@ -76,6 +97,18 @@ def run(args: LoopArgs) -> None:
     if shutil.which(command[0]) is None:
         print(f"Error: {command[0]} is not installed or not in PATH.", file=sys.stderr)
         raise SystemExit(1)
+
+    if not _progress_file(args).is_file():
+        bootstrap_prompt_file = _prompt_file("update_progress.md")
+        if not bootstrap_prompt_file.is_file():
+            print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
+            raise SystemExit(1)
+        subprocess.run(
+            [*command, f"@{bootstrap_prompt_file}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     log_file = Path.cwd() / f"loop-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     print(f"Logging to {log_file.name}")

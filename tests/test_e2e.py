@@ -2475,6 +2475,8 @@ class TestLoop:
 
         work = tmp_path / "work"
         work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(["loop"], env=env, cwd=str(work))
 
@@ -2509,11 +2511,49 @@ class TestLoop:
 
         work = tmp_path / "work"
         work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(["loop"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
+    def test_bootstraps_progress_prompt_when_progress_file_is_missing(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        prefix = tmp_path / "prefix"
+        (prefix / "bin").mkdir(parents=True)
+        agm = prefix / "bin" / "agm"
+        agm.write_text("#!/bin/bash\n")
+        agm.chmod(agm.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{prefix / 'bin'}:{env['PATH']}"
+
+        prompt_dir = prefix / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        bootstrap_prompt = prompt_dir / "update_progress.md"
+        bootstrap_prompt.write_text("update progress\n")
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "Step 1" in result.stdout
+        assert "Step 2" not in result.stdout
+        log_file = next(work.glob("loop-*.log"))
+        assert log_file.read_text() == "  COMPLETE  \n"
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"-p @{bootstrap_prompt}",
+            f"-p @{prompt_file}",
+        ]
 
     def test_uses_configured_loop_command(
         self, tmp_path: Path, env: dict[str, str]
@@ -2532,6 +2572,8 @@ class TestLoop:
 
         work = tmp_path / "work"
         work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(["loop"], env=env, cwd=str(work))
 
@@ -2557,12 +2599,69 @@ class TestLoop:
 
         work = tmp_path / "work"
         work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(["loop", "-c", "claude --stream"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
             f"--stream @{prompt_file}"
+        ] * 2
+
+    def test_uses_configured_loop_tasks_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        bootstrap_prompt = prompt_dir / "update_progress.md"
+        bootstrap_prompt.write_text("update progress\n")
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"-p @{bootstrap_prompt}",
+            f"-p @{prompt_file}",
+        ]
+
+    def test_cli_loop_tasks_dir_overrides_configured_tasks_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "cli" / "tasks").mkdir(parents=True)
+        (work / "cli" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "--tasks-dir", "cli/tasks"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"-p @{prompt_file}"
         ] * 2
 
 
@@ -3264,9 +3363,9 @@ class TestHelp:
     ) -> None:
         result = run_agm(["help", "run"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
-        assert "$HOME/.agm/config.toml" in result.stdout
-        assert "the project config.toml" in result.stdout
-        assert "./.agm/config.toml" in result.stdout
+        assert "<install-prefix>/.agm/config.toml" in result.stdout
+        assert "otherwise $HOME/.agm/config.toml is used" in result.stdout
+        assert "project config.toml and ./.agm/config.toml" in result.stdout
         assert '[run.<command>] alias = "<other-command>"' in result.stdout
         assert "-f, --file SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout

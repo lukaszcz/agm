@@ -1,0 +1,38 @@
+{
+  "network": {
+    "allowedDomains": [
+      "calude.ai",
+      "platform.claude.com",
+      "api.anthropic.com",
+      "openrouter.ai",
+      "api.fireworks.ai",
+      "api.friendli.ai",
+      "pypi.org",
+      "files.pythonhosted.org",
+      "registry.npmjs.org",
+      "github.com",
+      "api.github.com",
+      "gist.github.com",
+      "uploads.github.com",
+      "release-assets.githubusercontent.com",
+      "raw.githubusercontent.com",
+      "gitlab.com",
+      "bitbucket.org"
+    ],
+    "deniedDomains": []
+  },
+  "filesystem": {
+    "denyRead": [
+      "~/.ssh",
+      "~/.aws",
+      "~/.gnupg"
+    ],
+    "allowWrite": [
+      ".",
+      "/tmp",
+      "~/.cache",
+      "~/.opencode"
+    ],
+    "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
+  }
+}

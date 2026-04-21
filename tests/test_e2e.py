@@ -360,25 +360,6 @@ class TestCpConfig:
 
         assert (dest / ".env").read_text() == "FROM_CONFIG=1"
 
-    def test_copies_files_from_proj_dir_env_config_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        project = tmp_path / "proj"
-        (project / "config").mkdir(parents=True)
-        (project / "config" / ".env").write_text("FROM_ENV=1")
-
-        cwd = tmp_path / "cwd"
-        cwd.mkdir()
-        (cwd / ".env").write_text("FROM_CWD=1")
-
-        dest = tmp_path / "dest"
-        dest.mkdir()
-
-        env["PROJ_DIR"] = str(project)
-        run_agm(["config", "cp", str(dest)], env=env, cwd=str(cwd))
-
-        assert (dest / ".env").read_text() == "FROM_ENV=1"
-
     def test_d_option_is_rejected(self, tmp_path: Path, env: dict[str, str]) -> None:
         custom = tmp_path / "custom"
         custom.mkdir()
@@ -419,6 +400,29 @@ class TestCpConfig:
         run_agm(["config", "cp", str(dest)], env=env, cwd=str(wt))
 
         assert (dest / ".env").read_text() == "FROM_WT=1"
+
+    def test_auto_detects_project_from_custom_git_worktree_path(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        (project / "config" / ".env").write_text("FROM_CUSTOM_WT=1")
+
+        custom_worktrees = tmp_path / "custom-worktrees"
+        custom_worktrees.mkdir()
+        run_agm(
+            ["wt", "new", "-d", str(custom_worktrees), "feat/custom-copy"],
+            env=env,
+            cwd=str(project / "repo"),
+        )
+
+        wt = custom_worktrees / "feat/custom-copy"
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        run_agm(["config", "cp", str(dest)], env=env, cwd=str(wt))
+
+        assert (dest / ".env").read_text() == "FROM_CUSTOM_WT=1"
 
     def test_auto_detects_embedded_project_from_dot_worktrees_subdir(
         self, tmp_path: Path, env: dict[str, str]

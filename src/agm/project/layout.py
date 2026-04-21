@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -72,6 +71,16 @@ def current_project_dir(cwd: Path | None = None) -> Path:
         project_dir = _project_dir_from_checkout(candidate)
         if project_dir is not None:
             return project_dir
+    try:
+        common_dir = git_helpers.git_common_dir(current)
+    except SystemExit:
+        common_dir = None
+    if common_dir is not None:
+        common_checkout = common_dir.parent
+        for candidate in (common_checkout, *common_checkout.parents):
+            project_dir = _project_dir_from_checkout(candidate)
+            if project_dir is not None:
+                return project_dir
     if checkout_dir == current or checkout_dir in current.parents:
         return checkout_dir
     return current
@@ -179,12 +188,7 @@ def copy_config(
     """Copy known config files from the project config directory into *target*."""
 
     current = _resolved_cwd(cwd)
-    if project_dir is not None:
-        proj_dir = project_dir.resolve()
-    elif os.environ.get("PROJ_DIR"):
-        proj_dir = Path(os.environ["PROJ_DIR"]).resolve()
-    else:
-        proj_dir = current_project_dir(current)
+    proj_dir = current_project_dir(current) if project_dir is None else project_dir.resolve()
     resolved_target = target if target.is_absolute() else current / target
     if not resolved_target.is_dir():
         return

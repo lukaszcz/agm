@@ -51,6 +51,16 @@ def git_setup(cwd: Path | None = None) -> Path:
     raise SystemExit(1)
 
 
+def git_common_dir(cwd: Path | None = None) -> Path:
+    """Return the common git directory shared by the current worktree."""
+
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    common_dir = require_capture(
+        ["git", "-C", str(current), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ).strip()
+    return Path(common_dir)
+
+
 def fetch(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
     """Run git fetch."""
 

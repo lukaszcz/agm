@@ -11,7 +11,12 @@ import click
 import agm.vcs.git as git_helpers
 from agm.commands.dep.common import main_dep_repo
 from agm.config.general import load_run_config
-from agm.project.layout import current_project_dir, project_deps_dir, project_repo_dir
+from agm.project.layout import (
+    current_project_dir,
+    default_worktrees_dir,
+    project_deps_dir,
+    project_repo_dir,
+)
 
 _COMMON_PANE_COUNTS = ["1", "2", "3", "4", "6", "8", "12", "16"]
 
@@ -93,11 +98,20 @@ def _worktree_branch_candidates(repo_dir: Path) -> set[str]:
     except SystemExit:
         return set()
 
+    project_dir = current_project_dir(repo_dir)
+    worktrees_dir = default_worktrees_dir(project_dir)
     branches: set[str] = set()
     try:
         for worktree in git_helpers.worktree_list(repo_dir):
-            if worktree.branch is not None and worktree.branch != repo_branch:
-                branches.add(worktree.branch)
+            branch = worktree.branch
+            if branch is None:
+                try:
+                    relative_path = worktree.path.relative_to(worktrees_dir)
+                except ValueError:
+                    continue
+                branch = relative_path.as_posix()
+            if branch and branch != repo_branch:
+                branches.add(branch)
     except SystemExit:
         return set()
     return branches

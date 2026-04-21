@@ -84,6 +84,28 @@ def test_complete_close_branch_only_returns_worktree_branches(
     assert suggestions == ["feat/a", "feat/b"]
 
 
+def test_complete_close_branch_infers_branch_name_from_checkout_worktree_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project_dir = tmp_path / "project"
+    repo_dir = project_dir / "repo"
+    worktrees_dir = project_dir / "worktrees"
+    repo_dir.mkdir(parents=True)
+    worktrees_dir.mkdir()
+    monkeypatch.setattr(completion, "_resolve_project_repo_dir", lambda: repo_dir)
+    monkeypatch.setattr(git_helpers, "current_branch", lambda repo_dir: "main")
+    monkeypatch.setattr(
+        git_helpers,
+        "worktree_list",
+        lambda repo_dir: [
+            git_helpers.WorktreeInfo(path=repo_dir, branch="main"),
+            git_helpers.WorktreeInfo(path=worktrees_dir / "feat" / "detached", branch=None),
+        ],
+    )
+
+    assert completion.complete_close_branch("feat/") == ["feat/detached"]
+
+
 def test_complete_help_path_suggests_subcommands() -> None:
     assert completion.complete_help_path(["wt"], "n") == ["new"]
     assert completion.complete_help_path([], "o") == ["open"]

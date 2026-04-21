@@ -182,6 +182,33 @@ def _settings(
     return settings
 
 
+def _install_fake_claude(directory: Path, env: dict[str, str]) -> Path:
+    """Create a fake ``claude`` binary that returns scripted outputs."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    claude = directory / "claude"
+    claude.write_text(
+        "#!/bin/bash\n"
+        'state_file="${FAKE_CLAUDE_STATE:?FAKE_CLAUDE_STATE must be set}"\n'
+        'log_file="${FAKE_CLAUDE_LOG:?FAKE_CLAUDE_LOG must be set}"\n'
+        'count=0\n'
+        'if [[ -f "$state_file" ]]; then\n'
+        '  count="$(cat "$state_file")"\n'
+        "fi\n"
+        'count=$((count + 1))\n'
+        'printf "%s" "$count" > "$state_file"\n'
+        'echo "$*" >> "$log_file"\n'
+        'case "$count" in\n'
+        '  1) printf "keep going\\n" ;;\n'
+        '  2) printf "  COMPLETE  \\n" ;;\n'
+        '  *) printf "COMPLETE\\n" ;;\n'
+        "esac\n"
+    )
+    claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
+    env["PATH"] = str(directory) + ":" + env["PATH"]
+    return claude
+
+
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
 # ---------------------------------------------------------------------------
@@ -2428,6 +2455,115 @@ class TestSandbox:
         assert result.returncode == 0
         assert _srt_command(result) == "printf hello"
         assert _srt_settings(result)["network"]["allowedDomains"] == ["echo.com"]
+
+
+class TestLoop:
+    """agm loop: repeated Claude execution until COMPLETE."""
+
+    def test_runs_loop_prompt_until_complete(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "Logging to loop-" in result.stdout
+        assert "Step 1" in result.stdout
+        assert "Step 2" in result.stdout
+        assert "Completed." in result.stdout
+
+        log_file = next(work.glob("loop-*.log"))
+        assert log_file.read_text() == "keep going\n  COMPLETE  \n"
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
+    def test_uses_prompt_from_agm_install_prefix(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        prefix = tmp_path / "prefix"
+        (prefix / "bin").mkdir(parents=True)
+        agm = prefix / "bin" / "agm"
+        agm.write_text("#!/bin/bash\n")
+        agm.chmod(agm.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{prefix / 'bin'}:{env['PATH']}"
+
+        prompt_dir = prefix / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
+    def test_uses_configured_loop_command(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\ncommand = "claude --print"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"--print @{prompt_file}"
+        ] * 2
+
+    def test_cli_loop_command_overrides_configured_loop_command(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\ncommand = "claude --print"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop", "-c", "claude --stream"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"--stream @{prompt_file}"
+        ] * 2
 
 
 # ── agm open ────────────────────────────────────────────────────────────────

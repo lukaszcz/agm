@@ -73,6 +73,23 @@ _HELP_TEXTS: dict[str, str] = {
         missing local tracking branches for origin branches not merged into
         origin/main in each repo.
     """),
+    "loop": textwrap.dedent("""\
+        agm loop [-c|--command COMMAND]
+
+        Repeatedly run a prompt command against ``loop.md`` until the command
+        returns only ``COMPLETE`` after whitespace is removed.
+
+        Command config:
+          [loop] command = "claude -p" in config.toml sets the default command
+          prefix. ``agm loop --command "..."`` overrides that value.
+
+        Behavior:
+          Appends ``@<resolved-loop-prompt>`` as the final argument to the
+          selected command.
+          Creates a ``loop-YYYYMMDD-HHMMSS.log`` file in the current directory,
+          prints each step header, appends each Claude response to the log, and
+          stops when the response is ``COMPLETE``.
+    """),
     "config": textwrap.dedent("""\
         agm config copy DIRNAME
         agm config cp   DIRNAME
@@ -195,6 +212,7 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
         "fetch",
         "Fetch upstream changes for the repo and all dependencies",
     ),
+    ("loop", "Run the loop prompt until completion"),
     ("run", "Run a command in a sandbox"),
     ("config", "Manage project configuration files"),
     ("worktree", "Git worktree management"),

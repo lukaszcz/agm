@@ -53,12 +53,23 @@ class RunConfig:
         return self.aliases.get(command_name)
 
 
-def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfig:
+@dataclass(frozen=True)
+class LoopConfig:
+    """Resolved loop-command configuration."""
+
+    command: str | None
+
+
+def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
     merged: TomlDict = {}
     for path in config_file_candidates(home=home, proj_dir=proj_dir, cwd=cwd):
         if path.is_file():
             merged = _merge_config(merged, _load_config_file(path))
+    return merged
 
+
+def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfig:
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     run_table = _toml_dict(merged.get("run"))
     aliases: dict[str, str] = {}
     for command_name, command_config in run_table.items():
@@ -67,3 +78,12 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
         if isinstance(alias, str) and alias:
             aliases[command_name] = alias
     return RunConfig(aliases=aliases)
+
+
+def load_loop_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> LoopConfig:
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    loop_table = _toml_dict(merged.get("loop"))
+    command = loop_table.get("command")
+    if isinstance(command, str) and command.strip():
+        return LoopConfig(command=command)
+    return LoopConfig(command=None)

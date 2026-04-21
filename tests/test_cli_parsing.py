@@ -448,6 +448,33 @@ class TestRun:
         assert "agm run" in result.stdout
 
 
+class TestLoop:
+    def test_loop(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command is None
+
+    def test_loop_with_command_short(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "-c", "opencode prompt"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command == "opencode prompt"
+
+    def test_loop_with_command_long(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--command", "codex exec"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command == "codex exec"
+
+
 class TestTmuxOpen:
     def test_tmux_open_bare(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.tmux_open_command)
@@ -581,6 +608,7 @@ class TestHelpTextCoverage:
             "close",
             "init",
             "fetch",
+            "loop",
             "config",
             "worktree",
             "dep",

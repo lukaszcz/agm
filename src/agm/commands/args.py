@@ -82,6 +82,11 @@ class RunArgs:
 
 
 @dataclass(slots=True)
+class LoopArgs:
+    command: str | None
+
+
+@dataclass(slots=True)
 class TmuxOpenArgs:
     detach: bool
     pane_count: str | None

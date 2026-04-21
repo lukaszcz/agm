@@ -14,6 +14,7 @@ import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
+import agm.commands.loop as loop_command
 import agm.commands.open as open_command
 import agm.commands.run as run_command
 import agm.commands.tmux.close as tmux_close_command
@@ -31,6 +32,7 @@ from agm.commands.args import (
     DepRemoveArgs,
     DepSwitchArgs,
     InitArgs,
+    LoopArgs,
     OpenArgs,
     RunArgs,
     TmuxCloseArgs,
@@ -411,6 +413,20 @@ def dep_rm(
 def fetch(_help: bool = _help_option()) -> None:
     del _help
     fetch_command.run(object())
+
+
+@app.command()
+def loop(
+    command: str | None = typer.Option(
+        None,
+        "-c",
+        "--command",
+        help="Override the configured loop command prefix.",
+    ),
+    _help: bool = _help_option(),
+) -> None:
+    del _help
+    loop_command.run(LoopArgs(command=command))
 
 
 @app.command()

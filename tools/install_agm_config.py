@@ -51,7 +51,9 @@ def install_user_config(
 ) -> InstallUserConfigResult:
     agm_config_dir = install_root / ".agm"
     sandbox_dir = agm_config_dir / "sandbox"
+    prompts_dir = agm_config_dir / "prompts"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
+    prompts_dir.mkdir(parents=True, exist_ok=True)
 
     installed: list[Path] = []
     skipped: list[Path] = []
@@ -71,6 +73,15 @@ def install_user_config(
             installed.append(sandbox_destination)
         else:
             skipped.append(sandbox_destination)
+
+    for prompt_source in sorted((repo_root / "config" / "prompts").iterdir()):
+        if not prompt_source.is_file():
+            continue
+        prompt_destination = prompts_dir / prompt_source.name
+        if _install_file(source=prompt_source, destination=prompt_destination, force=force):
+            installed.append(prompt_destination)
+        else:
+            skipped.append(prompt_destination)
 
     return InstallUserConfigResult(installed=installed, skipped=skipped)
 

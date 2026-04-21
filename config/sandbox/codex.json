@@ -2,6 +2,7 @@
   "network": {
     "allowedDomains": [
       "api.openai.com",
+      "auth.openai.com",
       "chatgpt.com",
       "pypi.org",
       "files.pythonhosted.org",

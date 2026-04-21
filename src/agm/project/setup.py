@@ -20,18 +20,19 @@ def load_worktree_env(
     project_dir: Path,
     branch: str | None,
     *,
-    shell_cwd: Path,
+    checkout_dir: Path,
     env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Return the sourced environment for a repo or worktree checkout."""
 
     resolved_env = dict(os.environ if env is None else env)
     resolved_env["PROJ_DIR"] = str(project_dir)
+    resolved_env["REPO_DIR"] = str(checkout_dir)
     config_dir = project_config_dir(project_dir)
     env_files = [config_dir / "env.sh"]
     if branch is not None:
         env_files.append(config_dir / branch / "env.sh")
-    return source_env_files(env_files, resolved_env, cwd=shell_cwd)
+    return source_env_files(env_files, resolved_env, cwd=checkout_dir)
 
 
 def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -47,7 +48,7 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
         target_name = branch_session_name(project_dir, branch)
     else:
         target_name = branch_session_name(project_dir, repo_branch)
-    setup_env = load_worktree_env(project_dir, branch, shell_cwd=checkout_dir, env=env)
+    setup_env = load_worktree_env(project_dir, branch, checkout_dir=checkout_dir, env=env)
     config_dir = project_config_dir(project_dir)
 
     setup_paths = [

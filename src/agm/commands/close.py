@@ -22,7 +22,7 @@ def close_session(*, branch: str, cwd: Path | None = None) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     proj_dir = current_project_dir(current)
     repo_dir = project_repo_dir(proj_dir)
-    env = load_worktree_env(proj_dir, None, shell_cwd=repo_dir)
+    env = load_worktree_env(proj_dir, None, checkout_dir=repo_dir)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     if is_main_checkout_branch(proj_dir, branch, repo_branch=repo_branch):
         print(

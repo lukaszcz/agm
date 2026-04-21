@@ -18,6 +18,7 @@ def env(tmp_path: Path) -> dict[str, str]:
     e["GIT_COMMITTER_EMAIL"] = "test@test.com"
     e["GIT_CONFIG_NOSYSTEM"] = "1"
     e.pop("PROJ_DIR", None)
+    e.pop("REPO_DIR", None)
     e.pop("TMUX", None)
     e.pop("TMUX_PANE", None)
     fake_home = tmp_path / "home"

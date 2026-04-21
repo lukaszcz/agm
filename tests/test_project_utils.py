@@ -15,6 +15,7 @@ from agm.project.layout import (
     is_main_checkout_branch,
     main_repo_dir,
 )
+from agm.project.setup import load_worktree_env
 
 
 def test_current_project_dir_from_project_root(tmp_path: Path) -> None:
@@ -142,3 +143,24 @@ def test_branch_session_name_for_repo_name_does_not_need_repo_branch_lookup(
     monkeypatch.setattr(project_helpers.git_helpers, "current_branch", fail_current_branch)
 
     assert branch_session_name(project, "repo") == "proj"
+
+
+def test_load_worktree_env_exposes_repo_dir_to_sourced_scripts(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    config_dir.mkdir(parents=True)
+    checkout_dir = project / "worktrees" / "feat"
+    checkout_dir.mkdir(parents=True)
+    (config_dir / "env.sh").write_text(
+        'export CAPTURE_PROJ_DIR="$PROJ_DIR"\nexport CAPTURE_REPO_DIR="$REPO_DIR"\n',
+        encoding="utf-8",
+    )
+
+    loaded_env = load_worktree_env(project, "feat", checkout_dir=checkout_dir, env=env)
+
+    assert loaded_env["PROJ_DIR"] == str(project)
+    assert loaded_env["REPO_DIR"] == str(checkout_dir)
+    assert loaded_env["CAPTURE_PROJ_DIR"] == str(project)
+    assert loaded_env["CAPTURE_REPO_DIR"] == str(checkout_dir)

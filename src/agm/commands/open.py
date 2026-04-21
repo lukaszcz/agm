@@ -124,7 +124,7 @@ def open_session(
             )
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
-    env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
+    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     create_tmux_session(
         detach=detached,
         pane_count=pane_count,
@@ -147,7 +147,7 @@ def new_session(
     proj_dir = current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     repo_path.mkdir(parents=True, exist_ok=True)
-    env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
+    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
         new_branch=branch,
@@ -179,7 +179,7 @@ def checkout_session(
     proj_dir = current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     repo_path.mkdir(parents=True, exist_ok=True)
-    env = load_worktree_env(proj_dir, branch, shell_cwd=repo_path)
+    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
         new_branch=None,

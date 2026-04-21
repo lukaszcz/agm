@@ -1,0 +1,1 @@
+Read .agent-files/tasks/TASK_*.md. Update (or create if doesn't exist) .agent-files/PROGRESS.md which tracks task progress - completed and remaining tasks, next unblocked task. Update and verify based on the actual codebase source.

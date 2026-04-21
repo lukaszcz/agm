@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -175,15 +176,18 @@ def copy_config(
     target: Path,
     cwd: Path | None = None,
 ) -> None:
-    """Copy known config files from cwd and project config/ into *target*."""
+    """Copy known config files from the project config directory into *target*."""
 
     current = _resolved_cwd(cwd)
-    proj_dir = current_project_dir(current) if project_dir is None else project_dir.resolve()
+    if project_dir is not None:
+        proj_dir = project_dir.resolve()
+    elif os.environ.get("PROJ_DIR"):
+        proj_dir = Path(os.environ["PROJ_DIR"]).resolve()
+    else:
+        proj_dir = current_project_dir(current)
     resolved_target = target if target.is_absolute() else current / target
     if not resolved_target.is_dir():
         return
-
-    _copy_existing_config_files(current, resolved_target)
 
     config_dir = project_config_dir(proj_dir)
     if config_dir.is_dir():

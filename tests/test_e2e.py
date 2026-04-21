@@ -317,22 +317,29 @@ def _srt_command(result: subprocess.CompletedProcess[str]) -> str:
 class TestCpConfig:
     """agm config cp: copy configuration files."""
 
-    def test_copies_files_from_current_dir(
+    def test_ignores_files_from_current_dir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        src = tmp_path / "src"
-        src.mkdir()
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "repo").mkdir()
+        (project / "worktrees").mkdir()
+        config = project / "config"
+        config.mkdir()
+        (config / ".env").write_text("FROM_CONFIG=1")
+
+        src = project / "repo"
+        (src / ".env").write_text("FROM_CWD=1")
+        (src / ".claude").mkdir()
+        (src / ".claude" / "settings.json").write_text("{\"cwd\":true}")
+
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        (src / ".env").write_text("KEY=val")
-        (src / ".claude").mkdir()
-        (src / ".claude" / "settings.json").write_text("{}")
-
         run_agm(["config", "cp", str(dest)], env=env, cwd=str(src))
 
-        assert (dest / ".env").read_text() == "KEY=val"
-        assert (dest / ".claude" / "settings.json").read_text() == "{}"
+        assert (dest / ".env").read_text() == "FROM_CONFIG=1"
+        assert not (dest / ".claude").exists()
 
     def test_copies_files_from_project_config_dir(
         self, tmp_path: Path, env: dict[str, str]
@@ -352,6 +359,25 @@ class TestCpConfig:
         run_agm(["config", "cp", str(dest)], env=env, cwd=str(project / "repo"))
 
         assert (dest / ".env").read_text() == "FROM_CONFIG=1"
+
+    def test_copies_files_from_proj_dir_env_config_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "proj"
+        (project / "config").mkdir(parents=True)
+        (project / "config" / ".env").write_text("FROM_ENV=1")
+
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        (cwd / ".env").write_text("FROM_CWD=1")
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+
+        env["PROJ_DIR"] = str(project)
+        run_agm(["config", "cp", str(dest)], env=env, cwd=str(cwd))
+
+        assert (dest / ".env").read_text() == "FROM_ENV=1"
 
     def test_d_option_is_rejected(self, tmp_path: Path, env: dict[str, str]) -> None:
         custom = tmp_path / "custom"
@@ -469,10 +495,16 @@ class TestCpConfig:
     def test_relative_dirname_resolved_to_cwd(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        src = tmp_path / "src"
-        src.mkdir()
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "repo").mkdir()
+        (project / "worktrees").mkdir()
+        config = project / "config"
+        config.mkdir()
+        (config / ".env").write_text("REL=1")
+
+        src = project / "repo"
         (src / "target").mkdir()
-        (src / ".env").write_text("REL=1")
 
         run_agm(["config", "cp", "target"], env=env, cwd=str(src))
 
@@ -481,15 +513,21 @@ class TestCpConfig:
     def test_copies_all_recognized_file_types(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        src = tmp_path / "src"
-        src.mkdir()
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "repo").mkdir()
+        (project / "worktrees").mkdir()
+        config = project / "config"
+        config.mkdir()
+
+        src = project / "repo"
         dest = tmp_path / "dest"
         dest.mkdir()
 
         files = [".setup.sh", ".env", ".env.local", ".mcp.json",
                  ".agents", ".opencode", ".codex", ".pi"]
         for f in files:
-            (src / f).write_text(f"content of {f}")
+            (config / f).write_text(f"content of {f}")
 
         run_agm(["config", "cp", str(dest)], env=env, cwd=str(src))
 
@@ -500,12 +538,15 @@ class TestCpConfig:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """The 'config copy' alias works identically to 'config cp'."""
-        src = tmp_path / "src"
-        src.mkdir()
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "repo").mkdir()
+        (project / "config").mkdir()
+        (project / "config" / ".env").write_text("ALIAS=1")
+
+        src = project / "repo"
         dest = tmp_path / "dest"
         dest.mkdir()
-
-        (src / ".env").write_text("ALIAS=1")
 
         run_agm(["config", "copy", str(dest)], env=env, cwd=str(src))
 

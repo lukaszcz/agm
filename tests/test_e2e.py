@@ -2720,6 +2720,59 @@ class TestLoop:
             f"-p @{prompt_file}",
         ]
 
+    def test_preprocesses_loop_and_progress_prompts_with_env_vars(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+        env["FAKE_RUNNER_STATE"] = str(tmp_path / "runner-count")
+        env["PROMPT_VALUE"] = "expanded"
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'state_file="${FAKE_RUNNER_STATE:?FAKE_RUNNER_STATE must be set}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
+                'printf -- "---\\n" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file"\n'
+                'case "$count" in\n'
+                '  1) printf "keep going\\n" ;;\n'
+                '  2) printf "COMPLETE\\n" ;;\n'
+                '  *) printf "COMPLETE\\n" ;;\n'
+                "esac\n"
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("progress $PROMPT_VALUE ${MISSING}\n")
+        loop_prompt = prompt_dir / "loop.md"
+        loop_prompt.write_text("loop $PROMPT_VALUE ${MISSING}\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop", "--runner", "runner"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_RUNNER_LOG"]).read_text() == (
+            "---\n"
+            "progress expanded ${MISSING}\n"
+            "---\n"
+            "loop expanded ${MISSING}\n"
+        )
+
     def test_uses_configured_loop_command(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

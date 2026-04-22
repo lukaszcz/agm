@@ -13,6 +13,7 @@ from pathlib import Path
 from agm.commands.args import LoopArgs
 from agm.config.general import LoopConfig, load_loop_config
 from agm.core.env import agm_installation_prefix
+from agm.core.prompt import preprocess_prompt_file
 
 
 def _prompt_dir_candidates() -> list[Path]:
@@ -180,37 +181,60 @@ def _selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
     return task_path
 
 
+def _cleanup_temp_files(temp_files: list[Path]) -> None:
+    for temp_file in temp_files:
+        try:
+            temp_file.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def run(args: LoopArgs) -> None:
+    temp_files: list[Path] = []
     runner_command = _runner_command(args)
     selector_command = _selector_command(args)
     _validate_command(runner_command, kind="runner")
     if selector_command is not None:
         _validate_command(selector_command, kind="selector")
 
-    prompt_file: Path | None = None
-    if selector_command is None:
-        prompt_file = _prompt_file("loop.md")
-        if not prompt_file.is_file():
-            print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
-            raise SystemExit(1)
-
-    progress_file = _progress_file(args)
-    if selector_command is None and not progress_file.is_file():
-        bootstrap_prompt_file = _prompt_file("update_progress.md")
-        if not bootstrap_prompt_file.is_file():
-            print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
-            raise SystemExit(1)
-        _run_command(runner_command, bootstrap_prompt_file)
-
-    log_file = _log_file(args)
-    if log_file is not None:
-        print(
-            f"Logging to {log_file if args.log_file is not None else log_file.name}"
-        )
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-
-    step = 1
     try:
+        prompt_file: Path | None = None
+        if selector_command is None:
+            prompt_file = _prompt_file("loop.md")
+            if not prompt_file.is_file():
+                print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
+                raise SystemExit(1)
+            prompt_file = preprocess_prompt_file(prompt_file, temp_files=temp_files, env=os.environ)
+
+        progress_file = _progress_file(args)
+        if selector_command is None and not progress_file.is_file():
+            bootstrap_prompt_file = _prompt_file("update_progress.md")
+            if not bootstrap_prompt_file.is_file():
+                print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
+                raise SystemExit(1)
+            bootstrap_prompt_file = preprocess_prompt_file(
+                bootstrap_prompt_file, temp_files=temp_files, env=os.environ
+            )
+            _run_command(runner_command, bootstrap_prompt_file)
+
+        selector_prompt_file: Path | None = None
+        if selector_command is not None:
+            selector_prompt_file = _prompt_file("update_progress.md")
+            if not selector_prompt_file.is_file():
+                print(f"Error: prompt file not found: {selector_prompt_file}", file=sys.stderr)
+                raise SystemExit(1)
+            selector_prompt_file = preprocess_prompt_file(
+                selector_prompt_file, temp_files=temp_files, env=os.environ
+            )
+
+        log_file = _log_file(args)
+        if log_file is not None:
+            print(
+                f"Logging to {log_file if args.log_file is not None else log_file.name}"
+            )
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        step = 1
         while True:
             header = _step_header_text(step)
             print(header, end="")
@@ -226,10 +250,7 @@ def run(args: LoopArgs) -> None:
                     break
                 continue
 
-            selector_prompt_file = _prompt_file("update_progress.md")
-            if not selector_prompt_file.is_file():
-                print(f"Error: prompt file not found: {selector_prompt_file}", file=sys.stderr)
-                raise SystemExit(1)
+            assert selector_prompt_file is not None
             tasks_dir = _tasks_dir(args)
             while True:
                 selector_output = _run_command(selector_command, selector_prompt_file)
@@ -249,3 +270,5 @@ def run(args: LoopArgs) -> None:
     except KeyboardInterrupt:
         print("\nInterrupted")
         raise SystemExit(130)
+    finally:
+        _cleanup_temp_files(temp_files)

@@ -1,4 +1,4 @@
-Read ${TASKS_DIR}/TASK_INDEX.md. Update ${TASKS_DIR}/PROGRESS.md to track task progress - completed and remaining tasks, next unblocked task (not yet completed and not blocked by other tasks).
+Read ${TASKS_DIR}/TASK_INDEX.md. Update ${TASKS_DIR}/PROGRESS.md to track task progress - completed and remaining tasks, next unblocked task (not yet completed and not blocked by other tasks). Check against codebase sources.
 
 Commit in ${TASKS_DIR} (git repo separate from main repo) after updating ${TASKS_DIR}/PROGRESS.md
 

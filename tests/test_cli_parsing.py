@@ -473,6 +473,8 @@ class TestLoop:
         assert len(calls) == 1
         assert calls[0].command is None
         assert calls[0].tasks_dir is None
+        assert calls[0].no_log is False
+        assert calls[0].log_file is None
 
     def test_loop_with_command_short(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -500,6 +502,22 @@ class TestLoop:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].tasks_dir == "custom/tasks"
+
+    def test_loop_with_no_log(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--no-log"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_log is True
+
+    def test_loop_with_log_file(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--log-file", "custom/loop.log"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].log_file == "custom/loop.log"
 
 
 class TestTmuxOpen:

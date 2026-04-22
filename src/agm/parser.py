@@ -74,7 +74,7 @@ _HELP_TEXTS: dict[str, str] = {
         origin/main in each repo.
     """),
     "loop": textwrap.dedent("""\
-        agm loop [-c|--command COMMAND] [--tasks-dir DIR]
+        agm loop [-c|--command COMMAND] [--tasks-dir DIR] [--no-log|--log-file PATH]
 
         Repeatedly run a prompt command against ``loop.md`` until the command
         returns only ``COMPLETE`` after whitespace is removed.
@@ -88,9 +88,10 @@ _HELP_TEXTS: dict[str, str] = {
         Behavior:
           Appends ``@<resolved-loop-prompt>`` as the final argument to the
           selected command.
-          Creates a ``loop-YYYYMMDD-HHMMSS.log`` file in the current directory,
-          prints each step header, appends each Claude response to the log, and
-          stops when the response is ``COMPLETE``.
+          Creates a ``loop-YYYYMMDD-HHMMSS.log`` file in the current directory
+          by default, or writes to ``--log-file PATH``. ``--no-log`` disables
+          file logging entirely. The command prints each step header and stops
+          when the response is ``COMPLETE``.
     """),
     "config": textwrap.dedent("""\
         agm config copy DIRNAME

@@ -428,13 +428,27 @@ def loop(
         "--tasks-dir",
         help="Override the configured tasks directory.",
     ),
+    no_log: bool = typer.Option(
+        False,
+        "--no-log",
+        help="Disable loop logging.",
+    ),
+    log_file: Path | None = typer.Option(
+        None,
+        "--log-file",
+        help="Write loop output to this log file.",
+    ),
     _help: bool = _help_option(),
 ) -> None:
     del _help
+    if no_log and log_file is not None:
+        exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
     loop_command.run(
         LoopArgs(
             command=command,
             tasks_dir=str(tasks_dir) if tasks_dir is not None else None,
+            no_log=no_log,
+            log_file=str(log_file) if log_file is not None else None,
         )
     )
 

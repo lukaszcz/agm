@@ -85,6 +85,14 @@ def _progress_file(args: LoopArgs) -> Path:
     return _tasks_dir(args) / "PROGRESS.md"
 
 
+def _log_file(args: LoopArgs) -> Path | None:
+    if args.no_log:
+        return None
+    if args.log_file is not None:
+        return Path(args.log_file)
+    return Path.cwd() / f"loop-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+
+
 def run(args: LoopArgs) -> None:
     prompt_file = _prompt_file("loop.md")
     if not prompt_file.is_file():
@@ -112,8 +120,12 @@ def run(args: LoopArgs) -> None:
             check=False,
         )
 
-    log_file = Path.cwd() / f"loop-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-    print(f"Logging to {log_file.name}")
+    log_file = _log_file(args)
+    if log_file is not None:
+        print(
+            f"Logging to {log_file if args.log_file is not None else log_file.name}"
+        )
+        log_file.parent.mkdir(parents=True, exist_ok=True)
 
     step = 1
     try:
@@ -132,9 +144,10 @@ def run(args: LoopArgs) -> None:
             if result.stderr:
                 output += result.stderr
 
-            with log_file.open("a", encoding="utf-8") as handle:
-                handle.write(header)
-                handle.write(output)
+            if log_file is not None:
+                with log_file.open("a", encoding="utf-8") as handle:
+                    handle.write(header)
+                    handle.write(output)
 
             if output:
                 print(output, end="")

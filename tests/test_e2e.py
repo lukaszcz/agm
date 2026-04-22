@@ -2812,6 +2812,72 @@ class TestLoop:
             f"-p @{prompt_file}"
         ] * 2
 
+    def test_no_log_disables_loop_log_file(self, tmp_path: Path, env: dict[str, str]) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "--no-log"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "Logging to loop-" not in result.stdout
+        assert "Step 1" in result.stdout
+        assert "Step 2" in result.stdout
+        assert "Completed." in result.stdout
+        assert list(work.glob("loop-*.log")) == []
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
+    def test_log_file_writes_loop_output_to_explicit_path(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        log_file = tmp_path / "logs" / "custom-loop.log"
+        result = run_agm(["loop", "--log-file", str(log_file)], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert f"Logging to {log_file}" in result.stdout
+        assert not list(work.glob("loop-*.log"))
+        assert log_file.read_text() == (
+            "\n"
+            "-------------------------------------------------------------\n"
+            "                        Step 1\n"
+            "-------------------------------------------------------------\n"
+            "\n"
+            "keep going\n"
+            "\n"
+            "-------------------------------------------------------------\n"
+            "                        Step 2\n"
+            "-------------------------------------------------------------\n"
+            "\n"
+            "  COMPLETE  \n"
+        )
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
 
 # ── agm open ────────────────────────────────────────────────────────────────
 

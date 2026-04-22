@@ -87,6 +87,8 @@ class RunArgs:
 class LoopArgs:
     command: str | None
     tasks_dir: str | None
+    no_log: bool
+    log_file: str | None
 
 
 @dataclass(slots=True)

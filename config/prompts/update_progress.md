@@ -1,6 +1,6 @@
-Read .agent-files/tasks/TASK_INDEX.md. Update .agent-files/tasks/PROGRESS.md to track task progress - completed and remaining tasks, next unblocked task.
+Read ${TASKS_DIR}/TASK_INDEX.md. Update ${TASKS_DIR}/PROGRESS.md to track task progress - completed and remaining tasks, next unblocked task (not yet completed and not blocked by other tasks).
 
-Commit in .agent-files (git repo separate from main repo) after updating .agent-files/tasks/PROGRESS.md
+Commit in ${TASKS_DIR} (git repo separate from main repo) after updating ${TASKS_DIR}/PROGRESS.md
 
 Respond with either:
 - file path of the next unblocked task,

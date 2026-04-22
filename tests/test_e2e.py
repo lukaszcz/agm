@@ -2634,7 +2634,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop"], env=env, cwd=str(work))
+        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to loop-" in result.stdout
@@ -2683,7 +2683,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop"], env=env, cwd=str(work))
+        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -2712,7 +2712,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop"], env=env, cwd=str(work))
+        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
@@ -2774,7 +2774,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "--runner", "runner"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--runner", "runner", "runner"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_RUNNER_LOG"]).read_text() == (
@@ -2829,7 +2829,7 @@ class TestLoop:
         loop_prompt.write_text(f"loop $TASKS_DIR\nliteral {tasks_dir}\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--tasks-dir", "custom/tasks"],
+            ["loop", "--runner", "runner", "--tasks-dir", "custom/tasks", "runner"],
             env=env,
             cwd=str(work),
         )
@@ -2860,7 +2860,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop"], env=env, cwd=str(work))
+        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
@@ -2917,14 +2917,14 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--runner", "claude --stream"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--runner", "claude --stream", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
             f"--stream @{prompt_file}"
         ] * 2
 
-    def test_loop_passes_runner_args_after_separator(
+    def test_loop_passes_runner_args_after_positional_command(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         _install_fake_claude(tmp_path / "bin", env)
@@ -2942,13 +2942,11 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(
-            ["loop", "claude", "--", "-p", "--model", "sonnet"], env=env, cwd=str(work)
-        )
+        result = run_agm(["loop", "claude", "-p", "--model", "sonnet"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"-p --model sonnet @{prompt_file}"
+            f"-p -p --model sonnet @{prompt_file}"
         ] * 2
 
     def test_loop_replaces_percent_placeholder_in_cli_runner(
@@ -2969,7 +2967,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--runner", 'claude -p "@%%"'], env=env, cwd=str(work))
+        result = run_agm(["loop", "--runner", 'claude -p "@%%"', "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -2994,7 +2992,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop"], env=env, cwd=str(work))
+        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p {prompt_file}"] * 2
@@ -3020,7 +3018,9 @@ class TestLoop:
         result = run_agm(["loop", "claude", "--", "-p", "%%"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p {prompt_file}"] * 2
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"-p -p {prompt_file}"
+        ] * 2
 
     def test_runs_selector_then_runner_until_selector_returns_complete(
         self, tmp_path: Path, env: dict[str, str]
@@ -3074,7 +3074,9 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector"], env=env, cwd=str(work)
+            ["loop", "--runner", "runner", "--selector", "selector", "runner"],
+            env=env,
+            cwd=str(work),
         )
 
         assert result.returncode == 0
@@ -3172,6 +3174,7 @@ class TestLoop:
                 "selector",
                 "--tasks-dir",
                 "custom/tasks",
+                "runner",
             ],
             env=env,
             cwd=str(work),
@@ -3240,7 +3243,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector %{PROMPT}"],
+            ["loop", "--runner", "runner", "--selector", "selector %{PROMPT}", "runner"],
             env=env,
             cwd=str(work),
         )
@@ -3308,7 +3311,9 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector"], env=env, cwd=str(work)
+            ["loop", "--runner", "runner", "--selector", "selector", "runner"],
+            env=env,
+            cwd=str(work),
         )
 
         assert result.returncode == 0
@@ -3345,7 +3350,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop"], env=env, cwd=str(work))
+        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
@@ -3373,7 +3378,7 @@ class TestLoop:
         (work / "cli" / "tasks").mkdir(parents=True)
         (work / "cli" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--tasks-dir", "cli/tasks"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--tasks-dir", "cli/tasks", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
@@ -3399,12 +3404,65 @@ class TestLoop:
         result = run_agm(["loop", "--no-log"], env=env, cwd=str(work))
 
         assert result.returncode == 0
+        assert "agm loop" in result.stdout
+        assert "Step 1" not in result.stdout
+        assert list(work.glob("loop-*.log")) == []
+        assert not Path(env["FAKE_CLAUDE_LOG"]).exists()
+
+    def test_loop_accepts_no_log_before_positional_command(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "--no-log", "claude"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
         assert "Logging to loop-" not in result.stdout
         assert "Step 1" in result.stdout
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
         assert list(work.glob("loop-*.log")) == []
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
+    def test_loop_treats_loop_flags_after_command_as_runner_args(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "claude", "--no-log"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "Logging to loop-" in result.stdout
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"-p --no-log @{prompt_file}"
+        ] * 2
+        assert len(list(work.glob("loop-*.log"))) == 1
 
     def test_log_file_writes_loop_output_to_explicit_path(
         self, tmp_path: Path, env: dict[str, str]
@@ -3425,7 +3483,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         log_file = tmp_path / "logs" / "custom-loop.log"
-        result = run_agm(["loop", "--log-file", str(log_file)], env=env, cwd=str(work))
+        result = run_agm(["loop", "--log-file", str(log_file), "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert f"Logging to {log_file}" in result.stdout

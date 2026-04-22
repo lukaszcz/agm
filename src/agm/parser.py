@@ -74,8 +74,8 @@ _HELP_TEXTS: dict[str, str] = {
         origin/main in each repo.
     """),
     "loop": textwrap.dedent("""\
-        agm loop [CMD] [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
-                 [--no-log|--log-file PATH] [-- RUNNER_ARGS...]
+        agm loop [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
+                 [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
 
         Repeatedly run a prompt command until the selected loop mode reports
         completion.
@@ -86,12 +86,11 @@ _HELP_TEXTS: dict[str, str] = {
           selector command prefix. [loop] tasks_dir = ".agent-files/tasks"
           sets the tasks directory checked for ``PROGRESS.md`` and task files.
           ``agm loop CMD`` selects ``[loop.CMD]`` overrides; those values
-          override ``[loop]``. If ``[loop.CMD].runner`` is unset, AGM uses
-          ``CMD`` as the runner command prefix. ``agm loop --runner "..."``,
+          override ``[loop]``. ``agm loop --runner "..."``,
           ``agm loop --selector "..."``, and ``agm loop --tasks-dir ...``
-          override those values.
-          Extra runner arguments may be passed after ``--`` and are appended
-          only to the runner command, not the selector command.
+          override those values. ``RUNNER_ARGS`` are appended to the final
+          runner command after AGM resolves ``--runner``, config, or the
+          built-in default. Bare ``agm loop`` prints this help text.
 
         Behavior:
           Without a selector, AGM appends ``@<resolved-loop-prompt>`` as the

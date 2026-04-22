@@ -61,6 +61,10 @@ _RUN_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {
     "allow_extra_args": True,
     "ignore_unknown_options": True,
 }
+_LOOP_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {
+    **_RUN_CONTEXT_SETTINGS,
+    "allow_interspersed_args": False,
+}
 
 
 def _command_path_from_context(ctx: typer.Context) -> list[str]:
@@ -488,7 +492,7 @@ def fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> N
     fetch_command.run(object())
 
 
-@app.command(context_settings=_RUN_CONTEXT_SETTINGS)
+@app.command(context_settings=_LOOP_CONTEXT_SETTINGS)
 def loop(
     ctx: typer.Context,
     command_name: str | None = typer.Argument(
@@ -526,6 +530,9 @@ def loop(
 ) -> None:
     del _help
     del _dry_run
+    if command_name is None:
+        print_help_for_command_path(["loop"])
+        return
     if no_log and log_file is not None:
         exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
     runner_args = run_command.normalize_run_command(list(ctx.args))

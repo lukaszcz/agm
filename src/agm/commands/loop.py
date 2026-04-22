@@ -80,9 +80,7 @@ def _split_command(command: str, *, kind: str) -> list[str]:
 def _runner_command(args: LoopArgs) -> list[str]:
     configured = _configured_loop_settings(args.command_name)
     runner = args.runner if args.runner is not None else configured.runner
-    selected = args.command_name if runner is None and args.command_name is not None else runner
-    if selected is None:
-        selected = "claude -p"
+    selected = runner if runner is not None else "claude -p"
     return [*_split_command(selected, kind="runner"), *args.runner_args]
 
 

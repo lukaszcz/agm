@@ -52,12 +52,14 @@ def _configured_loop_settings() -> tuple[str | None, str | None]:
     return configured.command, configured.tasks_dir
 
 
-def _print_step_header(step: int) -> None:
-    print()
-    print("-------------------------------------------------------------")
-    print(f"                        Step {step}")
-    print("-------------------------------------------------------------")
-    print()
+def _step_header_text(step: int) -> str:
+    return (
+        "\n"
+        "-------------------------------------------------------------\n"
+        f"                        Step {step}\n"
+        "-------------------------------------------------------------\n"
+        "\n"
+    )
 
 
 def _loop_command(args: LoopArgs) -> list[str]:
@@ -116,7 +118,8 @@ def run(args: LoopArgs) -> None:
     step = 1
     try:
         while True:
-            _print_step_header(step)
+            header = _step_header_text(step)
+            print(header, end="")
             step += 1
 
             result = subprocess.run(
@@ -130,14 +133,15 @@ def run(args: LoopArgs) -> None:
                 output += result.stderr
 
             with log_file.open("a", encoding="utf-8") as handle:
+                handle.write(header)
                 handle.write(output)
 
             if output:
                 print(output, end="")
 
             if "".join(output.split()) == "COMPLETE":
-                print("Completed.")
+                print("\nCompleted.")
                 break
     except KeyboardInterrupt:
-        print("Interrupted")
+        print("\nInterrupted")
         raise SystemExit(130)

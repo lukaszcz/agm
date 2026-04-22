@@ -2615,7 +2615,20 @@ class TestLoop:
         assert "Completed." in result.stdout
 
         log_file = next(work.glob("loop-*.log"))
-        assert log_file.read_text() == "keep going\n  COMPLETE  \n"
+        assert log_file.read_text() == (
+            "\n"
+            "-------------------------------------------------------------\n"
+            "                        Step 1\n"
+            "-------------------------------------------------------------\n"
+            "\n"
+            "keep going\n"
+            "\n"
+            "-------------------------------------------------------------\n"
+            "                        Step 2\n"
+            "-------------------------------------------------------------\n"
+            "\n"
+            "  COMPLETE  \n"
+        )
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
     def test_uses_prompt_from_agm_install_prefix(
@@ -2677,7 +2690,14 @@ class TestLoop:
         assert "Step 1" in result.stdout
         assert "Step 2" not in result.stdout
         log_file = next(work.glob("loop-*.log"))
-        assert log_file.read_text() == "  COMPLETE  \n"
+        assert log_file.read_text() == (
+            "\n"
+            "-------------------------------------------------------------\n"
+            "                        Step 1\n"
+            "-------------------------------------------------------------\n"
+            "\n"
+            "  COMPLETE  \n"
+        )
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
             f"-p @{bootstrap_prompt}",
             f"-p @{prompt_file}",

@@ -63,6 +63,10 @@ def _step_header_text(step: int) -> str:
     )
 
 
+def _selected_task_text(task_file: Path) -> str:
+    return f"Selected task: {task_file}\n"
+
+
 def _split_command(command: str, *, kind: str) -> list[str]:
     split_command = shlex.split(command)
     if split_command:
@@ -260,18 +264,25 @@ def run(args: LoopArgs) -> None:
                 continue
 
             assert selector_prompt_file is not None
+            selector_outputs: list[str] = []
             while True:
                 selector_output = _run_command(selector_command, selector_prompt_file, env=loop_env)
-                _append_log(log_file, header, selector_output)
-                _print_output(selector_output)
+                selector_outputs.append(selector_output)
 
                 next_task = _selector_result(selector_output, tasks_dir=tasks_dir)
                 if next_task is None:
+                    combined_selector_output = "".join(selector_outputs)
+                    _append_log(log_file, header, combined_selector_output)
+                    _print_output(combined_selector_output)
                     print("\nCompleted.")
                     return
                 if isinstance(next_task, Path):
                     break
 
+            selected_task_output = _selected_task_text(next_task)
+            selector_transcript = "".join(selector_outputs)
+            _append_log(log_file, header, selected_task_output + selector_transcript)
+            _print_output(selector_transcript + "\n" + selected_task_output)
             runner_output = _run_command(runner_command, next_task, env=loop_env)
             _append_log(log_file, "", runner_output)
             _print_output(runner_output)

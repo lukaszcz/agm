@@ -3068,6 +3068,7 @@ class TestLoop:
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
+        assert f"Selected task: {tasks_dir / 'task-1.md'}" in result.stdout
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
         assert Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines() == [
@@ -3077,6 +3078,23 @@ class TestLoop:
         assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
             f"@{tasks_dir / 'task-1.md'}"
         ]
+        log_file = next(work.glob("loop-*.log"))
+        assert log_file.read_text() == (
+            "\n"
+            "-------------------------------------------------------------\n"
+            "                        Step 1\n"
+            "-------------------------------------------------------------\n"
+            "\n"
+            f"Selected task: {tasks_dir / 'task-1.md'}\n"
+            "task-1.md\n"
+            "implemented task\n"
+            "\n"
+            "-------------------------------------------------------------\n"
+            "                        Step 2\n"
+            "-------------------------------------------------------------\n"
+            "\n"
+            " COMPLETE \n"
+        )
 
     def test_loop_exposes_resolved_tasks_dir_to_selector_and_runner(
         self, tmp_path: Path, env: dict[str, str]

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -321,6 +322,21 @@ def _wait_for_path(path: Path, *, timeout: float = 2.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
+def _assert_pid_gone(pid: int) -> None:
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def _interrupt_agm_process(process: subprocess.Popen[str], *, child_pid: int) -> None:
+    os.kill(process.pid, signal.SIGINT)
+    stdout, stderr = process.communicate(timeout=5)
+
+    assert process.returncode == 130
+    assert "Interrupted" in stdout
+    assert "Traceback" not in stderr
+    _assert_pid_gone(child_pid)
+
+
 def _make_project(
     tmp_path: Path,
     bare: Path,
@@ -361,6 +377,20 @@ def _systemd_run_command(result: subprocess.CompletedProcess[str]) -> str:
         if line.startswith("SYSTEMD_RUN:"):
             return line[len("SYSTEMD_RUN:"):]
     return ""
+
+
+def _assert_systemd_run_command(
+    result: subprocess.CompletedProcess[str],
+    *,
+    memory_limit: str,
+    inner_command: str,
+) -> None:
+    command = _systemd_run_command(result)
+    pattern = (
+        rf"--user --scope -p MemoryMax={re.escape(memory_limit)} "
+        rf"--unit agm-run-[0-9a-f]+\.scope {re.escape(inner_command)}"
+    )
+    assert re.fullmatch(pattern, command), command
 
 
 # ── agm config cp ───────────────────────────────────────────────────────────
@@ -1982,6 +2012,9 @@ class TestSandbox:
             "    -p)\n"
             "      shift 2\n"
             "      ;;\n"
+            "    --unit)\n"
+            "      shift 2\n"
+            "      ;;\n"
             "    *)\n"
             '      exec "$@"\n'
             "      ;;\n"
@@ -2404,9 +2437,10 @@ class TestSandbox:
             env=env, cwd=str(work),
         )
         assert result.returncode == 0
-        assert _systemd_run_command(result) == (
-            f"--user --scope -p MemoryMax=20G srt --settings {work / '.sandbox' / 'npm.json'} "
-            "-- npm test --coverage"
+        _assert_systemd_run_command(
+            result,
+            memory_limit="20G",
+            inner_command=f"srt --settings {work / '.sandbox' / 'npm.json'} -- npm test --coverage",
         )
         assert _srt_command(result) == "npm test --coverage"
 
@@ -2428,9 +2462,10 @@ class TestSandbox:
 
         result = run_agm(["run", "--memory", "2G", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
-        assert _systemd_run_command(result) == (
-            f"--user --scope -p MemoryMax=2G srt --settings {work / '.sandbox' / 'echo.json'} "
-            "-- echo hi"
+        _assert_systemd_run_command(
+            result,
+            memory_limit="2G",
+            inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
 
     def test_run_command_memory_overrides_run_default(
@@ -2453,9 +2488,10 @@ class TestSandbox:
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
-        assert _systemd_run_command(result) == (
-            f"--user --scope -p MemoryMax=5G srt --settings {work / '.sandbox' / 'echo.json'} "
-            "-- echo hi"
+        _assert_systemd_run_command(
+            result,
+            memory_limit="5G",
+            inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
 
     def test_run_does_not_wrap_when_memory_limit_is_zero_or_less(
@@ -2611,6 +2647,125 @@ class TestSandbox:
         assert result.returncode == 0
         assert _srt_command(result) == "printf hello"
         assert _srt_settings(result)["network"]["allowedDomains"] == ["echo.com"]
+
+    def test_interrupt_kills_run_process_tree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        ready_file = tmp_path / "run.ready"
+        child_pid_file = tmp_path / "run-child.pid"
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="sleeper",
+            script=(
+                f'child_pid_file="{child_pid_file}"\n'
+                f'ready_file="{ready_file}"\n'
+                "(sleep 30) &\n"
+                'child_pid="$!"\n'
+                'printf "%s\\n" "$child_pid" > "$child_pid_file"\n'
+                'printf "ready\\n" > "$ready_file"\n'
+                "while true; do\n"
+                "  sleep 1\n"
+                "done\n"
+            ),
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        process = subprocess.Popen(
+            [sys.executable, "-m", "agm.cli", "run", "--no-sandbox", "sleeper"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=work,
+        )
+
+        child_pid: int | None = None
+        try:
+            _wait_for_path(ready_file)
+            child_pid = int(child_pid_file.read_text().strip())
+            _interrupt_agm_process(process, child_pid=child_pid)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_interrupt_kills_run_process_tree_with_real_systemd_run_scope(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        ready_file = tmp_path / "wrapped-run.ready"
+        child_pid_file = tmp_path / "wrapped-run-child.pid"
+
+        probe = subprocess.run(
+            ["systemd-run", "--user", "--scope", "true"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        if probe.returncode != 0:
+            pytest.skip(f"systemd-run --user --scope unavailable: {probe.stderr.strip()}")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="sleeper",
+            script=(
+                f'child_pid_file="{child_pid_file}"\n'
+                f'ready_file="{ready_file}"\n'
+                "(sleep 30) &\n"
+                'child_pid="$!"\n'
+                'printf "%s\\n" "$child_pid" > "$child_pid_file"\n'
+                'printf "ready\\n" > "$ready_file"\n'
+                "while true; do\n"
+                "  sleep 1\n"
+                "done\n"
+            ),
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "agm.cli",
+                "run",
+                "--no-sandbox",
+                "--memory",
+                "1G",
+                "sleeper",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=work,
+        )
+
+        child_pid: int | None = None
+        try:
+            _wait_for_path(ready_file)
+            child_pid = int(child_pid_file.read_text().strip())
+            _interrupt_agm_process(process, child_pid=child_pid)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 class TestLoop:
@@ -3503,6 +3658,147 @@ class TestLoop:
             "  COMPLETE  \n"
         )
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
+    def test_interrupt_kills_loop_runner_process_tree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        ready_file = tmp_path / "runner.ready"
+        child_pid_file = tmp_path / "runner-child.pid"
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                f'child_pid_file="{child_pid_file}"\n'
+                f'ready_file="{ready_file}"\n'
+                "(sleep 30) &\n"
+                'child_pid="$!"\n'
+                'printf "%s\\n" "$child_pid" > "$child_pid_file"\n'
+                'printf "ready\\n" > "$ready_file"\n'
+                "while true; do\n"
+                "  sleep 1\n"
+                "done\n"
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        process = subprocess.Popen(
+            [sys.executable, "-m", "agm.cli", "loop", "--runner", "runner", "runner"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=work,
+        )
+
+        child_pid: int | None = None
+        try:
+            _wait_for_path(ready_file)
+            child_pid = int(child_pid_file.read_text().strip())
+
+            os.kill(process.pid, signal.SIGINT)
+            stdout, stderr = process.communicate(timeout=5)
+
+            assert process.returncode == 130
+            assert "Interrupted" in stdout
+            assert stderr == ""
+            with pytest.raises(ProcessLookupError):
+                os.kill(child_pid, 0)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_interrupt_kills_loop_selector_process_tree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        ready_file = tmp_path / "selector.ready"
+        child_pid_file = tmp_path / "selector-child.pid"
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                f'child_pid_file="{child_pid_file}"\n'
+                f'ready_file="{ready_file}"\n'
+                "(sleep 30) &\n"
+                'child_pid="$!"\n'
+                'printf "%s\\n" "$child_pid" > "$child_pid_file"\n'
+                'printf "ready\\n" > "$ready_file"\n'
+                "while true; do\n"
+                "  sleep 1\n"
+                "done\n"
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script='printf "implemented task\\n"\n',
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "task-1.md").write_text("task one\n")
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "agm.cli",
+                "loop",
+                "--runner",
+                "runner",
+                "--selector",
+                "selector",
+                "runner",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=work,
+        )
+
+        child_pid: int | None = None
+        try:
+            _wait_for_path(ready_file)
+            child_pid = int(child_pid_file.read_text().strip())
+            _interrupt_agm_process(process, child_pid=child_pid)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 # ── agm open ────────────────────────────────────────────────────────────────

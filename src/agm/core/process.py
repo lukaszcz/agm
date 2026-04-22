@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -25,19 +26,93 @@ def exit_with_output(returncode: int, stdout: str = "", stderr: str = "") -> Non
     raise SystemExit(returncode)
 
 
+def _kill_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        process.wait()
+
+
+def _run_cleanup_command(
+    cmd: list[str] | None,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    if cmd is None:
+        return
+
+    subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=os.environ if env is None else env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    capture_output: bool = False,
+    interrupt_cleanup_cmd: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command in its own process group and clean it up on interrupt."""
+
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=os.environ if env is None else env,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=True,
+        start_new_session=True,
+    )
+
+    try:
+        stdout, stderr = process.communicate()
+    except BaseException:
+        _kill_process_group(process)
+        _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
+        raise
+
+    return subprocess.CompletedProcess(
+        cmd,
+        process.returncode,
+        stdout,
+        stderr,
+    )
+
+
 def run_foreground(
     cmd: list[str],
     *,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    interrupt_cleanup_cmd: list[str] | None = None,
 ) -> int:
     """Run a command inheriting stdio."""
 
-    result = subprocess.run(
+    result = run_subprocess(
         cmd,
         cwd=cwd,
-        env=os.environ if env is None else env,
-        check=False,
+        env=env,
+        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
     )
     return result.returncode
 
@@ -47,18 +122,18 @@ def run_capture(
     *,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    interrupt_cleanup_cmd: list[str] | None = None,
 ) -> tuple[int, str, str]:
     """Run a command and capture stdout/stderr."""
 
-    result = subprocess.run(
+    result = run_subprocess(
         cmd,
-        capture_output=True,
-        text=True,
         cwd=cwd,
-        env=os.environ if env is None else env,
-        check=False,
+        env=env,
+        capture_output=True,
+        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
     )
-    return result.returncode, result.stdout, result.stderr
+    return result.returncode, result.stdout or "", result.stderr or ""
 
 
 def require_success(

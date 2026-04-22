@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +14,7 @@ from agm.config.general import LoopConfig, load_loop_config
 from agm.core import dry_run
 from agm.core.env import agm_installation_prefix
 from agm.core.fs import append_text, is_file, mkdir, unlink
+from agm.core.process import run_capture
 from agm.core.prompt import preprocess_prompt_file
 
 
@@ -151,16 +151,13 @@ def _loop_env(tasks_dir: Path) -> dict[str, str]:
 
 
 def _run_command(command: list[str], target: Path, *, env: dict[str, str]) -> str:
-    result = subprocess.run(
+    _, stdout, stderr = run_capture(
         _command_with_prompt_target(command, target),
-        capture_output=True,
-        text=True,
         env=env,
-        check=False,
     )
-    output = result.stdout
-    if result.stderr:
-        output += result.stderr
+    output = stdout
+    if stderr:
+        output += stderr
     return output
 
 

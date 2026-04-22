@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from uuid import uuid4
 
 from agm.commands.args import RunArgs
 from agm.config.general import load_run_config
@@ -22,6 +22,7 @@ from agm.config.sandbox import (
 )
 from agm.core import dry_run
 from agm.core.fs import is_dir, is_file, rmdir, stat, unlink
+from agm.core.process import run_foreground
 
 DEFAULT_MEMORY_LIMIT = "20G"
 
@@ -83,6 +84,10 @@ def _memory_limit_enabled(limit: str | None) -> bool:
 
 def _systemd_run_prefix(limit: str) -> list[str]:
     return ["systemd-run", "--user", "--scope", "-p", f"MemoryMax={limit}"]
+
+
+def _systemd_scope_name() -> str:
+    return f"agm-run-{uuid4().hex}.scope"
 
 
 
@@ -190,6 +195,7 @@ def run(args: RunArgs) -> None:
     temp_files: list[Path] = []
     tracked_artifacts: list[Path] = []
     try:
+        interrupt_cleanup_cmd: list[str] | None = None
         if run_args.no_sandbox:
             subprocess_args = list(effective_run_command)
         else:
@@ -248,14 +254,25 @@ def run(args: RunArgs) -> None:
             ]
         if _memory_limit_enabled(effective_memory_limit):
             assert effective_memory_limit is not None
-            subprocess_args = [*_systemd_run_prefix(effective_memory_limit), *subprocess_args]
-        raise SystemExit(
-            subprocess.run(
-                subprocess_args,
-                cwd=current,
-                env=resolved_env,
-                check=False,
-            ).returncode,
-        )
+            scope_name = _systemd_scope_name()
+            subprocess_args = [
+                *_systemd_run_prefix(effective_memory_limit),
+                "--unit",
+                scope_name,
+                *subprocess_args,
+            ]
+            interrupt_cleanup_cmd = ["systemctl", "--user", "stop", scope_name]
+        try:
+            raise SystemExit(
+                run_foreground(
+                    subprocess_args,
+                    cwd=current,
+                    env=resolved_env,
+                    interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                )
+            )
+        except KeyboardInterrupt:
+            print("\nInterrupted")
+            raise SystemExit(130)
     finally:
         _cleanup(temp_files, tracked_artifacts)

@@ -95,6 +95,15 @@ class LoopArgs:
 
 
 @dataclass(slots=True)
+class LoopProgressArgs:
+    command_name: str | None
+    runner: str | None
+    runner_args: list[str]
+    selector: str | None
+    tasks_dir: str | None
+
+
+@dataclass(slots=True)
 class TmuxOpenArgs:
     detach: bool
     pane_count: str | None

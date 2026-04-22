@@ -16,6 +16,7 @@ import agm.commands.dep.switch as dep_switch_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
 import agm.commands.loop as loop_command
+import agm.commands.loop.progress as loop_progress_command
 import agm.commands.open as open_command
 import agm.commands.run as run_command
 import agm.commands.tmux.close as tmux_close_command
@@ -34,6 +35,7 @@ from agm.commands.args import (
     DepSwitchArgs,
     InitArgs,
     LoopArgs,
+    LoopProgressArgs,
     OpenArgs,
     RunArgs,
     TmuxCloseArgs,
@@ -142,6 +144,121 @@ def _require_value(
     if value is None:
         _missing_arguments(command_path, [name])
     return str(value)
+
+
+def _loop_option_value(
+    args: list[str],
+    index: int,
+    *,
+    command_path: Sequence[str],
+    option: str,
+) -> tuple[str, int]:
+    next_index = index + 1
+    if next_index >= len(args):
+        exit_with_usage_error(command_path, f"error: {option} requires a value")
+    return args[next_index], next_index + 1
+
+
+def _parse_loop_args(raw_args: list[str], *, command_path: Sequence[str]) -> LoopArgs:
+    runner: str | None = None
+    selector: str | None = None
+    tasks_dir: str | None = None
+    no_log = False
+    log_file: str | None = None
+    index = 0
+
+    while index < len(raw_args):
+        token = raw_args[index]
+        if token == "--":
+            break
+        if token == "--runner":
+            runner, index = _loop_option_value(
+                raw_args,
+                index,
+                command_path=command_path,
+                option=token,
+            )
+            continue
+        if token == "--selector":
+            selector, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--tasks-dir":
+            tasks_dir, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--log-file":
+            log_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--no-log":
+            no_log = True
+            index += 1
+            continue
+        break
+
+    remaining = raw_args[index:]
+    if not remaining:
+        print_help_for_command_path(["loop"])
+        raise typer.Exit()
+    command_name = remaining[0]
+    runner_args = run_command.normalize_run_command(remaining[1:])
+    if no_log and log_file is not None:
+        exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
+    return LoopArgs(
+        command_name=command_name,
+        runner=runner,
+        runner_args=runner_args,
+        selector=selector,
+        tasks_dir=tasks_dir,
+        no_log=no_log,
+        log_file=log_file,
+    )
+
+
+def _parse_loop_progress_args(raw_args: list[str]) -> LoopProgressArgs:
+    runner: str | None = None
+    selector: str | None = None
+    tasks_dir: str | None = None
+    index = 0
+
+    while index < len(raw_args):
+        token = raw_args[index]
+        if token == "--":
+            break
+        if token == "--runner":
+            runner, index = _loop_option_value(
+                raw_args, index, command_path=["loop", "progress"], option=token
+            )
+            continue
+        if token == "--selector":
+            selector, index = _loop_option_value(
+                raw_args, index, command_path=["loop", "progress"], option=token
+            )
+            continue
+        if token == "--tasks-dir":
+            tasks_dir, index = _loop_option_value(
+                raw_args, index, command_path=["loop", "progress"], option=token
+            )
+            continue
+        break
+
+    remaining = raw_args[index:]
+    command_name: str | None = None
+    runner_args: list[str] = []
+    if remaining:
+        command_name = remaining[0]
+        runner_args = run_command.normalize_run_command(remaining[1:])
+    return LoopProgressArgs(
+        command_name=command_name,
+        runner=runner,
+        runner_args=runner_args,
+        selector=selector,
+        tasks_dir=tasks_dir,
+    )
 
 
 app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
@@ -492,61 +609,22 @@ def fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> N
     fetch_command.run(object())
 
 
-@app.command(context_settings=_LOOP_CONTEXT_SETTINGS)
+@app.command(context_settings=_RUN_CONTEXT_SETTINGS)
 def loop(
     ctx: typer.Context,
-    command_name: str | None = typer.Argument(
-        None,
-        metavar="CMD",
-        autocompletion=completion.complete_run_command,
-    ),
-    runner: str | None = typer.Option(
-        None,
-        "--runner",
-        help="Override the configured loop runner command prefix.",
-    ),
-    selector: str | None = typer.Option(
-        None,
-        "--selector",
-        help="Override the configured loop selector command prefix.",
-    ),
-    tasks_dir: Path | None = typer.Option(
-        None,
-        "--tasks-dir",
-        help="Override the configured tasks directory.",
-    ),
-    no_log: bool = typer.Option(
-        False,
-        "--no-log",
-        help="Disable loop logging.",
-    ),
-    log_file: Path | None = typer.Option(
-        None,
-        "--log-file",
-        help="Write loop output to this log file.",
-    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
     del _dry_run
-    if command_name is None:
+    raw_args = list(ctx.args)
+    if not raw_args:
         print_help_for_command_path(["loop"])
+        raise typer.Exit()
+    if raw_args[0] == "progress":
+        loop_progress_command.run(_parse_loop_progress_args(raw_args[1:]))
         return
-    if no_log and log_file is not None:
-        exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
-    runner_args = run_command.normalize_run_command(list(ctx.args))
-    loop_command.run(
-        LoopArgs(
-            command_name=command_name,
-            runner=runner,
-            runner_args=runner_args,
-            selector=selector,
-            tasks_dir=str(tasks_dir) if tasks_dir is not None else None,
-            no_log=no_log,
-            log_file=str(log_file) if log_file is not None else None,
-        )
-    )
+    loop_command.run(_parse_loop_args(raw_args, command_path=["loop"]))
 
 
 @app.command()

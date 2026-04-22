@@ -76,9 +76,11 @@ _HELP_TEXTS: dict[str, str] = {
     "loop": textwrap.dedent("""\
         agm loop [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
                  [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+        agm loop progress [--runner COMMAND] [--selector COMMAND]
+                          [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
 
         Repeatedly run a prompt command until the selected loop mode reports
-        completion.
+        completion, or run the progress-update prompt once.
 
         Command config:
           [loop] runner = "claude -p" in config.toml sets the default runner
@@ -104,6 +106,9 @@ _HELP_TEXTS: dict[str, str] = {
           by default, or writes to ``--log-file PATH``. ``--no-log`` disables
           file logging entirely. The command prints each step header and stops
           when the active mode reports completion.
+          ``agm loop progress`` runs ``update_progress.md`` once using the
+          resolved selector, or the resolved runner when no selector is
+          configured. It uses the same prompt lookup behavior as ``agm loop``.
     """),
     "config": textwrap.dedent("""\
         agm config copy DIRNAME
@@ -268,6 +273,13 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm wt rm [-f|--force] BRANCH
 
         Remove a worktree and delete its local branch.
+    """),
+    ("loop", "progress"): textwrap.dedent("""\
+        agm loop progress [--runner COMMAND] [--selector COMMAND]
+                          [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
+
+        Run the update-progress prompt once using the resolved selector, or
+        the resolved runner when no selector is configured.
     """),
     ("worktree", "new"): textwrap.dedent("""\
         agm worktree new [-d|--dir DIR] BRANCH

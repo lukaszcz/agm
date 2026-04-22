@@ -595,6 +595,37 @@ class TestLoop:
         assert calls[0].command_name == "claude"
         assert calls[0].log_file == "custom/loop.log"
 
+    def test_loop_progress(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_progress_command)
+        result = invoke(runner, ["loop", "progress"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name is None
+        assert calls[0].runner is None
+        assert calls[0].runner_args == []
+        assert calls[0].selector is None
+        assert calls[0].tasks_dir is None
+
+    def test_loop_progress_with_positional_command_and_runner_args(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_progress_command)
+        result = invoke(runner, ["loop", "progress", "claude", "-p", "--model", "sonnet"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].runner_args == ["-p", "--model", "sonnet"]
+
+    def test_loop_progress_with_selector_override(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_progress_command)
+        result = invoke(runner, ["loop", "progress", "--selector", "codex exec", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].selector == "codex exec"
+
 
 class TestTmuxOpen:
     def test_tmux_open_bare(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

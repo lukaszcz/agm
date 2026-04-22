@@ -3802,6 +3802,102 @@ class TestLoop:
                 except ProcessLookupError:
                     pass
 
+    def test_loop_progress_runs_selector_with_update_progress_prompt(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
+                'printf "%s\\n" "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file"\n'
+                'printf "task-1.md\\n"\n'
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'printf "%s\\n" "$*" >> "$log_file"\n'
+                'printf "runner should not run\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "runner"\nselector = "selector"\n'
+        )
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop", "progress"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout == "task-1.md\n"
+        assert Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines() == [
+            f"@{selector_prompt}",
+            "update progress",
+        ]
+        assert not Path(env["FAKE_RUNNER_LOG"]).exists()
+
+    def test_loop_progress_runs_runner_when_selector_is_not_configured(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
+                'printf "%s\\n" "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file"\n'
+                'printf "progress updated\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "runner"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update $TASKS_DIR\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["loop", "progress", "--tasks-dir", "custom/tasks"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert result.stdout == "progress updated\n"
+        runner_log_lines = Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines()
+        assert len(runner_log_lines) == 2
+        assert runner_log_lines[0].startswith("@")
+        assert runner_log_lines[1] == f"update {work / 'custom' / 'tasks'}"
+
 
 # ── agm open ────────────────────────────────────────────────────────────────
 

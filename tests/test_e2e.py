@@ -2831,6 +2831,77 @@ class TestLoop:
             f"-p --model sonnet @{prompt_file}"
         ] * 2
 
+    def test_loop_replaces_percent_placeholder_in_cli_runner(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "--runner", 'claude -p "@%%"'], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
+
+    def test_loop_replaces_prompt_placeholder_in_configured_runner(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude -p %{PROMPT}"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p {prompt_file}"] * 2
+
+    def test_loop_replaces_percent_placeholder_in_runner_args_after_separator(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".agent-files" / "tasks").mkdir(parents=True)
+        (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "claude", "--", "-p", "%%"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p {prompt_file}"] * 2
+
     def test_runs_selector_then_runner_until_selector_returns_complete(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -2893,6 +2964,72 @@ class TestLoop:
         assert Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines() == [
             f"@{selector_prompt}",
             f"@{selector_prompt}",
+        ]
+        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
+            f"@{tasks_dir / 'task-1.md'}"
+        ]
+
+    def test_loop_replaces_prompt_placeholder_in_selector(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_SELECTOR_STATE"] = str(tmp_path / "selector-count")
+        env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
+                'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'echo "$*" >> "$log_file"\n'
+                'case "$count" in\n'
+                '  1) printf "task-1.md\\n" ;;\n'
+                '  2) printf " COMPLETE \\n" ;;\n'
+                '  *) printf "COMPLETE\\n" ;;\n'
+                "esac\n"
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'echo "$*" >> "$log_file"\n'
+                'printf "implemented task\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "task-1.md").write_text("task one\n")
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(
+            ["loop", "--runner", "runner", "--selector", "selector %{PROMPT}"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines() == [
+            str(selector_prompt),
+            str(selector_prompt),
         ]
         assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
             f"@{tasks_dir / 'task-1.md'}"

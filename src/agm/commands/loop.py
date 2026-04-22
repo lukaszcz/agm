@@ -120,9 +120,28 @@ def _validate_command(command: list[str], *, kind: str) -> None:
         raise SystemExit(1)
 
 
+def _command_with_prompt_target(command: list[str], target: Path) -> list[str]:
+    prompt_path = str(target)
+    placeholders = ("%%", "%{PROMPT}")
+    replaced_command: list[str] = []
+    replaced = False
+
+    for arg in command:
+        updated = arg
+        for placeholder in placeholders:
+            if placeholder in updated:
+                updated = updated.replace(placeholder, prompt_path)
+                replaced = True
+        replaced_command.append(updated)
+
+    if replaced:
+        return replaced_command
+    return [*command, f"@{target}"]
+
+
 def _run_command(command: list[str], target: Path) -> str:
     result = subprocess.run(
-        [*command, f"@{target}"],
+        _command_with_prompt_target(command, target),
         capture_output=True,
         text=True,
         check=False,

@@ -3,3 +3,9 @@ alias = "claude --dangerously-skip-permissions"
 
 [run.codex]
 alias = "codex --yolo"
+
+[loop.claude]
+runner = "claude -p '@%{PROMPT_FILE}'"
+
+[loop.pi]
+runner = "agm run pi -p '@%{PROMPT_FILE}'"

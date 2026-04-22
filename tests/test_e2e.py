@@ -2730,6 +2730,36 @@ class TestLoop:
             f"--print @{prompt_file}"
         ] * 2
 
+    def test_uses_command_specific_loop_config_for_positional_command(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_claude(tmp_path / "bin", env)
+        env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
+        env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\ncommand = "claude -p"\ntasks_dir = "global/tasks"\n'
+            '[loop.codex]\ncommand = "claude --print"\ntasks_dir = "codex/tasks"\n'
+        )
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "codex" / "tasks").mkdir(parents=True)
+        (work / "codex" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "codex"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
+            f"--print @{prompt_file}"
+        ] * 2
+
     def test_cli_loop_command_overrides_configured_loop_command(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

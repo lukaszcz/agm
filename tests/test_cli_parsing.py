@@ -471,10 +471,21 @@ class TestLoop:
         result = invoke(runner, ["loop"])
         assert result.exit_code == 0
         assert len(calls) == 1
+        assert calls[0].command_name is None
         assert calls[0].command is None
         assert calls[0].tasks_dir is None
         assert calls[0].no_log is False
         assert calls[0].log_file is None
+
+    def test_loop_with_positional_command(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "codex"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "codex"
+        assert calls[0].command is None
 
     def test_loop_with_command_short(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch

@@ -43,11 +43,12 @@ def _prompt_file(filename: str) -> Path:
     return candidates[-1]
 
 
-def _configured_loop_settings() -> tuple[str | None, str | None]:
+def _configured_loop_settings(command_name: str | None) -> tuple[str | None, str | None]:
     configured = load_loop_config(
         home=Path(os.environ["HOME"]),
         proj_dir=Path(os.environ["PROJ_DIR"]) if os.environ.get("PROJ_DIR") else None,
         cwd=Path.cwd(),
+        command_name=command_name,
     )
     return configured.command, configured.tasks_dir
 
@@ -63,14 +64,16 @@ def _step_header_text(step: int) -> str:
 
 
 def _loop_command(args: LoopArgs) -> list[str]:
-    configured_command, _configured_tasks_dir = _configured_loop_settings()
+    configured_command, _configured_tasks_dir = _configured_loop_settings(args.command_name)
     command = args.command if args.command is not None else configured_command
-    selected = "claude -p" if command is None else command
+    selected = args.command_name if command is None and args.command_name is not None else command
+    if selected is None:
+        selected = "claude -p"
     return shlex.split(selected)
 
 
 def _tasks_dir(args: LoopArgs) -> Path:
-    _configured_command, configured_tasks_dir = _configured_loop_settings()
+    _configured_command, configured_tasks_dir = _configured_loop_settings(args.command_name)
     selected = args.tasks_dir if args.tasks_dir is not None else configured_tasks_dir
     if selected is None:
         return Path.cwd() / ".agent-files" / "tasks"

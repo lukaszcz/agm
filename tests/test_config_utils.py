@@ -121,6 +121,20 @@ def test_load_loop_config_reads_tasks_dir(tmp_path: Path) -> None:
     assert config.tasks_dir == "custom/tasks"
 
 
+def test_load_loop_config_prefers_command_specific_overrides(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(
+        '[loop]\ncommand = "claude -p"\ntasks_dir = "custom/tasks"\n'
+        '[loop.codex]\ncommand = "codex exec"\ntasks_dir = "codex/tasks"\n'
+    )
+
+    config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work", command_name="codex")
+
+    assert config.command == "codex exec"
+    assert config.tasks_dir == "codex/tasks"
+
+
 def test_load_run_config_prefers_dot_agm_memory_after_project_config(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()

@@ -106,11 +106,17 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
     )
 
 
-def load_loop_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> LoopConfig:
+def load_loop_config(
+    *, home: Path, proj_dir: Path | None, cwd: Path, command_name: str | None = None
+) -> LoopConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     loop_table = _toml_dict(merged.get("loop"))
-    command = loop_table.get("command")
-    tasks_dir = loop_table.get("tasks_dir")
+    selected_loop_table = loop_table
+    if command_name is not None:
+        command_table = _toml_dict(loop_table.get(command_name))
+        selected_loop_table = _merge_config(loop_table, command_table)
+    command = selected_loop_table.get("command")
+    tasks_dir = selected_loop_table.get("tasks_dir")
     resolved_command = command if isinstance(command, str) and command.strip() else None
     resolved_tasks_dir = tasks_dir if isinstance(tasks_dir, str) and tasks_dir.strip() else None
     return LoopConfig(command=resolved_command, tasks_dir=resolved_tasks_dir)

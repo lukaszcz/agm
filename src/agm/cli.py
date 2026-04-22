@@ -417,6 +417,11 @@ def fetch(_help: bool = _help_option()) -> None:
 
 @app.command()
 def loop(
+    command_name: str | None = typer.Argument(
+        None,
+        metavar="CMD",
+        autocompletion=completion.complete_run_command,
+    ),
     command: str | None = typer.Option(
         None,
         "-c",
@@ -445,6 +450,7 @@ def loop(
         exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
     loop_command.run(
         LoopArgs(
+            command_name=command_name,
             command=command,
             tasks_dir=str(tasks_dir) if tasks_dir is not None else None,
             no_log=no_log,

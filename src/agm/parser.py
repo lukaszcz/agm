@@ -74,7 +74,7 @@ _HELP_TEXTS: dict[str, str] = {
         origin/main in each repo.
     """),
     "loop": textwrap.dedent("""\
-        agm loop [-c|--command COMMAND] [--tasks-dir DIR] [--no-log|--log-file PATH]
+        agm loop [CMD] [-c|--command COMMAND] [--tasks-dir DIR] [--no-log|--log-file PATH]
 
         Repeatedly run a prompt command against ``loop.md`` until the command
         returns only ``COMPLETE`` after whitespace is removed.
@@ -82,8 +82,11 @@ _HELP_TEXTS: dict[str, str] = {
         Command config:
           [loop] command = "claude -p" in config.toml sets the default command
           prefix. [loop] tasks_dir = ".agent-files/tasks" sets the tasks
-          directory checked for ``PROGRESS.md``. ``agm loop --command "..."``
-          and ``agm loop --tasks-dir ...`` override those values.
+          directory checked for ``PROGRESS.md``. ``agm loop CMD`` selects
+          ``[loop.CMD]`` overrides; those values override ``[loop]``. If
+          ``[loop.CMD].command`` is unset, AGM uses ``CMD`` as the command
+          prefix. ``agm loop --command "..."`` and ``agm loop --tasks-dir ...``
+          override those values.
 
         Behavior:
           Appends ``@<resolved-loop-prompt>`` as the final argument to the

@@ -70,7 +70,8 @@ class RunConfig:
 class LoopConfig:
     """Resolved loop-command configuration."""
 
-    command: str | None
+    runner: str | None
+    selector: str | None
     tasks_dir: str | None
 
 
@@ -115,8 +116,14 @@ def load_loop_config(
     if command_name is not None:
         command_table = _toml_dict(loop_table.get(command_name))
         selected_loop_table = _merge_config(loop_table, command_table)
-    command = selected_loop_table.get("command")
+    runner = selected_loop_table.get("runner")
+    selector = selected_loop_table.get("selector")
     tasks_dir = selected_loop_table.get("tasks_dir")
-    resolved_command = command if isinstance(command, str) and command.strip() else None
+    resolved_runner = runner if isinstance(runner, str) and runner.strip() else None
+    resolved_selector = selector if isinstance(selector, str) and selector.strip() else None
     resolved_tasks_dir = tasks_dir if isinstance(tasks_dir, str) and tasks_dir.strip() else None
-    return LoopConfig(command=resolved_command, tasks_dir=resolved_tasks_dir)
+    return LoopConfig(
+        runner=resolved_runner,
+        selector=resolved_selector,
+        tasks_dir=resolved_tasks_dir,
+    )

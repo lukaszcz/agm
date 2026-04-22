@@ -415,18 +415,23 @@ def fetch(_help: bool = _help_option()) -> None:
     fetch_command.run(object())
 
 
-@app.command()
+@app.command(context_settings=_RUN_CONTEXT_SETTINGS)
 def loop(
+    ctx: typer.Context,
     command_name: str | None = typer.Argument(
         None,
         metavar="CMD",
         autocompletion=completion.complete_run_command,
     ),
-    command: str | None = typer.Option(
+    runner: str | None = typer.Option(
         None,
-        "-c",
-        "--command",
-        help="Override the configured loop command prefix.",
+        "--runner",
+        help="Override the configured loop runner command prefix.",
+    ),
+    selector: str | None = typer.Option(
+        None,
+        "--selector",
+        help="Override the configured loop selector command prefix.",
     ),
     tasks_dir: Path | None = typer.Option(
         None,
@@ -448,10 +453,13 @@ def loop(
     del _help
     if no_log and log_file is not None:
         exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
+    runner_args = run_command.normalize_run_command(list(ctx.args))
     loop_command.run(
         LoopArgs(
             command_name=command_name,
-            command=command,
+            runner=runner,
+            runner_args=runner_args,
+            selector=selector,
             tasks_dir=str(tasks_dir) if tasks_dir is not None else None,
             no_log=no_log,
             log_file=str(log_file) if log_file is not None else None,

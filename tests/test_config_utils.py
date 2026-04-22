@@ -112,12 +112,13 @@ def test_load_loop_config_reads_tasks_dir(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "config.toml").write_text(
-        '[loop]\ncommand = "claude -p"\ntasks_dir = "custom/tasks"\n'
+        '[loop]\nrunner = "claude -p"\nselector = "codex exec"\ntasks_dir = "custom/tasks"\n'
     )
 
     config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
 
-    assert config.command == "claude -p"
+    assert config.runner == "claude -p"
+    assert config.selector == "codex exec"
     assert config.tasks_dir == "custom/tasks"
 
 
@@ -125,13 +126,15 @@ def test_load_loop_config_prefers_command_specific_overrides(tmp_path: Path) -> 
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "config.toml").write_text(
-        '[loop]\ncommand = "claude -p"\ntasks_dir = "custom/tasks"\n'
-        '[loop.codex]\ncommand = "codex exec"\ntasks_dir = "codex/tasks"\n'
+        '[loop]\nrunner = "claude -p"\nselector = "opencode prompt"\ntasks_dir = "custom/tasks"\n'
+        '[loop.codex]\nrunner = "codex exec"\nselector = "claude --print"\n'
+        'tasks_dir = "codex/tasks"\n'
     )
 
     config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work", command_name="codex")
 
-    assert config.command == "codex exec"
+    assert config.runner == "codex exec"
+    assert config.selector == "claude --print"
     assert config.tasks_dir == "codex/tasks"
 
 

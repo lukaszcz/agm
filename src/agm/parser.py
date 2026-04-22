@@ -74,27 +74,37 @@ _HELP_TEXTS: dict[str, str] = {
         origin/main in each repo.
     """),
     "loop": textwrap.dedent("""\
-        agm loop [CMD] [-c|--command COMMAND] [--tasks-dir DIR] [--no-log|--log-file PATH]
+        agm loop [CMD] [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
+                 [--no-log|--log-file PATH] [-- RUNNER_ARGS...]
 
-        Repeatedly run a prompt command against ``loop.md`` until the command
-        returns only ``COMPLETE`` after whitespace is removed.
+        Repeatedly run a prompt command until the selected loop mode reports
+        completion.
 
         Command config:
-          [loop] command = "claude -p" in config.toml sets the default command
-          prefix. [loop] tasks_dir = ".agent-files/tasks" sets the tasks
-          directory checked for ``PROGRESS.md``. ``agm loop CMD`` selects
-          ``[loop.CMD]`` overrides; those values override ``[loop]``. If
-          ``[loop.CMD].command`` is unset, AGM uses ``CMD`` as the command
-          prefix. ``agm loop --command "..."`` and ``agm loop --tasks-dir ...``
+          [loop] runner = "claude -p" in config.toml sets the default runner
+          command prefix. [loop] selector = "codex exec" sets an optional
+          selector command prefix. [loop] tasks_dir = ".agent-files/tasks"
+          sets the tasks directory checked for ``PROGRESS.md`` and task files.
+          ``agm loop CMD`` selects ``[loop.CMD]`` overrides; those values
+          override ``[loop]``. If ``[loop.CMD].runner`` is unset, AGM uses
+          ``CMD`` as the runner command prefix. ``agm loop --runner "..."``,
+          ``agm loop --selector "..."``, and ``agm loop --tasks-dir ...``
           override those values.
+          Extra runner arguments may be passed after ``--`` and are appended
+          only to the runner command, not the selector command.
 
         Behavior:
-          Appends ``@<resolved-loop-prompt>`` as the final argument to the
-          selected command.
+          Without a selector, AGM appends ``@<resolved-loop-prompt>`` as the
+          final argument to the runner and stops when the response is
+          ``COMPLETE`` after whitespace is removed.
+          With a selector, AGM runs the selector with ``@update_progress.md``.
+          If the selector returns ``COMPLETE`` after whitespace is removed, AGM
+          stops. Otherwise the selector output is treated as the next task path
+          and AGM runs the runner with that task file.
           Creates a ``loop-YYYYMMDD-HHMMSS.log`` file in the current directory
           by default, or writes to ``--log-file PATH``. ``--no-log`` disables
           file logging entirely. The command prints each step header and stops
-          when the response is ``COMPLETE``.
+          when the active mode reports completion.
     """),
     "config": textwrap.dedent("""\
         agm config copy DIRNAME

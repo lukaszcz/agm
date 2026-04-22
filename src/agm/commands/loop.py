@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agm.commands.args import LoopArgs
-from agm.config.general import load_loop_config
+from agm.config.general import LoopConfig, load_loop_config
 from agm.core.env import agm_installation_prefix
 
 
@@ -43,14 +43,13 @@ def _prompt_file(filename: str) -> Path:
     return candidates[-1]
 
 
-def _configured_loop_settings(command_name: str | None) -> tuple[str | None, str | None]:
-    configured = load_loop_config(
+def _configured_loop_settings(command_name: str | None) -> LoopConfig:
+    return load_loop_config(
         home=Path(os.environ["HOME"]),
         proj_dir=Path(os.environ["PROJ_DIR"]) if os.environ.get("PROJ_DIR") else None,
         cwd=Path.cwd(),
         command_name=command_name,
     )
-    return configured.command, configured.tasks_dir
 
 
 def _step_header_text(step: int) -> str:
@@ -63,17 +62,33 @@ def _step_header_text(step: int) -> str:
     )
 
 
-def _loop_command(args: LoopArgs) -> list[str]:
-    configured_command, _configured_tasks_dir = _configured_loop_settings(args.command_name)
-    command = args.command if args.command is not None else configured_command
-    selected = args.command_name if command is None and args.command_name is not None else command
+def _split_command(command: str, *, kind: str) -> list[str]:
+    split_command = shlex.split(command)
+    if split_command:
+        return split_command
+    print(f"Error: loop {kind} command is empty.", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def _runner_command(args: LoopArgs) -> list[str]:
+    configured = _configured_loop_settings(args.command_name)
+    runner = args.runner if args.runner is not None else configured.runner
+    selected = args.command_name if runner is None and args.command_name is not None else runner
     if selected is None:
         selected = "claude -p"
-    return shlex.split(selected)
+    return [*_split_command(selected, kind="runner"), *args.runner_args]
+
+
+def _selector_command(args: LoopArgs) -> list[str] | None:
+    configured = _configured_loop_settings(args.command_name)
+    selector = args.selector if args.selector is not None else configured.selector
+    if selector is None:
+        return None
+    return _split_command(selector, kind="selector")
 
 
 def _tasks_dir(args: LoopArgs) -> Path:
-    _configured_command, configured_tasks_dir = _configured_loop_settings(args.command_name)
+    configured_tasks_dir = _configured_loop_settings(args.command_name).tasks_dir
     selected = args.tasks_dir if args.tasks_dir is not None else configured_tasks_dir
     if selected is None:
         return Path.cwd() / ".agent-files" / "tasks"
@@ -96,32 +111,77 @@ def _log_file(args: LoopArgs) -> Path | None:
     return Path.cwd() / f"loop-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
 
-def run(args: LoopArgs) -> None:
-    prompt_file = _prompt_file("loop.md")
-    if not prompt_file.is_file():
-        print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
-        raise SystemExit(1)
-
-    command = _loop_command(args)
-    if not command:
-        print("Error: loop command is empty.", file=sys.stderr)
-        raise SystemExit(1)
-
+def _validate_command(command: list[str], *, kind: str) -> None:
     if shutil.which(command[0]) is None:
-        print(f"Error: {command[0]} is not installed or not in PATH.", file=sys.stderr)
+        print(
+            f"Error: {kind} command {command[0]} is not installed or not in PATH.",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
-    if not _progress_file(args).is_file():
+
+def _run_command(command: list[str], target: Path) -> str:
+    result = subprocess.run(
+        [*command, f"@{target}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stdout
+    if result.stderr:
+        output += result.stderr
+    return output
+
+
+def _append_log(log_file: Path | None, header: str, output: str) -> None:
+    if log_file is None:
+        return
+    with log_file.open("a", encoding="utf-8") as handle:
+        handle.write(header)
+        handle.write(output)
+
+
+def _print_output(output: str) -> None:
+    if output:
+        print(output, end="")
+
+
+def _selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
+    selected = output.strip()
+    if not selected:
+        return ""
+    if "".join(selected.split()) == "COMPLETE":
+        return None
+
+    task_path = Path(selected)
+    if not task_path.is_absolute():
+        task_path = tasks_dir / task_path
+    if not task_path.is_file():
+        return selected
+    return task_path
+
+
+def run(args: LoopArgs) -> None:
+    runner_command = _runner_command(args)
+    selector_command = _selector_command(args)
+    _validate_command(runner_command, kind="runner")
+    if selector_command is not None:
+        _validate_command(selector_command, kind="selector")
+
+    prompt_file: Path | None = None
+    if selector_command is None:
+        prompt_file = _prompt_file("loop.md")
+        if not prompt_file.is_file():
+            print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
+            raise SystemExit(1)
+
+    progress_file = _progress_file(args)
+    if selector_command is None and not progress_file.is_file():
         bootstrap_prompt_file = _prompt_file("update_progress.md")
         if not bootstrap_prompt_file.is_file():
             print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
             raise SystemExit(1)
-        subprocess.run(
-            [*command, f"@{bootstrap_prompt_file}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        _run_command(runner_command, bootstrap_prompt_file)
 
     log_file = _log_file(args)
     if log_file is not None:
@@ -137,27 +197,36 @@ def run(args: LoopArgs) -> None:
             print(header, end="")
             step += 1
 
-            result = subprocess.run(
-                [*command, f"@{prompt_file}"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            output = result.stdout
-            if result.stderr:
-                output += result.stderr
+            if selector_command is None:
+                assert prompt_file is not None
+                output = _run_command(runner_command, prompt_file)
+                _append_log(log_file, header, output)
+                _print_output(output)
+                if "".join(output.split()) == "COMPLETE":
+                    print("\nCompleted.")
+                    break
+                continue
 
-            if log_file is not None:
-                with log_file.open("a", encoding="utf-8") as handle:
-                    handle.write(header)
-                    handle.write(output)
+            selector_prompt_file = _prompt_file("update_progress.md")
+            if not selector_prompt_file.is_file():
+                print(f"Error: prompt file not found: {selector_prompt_file}", file=sys.stderr)
+                raise SystemExit(1)
+            tasks_dir = _tasks_dir(args)
+            while True:
+                selector_output = _run_command(selector_command, selector_prompt_file)
+                _append_log(log_file, header, selector_output)
+                _print_output(selector_output)
 
-            if output:
-                print(output, end="")
+                next_task = _selector_result(selector_output, tasks_dir=tasks_dir)
+                if next_task is None:
+                    print("\nCompleted.")
+                    return
+                if isinstance(next_task, Path):
+                    break
 
-            if "".join(output.split()) == "COMPLETE":
-                print("\nCompleted.")
-                break
+            runner_output = _run_command(runner_command, next_task)
+            _append_log(log_file, "", runner_output)
+            _print_output(runner_output)
     except KeyboardInterrupt:
         print("\nInterrupted")
         raise SystemExit(130)

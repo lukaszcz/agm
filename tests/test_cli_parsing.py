@@ -472,7 +472,9 @@ class TestLoop:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command_name is None
-        assert calls[0].command is None
+        assert calls[0].runner is None
+        assert calls[0].runner_args == []
+        assert calls[0].selector is None
         assert calls[0].tasks_dir is None
         assert calls[0].no_log is False
         assert calls[0].log_file is None
@@ -485,25 +487,37 @@ class TestLoop:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command_name == "codex"
-        assert calls[0].command is None
+        assert calls[0].runner is None
+        assert calls[0].runner_args == []
+        assert calls[0].selector is None
 
-    def test_loop_with_command_short(
+    def test_loop_with_runner(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
-        result = invoke(runner, ["loop", "-c", "opencode prompt"])
+        result = invoke(runner, ["loop", "--runner", "opencode prompt"])
         assert result.exit_code == 0
         assert len(calls) == 1
-        assert calls[0].command == "opencode prompt"
+        assert calls[0].runner == "opencode prompt"
 
-    def test_loop_with_command_long(
+    def test_loop_with_runner_args_after_separator(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
-        result = invoke(runner, ["loop", "--command", "codex exec"])
+        result = invoke(runner, ["loop", "claude", "--", "-p", "--model", "sonnet"])
         assert result.exit_code == 0
         assert len(calls) == 1
-        assert calls[0].command == "codex exec"
+        assert calls[0].command_name == "claude"
+        assert calls[0].runner_args == ["-p", "--model", "sonnet"]
+
+    def test_loop_with_selector(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--selector", "claude -p"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].selector == "claude -p"
 
     def test_loop_with_tasks_dir(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch

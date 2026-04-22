@@ -140,11 +140,18 @@ def _command_with_prompt_target(command: list[str], target: Path) -> list[str]:
     return [*command, f"@{target}"]
 
 
-def _run_command(command: list[str], target: Path) -> str:
+def _loop_env(tasks_dir: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    env["TASKS_DIR"] = str(tasks_dir)
+    return env
+
+
+def _run_command(command: list[str], target: Path, *, env: dict[str, str]) -> str:
     result = subprocess.run(
         _command_with_prompt_target(command, target),
         capture_output=True,
         text=True,
+        env=env,
         check=False,
     )
     output = result.stdout
@@ -191,6 +198,8 @@ def _cleanup_temp_files(temp_files: list[Path]) -> None:
 
 def run(args: LoopArgs) -> None:
     temp_files: list[Path] = []
+    tasks_dir = _tasks_dir(args)
+    loop_env = _loop_env(tasks_dir)
     runner_command = _runner_command(args)
     selector_command = _selector_command(args)
     _validate_command(runner_command, kind="runner")
@@ -204,7 +213,7 @@ def run(args: LoopArgs) -> None:
             if not prompt_file.is_file():
                 print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
                 raise SystemExit(1)
-            prompt_file = preprocess_prompt_file(prompt_file, temp_files=temp_files, env=os.environ)
+            prompt_file = preprocess_prompt_file(prompt_file, temp_files=temp_files, env=loop_env)
 
         progress_file = _progress_file(args)
         if selector_command is None and not progress_file.is_file():
@@ -213,9 +222,9 @@ def run(args: LoopArgs) -> None:
                 print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
                 raise SystemExit(1)
             bootstrap_prompt_file = preprocess_prompt_file(
-                bootstrap_prompt_file, temp_files=temp_files, env=os.environ
+                bootstrap_prompt_file, temp_files=temp_files, env=loop_env
             )
-            _run_command(runner_command, bootstrap_prompt_file)
+            _run_command(runner_command, bootstrap_prompt_file, env=loop_env)
 
         selector_prompt_file: Path | None = None
         if selector_command is not None:
@@ -224,7 +233,7 @@ def run(args: LoopArgs) -> None:
                 print(f"Error: prompt file not found: {selector_prompt_file}", file=sys.stderr)
                 raise SystemExit(1)
             selector_prompt_file = preprocess_prompt_file(
-                selector_prompt_file, temp_files=temp_files, env=os.environ
+                selector_prompt_file, temp_files=temp_files, env=loop_env
             )
 
         log_file = _log_file(args)
@@ -242,7 +251,7 @@ def run(args: LoopArgs) -> None:
 
             if selector_command is None:
                 assert prompt_file is not None
-                output = _run_command(runner_command, prompt_file)
+                output = _run_command(runner_command, prompt_file, env=loop_env)
                 _append_log(log_file, header, output)
                 _print_output(output)
                 if "".join(output.split()) == "COMPLETE":
@@ -251,9 +260,8 @@ def run(args: LoopArgs) -> None:
                 continue
 
             assert selector_prompt_file is not None
-            tasks_dir = _tasks_dir(args)
             while True:
-                selector_output = _run_command(selector_command, selector_prompt_file)
+                selector_output = _run_command(selector_command, selector_prompt_file, env=loop_env)
                 _append_log(log_file, header, selector_output)
                 _print_output(selector_output)
 
@@ -264,7 +272,7 @@ def run(args: LoopArgs) -> None:
                 if isinstance(next_task, Path):
                     break
 
-            runner_output = _run_command(runner_command, next_task)
+            runner_output = _run_command(runner_command, next_task, env=loop_env)
             _append_log(log_file, "", runner_output)
             _print_output(runner_output)
     except KeyboardInterrupt:

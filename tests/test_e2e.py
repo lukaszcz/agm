@@ -2773,6 +2773,62 @@ class TestLoop:
             "loop expanded ${MISSING}\n"
         )
 
+    def test_preprocesses_loop_prompts_with_resolved_tasks_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+        env["FAKE_RUNNER_STATE"] = str(tmp_path / "runner-count")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'state_file="${FAKE_RUNNER_STATE:?FAKE_RUNNER_STATE must be set}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
+                'printf -- "---\\n" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file"\n'
+                'case "$count" in\n'
+                '  1) printf "keep going\\n" ;;\n'
+                '  2) printf "COMPLETE\\n" ;;\n'
+                '  *) printf "COMPLETE\\n" ;;\n'
+                "esac\n"
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        tasks_dir = work / "custom" / "tasks"
+
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text(f"progress $TASKS_DIR\nliteral {tasks_dir}\n")
+        loop_prompt = prompt_dir / "loop.md"
+        loop_prompt.write_text(f"loop $TASKS_DIR\nliteral {tasks_dir}\n")
+
+        result = run_agm(
+            ["loop", "--runner", "runner", "--tasks-dir", "custom/tasks"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert Path(env["FAKE_RUNNER_LOG"]).read_text() == (
+            f"---\nprogress {tasks_dir}\nliteral {tasks_dir}\n"
+            f"---\nloop {tasks_dir}\nliteral {tasks_dir}\n"
+        )
+
     def test_uses_configured_loop_command(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -3020,6 +3076,87 @@ class TestLoop:
         ]
         assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
             f"@{tasks_dir / 'task-1.md'}"
+        ]
+
+    def test_loop_exposes_resolved_tasks_dir_to_selector_and_runner(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_SELECTOR_STATE"] = str(tmp_path / "selector-count")
+        env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
+                'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'printf "%s|%s\\n" "$TASKS_DIR" "$*" >> "$log_file"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
+                'cat "$prompt_file" >> "$log_file"\n'
+                'case "$count" in\n'
+                '  1) printf "task-1.md\\n" ;;\n'
+                '  2) printf " COMPLETE \\n" ;;\n'
+                '  *) printf "COMPLETE\\n" ;;\n'
+                "esac\n"
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'printf "%s|%s\\n" "$TASKS_DIR" "$*" >> "$log_file"\n'
+                'printf "implemented task\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        tasks_dir = work / "custom" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "task-1.md").write_text("task one\n")
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text(f"update $TASKS_DIR\nliteral {tasks_dir}\n")
+
+        result = run_agm(
+            [
+                "loop",
+                "--runner",
+                "runner",
+                "--selector",
+                "selector",
+                "--tasks-dir",
+                "custom/tasks",
+            ],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        selector_log_lines = Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines()
+        assert len(selector_log_lines) == 6
+        assert selector_log_lines[0].startswith(f"{tasks_dir}|@")
+        assert selector_log_lines[1:3] == [f"update {tasks_dir}", f"literal {tasks_dir}"]
+        assert selector_log_lines[3].startswith(f"{tasks_dir}|@")
+        assert selector_log_lines[4:6] == [f"update {tasks_dir}", f"literal {tasks_dir}"]
+        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
+            f"{tasks_dir}|@{tasks_dir / 'task-1.md'}"
         ]
 
     def test_loop_replaces_prompt_placeholder_in_selector(

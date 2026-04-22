@@ -9,6 +9,7 @@ from click.testing import CliRunner, Result
 from typer.main import get_command
 
 import agm.cli as cli
+from agm.core import dry_run as dry_run_state
 
 
 class RecordedArgs(Protocol):
@@ -239,9 +240,39 @@ class TestFetch:
         assert result.exit_code == 0
         assert len(calls) == 1
 
+    def test_fetch_accepts_global_dry_run(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observed: list[bool] = []
+
+        def record(args: object) -> None:
+            del args
+            observed.append(dry_run_state.enabled())
+
+        monkeypatch.setattr(cli.fetch_command, "run", record)
+        result = invoke(runner, ["--dry-run", "fetch"])
+        assert result.exit_code == 0
+        assert observed == [True]
+
     def test_fetch_rejects_args(self, runner: CliRunner) -> None:
         result = invoke(runner, ["fetch", "extra"])
         assert result.exit_code != 0
+
+
+class TestDryRun:
+    def test_open_accepts_command_level_dry_run(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observed: list[bool] = []
+
+        def record(args: RecordedArgs) -> None:
+            observed.append(dry_run_state.enabled())
+            assert args.branch == "repo"
+
+        monkeypatch.setattr(cli.open_command, "run", record)
+        result = invoke(runner, ["open", "--dry-run", "repo"])
+        assert result.exit_code == 0
+        assert observed == [True]
 
 
 class TestInit:

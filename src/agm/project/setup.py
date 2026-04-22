@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.core import dry_run
 from agm.core.env import source_env_files
 from agm.core.process import require_success
 from agm.project.layout import (
@@ -75,5 +76,7 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
             except ValueError:
                 setup_label = setup_path
         print(f"Running {setup_label}...")
+        if dry_run.enabled():
+            dry_run.print_operation("run-setup", str(setup_path))
         require_success(["bash", str(setup_path)], cwd=checkout_dir, env=setup_env)
     print(f"Setup complete for {target_name}.")

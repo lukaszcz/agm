@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+from agm.core import dry_run
+
 
 def _write_stream(stream: TextIO, data: str) -> None:
     if data:
@@ -67,6 +69,9 @@ def require_success(
 ) -> None:
     """Run a command in the foreground and exit if it fails."""
 
+    if dry_run.enabled():
+        dry_run.print_command(cmd, cwd=cwd)
+        return
     returncode = run_foreground(cmd, cwd=cwd, env=env)
     if returncode != 0:
         raise SystemExit(returncode)

@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agm.core import dry_run
 from agm.parser import exit_with_usage_error
 from agm.tmux.layout import apply_layout
 
@@ -77,6 +78,53 @@ def create_tmux_session(
         session_name_args = ["-s", session_name]
 
     if create_detached_session:
+        if dry_run.enabled():
+            planned_session = session_name or "0"
+            dry_run.print_command(
+                [
+                    "tmux",
+                    "new-session",
+                    "-dP",
+                    "-F",
+                    "#{session_name}",
+                    "-c",
+                    str(current),
+                    *tmux_env_args,
+                    *session_name_args,
+                ],
+                cwd=current,
+            )
+            for _ in range(1, pane_total):
+                dry_run.print_command(
+                    [
+                        "tmux",
+                        "split-window",
+                        "-d",
+                        "-h",
+                        "-t",
+                        f"{planned_session}:0",
+                        "-c",
+                        str(current),
+                    ],
+                    cwd=current,
+                )
+            dry_run.print_operation("tmux-layout", f"{planned_session}:0 {pane_total} panes")
+            dry_run.print_command(
+                ["tmux", "select-pane", "-t", f"{planned_session}:0.0"],
+                cwd=current,
+            )
+            if switch_to_session:
+                dry_run.print_command(
+                    ["tmux", "switch-client", "-t", planned_session],
+                    cwd=current,
+                )
+            elif not detach:
+                dry_run.print_command(
+                    ["tmux", "attach-session", "-t", planned_session],
+                    cwd=current,
+                )
+            print(f"Detached tmux session {planned_session} created")
+            return planned_session
         result = subprocess.run(
             [
                 "tmux",
@@ -179,6 +227,9 @@ def create_tmux_session(
     for _ in range(1, pane_total):
         args.extend([";", "split-window", "-d", "-h", "-c", str(current)])
     args.extend([";", "run-shell", layout_command, ";", "select-pane", "-t", "0"])
+    if dry_run.enabled():
+        dry_run.print_command(args, cwd=current)
+        return None
     raise SystemExit(subprocess.run(args, cwd=current, env=resolved_env, check=False).returncode)
 
 
@@ -194,6 +245,12 @@ def queue_command_in_session(
     current = Path.cwd() if cwd is None else cwd.resolve()
     resolved_env = dict(os.environ if env is None else env)
     shell_command = " ".join(shlex.quote(part) for part in command)
+    if dry_run.enabled():
+        dry_run.print_command(
+            ["tmux", "send-keys", "-t", f"{session_name}:0.0", shell_command, "C-m"],
+            cwd=current,
+        )
+        return
     status = subprocess.run(
         ["tmux", "send-keys", "-t", f"{session_name}:0.0", shell_command, "C-m"],
         cwd=current,
@@ -219,6 +276,9 @@ def focus_tmux_session(
         if resolved_env.get("TMUX")
         else ["tmux", "attach-session", "-t", session_name]
     )
+    if dry_run.enabled():
+        dry_run.print_command(command, cwd=current)
+        return 0
     return subprocess.run(command, cwd=current, env=resolved_env, check=False).returncode
 
 
@@ -232,6 +292,9 @@ def kill_tmux_session(
 
     current = Path.cwd() if cwd is None else cwd.resolve()
     resolved_env = dict(os.environ if env is None else env)
+    if dry_run.enabled():
+        dry_run.print_command(["tmux", "kill-session", "-t", session_name], cwd=current)
+        return 0
     return subprocess.run(
         ["tmux", "kill-session", "-t", session_name],
         cwd=current,

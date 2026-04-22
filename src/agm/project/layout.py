@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.core.process import run_foreground
+from agm.core.process import require_success
 
 CONFIG_FILES: list[str] = [
     ".setup.sh",
@@ -28,7 +28,7 @@ def _copy_existing_config_files(source_dir: Path, target_dir: Path) -> None:
     ]
     if not existing_paths:
         return
-    run_foreground(["cp", "-r", *existing_paths, str(target_dir)])
+    require_success(["cp", "-r", *existing_paths, str(target_dir)])
 
 
 def _resolved_cwd(cwd: Path | None = None) -> Path:

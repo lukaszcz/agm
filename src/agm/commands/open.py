@@ -7,6 +7,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.commands.args import OpenArgs
+from agm.core.fs import mkdir
 from agm.parser import exit_with_usage_error
 from agm.project.layout import (
     branch_session_name,
@@ -146,7 +147,7 @@ def new_session(
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
-    repo_path.mkdir(parents=True, exist_ok=True)
+    mkdir(repo_path, parents=True, exist_ok=True)
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
@@ -178,7 +179,7 @@ def checkout_session(
     validate_pane_count(pane_count)
     proj_dir = current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
-    repo_path.mkdir(parents=True, exist_ok=True)
+    mkdir(repo_path, parents=True, exist_ok=True)
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(

@@ -1807,6 +1807,17 @@ class TestInit:
             assert (proj / d).is_dir()
         assert not list((proj / "repo").iterdir())
 
+    def test_init_dry_run_prints_operations_without_creating_project(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(["--dry-run", "init", "sample"], env=env, cwd=str(tmp_path))
+
+        assert result.returncode == 0
+        assert not (tmp_path / "sample").exists()
+        assert "dry-run: agm mkdir" in result.stdout
+        assert "dry-run: agm write-file" in result.stdout
+        assert "dry-run: agm chmod" in result.stdout
+
     def test_init_auto_detects_embedded_layout_for_existing_git_repo(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -3557,6 +3568,25 @@ class TestOpen:
         assert "Detached tmux session proj/feat/test created" in result.stdout
         assert "true" not in result.stdout
         assert "cannot stat" not in result.stderr
+
+    def test_open_dry_run_prints_planned_commands_without_side_effects(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        result = run_agm(["open", "--dry-run", "feat/test"], env=env, cwd=str(project))
+
+        assert result.returncode == 0
+        assert not (project / "worktrees" / "feat/test").exists()
+        assert not tmux_log.exists()
+        assert "dry-run: agm mkdir" in result.stdout
+        assert "git -C" in result.stdout
+        assert "worktree add -b feat/test" in result.stdout
+        assert "tmux new-session" in result.stdout
+        assert "tmux send-keys" in result.stdout
 
     def test_open_missing_branch_detached_keeps_current_session(
         self, tmp_path: Path, env: dict[str, str]

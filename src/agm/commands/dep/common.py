@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.core.fs import is_dir, rglob
 from agm.core.process import run_capture
 
 
@@ -70,8 +71,8 @@ def default_branch_from_repo(repo_path: Path, *, env: dict[str, str] | None = No
 def main_dep_repo(dep_dir: Path) -> Path:
     """Return the main checked-out dependency repo under *dep_dir*."""
 
-    for path in sorted(candidate for candidate in dep_dir.rglob("*") if candidate.is_dir()):
-        if (path / ".git").is_dir() and git_helpers.is_git_repo(path):
+    for path in sorted(candidate for candidate in rglob(dep_dir, "*") if is_dir(candidate)):
+        if is_dir(path / ".git") and git_helpers.is_git_repo(path):
             return path
     print(
         f"error: {dep_dir} must contain a main checked out branch",

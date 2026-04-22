@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 import typer
 
@@ -42,6 +43,7 @@ from agm.commands.args import (
     WorktreeRemoveArgs,
     WorktreeSetupArgs,
 )
+from agm.core import dry_run
 from agm.parser import (
     exit_with_usage_error,
     print_command_help,
@@ -72,6 +74,13 @@ def _command_path_from_context(ctx: typer.Context) -> list[str]:
     return path
 
 
+def _root_context(ctx: typer.Context) -> typer.Context:
+    current = ctx
+    while current.parent is not None:
+        current = current.parent
+    return current
+
+
 def _print_context_help(ctx: typer.Context, param: object, value: bool) -> None:
     del param
     if not value or ctx.resilient_parsing:
@@ -92,6 +101,26 @@ def _help_option() -> bool:
         callback=_print_context_help,
         expose_value=False,
         is_eager=True,
+    )
+
+
+def _set_dry_run(ctx: typer.Context, param: object, value: bool) -> None:
+    del param
+    root = _root_context(ctx)
+    root_meta = cast(dict[str, bool], getattr(root, "meta"))
+    enabled = value or bool(root_meta.get("dry_run"))
+    root_meta["dry_run"] = enabled
+    dry_run.set_enabled(enabled)
+
+
+def _dry_run_option() -> bool:
+    return typer.Option(
+        False,
+        "--dry-run",
+        callback=_set_dry_run,
+        expose_value=False,
+        is_eager=True,
+        help="Print commands and AGM operations without executing them.",
     )
 
 
@@ -120,8 +149,13 @@ tmux_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_c
 
 
 @app.callback(invoke_without_command=True)
-def main_callback(ctx: typer.Context, _help: bool = _help_option()) -> None:
+def main_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
     del _help
+    del _dry_run
     if ctx.invoked_subcommand is None:
         print_overview()
         raise typer.Exit()
@@ -135,8 +169,10 @@ def help(
         autocompletion=completion.complete_help_path,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     if not help_command:
         print_overview()
         raise typer.Exit()
@@ -172,8 +208,10 @@ def open(
         autocompletion=completion.complete_worktree_branch,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     open_command.run(
         OpenArgs(
             detached=detached,
@@ -192,8 +230,10 @@ def close(
         autocompletion=completion.complete_close_branch,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     close_command.run(
         CloseArgs(
             branch=_require_value(
@@ -206,8 +246,13 @@ def close(
 
 
 @config_app.callback(invoke_without_command=True)
-def config_callback(ctx: typer.Context, _help: bool = _help_option()) -> None:
+def config_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
     del _help
+    del _dry_run
     if ctx.invoked_subcommand is None:
         print_help_for_command_path(["config"])
         raise typer.Exit()
@@ -221,8 +266,10 @@ def config_cp(
         autocompletion=completion.complete_path_argument,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     config_copy_command.run(
         ConfigCopyArgs(
             config_command="cp",
@@ -239,8 +286,10 @@ def config_copy(
         autocompletion=completion.complete_path_argument,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     config_copy_command.run(
         ConfigCopyArgs(
             config_command="copy",
@@ -250,8 +299,13 @@ def config_copy(
 
 
 @worktree_app.callback(invoke_without_command=True)
-def worktree_callback(ctx: typer.Context, _help: bool = _help_option()) -> None:
+def worktree_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
     del _help
+    del _dry_run
     if ctx.invoked_subcommand is None:
         print_help_for_command_path([ctx.info_name or "worktree"])
         raise typer.Exit()
@@ -272,8 +326,10 @@ def new(
         autocompletion=completion.complete_path_argument,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     worktree_new_command.run(
         WorktreeNewArgs(
             worktrees_dir=str(worktrees_dir) if worktrees_dir is not None else None,
@@ -283,8 +339,9 @@ def new(
 
 
 @worktree_app.command()
-def setup(_help: bool = _help_option()) -> None:
+def setup(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
     del _help
+    del _dry_run
     worktree_setup_command.run(WorktreeSetupArgs(wt_command="setup"))
 
 
@@ -299,8 +356,10 @@ def worktree_rm(
         False, "-f", "--force", help="Force removal of locked or dirty worktrees."
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     worktree_remove_command.run(
         WorktreeRemoveArgs(
             force=force,
@@ -320,8 +379,10 @@ def worktree_remove(
         False, "-f", "--force", help="Force removal of locked or dirty worktrees."
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     worktree_remove_command.run(
         WorktreeRemoveArgs(
             force=force,
@@ -331,8 +392,13 @@ def worktree_remove(
 
 
 @dep_app.callback(invoke_without_command=True)
-def dep_callback(ctx: typer.Context, _help: bool = _help_option()) -> None:
+def dep_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
     del _help
+    del _dry_run
     if ctx.invoked_subcommand is None:
         print_help_for_command_path(["dep"])
         raise typer.Exit()
@@ -345,8 +411,10 @@ def new_dep(
         None, "-b", "--branch", help="Clone BRANCH instead of the default branch."
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     dep_new_command.run(
         DepNewArgs(
             branch=branch,
@@ -375,8 +443,10 @@ def dep_switch(
         False, "-b", "--branch", help="Create the branch from the default branch."
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     if dep is None or branch is None:
         _missing_arguments(["dep", "switch"], ["dep", "branch"])
     assert dep is not None
@@ -395,8 +465,10 @@ def dep_rm(
     ),
     all: bool = typer.Option(False, "--all", help="Remove the entire dependency directory."),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     dep_remove_command.run(
         DepRemoveArgs(
             all=all,
@@ -410,8 +482,9 @@ def dep_rm(
 
 
 @app.command()
-def fetch(_help: bool = _help_option()) -> None:
+def fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
     del _help
+    del _dry_run
     fetch_command.run(object())
 
 
@@ -449,8 +522,10 @@ def loop(
         help="Write loop output to this log file.",
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     if no_log and log_file is not None:
         exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
     runner_args = run_command.normalize_run_command(list(ctx.args))
@@ -477,8 +552,10 @@ def init(
         None, "-b", "--branch", help="Clone this branch when a repository URL is provided."
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     if embedded and workspace:
         exit_with_usage_error(["init"], "error: --embedded and --workspace are mutually exclusive")
     if arg1 is None:
@@ -521,8 +598,10 @@ def run(
         help="Set MemoryMax; <= 0 disables memory limiting.",
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     command = [] if run_command_args is None else list(run_command_args)
     if command and command[0].startswith("-") and command[0] != "--":
         exit_with_usage_error(["run"], f"error: unrecognized arguments: {' '.join(command)}")
@@ -540,8 +619,13 @@ def run(
 
 
 @tmux_app.callback(invoke_without_command=True)
-def tmux_callback(ctx: typer.Context, _help: bool = _help_option()) -> None:
+def tmux_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
     del _help
+    del _dry_run
     if ctx.invoked_subcommand is None:
         print_help_for_command_path(["tmux"])
         raise typer.Exit()
@@ -563,8 +647,10 @@ def tmux_open(
         autocompletion=completion.complete_pane_count,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     tmux_open_command.run(
         TmuxOpenArgs(detach=detach, pane_count=pane_count, session_name=session_name)
     )
@@ -578,8 +664,10 @@ def tmux_close(
         autocompletion=completion.complete_tmux_session,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     tmux_close_command.run(
         TmuxCloseArgs(
             session_name=_require_value(
@@ -606,8 +694,10 @@ def tmux_layout(
         autocompletion=completion.complete_tmux_window,
     ),
     _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _dry_run
     tmux_layout_command.run(
         TmuxLayoutArgs(
             pane_count=_require_value(pane_count, command_path=["tmux", "layout"], name="panes"),

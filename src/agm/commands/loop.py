@@ -12,7 +12,9 @@ from pathlib import Path
 
 from agm.commands.args import LoopArgs
 from agm.config.general import LoopConfig, load_loop_config
+from agm.core import dry_run
 from agm.core.env import agm_installation_prefix
+from agm.core.fs import append_text, is_file, mkdir, unlink
 from agm.core.prompt import preprocess_prompt_file
 
 
@@ -39,7 +41,7 @@ def _prompt_dir_candidates() -> list[Path]:
 def _prompt_file(filename: str) -> Path:
     candidates = [prompt_dir / filename for prompt_dir in _prompt_dir_candidates()]
     for candidate in candidates:
-        if candidate.is_file():
+        if is_file(candidate):
             return candidate
     return candidates[-1]
 
@@ -167,9 +169,7 @@ def _run_command(command: list[str], target: Path, *, env: dict[str, str]) -> st
 def _append_log(log_file: Path | None, header: str, output: str) -> None:
     if log_file is None:
         return
-    with log_file.open("a", encoding="utf-8") as handle:
-        handle.write(header)
-        handle.write(output)
+    append_text(log_file, header + output, encoding="utf-8")
 
 
 def _print_output(output: str) -> None:
@@ -187,7 +187,7 @@ def _selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
     task_path = Path(selected)
     if not task_path.is_absolute():
         task_path = tasks_dir / task_path
-    if not task_path.is_file():
+    if not is_file(task_path):
         return selected
     return task_path
 
@@ -195,7 +195,7 @@ def _selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
 def _cleanup_temp_files(temp_files: list[Path]) -> None:
     for temp_file in temp_files:
         try:
-            temp_file.unlink()
+            unlink(temp_file)
         except FileNotFoundError:
             pass
 
@@ -214,15 +214,15 @@ def run(args: LoopArgs) -> None:
         prompt_file: Path | None = None
         if selector_command is None:
             prompt_file = _prompt_file("loop.md")
-            if not prompt_file.is_file():
+            if not is_file(prompt_file):
                 print(f"Error: prompt file not found: {prompt_file}", file=sys.stderr)
                 raise SystemExit(1)
             prompt_file = preprocess_prompt_file(prompt_file, temp_files=temp_files, env=loop_env)
 
         progress_file = _progress_file(args)
-        if selector_command is None and not progress_file.is_file():
+        if selector_command is None and not is_file(progress_file):
             bootstrap_prompt_file = _prompt_file("update_progress.md")
-            if not bootstrap_prompt_file.is_file():
+            if not is_file(bootstrap_prompt_file):
                 print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
                 raise SystemExit(1)
             bootstrap_prompt_file = preprocess_prompt_file(
@@ -233,7 +233,7 @@ def run(args: LoopArgs) -> None:
         selector_prompt_file: Path | None = None
         if selector_command is not None:
             selector_prompt_file = _prompt_file("update_progress.md")
-            if not selector_prompt_file.is_file():
+            if not is_file(selector_prompt_file):
                 print(f"Error: prompt file not found: {selector_prompt_file}", file=sys.stderr)
                 raise SystemExit(1)
             selector_prompt_file = preprocess_prompt_file(
@@ -245,7 +245,24 @@ def run(args: LoopArgs) -> None:
             print(
                 f"Logging to {log_file if args.log_file is not None else log_file.name}"
             )
-            log_file.parent.mkdir(parents=True, exist_ok=True)
+            mkdir(log_file.parent, parents=True, exist_ok=True)
+
+        if dry_run.enabled():
+            if selector_command is None:
+                target = prompt_file if prompt_file is not None else _prompt_file("loop.md")
+                dry_run.print_command(_command_with_prompt_target(runner_command, target))
+            else:
+                assert selector_prompt_file is not None
+                selector_args = _command_with_prompt_target(
+                    selector_command,
+                    selector_prompt_file,
+                )
+                dry_run.print_command(selector_args)
+                dry_run.print_operation(
+                    "loop-runner",
+                    "subsequent runner invocations depend on selector output",
+                )
+            return
 
         step = 1
         while True:

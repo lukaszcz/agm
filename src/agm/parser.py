@@ -334,6 +334,7 @@ def _overview_text() -> str:
         [
             "",
             "Global options:",
+            "  --dry-run             Print planned commands and AGM operations only.",
             "  --install-completion  Install shell completion for the current shell.",
             "  --show-completion     Print the shell completion script.",
             "",

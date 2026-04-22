@@ -8,6 +8,7 @@ from typing import Sequence
 
 import agm.vcs.git as git_helpers
 from agm.commands.args import InitArgs
+from agm.core.fs import chmod, exists, is_empty_dir, mkdir, read_text, stat, write_text
 from agm.core.process import require_success
 from agm.project.layout import (
     default_worktrees_dir,
@@ -41,28 +42,28 @@ def derive_project_name(repo_url: str) -> str:
 
 
 def write_file_if_missing(path: Path, content: str) -> None:
-    if path.exists():
+    if exists(path):
         return
-    path.write_text(f"{content}\n", encoding="utf-8")
+    write_text(path, f"{content}\n", encoding="utf-8")
 
 
 def ensure_gitignore_entry(path: Path, entry: str) -> None:
-    if path.exists():
-        content = path.read_text(encoding="utf-8")
+    if exists(path):
+        content = read_text(path, encoding="utf-8")
         existing_lines = content.splitlines()
         if entry in existing_lines:
             return
         suffix = "" if content.endswith("\n") else "\n"
-        path.write_text(f"{content}{suffix}{entry}\n", encoding="utf-8")
+        write_text(path, f"{content}{suffix}{entry}\n", encoding="utf-8")
         return
-    path.write_text(f"{entry}\n", encoding="utf-8")
+    write_text(path, f"{entry}\n", encoding="utf-8")
 
 
 def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
     layout_dirs: Sequence[Path]
     if embedded:
         data_dir = project_dir / ".agm"
-        data_dir.mkdir(parents=True, exist_ok=True)
+        mkdir(data_dir, parents=True, exist_ok=True)
         ensure_gitignore_entry(project_dir / ".gitignore", ".agm")
         config_dir = data_dir / "config"
         layout_dirs = (
@@ -72,7 +73,7 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
             data_dir / "worktrees",
         )
     else:
-        project_dir.mkdir(parents=True, exist_ok=True)
+        mkdir(project_dir, parents=True, exist_ok=True)
         config_dir = project_config_dir(project_dir)
         layout_dirs = (
             project_dir / "repo",
@@ -82,7 +83,7 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
             default_worktrees_dir(project_dir),
         )
     for dirname in layout_dirs:
-        dirname.mkdir(parents=True, exist_ok=True)
+        mkdir(dirname, parents=True, exist_ok=True)
 
     write_file_if_missing(
         config_dir / "env.sh",
@@ -93,7 +94,8 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
         setup_path,
         "# Initialize a newly created worktree here.",
     )
-    setup_path.chmod(setup_path.stat().st_mode | 0o111)
+    setup_mode = 0o755 if not exists(setup_path) else stat(setup_path).st_mode | 0o111
+    chmod(setup_path, setup_mode)
 
 
 def use_embedded_layout(args: InitArgs, *, project_dir: Path, repo_url: str) -> bool:
@@ -103,7 +105,7 @@ def use_embedded_layout(args: InitArgs, *, project_dir: Path, repo_url: str) -> 
         return False
     if repo_url:
         return False
-    if project_dir.exists() and git_helpers.is_git_repo(project_dir):
+    if exists(project_dir) and git_helpers.is_git_repo(project_dir):
         print("git repo detected, choosing embedded layout")
         return True
     return False
@@ -138,7 +140,7 @@ def run(args: InitArgs) -> None:
         return
 
     repo_dir = project_repo_dir(project_dir) if embedded_layout else project_dir / "repo"
-    if repo_dir.exists() and any(repo_dir.iterdir()):
+    if exists(repo_dir) and not is_empty_dir(repo_dir):
         display_dir = proj if embedded_layout else f"{proj}/repo"
         print(f"error: {display_dir} already exists and is not empty", file=sys.stderr)
         raise SystemExit(1)

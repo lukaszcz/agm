@@ -3127,7 +3127,7 @@ class TestLoop:
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
-    def test_loop_replaces_prompt_placeholder_in_configured_runner(
+    def test_loop_replaces_prompt_file_placeholder_in_configured_runner(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         _install_fake_claude(tmp_path / "bin", env)
@@ -3136,7 +3136,9 @@ class TestLoop:
 
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude -p %{PROMPT}"\n')
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude -p %{PROMPT_FILE}"\n'
+        )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_file = prompt_dir / "loop.md"
@@ -3346,7 +3348,7 @@ class TestLoop:
             f"{tasks_dir}|@{tasks_dir / 'task-1.md'}"
         ]
 
-    def test_loop_replaces_prompt_placeholder_in_selector(
+    def test_loop_replaces_prompt_file_placeholder_in_selector(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["FAKE_SELECTOR_STATE"] = str(tmp_path / "selector-count")
@@ -3398,7 +3400,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector %{PROMPT}", "runner"],
+            ["loop", "--runner", "runner", "--selector", "selector %{PROMPT_FILE}", "runner"],
             env=env,
             cwd=str(work),
         )

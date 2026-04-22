@@ -127,7 +127,7 @@ def _validate_command(command: list[str], *, kind: str) -> None:
 
 def _command_with_prompt_target(command: list[str], target: Path) -> list[str]:
     prompt_path = str(target)
-    placeholders = ("%%", "%{PROMPT}")
+    placeholders = ("%%", "%{PROMPT_FILE}")
     replaced_command: list[str] = []
     replaced = False
 

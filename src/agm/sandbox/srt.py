@@ -101,7 +101,8 @@ def _print_dry_run(
     process_prefix: list[str],
 ) -> None:
     if settings_file is not None:
-        dry_run.print_operation("sandbox-settings", f"use {settings_file}")
+        settings_source = "explicit"
+        settings_detail = settings_file
     else:
         settings_candidates = sandbox_settings_candidates(
             cwd=cwd,
@@ -110,14 +111,19 @@ def _print_dry_run(
             command_name=command_name,
             alias_command_name=alias_command_name,
         )
-        dry_run.print_operation(
-            "sandbox-settings",
-            "merge " + ", ".join(str(path) for path in settings_candidates),
-        )
-    if patch_proj_dir is not None:
-        dry_run.print_operation("patch-sandbox-settings", str(patch_proj_dir))
+        settings_source = "merged"
+        settings_detail = ", ".join(str(path) for path in settings_candidates)
 
-    dry_run.print_command(
+    dry_run.print_configuration("sandbox")
+    dry_run.print_detail("settings source", settings_source)
+    dry_run.print_detail("settings candidates", settings_detail)
+    dry_run.print_detail(
+        "patch proj dir path",
+        str(patch_proj_dir) if patch_proj_dir is not None else "disabled",
+    )
+
+    dry_run.print_labeled_command(
+        "sandbox",
         [*process_prefix, "srt", "--settings", "<dry-run-settings>", "--", *command],
         cwd=cwd,
     )

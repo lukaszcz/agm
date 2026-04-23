@@ -90,7 +90,11 @@ def _dry_run_prompt_text(prompt: PreparedPrompt) -> str:
 
 
 def _print_dry_run_command(label: str, command: list[str]) -> None:
-    print(f"dry-run: command [{label}]: {dry_run.format_command(command)}")
+    dry_run.print_labeled_command(label, command)
+
+
+def _print_dry_run_prompt(label: str, prompt_text: str) -> None:
+    print(f"dry-run: prompt [{label}]: {prompt_text}")
 
 
 def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
@@ -160,29 +164,26 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
 
 
 def print_dry_run(runtime: LoopStepRuntime) -> None:
-    print("dry-run: loop configuration")
-    print(f"dry-run:   tasks dir: {runtime.resolved_tasks_dir}")
-    print(f"dry-run:   progress file: {runtime.resolved_progress_file}")
-    print(
-        "dry-run:   log file: "
-        f"{runtime.log_file if runtime.log_file is not None else 'disabled'}"
+    dry_run.print_configuration("loop")
+    dry_run.print_detail("tasks dir", str(runtime.resolved_tasks_dir))
+    dry_run.print_detail("progress file", str(runtime.resolved_progress_file))
+    dry_run.print_detail(
+        "log file",
+        str(runtime.log_file) if runtime.log_file is not None else "disabled",
     )
-    print(
-        "dry-run:   runner command: "
-        f"{dry_run.format_command(runtime.resolved_runner_command)}"
-    )
+    dry_run.print_detail("runner command", dry_run.format_command(runtime.resolved_runner_command))
     selector_command_text = (
         dry_run.format_command(runtime.resolved_selector_command)
         if runtime.resolved_selector_command is not None
         else "disabled"
     )
-    print(f"dry-run:   selector command: {selector_command_text}")
+    dry_run.print_detail("selector command", selector_command_text)
 
     prompts = [runtime.bootstrap_prompt, runtime.selector_prompt, runtime.loop_prompt]
     for prompt in prompts:
         if prompt is None:
             continue
-        print(f"dry-run: prompt [{prompt.label}]: {_dry_run_prompt_text(prompt)}")
+        _print_dry_run_prompt(prompt.label, _dry_run_prompt_text(prompt))
 
     if runtime.bootstrap_prompt is not None:
         _print_dry_run_command(

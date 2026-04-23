@@ -147,6 +147,18 @@ def run(args: RunArgs) -> None:
         resolved_env, effective_memory_limit
     )
     if dry_run.enabled():
+        dry_run_memory_limit = (
+            effective_memory_limit
+            if effective_memory_limit is not None and _memory_limit_enabled(effective_memory_limit)
+            else "disabled"
+        )
+        dry_run.print_configuration("run")
+        dry_run.print_detail("cwd", str(current))
+        dry_run.print_detail("sandbox", "disabled" if run_args.no_sandbox else "enabled")
+        dry_run.print_detail("patch proj dir", "disabled" if run_args.no_patch else "enabled")
+        dry_run.print_detail("command name", command_name)
+        dry_run.print_detail("alias command", command_alias or "disabled")
+        dry_run.print_detail("memory limit", dry_run_memory_limit)
         if not run_args.no_sandbox:
             srt.run_sandboxed(
                 command=effective_run_command,
@@ -166,7 +178,7 @@ def run(args: RunArgs) -> None:
             )
             return
         subprocess_args = [*process_prefix, *effective_run_command]
-        dry_run.print_command(subprocess_args, cwd=current)
+        dry_run.print_labeled_command("run", subprocess_args, cwd=current)
         return
 
     if run_args.no_sandbox:

@@ -2468,6 +2468,81 @@ class TestSandbox:
             inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
 
+    def test_run_dry_run_summarizes_resolved_config_and_sandbox_settings(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[run]\nmemory = "10G"\n[run.echo]\nalias = "printf"\nmemory = "5G"\n'
+        )
+        (home / ".agm" / "sandbox").mkdir(parents=True)
+        (home / ".agm" / "sandbox" / "echo.json").write_text(
+            json.dumps(_settings(network=_network_settings("home.com")))
+        )
+
+        proj_dir = tmp_path / "project"
+        (proj_dir / "config" / "sandbox").mkdir(parents=True)
+        (proj_dir / "config" / "sandbox" / "printf.json").write_text(
+            json.dumps(_settings(filesystem=_filesystem_settings("/proj")))
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / ".sandbox").mkdir()
+        (work / ".sandbox" / "printf.json").write_text(json.dumps(_settings(enabled=True)))
+        env["PROJ_DIR"] = str(proj_dir)
+
+        result = run_agm(["--dry-run", "run", "echo", "hi"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "dry-run: run configuration" in result.stdout
+        assert f"dry-run:   cwd: {work}" in result.stdout
+        assert "dry-run:   sandbox: enabled" in result.stdout
+        assert "dry-run:   patch proj dir: enabled" in result.stdout
+        assert "dry-run:   command name: echo" in result.stdout
+        assert "dry-run:   alias command: printf" in result.stdout
+        assert "dry-run:   memory limit: 5G" in result.stdout
+        assert "dry-run: sandbox configuration" in result.stdout
+        assert "dry-run:   settings source: merged" in result.stdout
+        assert f"{home / '.agm' / 'sandbox' / 'echo.json'}" in result.stdout
+        assert f"{proj_dir / 'config' / 'sandbox' / 'printf.json'}" in result.stdout
+        assert f"{work / '.sandbox' / 'printf.json'}" in result.stdout
+        assert f"dry-run:   patch proj dir path: {proj_dir}" in result.stdout
+        assert "dry-run: command [sandbox]:" in result.stdout
+        assert "systemd-run --user --scope -p MemoryMax=5G" in result.stdout
+        assert "srt --settings" in result.stdout
+        assert "-- printf hi" in result.stdout
+
+    def test_run_dry_run_no_sandbox_summarizes_resolved_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[run.echo]\nalias = "printf"\nmemory = "5G"\n')
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["--dry-run", "run", "--no-sandbox", "echo", "hi"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "dry-run: run configuration" in result.stdout
+        assert "dry-run:   sandbox: disabled" in result.stdout
+        assert "dry-run:   command name: echo" in result.stdout
+        assert "dry-run:   alias command: printf" in result.stdout
+        assert "dry-run:   memory limit: disabled" in result.stdout
+        assert "dry-run: command [run]:" in result.stdout
+        assert "(cd " in result.stdout
+        assert "printf hi" in result.stdout
+
     def test_run_command_memory_overrides_run_default(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -4031,6 +4106,86 @@ class TestLoop:
         assert len(runner_log_lines) == 2
         assert runner_log_lines[0].startswith("@")
         assert runner_log_lines[1] == f"update {work / 'custom' / 'tasks'}"
+
+    def test_loop_next_dry_run_summarizes_selector_mode_configuration(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["TASK_LABEL"] = "expanded"
+        env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                'echo "$*" >> "${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
+                'printf "task-1.md\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "runner"\nselector = "selector"\ntasks_dir = "config/tasks"\n'
+        )
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update $TASK_LABEL\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["--dry-run", "loop", "next"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "dry-run: loop-next configuration" in result.stdout
+        assert f"dry-run:   tasks dir: {work / 'config' / 'tasks'}" in result.stdout
+        assert "dry-run:   selector command: selector" in result.stdout
+        assert "dry-run:   runner command: runner" in result.stdout
+        assert "dry-run:   execution command: selector" in result.stdout
+        assert f"dry-run: prompt [progress]: {selector_prompt} -> " in result.stdout
+        assert "(preprocessed)" in result.stdout
+        assert "dry-run: command [selector]:" in result.stdout
+        assert not Path(env["FAKE_SELECTOR_LOG"]).exists()
+
+    def test_loop_next_dry_run_summarizes_runner_mode_configuration(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'echo "$*" >> "${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'printf "progress updated\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "runner"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["--dry-run", "loop", "next"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "dry-run: loop-next configuration" in result.stdout
+        assert f"dry-run:   tasks dir: {work / '.agent-files' / 'tasks'}" in result.stdout
+        assert "dry-run:   selector command: disabled" in result.stdout
+        assert "dry-run:   runner command: runner" in result.stdout
+        assert "dry-run:   execution command: runner" in result.stdout
+        assert f"dry-run: prompt [progress]: {selector_prompt}" in result.stdout
+        assert "dry-run: command [runner]:" in result.stdout
+        assert not Path(env["FAKE_RUNNER_LOG"]).exists()
 
     def test_loop_step_performs_one_loop_iteration(
         self, tmp_path: Path, env: dict[str, str]

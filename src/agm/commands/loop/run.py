@@ -14,10 +14,6 @@ def run(args: LoopArgs) -> None:
         runtime = step_command.prepare_runtime(args)
         if dry_run.enabled():
             step_command.print_dry_run(runtime)
-            dry_run.print_operation(
-                "loop-runner",
-                "subsequent runner invocations depend on selector output",
-            )
             return
 
         step_number = 1

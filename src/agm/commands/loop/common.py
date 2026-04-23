@@ -11,7 +11,7 @@ from pathlib import Path
 from agm.commands.args import LoopArgs, LoopProgressArgs
 from agm.config.general import LoopConfig, load_loop_config
 from agm.core.env import agm_installation_prefix
-from agm.core.fs import is_file, unlink
+from agm.core.fs import is_file
 from agm.core.process import run_capture
 
 LoopCommandArgs = LoopArgs | LoopProgressArgs
@@ -170,6 +170,6 @@ def selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
 def cleanup_temp_files(temp_files: list[Path]) -> None:
     for temp_file in temp_files:
         try:
-            unlink(temp_file)
+            temp_file.unlink()
         except FileNotFoundError:
             pass

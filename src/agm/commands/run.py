@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 from agm.commands.args import RunArgs
 from agm.config.general import load_run_config
-from agm.config.sandbox import (
-    JsonDict,
-    load_settings,
-    merge_settings_chain,
-    patch_for_proj_dir,
-    sandbox_settings_candidates,
-    track_bwrap_artifacts,
-)
 from agm.core import dry_run
-from agm.core.fs import is_dir, is_file, rmdir, stat, unlink
 from agm.core.process import run_foreground
+from agm.sandbox import srt
 
 DEFAULT_MEMORY_LIMIT = "20G"
 
@@ -90,29 +80,43 @@ def _systemd_scope_name() -> str:
     return f"agm-run-{uuid4().hex}.scope"
 
 
+def _memory_limit_run_context(
+    env: dict[str, str], memory_limit: str | None
+) -> tuple[list[str], list[str] | None]:
+    if not _memory_limit_enabled(memory_limit):
+        return [], None
+    if shutil.which("systemd-run", path=env.get("PATH")) is None:
+        print("Error: systemd-run is not installed or not in PATH.", file=sys.stderr)
+        raise SystemExit(1)
+    assert memory_limit is not None
+    scope_name = _systemd_scope_name()
+    return (
+        [*_systemd_run_prefix(memory_limit), "--unit", scope_name],
+        ["systemctl", "--user", "stop", scope_name],
+    )
 
-def _write_json_temp(data: JsonDict, temp_files: list[Path]) -> Path:
-    with NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        json.dump(data, handle)
-        path = Path(handle.name)
-    temp_files.append(path)
-    return path
 
-
-def _cleanup(temp_files: list[Path], tracked_artifacts: list[Path]) -> None:
-    for temp_file in temp_files:
-        try:
-            unlink(temp_file)
-        except FileNotFoundError:
-            pass
-    for artifact in tracked_artifacts:
-        try:
-            if is_file(artifact) and stat(artifact).st_size == 0:
-                unlink(artifact)
-            elif is_dir(artifact):
-                rmdir(artifact)
-        except OSError:
-            pass
+def _run_with_optional_memory_limit(
+    *,
+    subprocess_args: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    memory_limit: str | None,
+) -> None:
+    process_prefix, interrupt_cleanup_cmd = _memory_limit_run_context(env, memory_limit)
+    subprocess_args = [*process_prefix, *subprocess_args]
+    try:
+        raise SystemExit(
+            run_foreground(
+                subprocess_args,
+                cwd=cwd,
+                env=env,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+            )
+        )
+    except KeyboardInterrupt:
+        print("\nInterrupted")
+        raise SystemExit(130)
 
 
 def run(args: RunArgs) -> None:
@@ -139,140 +143,55 @@ def run(args: RunArgs) -> None:
     effective_run_command = list(run_command)
     if command_alias is not None:
         effective_run_command[0] = command_alias
-    if not run_args.no_sandbox and shutil.which("srt", path=resolved_env.get("PATH")) is None:
-        print("Error: srt is not installed or not in PATH.", file=sys.stderr)
-        print("Install it with: npm install -g @anthropic-ai/sandbox-runtime", file=sys.stderr)
-        raise SystemExit(1)
-    if _memory_limit_enabled(effective_memory_limit) and (
-        shutil.which("systemd-run", path=resolved_env.get("PATH")) is None
-    ):
-        print("Error: systemd-run is not installed or not in PATH.", file=sys.stderr)
-        raise SystemExit(1)
-
+    process_prefix, interrupt_cleanup_cmd = _memory_limit_run_context(
+        resolved_env, effective_memory_limit
+    )
     if dry_run.enabled():
         if not run_args.no_sandbox:
-            if run_args.settings_file is not None:
-                dry_run.print_operation("sandbox-settings", f"use {run_args.settings_file}")
-            else:
-                settings_candidates = sandbox_settings_candidates(
-                    cwd=current,
-                    home=Path(resolved_env["HOME"]),
-                    proj_dir=(
-                        Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None
-                    ),
-                    command_name=run_command[0],
-                    alias_command_name=(
-                        effective_run_command[0] if command_alias is not None else None
-                    ),
-                )
-                dry_run.print_operation(
-                    "sandbox-settings",
-                    "merge " + ", ".join(str(path) for path in settings_candidates),
-                )
-            if not run_args.no_patch and resolved_env.get("PROJ_DIR"):
-                dry_run.print_operation(
-                    "patch-sandbox-settings",
-                    resolved_env["PROJ_DIR"],
-                )
-
-        subprocess_args: list[str]
-        if run_args.no_sandbox:
-            subprocess_args = list(effective_run_command)
-        else:
-            subprocess_args = [
-                "srt",
-                "--settings",
-                "<dry-run-settings>",
-                "--",
-                *effective_run_command,
-            ]
-        if _memory_limit_enabled(effective_memory_limit):
-            assert effective_memory_limit is not None
-            subprocess_args = [*_systemd_run_prefix(effective_memory_limit), *subprocess_args]
+            srt.run_sandboxed(
+                command=effective_run_command,
+                cwd=current,
+                env=resolved_env,
+                home=Path(resolved_env["HOME"]),
+                proj_dir=Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None,
+                command_name=run_command[0],
+                alias_command_name=effective_run_command[0] if command_alias is not None else None,
+                settings_file=run_args.settings_file,
+                patch_proj_dir=(
+                    Path(resolved_env["PROJ_DIR"])
+                    if not run_args.no_patch and resolved_env.get("PROJ_DIR")
+                    else None
+                ),
+                process_prefix=process_prefix,
+            )
+            return
+        subprocess_args = [*process_prefix, *effective_run_command]
         dry_run.print_command(subprocess_args, cwd=current)
         return
 
-    temp_files: list[Path] = []
-    tracked_artifacts: list[Path] = []
-    try:
-        interrupt_cleanup_cmd: list[str] | None = None
-        if run_args.no_sandbox:
-            subprocess_args = list(effective_run_command)
-        else:
-            if run_args.settings_file is not None:
-                selected_settings = Path(run_args.settings_file)
-                if not is_file(selected_settings):
-                    print(
-                        f"Error: settings file not found: {run_args.settings_file}",
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(1)
-            else:
-                settings_candidates = sandbox_settings_candidates(
-                    cwd=current,
-                    home=Path(resolved_env["HOME"]),
-                    proj_dir=(
-                        Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None
-                    ),
-                    command_name=run_command[0],
-                    alias_command_name=(
-                        effective_run_command[0] if command_alias is not None else None
-                    ),
-                )
-                found_settings = [path for path in settings_candidates if is_file(path)]
-                if not found_settings:
-                    print("Error: no sandbox settings file found.", file=sys.stderr)
-                    print(
-                        "Checked: " + ", ".join(str(path) for path in settings_candidates),
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(1)
-                if len(found_settings) == 1:
-                    selected_settings = found_settings[0]
-                else:
-                    settings_data = [
-                        load_settings(settings_path) for settings_path in found_settings
-                    ]
-                    selected_settings = _write_json_temp(
-                        merge_settings_chain(settings_data), temp_files
-                    )
+    if run_args.no_sandbox:
+        _run_with_optional_memory_limit(
+            subprocess_args=list(effective_run_command),
+            cwd=current,
+            env=resolved_env,
+            memory_limit=effective_memory_limit,
+        )
+        return
 
-            if not run_args.no_patch and resolved_env.get("PROJ_DIR"):
-                selected_settings_data = load_settings(selected_settings)
-                selected_settings = _write_json_temp(
-                    patch_for_proj_dir(selected_settings_data, Path(resolved_env["PROJ_DIR"])),
-                    temp_files,
-                )
-
-            tracked_artifacts = track_bwrap_artifacts(selected_settings, current)
-            subprocess_args = [
-                "srt",
-                "--settings",
-                str(selected_settings),
-                "--",
-                *effective_run_command,
-            ]
-        if _memory_limit_enabled(effective_memory_limit):
-            assert effective_memory_limit is not None
-            scope_name = _systemd_scope_name()
-            subprocess_args = [
-                *_systemd_run_prefix(effective_memory_limit),
-                "--unit",
-                scope_name,
-                *subprocess_args,
-            ]
-            interrupt_cleanup_cmd = ["systemctl", "--user", "stop", scope_name]
-        try:
-            raise SystemExit(
-                run_foreground(
-                    subprocess_args,
-                    cwd=current,
-                    env=resolved_env,
-                    interrupt_cleanup_cmd=interrupt_cleanup_cmd,
-                )
-            )
-        except KeyboardInterrupt:
-            print("\nInterrupted")
-            raise SystemExit(130)
-    finally:
-        _cleanup(temp_files, tracked_artifacts)
+    srt.run_sandboxed(
+        command=effective_run_command,
+        cwd=current,
+        env=resolved_env,
+        home=Path(resolved_env["HOME"]),
+        proj_dir=Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None,
+        command_name=run_command[0],
+        alias_command_name=effective_run_command[0] if command_alias is not None else None,
+        settings_file=run_args.settings_file,
+        patch_proj_dir=(
+            Path(resolved_env["PROJ_DIR"])
+            if not run_args.no_patch and resolved_env.get("PROJ_DIR")
+            else None
+        ),
+        process_prefix=process_prefix,
+        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+    )

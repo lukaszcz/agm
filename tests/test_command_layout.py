@@ -11,4 +11,4 @@ def test_command_subpackages_match_cli_command_groups() -> None:
         if path.is_dir() and not path.name.startswith("__")
     }
 
-    assert subpackages == {"branch", "config", "dep", "loop", "tmux", "worktree"}
+    assert subpackages == {"config", "dep", "loop", "tmux", "worktree"}

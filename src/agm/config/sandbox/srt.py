@@ -1,4 +1,4 @@
-"""Sandbox settings resolution and merge helpers."""
+"""SRT sandbox settings resolution and merge helpers."""
 
 from __future__ import annotations
 

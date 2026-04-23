@@ -657,7 +657,11 @@ def loop(
         )
         return
     if raw_args[0] == "step":
-        loop_step_command.run(_parse_loop_args(raw_args[1:], command_path=["loop", "step"]))
+        loop_step_command.run(
+            _parse_loop_args(
+                raw_args[1:], command_path=["loop", "step"], command_optional=True
+            )
+        )
         return
     loop_command.run(_parse_loop_args(raw_args, command_path=["loop"]))
 

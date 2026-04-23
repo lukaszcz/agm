@@ -15,8 +15,10 @@ import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
-import agm.commands.loop as loop_command
-import agm.commands.loop.progress as loop_progress_command
+import agm.commands.loop.next as loop_next_command
+import agm.commands.loop.run as loop_command
+import agm.commands.loop.run as loop_run_command
+import agm.commands.loop.step as loop_step_command
 import agm.commands.open as open_command
 import agm.commands.run as run_command
 import agm.commands.tmux.close as tmux_close_command
@@ -202,12 +204,14 @@ def _parse_loop_args(raw_args: list[str], *, command_path: Sequence[str]) -> Loo
 
     remaining = raw_args[index:]
     if not remaining:
-        print_help_for_command_path(["loop"])
+        print_help_for_command_path(command_path)
         raise typer.Exit()
     command_name = remaining[0]
     runner_args = run_command.normalize_run_command(remaining[1:])
     if no_log and log_file is not None:
-        exit_with_usage_error(["loop"], "error: --no-log and --log-file are mutually exclusive")
+        exit_with_usage_error(
+            command_path, "error: --no-log and --log-file are mutually exclusive"
+        )
     return LoopArgs(
         command_name=command_name,
         runner=runner,
@@ -219,7 +223,9 @@ def _parse_loop_args(raw_args: list[str], *, command_path: Sequence[str]) -> Loo
     )
 
 
-def _parse_loop_progress_args(raw_args: list[str]) -> LoopProgressArgs:
+def _parse_loop_next_args(
+    raw_args: list[str], *, command_path: Sequence[str] = ("loop", "next")
+) -> LoopProgressArgs:
     runner: str | None = None
     selector: str | None = None
     tasks_dir: str | None = None
@@ -231,17 +237,17 @@ def _parse_loop_progress_args(raw_args: list[str]) -> LoopProgressArgs:
             break
         if token == "--runner":
             runner, index = _loop_option_value(
-                raw_args, index, command_path=["loop", "progress"], option=token
+                raw_args, index, command_path=command_path, option=token
             )
             continue
         if token == "--selector":
             selector, index = _loop_option_value(
-                raw_args, index, command_path=["loop", "progress"], option=token
+                raw_args, index, command_path=command_path, option=token
             )
             continue
         if token == "--tasks-dir":
             tasks_dir, index = _loop_option_value(
-                raw_args, index, command_path=["loop", "progress"], option=token
+                raw_args, index, command_path=command_path, option=token
             )
             continue
         break
@@ -621,8 +627,14 @@ def loop(
     if not raw_args:
         print_help_for_command_path(["loop"])
         raise typer.Exit()
-    if raw_args[0] == "progress":
-        loop_progress_command.run(_parse_loop_progress_args(raw_args[1:]))
+    if raw_args[0] == "next":
+        loop_next_command.run(_parse_loop_next_args(raw_args[1:]))
+        return
+    if raw_args[0] == "run":
+        loop_run_command.run(_parse_loop_args(raw_args[1:], command_path=["loop", "run"]))
+        return
+    if raw_args[0] == "step":
+        loop_step_command.run(_parse_loop_args(raw_args[1:], command_path=["loop", "step"]))
         return
     loop_command.run(_parse_loop_args(raw_args, command_path=["loop"]))
 

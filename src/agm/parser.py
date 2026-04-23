@@ -76,19 +76,25 @@ _HELP_TEXTS: dict[str, str] = {
     "loop": textwrap.dedent("""\
         agm loop [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
                  [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
-        agm loop progress [--runner COMMAND] [--selector COMMAND]
-                          [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
+        agm loop run [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
+                     [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+        agm loop step [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
+                      [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+        agm loop next [--runner COMMAND] [--selector COMMAND]
+                      [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
 
         Repeatedly run a prompt command until the selected loop mode reports
-        completion, or run the progress-update prompt once.
+        completion, perform one loop iteration, or run the progress-update
+        prompt once.
 
         Command config:
           [loop] runner = "claude -p" in config.toml sets the default runner
           command prefix. [loop] selector = "codex exec" sets an optional
           selector command prefix. [loop] tasks_dir = ".agent-files/tasks"
           sets the tasks directory checked for ``PROGRESS.md`` and task files.
-          ``agm loop CMD`` selects ``[loop.CMD]`` overrides; those values
-          override ``[loop]``. ``agm loop --runner "..."``,
+          ``agm loop CMD`` is shorthand for ``agm loop run CMD`` when ``CMD``
+          is not a built-in subcommand, and still selects ``[loop.CMD]``
+          overrides; those values override ``[loop]``. ``agm loop --runner "..."``,
           ``agm loop --selector "..."``, and ``agm loop --tasks-dir ...``
           override those values. ``RUNNER_ARGS`` are appended to the final
           runner command after AGM resolves ``--runner``, config, or the
@@ -106,7 +112,9 @@ _HELP_TEXTS: dict[str, str] = {
           by default, or writes to ``--log-file PATH``. ``--no-log`` disables
           file logging entirely. The command prints each step header and stops
           when the active mode reports completion.
-          ``agm loop progress`` runs ``update_progress.md`` once using the
+          ``agm loop step`` performs a single loop iteration using the same
+          runner, selector, and logging behavior as ``agm loop run``.
+          ``agm loop next`` runs ``update_progress.md`` once using the
           resolved selector, or the resolved runner when no selector is
           configured. It uses the same prompt lookup behavior as ``agm loop``.
     """),
@@ -274,12 +282,26 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Remove a worktree and delete its local branch.
     """),
-    ("loop", "progress"): textwrap.dedent("""\
-        agm loop progress [--runner COMMAND] [--selector COMMAND]
-                          [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
+    ("loop", "next"): textwrap.dedent("""\
+        agm loop next [--runner COMMAND] [--selector COMMAND]
+                      [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
 
         Run the update-progress prompt once using the resolved selector, or
         the resolved runner when no selector is configured.
+    """),
+    ("loop", "run"): textwrap.dedent("""\
+        agm loop run [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
+                     [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+
+        Run the loop prompt until completion. Bare ``agm loop CMD`` is a
+        shorthand for this command when ``CMD`` is not a built-in subcommand.
+    """),
+    ("loop", "step"): textwrap.dedent("""\
+        agm loop step [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
+                      [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+
+        Perform one loop iteration using the same runner and selector
+        resolution as ``agm loop run``.
     """),
     ("worktree", "new"): textwrap.dedent("""\
         agm worktree new [-d|--dir DIR] BRANCH

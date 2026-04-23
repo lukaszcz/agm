@@ -1,4 +1,4 @@
-"""agm loop progress."""
+"""agm loop next."""
 
 from __future__ import annotations
 

@@ -66,7 +66,7 @@ def step_header_text(step: int) -> str:
 
 
 def selected_task_text(task_file: Path) -> str:
-    return f"Selected task: {task_file}\n"
+    return f"Selected task: {task_file}\n\n"
 
 
 def split_command(command: str, *, kind: str) -> list[str]:

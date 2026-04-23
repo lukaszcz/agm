@@ -15,6 +15,6 @@ Only three sections:
     - done / blocked / unblocked (not started / in progress)
 2. Next unblocked task
 3. Completion log
-    - ONE line per task as each task lands (explictly state this requirement)
+    - ONE line per task as each task lands (explicitly state this requirement)
 
 Keep PROGRESS.md concise.

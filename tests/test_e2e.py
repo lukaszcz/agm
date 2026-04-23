@@ -3700,6 +3700,71 @@ class TestLoop:
             f"@{tasks_dir / 'task-1.md'}"
         ]
 
+    def test_selector_prefers_relative_path_from_current_directory_before_tasks_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_SELECTOR_STATE"] = str(tmp_path / "selector-count")
+        env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'case "$count" in\n'
+                '  1) printf "custom/tasks/task-1.md\\n" ;;\n'
+                '  2) printf "COMPLETE\\n" ;;\n'
+                '  *) printf "COMPLETE\\n" ;;\n'
+                "esac\n"
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'echo "$*" >> "$log_file"\n'
+                'printf "implemented task\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        cwd_task = work / "custom" / "tasks" / "task-1.md"
+        cwd_task.parent.mkdir(parents=True)
+        cwd_task.write_text("cwd task\n")
+
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "custom" / "tasks").mkdir(parents=True)
+        (tasks_dir / "custom" / "tasks" / "task-1.md").write_text("tasks dir task\n")
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(
+            ["loop", "--runner", "runner", "--selector", "selector", "runner"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert f"Selected task: {cwd_task}" in result.stdout
+        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [f"@{cwd_task}"]
+
     def test_retries_selector_until_it_returns_complete_or_existing_task(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

@@ -184,11 +184,18 @@ def selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
         return None
 
     task_path = Path(selected)
-    if not task_path.is_absolute():
-        task_path = tasks_dir / task_path
-    if not is_file(task_path):
+    if task_path.is_absolute():
+        if is_file(task_path):
+            return task_path
         return selected
-    return task_path
+
+    resolved_task_path = Path.cwd() / task_path
+    if is_file(resolved_task_path):
+        return resolved_task_path
+    tasks_dir_task_path = tasks_dir / task_path
+    if is_file(tasks_dir_task_path):
+        return tasks_dir_task_path
+    return selected
 
 
 def cleanup_temp_files(temp_files: list[Path]) -> None:

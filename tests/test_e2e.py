@@ -3542,6 +3542,113 @@ class TestLoop:
             f"-p @{prompt_file}",
         ]
 
+    def test_loop_dry_run_summarizes_resolved_configuration_and_prompt_sources(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["TASK_LABEL"] = "expanded"
+        env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                'echo "$*" >> "${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
+                'printf "COMPLETE\\n"\n'
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'echo "$*" >> "${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'printf "implemented task\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "runner"\nselector = "selector"\ntasks_dir = "config/tasks"\n'
+        )
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("pick $TASK_LABEL\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["--dry-run", "loop", "run"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "Logging to loop-" in result.stdout
+        assert f"dry-run: agm mkdir {work}" in result.stdout
+        assert "dry-run: loop configuration" in result.stdout
+        assert f"dry-run:   tasks dir: {work / 'config' / 'tasks'}" in result.stdout
+        assert (
+            f"dry-run:   progress file: {work / 'config' / 'tasks' / 'PROGRESS.md'}"
+            in result.stdout
+        )
+        assert "dry-run:   runner command: runner" in result.stdout
+        assert "dry-run:   selector command: selector" in result.stdout
+        assert f"dry-run: prompt [selector]: {selector_prompt} -> " in result.stdout
+        assert "(preprocessed)" in result.stdout
+        assert "dry-run: command [selector]:" in result.stdout
+        assert (
+            "dry-run: agm loop-runner subsequent runner invocations depend on selector output"
+            in result.stdout
+        )
+        assert not Path(env["FAKE_SELECTOR_LOG"]).exists()
+        assert not Path(env["FAKE_RUNNER_LOG"]).exists()
+
+    def test_loop_dry_run_does_not_bootstrap_progress_when_progress_file_is_missing(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["PROMPT_VALUE"] = "expanded"
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'echo "$*" >> "${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'printf "COMPLETE\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        bootstrap_prompt = prompt_dir / "update_progress.md"
+        bootstrap_prompt.write_text("progress $PROMPT_VALUE\n")
+        loop_prompt = prompt_dir / "loop.md"
+        loop_prompt.write_text("loop $PROMPT_VALUE\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["--dry-run", "loop", "run", "--runner", "runner"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "dry-run: loop configuration" in result.stdout
+        assert f"dry-run: prompt [bootstrap]: {bootstrap_prompt} -> " in result.stdout
+        assert f"dry-run: prompt [loop]: {loop_prompt} -> " in result.stdout
+        assert "dry-run: command [bootstrap]:" in result.stdout
+        assert "dry-run: command [runner]:" in result.stdout
+        assert (
+            "dry-run: agm loop-runner runner command repeats until output is COMPLETE"
+            in result.stdout
+        )
+        assert not Path(env["FAKE_RUNNER_LOG"]).exists()
+
     def test_cli_loop_tasks_dir_overrides_configured_tasks_dir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

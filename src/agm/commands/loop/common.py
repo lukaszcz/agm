@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from agm.commands.args import LoopArgs, LoopProgressArgs
@@ -141,11 +142,34 @@ def loop_env(tasks_dir: Path) -> dict[str, str]:
     return env
 
 
-def run_command(command: list[str], target: Path, *, env: dict[str, str]) -> str:
+def run_command(
+    command: list[str],
+    target: Path,
+    *,
+    env: dict[str, str],
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
+) -> str:
+    ordered_output: list[str] = []
+
+    def handle_stdout(chunk: str) -> None:
+        ordered_output.append(chunk)
+        if stdout_callback is not None:
+            stdout_callback(chunk)
+
+    def handle_stderr(chunk: str) -> None:
+        ordered_output.append(chunk)
+        if stderr_callback is not None:
+            stderr_callback(chunk)
+
     _, stdout, stderr = run_capture(
         command_with_prompt_target(command, target),
         env=env,
+        stdout_callback=handle_stdout,
+        stderr_callback=handle_stderr,
     )
+    if ordered_output:
+        return "".join(ordered_output)
     output = stdout
     if stderr:
         output += stderr

@@ -2846,6 +2846,183 @@ class TestSandbox:
 class TestLoop:
     """agm loop: repeated Claude execution until COMPLETE."""
 
+    def test_streams_runner_output_to_stdout_and_log_before_runner_exits(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        state_file = tmp_path / "runner-count"
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                f'state_file="{state_file}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'if [[ "$count" == "1" ]]; then\n'
+                '  printf "runner line 1\\n"\n'
+                "  sync\n"
+                "  sleep 2\n"
+                '  printf "keep going\\n"\n'
+                "else\n"
+                '  printf "COMPLETE\\n"\n'
+                "fi\n"
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_dir.joinpath("loop.md").write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        process = subprocess.Popen(
+            [sys.executable, "-m", "agm.cli", "loop", "run", "--runner", "runner"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=str(work),
+        )
+
+        try:
+            assert process.stdout is not None
+
+            output_lines: list[str] = []
+            log_file: Path | None = None
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                line = process.stdout.readline()
+                if line:
+                    output_lines.append(line)
+                    if line.startswith("Logging to "):
+                        log_file = work / line.removeprefix("Logging to ").strip()
+                    if line == "runner line 1\n":
+                        break
+                elif process.poll() is not None:
+                    break
+
+            assert "runner line 1\n" in output_lines
+            assert process.poll() is None
+            assert log_file is not None
+            assert log_file.exists()
+            assert "runner line 1\n" in log_file.read_text()
+            assert "COMPLETE\n" not in log_file.read_text()
+
+            stdout, stderr = process.communicate(timeout=5)
+            assert process.returncode == 0
+            assert stderr == ""
+            assert "Completed.\n" in "".join(output_lines) + stdout
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_streams_selector_output_to_stdout_and_log_before_selector_exits(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'if [[ "$count" == "1" ]]; then\n'
+                '  printf "task-1.md\\n"\n'
+                "  sync\n"
+                "  sleep 2\n"
+                "else\n"
+                '  printf "COMPLETE\\n"\n'
+                "fi\n"
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script='printf "implemented task\\n"\n',
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_dir.joinpath("update_progress.md").write_text("select task\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "task-1.md").write_text("task one\n")
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+        env["FAKE_SELECTOR_STATE"] = str(tmp_path / "selector-count")
+
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "agm.cli",
+                "loop",
+                "--runner",
+                "runner",
+                "--selector",
+                "selector",
+                "runner",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            cwd=str(work),
+        )
+
+        try:
+            assert process.stdout is not None
+
+            output_lines: list[str] = []
+            log_file: Path | None = None
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                line = process.stdout.readline()
+                if line:
+                    output_lines.append(line)
+                    if line.startswith("Logging to "):
+                        log_file = work / line.removeprefix("Logging to ").strip()
+                    if line == "task-1.md\n":
+                        break
+                elif process.poll() is not None:
+                    break
+
+            assert "task-1.md\n" in output_lines
+            assert process.poll() is None
+            assert log_file is not None
+            assert log_file.exists()
+            assert "task-1.md\n" in log_file.read_text()
+            assert "implemented task\n" not in log_file.read_text()
+
+            stdout, stderr = process.communicate(timeout=5)
+            assert process.returncode == 0
+            assert stderr == ""
+            assert "implemented task\n" in "".join(output_lines) + stdout
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
     def test_runs_loop_prompt_until_complete(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -3357,8 +3534,8 @@ class TestLoop:
             "                        Step 1\n"
             "-------------------------------------------------------------\n"
             "\n"
-            f"Selected task: {tasks_dir / 'task-1.md'}\n"
             "task-1.md\n"
+            f"\nSelected task: {tasks_dir / 'task-1.md'}\n"
             "implemented task\n"
             "\n"
             "-------------------------------------------------------------\n"

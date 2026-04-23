@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import codecs
 import os
+import queue
 import signal
 import subprocess
 import sys
+import threading
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
-from typing import TextIO
+from typing import IO, TextIO
 
 from agm.core import dry_run
 
@@ -26,7 +31,7 @@ def exit_with_output(returncode: int, stdout: str = "", stderr: str = "") -> Non
     raise SystemExit(returncode)
 
 
-def _kill_process_group(process: subprocess.Popen[str]) -> None:
+def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
 
@@ -64,6 +69,23 @@ def _run_cleanup_command(
     )
 
 
+def _read_pipe_chunks(
+    stream: IO[bytes],
+    *,
+    name: str,
+    output_queue: queue.Queue[tuple[str, bytes | None]],
+) -> None:
+    try:
+        while True:
+            chunk = os.read(stream.fileno(), 4096)
+            if not chunk:
+                return
+            output_queue.put((name, chunk))
+    finally:
+        stream.close()
+        output_queue.put((name, None))
+
+
 def run_subprocess(
     cmd: list[str],
     *,
@@ -71,6 +93,8 @@ def run_subprocess(
     env: dict[str, str] | None = None,
     capture_output: bool = False,
     interrupt_cleanup_cmd: list[str] | None = None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a command in its own process group and clean it up on interrupt."""
 
@@ -78,18 +102,90 @@ def run_subprocess(
         cmd,
         cwd=cwd,
         env=os.environ if env is None else env,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        text=True,
+        stdout=subprocess.PIPE if capture_output or stdout_callback is not None else None,
+        stderr=subprocess.PIPE if capture_output or stderr_callback is not None else None,
+        text=False,
         start_new_session=True,
     )
 
+    readers: list[threading.Thread] = []
+    stream_queue: queue.Queue[tuple[str, bytes | None]] = queue.Queue()
+    stream_data: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    callbacks = {"stdout": stdout_callback, "stderr": stderr_callback}
+
+    if process.stdout is not None:
+        reader = threading.Thread(
+            target=partial(
+                _read_pipe_chunks,
+                process.stdout,
+                name="stdout",
+                output_queue=stream_queue,
+            ),
+            daemon=True,
+        )
+        reader.start()
+        readers.append(reader)
+
+    if process.stderr is not None:
+        reader = threading.Thread(
+            target=partial(
+                _read_pipe_chunks,
+                process.stderr,
+                name="stderr",
+                output_queue=stream_queue,
+            ),
+            daemon=True,
+        )
+        reader.start()
+        readers.append(reader)
+
     try:
-        stdout, stderr = process.communicate()
+        if readers:
+            decoders = {
+                "stdout": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+                "stderr": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+            }
+            active_readers = len(readers)
+            while active_readers > 0:
+                stream_name, chunk = stream_queue.get()
+                if chunk is None:
+                    active_readers -= 1
+                    continue
+
+                text = decoders[stream_name].decode(chunk)
+                if not text:
+                    continue
+                if capture_output:
+                    stream_data[stream_name].append(text)
+                callback = callbacks[stream_name]
+                if callback is not None:
+                    callback(text)
+
+            process.wait()
+
+            for stream_name, decoder in decoders.items():
+                text = decoder.decode(b"", final=True)
+                if not text:
+                    continue
+                if capture_output:
+                    stream_data[stream_name].append(text)
+                callback = callbacks[stream_name]
+                if callback is not None:
+                    callback(text)
+
+            stdout = "".join(stream_data["stdout"])
+            stderr = "".join(stream_data["stderr"])
+        else:
+            process.wait()
+            stdout = None
+            stderr = None
     except BaseException:
         _kill_process_group(process)
         _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
         raise
+    finally:
+        for reader in readers:
+            reader.join()
 
     return subprocess.CompletedProcess(
         cmd,
@@ -123,6 +219,8 @@ def run_capture(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     interrupt_cleanup_cmd: list[str] | None = None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
 ) -> tuple[int, str, str]:
     """Run a command and capture stdout/stderr."""
 
@@ -132,6 +230,8 @@ def run_capture(
         env=env,
         capture_output=True,
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
     )
     return result.returncode, result.stdout or "", result.stderr or ""
 

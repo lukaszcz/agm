@@ -58,15 +58,18 @@ def _log_file(args: LoopArgs) -> Path | None:
     return Path.cwd() / f"loop-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
 
-def _append_log(log_file: Path | None, header: str, output: str) -> None:
-    if log_file is None:
+def _append_log(log_file: Path | None, content: str) -> None:
+    if log_file is None or not content:
         return
-    append_text(log_file, header + output, encoding="utf-8")
+    append_text(log_file, content, encoding="utf-8")
 
 
-def _print_output(output: str) -> None:
-    if output:
-        print(output, end="")
+def _write_stream(chunk: str, *, stderr: bool = False) -> None:
+    if not chunk:
+        return
+    stream = sys.stderr if stderr else sys.stdout
+    stream.write(chunk)
+    stream.flush()
 
 
 def _prepare_prompt(
@@ -226,6 +229,15 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
 def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
     header = step_header_text(step_number)
     print(header, end="")
+    _append_log(runtime.log_file, header)
+
+    def stdout_callback(chunk: str) -> None:
+        _append_log(runtime.log_file, chunk)
+        _write_stream(chunk)
+
+    def stderr_callback(chunk: str) -> None:
+        _append_log(runtime.log_file, chunk)
+        _write_stream(chunk, stderr=True)
 
     if runtime.resolved_selector_command is None:
         assert runtime.loop_prompt is not None
@@ -233,41 +245,40 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             runtime.resolved_runner_command,
             runtime.loop_prompt.effective_file,
             env=runtime.env,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
         )
-        _append_log(runtime.log_file, header, output)
-        _print_output(output)
         if "".join(output.split()) == "COMPLETE":
             print("\nCompleted.")
             return True
         return False
 
     assert runtime.selector_prompt is not None
-    selector_outputs: list[str] = []
     while True:
         selector_output = run_command(
             runtime.resolved_selector_command,
             runtime.selector_prompt.effective_file,
             env=runtime.env,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
         )
-        selector_outputs.append(selector_output)
-
         next_task = selector_result(selector_output, tasks_dir=runtime.resolved_tasks_dir)
         if next_task is None:
-            combined_selector_output = "".join(selector_outputs)
-            _append_log(runtime.log_file, header, combined_selector_output)
-            _print_output(combined_selector_output)
             print("\nCompleted.")
             return True
         if isinstance(next_task, Path):
             break
 
     selected_task_output = selected_task_text(next_task)
-    selector_transcript = "".join(selector_outputs)
-    _append_log(runtime.log_file, header, selected_task_output + selector_transcript)
-    _print_output(selector_transcript + "\n" + selected_task_output)
-    runner_output = run_command(runtime.resolved_runner_command, next_task, env=runtime.env)
-    _append_log(runtime.log_file, "", runner_output)
-    _print_output(runner_output)
+    _append_log(runtime.log_file, "\n" + selected_task_output)
+    _write_stream("\n" + selected_task_output)
+    run_command(
+        runtime.resolved_runner_command,
+        next_task,
+        env=runtime.env,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
+    )
     return False
 
 

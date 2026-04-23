@@ -6,7 +6,7 @@ Respond with either:
 - file path of the next unblocked task,
 - COMPLETE if you are certain that all tasks are complete.
 
-The response must contain ONLY the file path or COMPLETE on a single line, no other text.
+CRITICAL: The response must contain ONLY the file path or COMPLETE on a single line, NO other text.
 
 ## Format of PROGRESS.md
 

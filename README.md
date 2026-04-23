@@ -1,166 +1,240 @@
-# AgM
+# AGM
 
-Agent Project Management — a unified CLI for managing worktrees, project dependencies, configuration, sandbox execution, and tmux sessions.
+Agent Management Framework is a CLI for setting up agent-oriented project workspaces, managing
+repo and dependency worktrees, opening tmux sessions, running setup scripts, and executing
+commands with sandbox settings.
 
 ## Requirements
 
-- `bash`
 - `git`
-- Python ≥ 3.12
-- [`just`](https://github.com/casey/just) (for installation)
-- [`srt`](https://github.com/anthropic-experimental/sandbox-runtime) (required by `agm run`)
+- `bash`
+- `tmux` for `agm open` and `agm tmux ...`
+- Python 3.12
+- [`uv`](https://docs.astral.sh/uv/)
+- [`just`](https://github.com/casey/just)
+- [`srt`](https://github.com/anthropic-experimental/sandbox-runtime) for sandboxed `agm run`
+- `systemd-run` for memory limits on `agm run` when enabled
 
 ## Install
 
-Install the `agm` CLI and sandbox configuration (default CLI install location: `$HOME/.local/bin`):
+Set up the development environment:
+
+```bash
+just setup
+```
+
+Install the CLI into an isolated `uv tool` environment and copy AGM config files into
+`$HOME/.agm/`:
 
 ```bash
 just install
 ```
 
-This also installs `config/config.toml` to `$HOME/.agm/config.toml` and all files from
-`config/sandbox/` to `$HOME/.agm/sandbox/`.
-
-If files already exist under `$HOME/.agm/`, `just install` leaves them in place and skips
-overwriting them. To overwrite existing config files, use:
+Pass arguments through to the config installer when needed:
 
 ```bash
 just install --force
-```
-
-Install AGM config files to a custom prefix:
-
-```bash
 just install /usr/local
-```
-
-Combine a custom prefix with overwriting existing files:
-
-```bash
 just install /usr/local --force
 ```
 
+## Project layouts
+
+`agm init` supports two layouts.
+
+Workspace layout:
+
+```text
+myproject/
+├── repo/
+├── deps/
+├── notes/
+├── worktrees/
+└── config/
+```
+
+Embedded layout:
+
+```text
+myproject/
+├── .agm/
+│   ├── config/
+│   ├── deps/
+│   ├── notes/
+│   └── worktrees/
+└── <main checkout>
+```
+
+Without `--embedded` or `--workspace`, AGM chooses:
+
+- embedded when the target project directory already exists and is a git repo
+- workspace otherwise
+
+`agm init` also creates `config/env.sh` and an executable `config/setup.sh` if they do not
+already exist.
+
 ## Usage
 
-```
+```bash
 agm <command> [options] [args]
 ```
 
-Run `agm help` to list all commands, or `agm help <command>` for detailed help on a specific command. Every subcommand also supports `--help`.
+Use `agm help` for the command list and `agm help <command>` for detailed help. Global options:
+
+- `--dry-run`
+- `--install-completion`
+- `--show-completion`
 
 ## Commands
 
-### `agm open` — Open a project session
+### `agm open`
 
-Open a tmux session for a project checkout.
-
-- `agm open repo` opens the main `repo/` checkout.
-- `agm open <default-branch>` also opens `repo/`, where `<default-branch>` is the branch currently checked out in `repo/`.
-- `agm open <branch>` opens `worktrees/<branch>` if it already exists there.
-- If `<branch>` exists but is not checked out yet, `agm open` checks it out into a worktree and opens it.
-- If `<branch>` does not exist, `agm open` creates it from `-p PARENT` or the current `repo/` branch and opens it.
+Open a tmux session for the main checkout or a branch worktree, creating or checking out the
+branch when needed.
 
 ```bash
 agm open repo
 agm open main
-agm open feat/login
-agm open -n 4 feat/login
-agm open -p develop feat/search
+agm open --num-panes 4 feat/login
+agm open --parent develop feat/search
+agm open --detach feat/search
 ```
 
-### `agm init` — Initialize a new project
+### `agm close`
 
-Clone a repository and set up the project structure. The project name is derived from the URL if omitted.
+Remove a branch worktree and close its tmux session.
 
 ```bash
-agm init https://github.com/org/repo.git
-agm init myproject https://github.com/org/repo.git
-agm init -b develop myproject https://github.com/org/repo.git
+agm close feat/search
 ```
 
-### `agm fetch` — Fetch repo and dependencies
+`repo` and the branch currently checked out in the main checkout resolve to the main checkout and
+cannot be closed.
 
-Fetch the latest changes for the main repository and for every dependency that has a checked-out worktree under `deps/`.
+### `agm init`
+
+Initialize a project directory, optionally cloning a repo.
+
+```bash
+agm init myproject
+agm init https://github.com/org/repo.git
+agm init myproject https://github.com/org/repo.git
+agm init --workspace -b develop myproject https://github.com/org/repo.git
+agm init --embedded myproject
+```
+
+When only `REPO_URL` is provided, AGM derives the project name from the repository URL.
+
+### `agm fetch`
+
+Fetch the main repo and all checked-out dependencies, then create local tracking branches for
+remote branches that are not yet merged into `origin/main`.
 
 ```bash
 agm fetch
 ```
 
-### `agm branch sync` — Sync remote tracking branches
+### `agm loop`
 
-Fetch and prune `origin`, then create local tracking branches for every remote branch not yet merged into `origin/main`. Alias: `agm br sync`.
+Run an iterative prompt loop using a configured runner, with optional selector-based task
+selection.
 
 ```bash
-agm br sync
-agm branch sync
+agm loop implement_feature
+agm loop run review --runner "claude -p"
+agm loop step fix_tests --log-file loop.log
+agm loop next review --selector "codex exec"
 ```
 
-### `agm config copy` — Copy configuration files
+Loop configuration is loaded from merged `config.toml` files via `[loop]` and optional
+`[loop.<command>]` overrides.
 
-Copy project configuration files into a target directory. Alias: `agm config cp`.
+### `agm run`
+
+Run a command directly or inside an Anthropic Sandbox Runtime container.
 
 ```bash
-agm config cp mydir
-agm config copy -d /path/to/project target
+agm run pytest -q
+agm run --file .sandbox/ci.json make test
+agm run --no-patch python script.py
+agm run --no-sandbox --memory 8G make lint
 ```
 
-### `agm worktree` — Git worktree management
+`agm run` loads config from:
 
-Low-level worktree operations. Alias: `agm wt`.
+1. `<install-prefix>/.agm/config.toml` when present, otherwise `$HOME/.agm/config.toml`
+2. `<project-config-dir>/config.toml`
+3. `./.agm/config.toml`
+
+Sandbox settings are resolved from the global sandbox directory, the project sandbox config
+directory, and `./.sandbox/`, with later files overriding earlier ones.
+
+### `agm config copy`
+
+Copy known project config files from the shared project config directory into an existing target
+directory.
 
 ```bash
-# check out a branch into a worktree
-agm wt co feat/login
-agm worktree checkout -d /custom/dir feat/login
+agm config copy target-dir
+agm config cp target-dir
+```
 
-# create a new branch and worktree
-agm wt new feat/search
-agm wt co -b feat/search          # equivalent
+Known files currently include `.setup.sh`, `.env`, `.env.local`, `.config`, `.agents`,
+`.opencode`, `.codex`, `.claude`, `.pi`, and `.mcp.json`.
 
-# remove a worktree and its local branch
+### `agm worktree`
+
+Low-level worktree operations for the main project repo.
+
+```bash
+agm worktree new feat/search
+agm wt new --dir /tmp/worktrees feat/search
+agm worktree setup
+agm worktree remove --force old-branch
 agm wt rm old-branch
-agm wt rm -f old-branch           # force removal
 ```
 
-### `agm dep` — Manage dependencies
+`agm worktree setup` runs executable setup scripts, in order, from:
 
-Manage dependency checkouts under `deps/`.
+1. `config/setup.sh`
+2. `<checkout>/.config/setup.sh`
+3. `<checkout>/.setup.sh`
+
+### `agm dep`
+
+Manage dependency checkouts under the project dependency directory.
 
 ```bash
-# clone a new dependency
 agm dep new https://github.com/org/lib.git
-agm dep new -b v2 https://github.com/org/lib.git
-
-# switch a dependency to a different branch
+agm dep new --branch develop https://github.com/org/lib.git
 agm dep switch mylib feat/update
-agm dep switch -b mylib feat/new-thing    # create the branch
+agm dep switch --branch mylib feat/new-work
+agm dep rm mylib/feat/update
+agm dep rm --all mylib
 ```
 
-### `agm run` — Run a command in a sandbox
+### `agm tmux`
 
-Run a command inside an [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime) container. Settings are discovered from `$HOME/.agm/sandbox/`, `$PROJ_DIR/config/sandbox/`, and `./.sandbox/` (later files override earlier ones with section-aware merging).
+Manage tmux sessions and apply AGM pane layouts directly.
 
 ```bash
-agm run npm test
-agm run -f .sandbox/ci.json make build
-agm run --no-patch python3 script.py
+agm tmux open
+agm tmux open --detach --num-panes 4 my-session
+agm tmux close my-session
+agm tmux layout 4 --window @1
 ```
 
-### `agm tmux` — Tmux session management
+## Aliases
 
-Create tmux sessions and apply pane layouts.
+- `agm wt` → `agm worktree`
+- `agm config cp` → `agm config copy`
+- `agm wt rm` → `agm worktree remove`
 
-```bash
-agm tmux new
-agm tmux new -d -n 4 my-session       # detached, 4 panes
-agm tmux layout 4 @1 200 50           # apply layout (internal use)
-```
-
-## Getting help
+## Help
 
 ```bash
-agm help               # list all commands
-agm help open          # detailed help for 'open'
-agm help worktree      # detailed help for 'worktree'
-agm open --help        # argparse-style option summary
+agm help
+agm help run
+agm help worktree setup
+agm open --help
 ```

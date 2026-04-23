@@ -608,6 +608,19 @@ class TestLoop:
         assert calls[0].selector is None
         assert calls[0].tasks_dir is None
 
+    def test_loop_run_without_positional_command(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_run_command)
+        result = invoke(runner, ["loop", "run"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name is None
+        assert calls[0].runner is None
+        assert calls[0].runner_args == []
+        assert calls[0].selector is None
+        assert calls[0].tasks_dir is None
+
     def test_loop_shorthand_dispatches_to_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:

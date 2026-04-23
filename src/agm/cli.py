@@ -161,7 +161,12 @@ def _loop_option_value(
     return args[next_index], next_index + 1
 
 
-def _parse_loop_args(raw_args: list[str], *, command_path: Sequence[str]) -> LoopArgs:
+def _parse_loop_args(
+    raw_args: list[str],
+    *,
+    command_path: Sequence[str],
+    command_optional: bool = False,
+) -> LoopArgs:
     runner: str | None = None
     selector: str | None = None
     tasks_dir: str | None = None
@@ -204,6 +209,20 @@ def _parse_loop_args(raw_args: list[str], *, command_path: Sequence[str]) -> Loo
 
     remaining = raw_args[index:]
     if not remaining:
+        if command_optional:
+            if no_log and log_file is not None:
+                exit_with_usage_error(
+                    command_path, "error: --no-log and --log-file are mutually exclusive"
+                )
+            return LoopArgs(
+                command_name=None,
+                runner=runner,
+                runner_args=[],
+                selector=selector,
+                tasks_dir=tasks_dir,
+                no_log=no_log,
+                log_file=log_file,
+            )
         print_help_for_command_path(command_path)
         raise typer.Exit()
     command_name = remaining[0]
@@ -631,7 +650,11 @@ def loop(
         loop_next_command.run(_parse_loop_next_args(raw_args[1:]))
         return
     if raw_args[0] == "run":
-        loop_run_command.run(_parse_loop_args(raw_args[1:], command_path=["loop", "run"]))
+        loop_run_command.run(
+            _parse_loop_args(
+                raw_args[1:], command_path=["loop", "run"], command_optional=True
+            )
+        )
         return
     if raw_args[0] == "step":
         loop_step_command.run(_parse_loop_args(raw_args[1:], command_path=["loop", "step"]))

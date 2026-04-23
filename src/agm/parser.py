@@ -77,7 +77,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm loop [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
                  [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
         agm loop run [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
-                     [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+                     [--no-log|--log-file PATH] [CMD [RUNNER_ARGS...]]
         agm loop step [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
                       [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
         agm loop next [--runner COMMAND] [--selector COMMAND]
@@ -291,7 +291,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     """),
     ("loop", "run"): textwrap.dedent("""\
         agm loop run [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]
-                     [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+                     [--no-log|--log-file PATH] [CMD [RUNNER_ARGS...]]
 
         Run the loop prompt until completion. Bare ``agm loop CMD`` is a
         shorthand for this command when ``CMD`` is not a built-in subcommand.

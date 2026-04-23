@@ -23,6 +23,7 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
 
     home_sandbox.mkdir(parents=True)
     work.mkdir()
+    (proj_dir / "repo").mkdir(parents=True)
     local_sandbox.mkdir(parents=True)
 
     (home_sandbox / "echo.json").write_text(
@@ -81,6 +82,7 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
         "/home-write",
         str(proj_dir / "notes"),
         str(proj_dir / "deps"),
+        str(proj_dir / "repo" / ".git"),
     ]
 
     assert not tracked_dir.exists()

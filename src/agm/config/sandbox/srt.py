@@ -7,7 +7,12 @@ import os
 from pathlib import Path
 from typing import cast
 
-from agm.project.layout import project_config_dir, project_deps_dir, project_notes_dir
+from agm.project.layout import (
+    project_config_dir,
+    project_deps_dir,
+    project_notes_dir,
+    project_repo_dir,
+)
 
 JsonDict = dict[str, object]
 
@@ -77,7 +82,11 @@ def patch_for_proj_dir(settings: JsonDict, proj_dir: Path) -> JsonDict:
     else:
         allow_write = []
     filesystem["allowWrite"] = allow_write
-    for path in (project_notes_dir(proj_dir), project_deps_dir(proj_dir)):
+    for path in (
+        project_notes_dir(proj_dir),
+        project_deps_dir(proj_dir),
+        project_repo_dir(proj_dir) / ".git",
+    ):
         path_str = str(path)
         if path_str not in allow_write:
             allow_write.append(path_str)

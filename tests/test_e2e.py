@@ -2240,6 +2240,7 @@ class TestSandbox:
             "/proj",
             str(proj_dir / "notes"),
             str(proj_dir / "deps"),
+            str(proj_dir / ".git"),
         ]
 
     def test_merge_overrides_ignore_violations(
@@ -2344,6 +2345,8 @@ class TestSandbox:
     ) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
+        project = tmp_path / "project"
+        (project / "repo").mkdir(parents=True)
         work = tmp_path / "work"
         work.mkdir()
         sandbox_dir = work / ".sandbox"
@@ -2352,20 +2355,23 @@ class TestSandbox:
             json.dumps(_settings(filesystem=_filesystem_settings(".")))
         )
 
-        env["PROJ_DIR"] = "/some/project/dir"
+        env["PROJ_DIR"] = str(project)
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
         parsed = _srt_settings(result)
-        assert "/some/project/dir/notes" in parsed["filesystem"]["allowWrite"]
-        assert "/some/project/dir/deps" in parsed["filesystem"]["allowWrite"]
-        assert "/some/project/dir" not in parsed["filesystem"]["allowWrite"]
+        assert str(project / "notes") in parsed["filesystem"]["allowWrite"]
+        assert str(project / "deps") in parsed["filesystem"]["allowWrite"]
+        assert str(project / "repo" / ".git") in parsed["filesystem"]["allowWrite"]
+        assert str(project) not in parsed["filesystem"]["allowWrite"]
 
     def test_no_patch_flag(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
+        project = tmp_path / "project"
+        (project / "repo").mkdir(parents=True)
         work = tmp_path / "work"
         work.mkdir()
         sandbox_dir = work / ".sandbox"
@@ -2374,16 +2380,17 @@ class TestSandbox:
             json.dumps(_settings(filesystem=_filesystem_settings(".")))
         )
 
-        env["PROJ_DIR"] = str(work)
+        env["PROJ_DIR"] = str(project)
 
         result = run_agm(
             ["run", "--no-patch", "echo", "hi"], env=env, cwd=str(work),
         )
         assert result.returncode == 0
         parsed = _srt_settings(result)
-        assert str(work) not in parsed["filesystem"]["allowWrite"]
-        assert str(work / "notes") not in parsed["filesystem"]["allowWrite"]
-        assert str(work / "deps") not in parsed["filesystem"]["allowWrite"]
+        assert str(project) not in parsed["filesystem"]["allowWrite"]
+        assert str(project / "notes") not in parsed["filesystem"]["allowWrite"]
+        assert str(project / "deps") not in parsed["filesystem"]["allowWrite"]
+        assert str(project / "repo" / ".git") not in parsed["filesystem"]["allowWrite"]
 
     def test_invalid_option(
         self, tmp_path: Path, env: dict[str, str]
@@ -5183,7 +5190,8 @@ class TestHelp:
         assert "-f, --file SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout
-        assert "Do not append the project notes and deps directories" in result.stdout
+        assert "Do not append the project notes, deps, and repo .git" in result.stdout
+        assert "paths to filesystem.allowWrite" in result.stdout
         assert "$HOME/.agm/sandbox/<command>.json" in result.stdout
         assert "$HOME/.agm/sandbox/default.json" in result.stdout
         assert "the project sandbox config directory" in result.stdout
@@ -5191,7 +5199,8 @@ class TestHelp:
         assert "./.sandbox/default.json" in result.stdout
         assert "try the aliased command's" in result.stdout
         assert "Later files override earlier ones." in result.stdout
-        assert "agm adds the project notes and deps" in result.stdout
+        assert "agm adds the project notes, deps, and" in result.stdout
+        assert "repo .git paths to filesystem.allowWrite" in result.stdout
 
     def test_help_aliases_resolve(
         self, tmp_path: Path, env: dict[str, str]

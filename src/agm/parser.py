@@ -184,9 +184,9 @@ _HELP_TEXTS: dict[str, str] = {
                        Wrap srt in systemd-run --user --scope and set
                        MemoryMax=LIMIT. The default is 20G. Values <= 0
                        disable memory limiting.
-          --no-patch   Do not append the project notes and deps directories to
-                       filesystem.allowWrite after loading the selected
-                       settings.
+          --no-patch   Do not append the project notes, deps, and repo .git
+                       paths to filesystem.allowWrite after loading the
+                       selected settings.
 
         Settings resolution:
           default      For each directory below, load <command>.json when it
@@ -206,8 +206,8 @@ _HELP_TEXTS: dict[str, str] = {
                        Skip default discovery and use SETTINGS as-is.
 
         Automatic patching:
-          Unless --no-patch is set, agm adds the project notes and deps
-          directories to filesystem.allowWrite when PROJ_DIR is set.
+          Unless --no-patch is set, agm adds the project notes, deps, and
+          repo .git paths to filesystem.allowWrite when PROJ_DIR is set.
     """),
     "tmux": textwrap.dedent("""\
         agm tmux open   [-d|--detach] [-n|--num-panes PANES] [SESSION]

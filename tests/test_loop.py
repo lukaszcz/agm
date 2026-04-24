@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.commands.loop.common import selector_result
+import pytest
+
+from agm.commands.loop.common import prompt_file, selector_result
 from agm.core.prompt import preprocess_prompt_file
 
 
@@ -74,3 +76,24 @@ def test_selector_result_falls_back_to_tasks_dir_when_relative_path_is_not_in_cw
     result = selector_result("task-1.md\n", tasks_dir=tasks_dir)
 
     assert result == task_file
+
+
+def test_prompt_file_prefers_home_over_install_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "prefix"
+    prefix_prompt_dir = prefix / ".agm" / "prompts"
+    prefix_prompt_dir.mkdir(parents=True)
+    prefix_prompt = prefix_prompt_dir / "loop.md"
+    prefix_prompt.write_text("prefix prompt\n", encoding="utf-8")
+
+    home = tmp_path / "home"
+    home_prompt_dir = home / ".agm" / "prompts"
+    home_prompt_dir.mkdir(parents=True)
+    home_prompt = home_prompt_dir / "loop.md"
+    home_prompt.write_text("home prompt\n", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+
+    assert prompt_file("loop.md") == home_prompt

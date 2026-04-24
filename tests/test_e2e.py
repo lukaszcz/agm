@@ -3543,6 +3543,7 @@ class TestLoop:
             "\n"
             "task-1.md\n"
             f"\nSelected task: {tasks_dir / 'task-1.md'}\n"
+            "\n"
             "implemented task\n"
             "\n"
             "-------------------------------------------------------------\n"
@@ -5246,7 +5247,7 @@ class TestHelp:
         result = run_agm(["help", "run"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
         assert "<install-prefix>/.agm/config.toml" in result.stdout
-        assert "otherwise $HOME/.agm/config.toml is used" in result.stdout
+        assert "$HOME/.agm/config.toml" in result.stdout
         assert "project config.toml and ./.agm/config.toml" in result.stdout
         assert '[run.<command>] alias = "<other-command>"' in result.stdout
         assert '[run] memory = "20G"' in result.stdout or "The default is 20G" in result.stdout

@@ -36,15 +36,36 @@ def _load_config_file(path: Path) -> TomlDict:
     return _toml_dict(raw)
 
 
-def config_file_candidates(*, home: Path, proj_dir: Path | None, cwd: Path) -> list[Path]:
-    install_prefix = agm_installation_prefix()
-    global_config = home / ".agm" / "config.toml"
-    if install_prefix is not None:
-        install_config = install_prefix / ".agm" / "config.toml"
-        if install_config.is_file():
-            global_config = install_config
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    unique_paths: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique_paths.append(path)
+    return unique_paths
 
-    candidates = [global_config]
+
+def agm_path_candidates(*, home: Path, relative_path: Path) -> list[Path]:
+    candidates: list[Path] = []
+    install_prefix = agm_installation_prefix()
+    if install_prefix is not None:
+        candidates.append(install_prefix / ".agm" / relative_path)
+    candidates.append(home / ".agm" / relative_path)
+    return _unique_paths(candidates)
+
+
+def resolve_agm_path(*, home: Path, relative_path: Path) -> Path:
+    candidates = agm_path_candidates(home=home, relative_path=relative_path)
+    for candidate in reversed(candidates):
+        if candidate.is_file():
+            return candidate
+    return candidates[-1]
+
+
+def config_file_candidates(*, home: Path, proj_dir: Path | None, cwd: Path) -> list[Path]:
+    candidates = agm_path_candidates(home=home, relative_path=Path("config.toml"))
     if proj_dir is not None:
         candidates.append(project_config_dir(proj_dir) / "config.toml")
     candidates.append(cwd / ".agm" / "config.toml")

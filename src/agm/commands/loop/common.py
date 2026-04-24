@@ -10,40 +10,18 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agm.commands.args import LoopArgs, LoopProgressArgs
-from agm.config.general import LoopConfig, load_loop_config
-from agm.core.env import agm_installation_prefix
+from agm.config.general import LoopConfig, load_loop_config, resolve_agm_path
 from agm.core.fs import is_file
 from agm.core.process import run_capture
 
 LoopCommandArgs = LoopArgs | LoopProgressArgs
 
 
-def prompt_dir_candidates() -> list[Path]:
-    candidates: list[Path] = []
-
-    install_prefix = agm_installation_prefix()
-    if install_prefix is not None:
-        candidates.append(install_prefix / ".agm" / "prompts")
-
-    home = Path(os.environ["HOME"])
-    candidates.append(home / ".agm" / "prompts")
-
-    unique_candidates: list[Path] = []
-    seen: set[Path] = set()
-    for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        unique_candidates.append(candidate)
-    return unique_candidates
-
-
 def prompt_file(filename: str) -> Path:
-    candidates = [prompt_dir / filename for prompt_dir in prompt_dir_candidates()]
-    for candidate in candidates:
-        if is_file(candidate):
-            return candidate
-    return candidates[-1]
+    return resolve_agm_path(
+        home=Path(os.environ["HOME"]),
+        relative_path=Path("prompts") / filename,
+    )
 
 
 def configured_loop_settings(command_name: str | None) -> LoopConfig:

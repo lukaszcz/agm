@@ -76,7 +76,7 @@ def test_load_run_config_prefers_dot_agm_config_after_project_config(tmp_path: P
     assert config.alias_for("echo") == "cat"
 
 
-def test_load_run_config_uses_install_prefix_before_home(
+def test_load_run_config_prefers_home_over_install_prefix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prefix = tmp_path / "prefix"
@@ -91,7 +91,7 @@ def test_load_run_config_uses_install_prefix_before_home(
 
     config = load_run_config(home=home, proj_dir=None, cwd=tmp_path / "work")
 
-    assert config.alias_for("echo") == "printf"
+    assert config.alias_for("echo") == "cat"
 
 
 def test_load_run_config_falls_back_to_home_when_install_prefix_is_missing(

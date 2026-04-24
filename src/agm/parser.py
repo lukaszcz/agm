@@ -167,8 +167,8 @@ _HELP_TEXTS: dict[str, str] = {
         Run a command inside an Anthropic Sandbox Runtime container.
 
         Command config:
-          <install-prefix>/.agm/config.toml is loaded when present,
-          otherwise $HOME/.agm/config.toml is used, followed by the
+          <install-prefix>/.agm/config.toml is loaded first, then
+          $HOME/.agm/config.toml, followed by the
           project config.toml and ./.agm/config.toml.
           [run.<command>] alias = "<other-command>" makes
           "agm run <command>" execute <other-command> instead.

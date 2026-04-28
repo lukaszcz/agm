@@ -2618,6 +2618,33 @@ class TestSandbox:
             inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
 
+    def test_run_command_swap_override_from_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[run]\nmemory = "10G"\nswap = "3G"\n[run.echo]\nmemory = "5G"\nswap = "1G"\n'
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        _assert_systemd_run_command(
+            result,
+            memory_limit="5G",
+            swap_limit="1G",
+            inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
+        )
+
     def test_run_wraps_with_zero_memory_limit(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

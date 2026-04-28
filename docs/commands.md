@@ -154,6 +154,14 @@ Loop behavior:
 2. `<project-config-dir>/config.toml`
 3. `./.agm/config.toml`
 
+`agm run` config keys:
+
+- `[run].memory`: default `MemoryMax` for sandboxed runs
+- `[run].swap`: default `MemorySwapMax` for sandboxed runs
+- `[run.<command>].memory`: per-command `MemoryMax` override
+- `[run.<command>].swap`: per-command `MemorySwapMax` override
+- `[run.<command>].alias`: replace the invoked command name before execution
+
 `agm run` options:
 
 - `--no-sandbox`: run the command directly without `srt`; skips sandbox settings discovery and patching

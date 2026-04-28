@@ -79,12 +79,17 @@ class RunConfig:
     aliases: dict[str, str]
     default_memory_limit: str | None
     command_memory_limits: dict[str, str]
+    default_swap_limit: str | None
+    command_swap_limits: dict[str, str]
 
     def alias_for(self, command_name: str) -> str | None:
         return self.aliases.get(command_name)
 
     def memory_limit_for(self, command_name: str) -> str | None:
         return self.command_memory_limits.get(command_name, self.default_memory_limit)
+
+    def swap_limit_for(self, command_name: str) -> str | None:
+        return self.command_swap_limits.get(command_name, self.default_swap_limit)
 
 
 @dataclass(frozen=True)
@@ -109,10 +114,13 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
     run_table = _toml_dict(merged.get("run"))
     aliases: dict[str, str] = {}
     command_memory_limits: dict[str, str] = {}
+    command_swap_limits: dict[str, str] = {}
     default_memory = run_table.get("memory")
     default_memory_limit = (
         default_memory if isinstance(default_memory, str) and default_memory else None
     )
+    default_swap = run_table.get("swap")
+    default_swap_limit = default_swap if isinstance(default_swap, str) and default_swap else None
     for command_name, command_config in run_table.items():
         config = _toml_dict(command_config)
         alias = config.get("alias")
@@ -121,10 +129,15 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
         memory = config.get("memory")
         if isinstance(memory, str) and memory:
             command_memory_limits[command_name] = memory
+        swap = config.get("swap")
+        if isinstance(swap, str) and swap:
+            command_swap_limits[command_name] = swap
     return RunConfig(
         aliases=aliases,
         default_memory_limit=default_memory_limit,
         command_memory_limits=command_memory_limits,
+        default_swap_limit=default_swap_limit,
+        command_swap_limits=command_swap_limits,
     )
 
 

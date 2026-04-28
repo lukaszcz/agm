@@ -19,10 +19,12 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
             [
                 "[run]",
                 'memory = "20G"',
+                'swap = "1G"',
                 "",
                 "[run.echo]",
                 'alias = "printf"',
                 'memory = "10G"',
+                'swap = "2G"',
                 "",
                 "[run.keep]",
                 'alias = "cat"',
@@ -39,6 +41,7 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
                 "[run.echo]",
                 'alias = "cat"',
                 'memory = "5G"',
+                'swap = "512M"',
                 "",
                 "[run.local]",
                 'alias = "sed"',
@@ -57,6 +60,10 @@ def test_load_run_config_merges_global_and_local_sections(tmp_path: Path) -> Non
     assert config.memory_limit_for("keep") == "20G"
     assert config.memory_limit_for("local") == "20G"
     assert config.memory_limit_for("missing") == "20G"
+    assert config.swap_limit_for("echo") == "512M"
+    assert config.swap_limit_for("keep") == "1G"
+    assert config.swap_limit_for("local") == "1G"
+    assert config.swap_limit_for("missing") == "1G"
 
 
 def test_load_run_config_prefers_dot_agm_config_after_project_config(tmp_path: Path) -> None:
@@ -145,17 +152,19 @@ def test_load_run_config_prefers_dot_agm_memory_after_project_config(tmp_path: P
     project = tmp_path / "project"
     (project / "config").mkdir(parents=True)
     (project / "config" / "config.toml").write_text(
-        '[run]\nmemory = "10G"\n[run.echo]\nmemory = "5G"\n'
+        '[run]\nmemory = "10G"\nswap = "2G"\n[run.echo]\nmemory = "5G"\nswap = "1G"\n'
     )
 
     work = tmp_path / "work"
     (work / ".agm").mkdir(parents=True)
-    (work / ".agm" / "config.toml").write_text('[run.echo]\nmemory = "2G"\n')
+    (work / ".agm" / "config.toml").write_text('[run.echo]\nmemory = "2G"\nswap = "256M"\n')
 
     config = load_run_config(home=home, proj_dir=project, cwd=work)
 
     assert config.memory_limit_for("echo") == "2G"
     assert config.memory_limit_for("other") == "10G"
+    assert config.swap_limit_for("echo") == "256M"
+    assert config.swap_limit_for("other") == "2G"
 
 
 def test_sandbox_settings_candidates_fall_back_to_alias_command(tmp_path: Path) -> None:

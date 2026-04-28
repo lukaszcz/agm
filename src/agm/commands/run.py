@@ -124,6 +124,7 @@ def run(args: RunArgs) -> None:
     command_name = Path(run_command[0]).name or run_command[0]
     command_alias = run_config.alias_for(command_name)
     configured_memory_limit = run_config.memory_limit_for(command_name)
+    configured_swap_limit = run_config.swap_limit_for(command_name)
     if run_args.no_memory_limit:
         effective_memory_limit = None
     elif run_args.no_sandbox:
@@ -135,7 +136,7 @@ def run(args: RunArgs) -> None:
     elif run_args.no_sandbox:
         effective_swap_limit = run_args.swap
     else:
-        effective_swap_limit = run_args.swap or DEFAULT_SWAP_LIMIT
+        effective_swap_limit = run_args.swap or configured_swap_limit or DEFAULT_SWAP_LIMIT
     effective_run_command = list(run_command)
     if command_alias is not None:
         effective_run_command[0] = command_alias

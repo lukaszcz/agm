@@ -22,7 +22,13 @@ def test_run_delegates_sandbox_execution_to_srt(
     monkeypatch.setattr(
         run_command,
         "load_run_config",
-        lambda **_: RunConfig(aliases={}, default_memory_limit=None, command_memory_limits={}),
+        lambda **_: RunConfig(
+            aliases={},
+            default_memory_limit=None,
+            command_memory_limits={},
+            default_swap_limit=None,
+            command_swap_limits={},
+        ),
     )
     monkeypatch.setattr(run_command.shutil, "which", lambda *_args, **_kwargs: "/bin/tool")
 
@@ -122,7 +128,11 @@ def test_run_no_memory_limit_omits_memory_max_but_keeps_default_swap_limit(
         run_command,
         "load_run_config",
         lambda **_: RunConfig(
-            aliases={}, default_memory_limit="10G", command_memory_limits={"echo": "5G"}
+            aliases={},
+            default_memory_limit="10G",
+            command_memory_limits={"echo": "5G"},
+            default_swap_limit=None,
+            command_swap_limits={},
         ),
     )
 
@@ -191,7 +201,11 @@ def test_run_no_memory_and_swap_limit_disable_wrapping(
         run_command,
         "load_run_config",
         lambda **_: RunConfig(
-            aliases={}, default_memory_limit="10G", command_memory_limits={"echo": "5G"}
+            aliases={},
+            default_memory_limit="10G",
+            command_memory_limits={"echo": "5G"},
+            default_swap_limit=None,
+            command_swap_limits={},
         ),
     )
 
@@ -243,7 +257,13 @@ def test_run_no_swap_limit_omits_memory_swap_max_property(
     monkeypatch.setattr(
         run_command,
         "load_run_config",
-        lambda **_: RunConfig(aliases={}, default_memory_limit=None, command_memory_limits={}),
+        lambda **_: RunConfig(
+            aliases={},
+            default_memory_limit=None,
+            command_memory_limits={},
+            default_swap_limit=None,
+            command_swap_limits={},
+        ),
     )
     monkeypatch.setattr(run_command.shutil, "which", lambda *_args, **_kwargs: "/bin/tool")
 
@@ -298,7 +318,13 @@ def test_run_zero_memory_limit_still_wraps(
     monkeypatch.setattr(
         run_command,
         "load_run_config",
-        lambda **_: RunConfig(aliases={}, default_memory_limit="0", command_memory_limits={}),
+        lambda **_: RunConfig(
+            aliases={},
+            default_memory_limit="0",
+            command_memory_limits={},
+            default_swap_limit=None,
+            command_swap_limits={},
+        ),
     )
     monkeypatch.setattr(run_command.shutil, "which", lambda *_args, **_kwargs: "/bin/tool")
 

@@ -15,6 +15,7 @@ from agm.core.prompt import preprocess_prompt_file
 from .common import (
     cleanup_temp_files,
     command_with_prompt_target,
+    is_complete_output,
     loop_env,
     progress_file,
     prompt_file,
@@ -248,7 +249,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
         )
-        if "".join(output.split()) == "COMPLETE":
+        if is_complete_output(output):
             print("\nCompleted.")
             return True
         return False

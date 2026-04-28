@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.commands.loop.common import prompt_file, selector_result
+from agm.commands.loop.common import is_complete_output, prompt_file, selector_result
 from agm.core.prompt import preprocess_prompt_file
 
 
@@ -76,6 +76,34 @@ def test_selector_result_falls_back_to_tasks_dir_when_relative_path_is_not_in_cw
     result = selector_result("task-1.md\n", tasks_dir=tasks_dir)
 
     assert result == task_file
+
+
+def test_selector_result_uses_only_last_output_line_for_task_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks_dir = tmp_path / ".agent-files" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    task_file = tasks_dir / "task-1.md"
+    task_file.write_text("task one\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = selector_result("progress update\n task-1.md \n", tasks_dir=tasks_dir)
+
+    assert result == task_file
+
+
+def test_selector_result_uses_only_last_output_line_for_complete(tmp_path: Path) -> None:
+    tasks_dir = tmp_path / ".agent-files" / "tasks"
+    tasks_dir.mkdir(parents=True)
+
+    result = selector_result("progress update\n COMPLETE \n", tasks_dir=tasks_dir)
+
+    assert result is None
+
+
+def test_is_complete_output_uses_only_last_output_line() -> None:
+    assert is_complete_output("progress update\n COMPLETE \n")
+    assert not is_complete_output(" COMPLETE \nprogress update\n")
 
 
 def test_prompt_file_prefers_home_over_install_prefix(

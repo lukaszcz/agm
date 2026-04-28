@@ -3577,6 +3577,119 @@ class TestLoop:
             " COMPLETE \n"
         )
 
+    def test_loop_run_treats_only_last_runner_output_line_as_completion_signal(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        state_file = tmp_path / "runner-count"
+        runner_log = tmp_path / "runner.log"
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                f'state_file="{state_file}"\n'
+                f'log_file="{runner_log}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'echo "$*" >> "$log_file"\n'
+                'if [[ "$count" == "1" ]]; then\n'
+                '  printf "progress update\\n COMPLETE \\n"\n'
+                "else\n"
+                '  printf "should not run\\n"\n'
+                "fi\n"
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "loop.md"
+        prompt_file.write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(["loop", "run", "--runner", "runner"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "Completed." in result.stdout
+        assert "Step 2" not in result.stdout
+        assert runner_log.read_text().splitlines() == [f"@{prompt_file}"]
+
+    def test_loop_run_treats_only_last_selector_output_line_as_task_path(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        selector_state = tmp_path / "selector-count"
+        selector_log = tmp_path / "selector.log"
+        runner_log = tmp_path / "runner.log"
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="selector",
+            script=(
+                f'state_file="{selector_state}"\n'
+                f'log_file="{selector_log}"\n'
+                'count=0\n'
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                'count=$((count + 1))\n'
+                'printf "%s" "$count" > "$state_file"\n'
+                'echo "$*" >> "$log_file"\n'
+                'if [[ "$count" == "1" ]]; then\n'
+                '  printf "progress update\\n task-1.md \\n"\n'
+                "else\n"
+                '  printf "progress update\\n COMPLETE \\n"\n'
+                "fi\n"
+            ),
+        )
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                f'log_file="{runner_log}"\n'
+                'echo "$*" >> "$log_file"\n'
+                'printf "implemented task\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "task-1.md").write_text("task one\n")
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        result = run_agm(
+            ["loop", "run", "--runner", "runner", "--selector", "selector", "runner"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert f"Selected task: {tasks_dir / 'task-1.md'}" in result.stdout
+        assert "Completed." in result.stdout
+        assert selector_log.read_text().splitlines() == [
+            f"@{selector_prompt}",
+            f"@{selector_prompt}",
+        ]
+        assert runner_log.read_text().splitlines() == [f"@{tasks_dir / 'task-1.md'}"]
+
     def test_loop_exposes_resolved_tasks_dir_to_selector_and_runner(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

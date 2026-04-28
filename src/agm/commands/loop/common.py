@@ -154,11 +154,22 @@ def run_command(
     return output
 
 
+def last_output_line(output: str) -> str:
+    lines = output.splitlines()
+    if not lines:
+        return output.strip()
+    return lines[-1].strip()
+
+
+def is_complete_output(output: str) -> bool:
+    return "".join(last_output_line(output).split()) == "COMPLETE"
+
+
 def selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
-    selected = output.strip()
+    selected = last_output_line(output)
     if not selected:
         return ""
-    if "".join(selected.split()) == "COMPLETE":
+    if is_complete_output(output):
         return None
 
     task_path = Path(selected)

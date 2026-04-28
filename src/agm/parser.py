@@ -162,8 +162,8 @@ _HELP_TEXTS: dict[str, str] = {
           DEP/MAIN_BRANCH Remove the main dependency checkout by branch name.
     """),
     "run": textwrap.dedent("""\
-        agm run [--no-sandbox] [--no-patch] [--memory LIMIT]
-        [--no-memory-limit] [-f|--file SETTINGS] COMMAND [ARGS...]
+        agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]
+        [--no-memory-limit] [--no-swap-limit] [-f|--file SETTINGS] COMMAND [ARGS...]
 
         Run a command inside an Anthropic Sandbox Runtime container.
 
@@ -182,13 +182,21 @@ _HELP_TEXTS: dict[str, str] = {
                        Use this settings file directly instead of discovering
                        and combining the default sandbox settings files.
           --memory LIMIT
-                       Wrap srt in systemd-run --user --scope and set
-                       MemoryMax=LIMIT. The default is 20G. Values <= 0
-                       disable memory limiting.
+                       Wrap COMMAND in a delegated systemd-run --user --scope
+                       with MemoryMax=LIMIT, optional MemorySwapMax, and
+                       Delegate=yes.
+                       The wrapper exports SANDBOX_CGROUP and enables the
+                       memory controller for descendant cgroups. The default
+                       memory limit is 20G. Use 0 for a zero limit or
+                       unlimited for no memory cap.
+          --swap LIMIT
+                       Set MemorySwapMax=LIMIT in the delegated systemd-run
+                       scope. In sandbox mode the default is 0. Use unlimited
+                       for no swap cap.
           --no-memory-limit
-                       Disable memory limiting and skip wrapping COMMAND
-                       in systemd-run. This is equivalent to
-                       --memory 0.
+                       Do not set MemoryMax.
+          --no-swap-limit
+                       Do not set MemorySwapMax.
           --no-patch   Do not append the project notes, deps, and repo .git
                        paths to filesystem.allowWrite after loading the
                        selected settings.

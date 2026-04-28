@@ -15,6 +15,15 @@ from agm.core.process import run_foreground
 from agm.sandbox import srt
 
 DEFAULT_MEMORY_LIMIT = "20G"
+DEFAULT_SWAP_LIMIT = "0"
+_SYSTEMD_DELEGATED_CGROUP_BOOTSTRAP = (
+    'CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup); '
+    'mkdir -p "${CG}/init"; '
+    'echo $$ > "${CG}/init/cgroup.procs"; '
+    'echo "+memory" > "${CG}/cgroup.subtree_control"; '
+    'export SANDBOX_CGROUP="$CG"; '
+    'exec "$@"'
+)
 
 
 def normalize_run_command(run_command: list[str]) -> list[str]:
@@ -23,87 +32,66 @@ def normalize_run_command(run_command: list[str]) -> list[str]:
     return run_command
 
 
-def _parse_memory_limit_value(limit: str) -> int | None:
-    stripped = limit.strip()
-    if not stripped:
-        return None
-    sign = 1
-    body = stripped
-    if body[:1] in {"+", "-"}:
-        if body[0] == "-":
-            sign = -1
-        body = body[1:]
-    digits = ""
-    index = 0
-    while index < len(body) and body[index].isdigit():
-        digits += body[index]
-        index += 1
-    if not digits:
-        return None
-    suffix = body[index:].upper()
-    multipliers = {
-        "": 1,
-        "B": 1,
-        "K": 1000,
-        "KB": 1000,
-        "M": 1000**2,
-        "MB": 1000**2,
-        "G": 1000**3,
-        "GB": 1000**3,
-        "T": 1000**4,
-        "TB": 1000**4,
-        "P": 1000**5,
-        "PB": 1000**5,
-        "E": 1000**6,
-        "EB": 1000**6,
-    }
-    multiplier = multipliers.get(suffix)
-    if multiplier is None:
-        return None
-    return sign * int(digits) * multiplier
+def _normalize_systemd_limit(limit: str) -> str:
+    if limit.strip().lower() == "unlimited":
+        return "infinity"
+    return limit
 
 
-def _memory_limit_enabled(limit: str | None) -> bool:
-    if limit is None:
-        return False
-    parsed = _parse_memory_limit_value(limit)
-    if parsed is None:
-        return True
-    return parsed > 0
-
-
-def _systemd_run_prefix(limit: str) -> list[str]:
-    return ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={limit}"]
+def _systemd_run_prefix(*, memory_limit: str | None, swap_limit: str | None) -> list[str]:
+    prefix = [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "-q",
+    ]
+    if memory_limit is not None:
+        prefix.extend(["-p", f"MemoryMax={_normalize_systemd_limit(memory_limit)}"])
+    if swap_limit is not None:
+        prefix.extend(["-p", f"MemorySwapMax={_normalize_systemd_limit(swap_limit)}"])
+    prefix.extend(["-p", "Delegate=yes"])
+    return prefix
 
 
 def _systemd_scope_name() -> str:
     return f"agm-run-{uuid4().hex}.scope"
 
 
-def _memory_limit_run_context(
-    env: dict[str, str], memory_limit: str | None
+def _resource_limit_run_context(
+    env: dict[str, str], memory_limit: str | None, swap_limit: str | None
 ) -> tuple[list[str], list[str] | None]:
-    if not _memory_limit_enabled(memory_limit):
+    if memory_limit is None and swap_limit is None:
         return [], None
     if shutil.which("systemd-run", path=env.get("PATH")) is None:
         print("Error: systemd-run is not installed or not in PATH.", file=sys.stderr)
         raise SystemExit(1)
-    assert memory_limit is not None
     scope_name = _systemd_scope_name()
     return (
-        [*_systemd_run_prefix(memory_limit), "--unit", scope_name],
+        [
+            *_systemd_run_prefix(memory_limit=memory_limit, swap_limit=swap_limit),
+            "--unit",
+            scope_name,
+            "--",
+            "bash",
+            "-c",
+            _SYSTEMD_DELEGATED_CGROUP_BOOTSTRAP,
+            "--",
+        ],
         ["systemctl", "--user", "stop", scope_name],
     )
 
 
-def _run_with_optional_memory_limit(
+def _run_with_optional_resource_limits(
     *,
     subprocess_args: list[str],
     cwd: Path,
     env: dict[str, str],
     memory_limit: str | None,
+    swap_limit: str | None,
 ) -> None:
-    process_prefix, interrupt_cleanup_cmd = _memory_limit_run_context(env, memory_limit)
+    process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
+        env, memory_limit, swap_limit
+    )
     subprocess_args = [*process_prefix, *subprocess_args]
     try:
         raise SystemExit(
@@ -142,25 +130,32 @@ def run(args: RunArgs) -> None:
         effective_memory_limit = run_args.memory
     else:
         effective_memory_limit = run_args.memory or configured_memory_limit or DEFAULT_MEMORY_LIMIT
+    if run_args.no_swap_limit:
+        effective_swap_limit = None
+    elif run_args.no_sandbox:
+        effective_swap_limit = run_args.swap
+    else:
+        effective_swap_limit = run_args.swap or DEFAULT_SWAP_LIMIT
     effective_run_command = list(run_command)
     if command_alias is not None:
         effective_run_command[0] = command_alias
-    process_prefix, interrupt_cleanup_cmd = _memory_limit_run_context(
-        resolved_env, effective_memory_limit
+    process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
+        resolved_env, effective_memory_limit, effective_swap_limit
     )
     if dry_run.enabled():
-        dry_run_memory_limit = (
-            effective_memory_limit
-            if effective_memory_limit is not None and _memory_limit_enabled(effective_memory_limit)
-            else "disabled"
-        )
         dry_run.print_configuration("run")
         dry_run.print_detail("cwd", str(current))
         dry_run.print_detail("sandbox", "disabled" if run_args.no_sandbox else "enabled")
         dry_run.print_detail("patch proj dir", "disabled" if run_args.no_patch else "enabled")
         dry_run.print_detail("command name", command_name)
         dry_run.print_detail("alias command", command_alias or "disabled")
-        dry_run.print_detail("memory limit", dry_run_memory_limit)
+        dry_run.print_detail(
+            "memory limit",
+            effective_memory_limit if effective_memory_limit is not None else "disabled",
+        )
+        dry_run.print_detail(
+            "swap limit", effective_swap_limit if effective_swap_limit is not None else "disabled"
+        )
         if not run_args.no_sandbox:
             srt.run_sandboxed(
                 command=effective_run_command,
@@ -184,11 +179,12 @@ def run(args: RunArgs) -> None:
         return
 
     if run_args.no_sandbox:
-        _run_with_optional_memory_limit(
+        _run_with_optional_resource_limits(
             subprocess_args=list(effective_run_command),
             cwd=current,
             env=resolved_env,
             memory_limit=effective_memory_limit,
+            swap_limit=effective_swap_limit,
         )
         return
 

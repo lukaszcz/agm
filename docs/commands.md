@@ -130,7 +130,7 @@ Loop behavior:
 |---|---|
 | `agm config copy DIRNAME` | Copy known project config files into an existing target directory |
 | `agm config cp DIRNAME` | Alias form of `agm config copy` |
-| `agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
+| `agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
 | `agm tmux open [-d\|--detach] [-n\|--num-panes PANES] [SESSION]` | Open a tmux session |
 | `agm tmux close SESSION` | Close a tmux session |
 | `agm tmux layout PANES [-w\|--window WINDOW_ID]` | Apply AGM's tmux pane layout to a window |
@@ -158,7 +158,10 @@ Loop behavior:
 
 - `--no-sandbox`: run the command directly without `srt`; skips sandbox settings discovery and patching
 - `-f`, `--file SETTINGS`: use one settings file directly instead of discovered settings
-- `--memory LIMIT`: wrap the command in `systemd-run --user --scope -p MemoryMax=LIMIT`; defaults to `20G`; values `<= 0` disable memory limiting
+- `--memory LIMIT`: set `MemoryMax=LIMIT` in the delegated `systemd-run --user --scope`; the bootstrap exports `SANDBOX_CGROUP` and enables the memory controller for descendant cgroups; defaults to `20G` in sandbox mode; `0` means a zero memory limit; `unlimited` means no memory cap
+- `--swap LIMIT`: set `MemorySwapMax=LIMIT` in the delegated scope; defaults to `0` in sandbox mode; `unlimited` means no swap cap
+- `--no-memory-limit`: do not set `MemoryMax`
+- `--no-swap-limit`: do not set `MemorySwapMax`
 - `--no-patch`: do not append project notes, deps, and repo `.git` paths to `filesystem.allowWrite`
 
 Sandbox settings resolution:

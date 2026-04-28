@@ -719,12 +719,28 @@ def run(
     memory: str | None = typer.Option(
         None,
         "--memory",
-        help="Set MemoryMax; <= 0 disables memory limiting.",
+        help=(
+            "Set MemoryMax inside delegated systemd-run; use 0 for a zero limit or "
+            "unlimited for no memory cap."
+        ),
+    ),
+    swap: str | None = typer.Option(
+        None,
+        "--swap",
+        help=(
+            "Set MemorySwapMax inside delegated systemd-run; default is 0 in sandbox mode, "
+            "or use unlimited for no swap cap."
+        ),
     ),
     no_memory_limit: bool = typer.Option(
         False,
         "--no-memory-limit",
-        help="Disable memory limiting and skip wrapping the command in systemd-run.",
+        help="Do not set MemoryMax.",
+    ),
+    no_swap_limit: bool = typer.Option(
+        False,
+        "--no-swap-limit",
+        help="Do not set MemorySwapMax.",
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
@@ -739,7 +755,9 @@ def run(
         no_sandbox=no_sandbox,
         no_patch=no_patch,
         memory=memory,
+        swap=swap,
         no_memory_limit=no_memory_limit,
+        no_swap_limit=no_swap_limit,
         settings_file=str(settings_file) if settings_file is not None else None,
     )
     if not run_command.normalize_run_command(list(typed_args.run_command)):

@@ -382,15 +382,27 @@ def _systemd_run_command(result: subprocess.CompletedProcess[str]) -> str:
 def _assert_systemd_run_command(
     result: subprocess.CompletedProcess[str],
     *,
-    memory_limit: str,
+    memory_limit: str | None,
+    swap_limit: str | None,
     inner_command: str,
 ) -> None:
     command = _systemd_run_command(result)
-    pattern = (
-        rf"--user --scope -q -p MemoryMax={re.escape(memory_limit)} "
-        rf"--unit agm-run-[0-9a-f]+\.scope {re.escape(inner_command)}"
-    )
-    assert re.fullmatch(pattern, command), command
+    assert re.search(r"--user --scope -q ", command), command
+    if memory_limit is None:
+        assert "MemoryMax=" not in command, command
+    else:
+        assert re.search(rf"-p MemoryMax={re.escape(memory_limit)} ", command), command
+    if swap_limit is None:
+        assert "MemorySwapMax=" not in command, command
+    else:
+        assert re.search(rf"-p MemorySwapMax={re.escape(swap_limit)} ", command), command
+    assert "-p Delegate=yes " in command, command
+    assert re.search(r"--unit agm-run-[0-9a-f]+\.scope -- bash -c ", command), command
+    assert 'mkdir -p "${CG}/init"' in command, command
+    assert 'echo $$ > "${CG}/init/cgroup.procs"' in command, command
+    assert 'echo "+memory" > "${CG}/cgroup.subtree_control"' in command, command
+    assert 'export SANDBOX_CGROUP="$CG"' in command, command
+    assert command.endswith(f" -- {inner_command}"), command
 
 
 # ── agm config cp ───────────────────────────────────────────────────────────
@@ -2092,8 +2104,8 @@ class TestSandbox:
         assert result.returncode == 0
         assert result.stderr == ""
         assert (
-            "agm run [--no-sandbox] [--no-patch] [--memory LIMIT]\n"
-            "[--no-memory-limit] [-f|--file SETTINGS] "
+            "agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]\n"
+            "[--no-memory-limit] [--no-swap-limit] [-f|--file SETTINGS] "
             "COMMAND [ARGS...]"
             in result.stdout
         )
@@ -2474,6 +2486,7 @@ class TestSandbox:
         _assert_systemd_run_command(
             result,
             memory_limit="20G",
+            swap_limit="0",
             inner_command=f"srt --settings {work / '.sandbox' / 'npm.json'} -- npm test --coverage",
         )
         assert _srt_command(result) == "npm test --coverage"
@@ -2499,6 +2512,7 @@ class TestSandbox:
         _assert_systemd_run_command(
             result,
             memory_limit="2G",
+            swap_limit="0",
             inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
 
@@ -2600,10 +2614,11 @@ class TestSandbox:
         _assert_systemd_run_command(
             result,
             memory_limit="5G",
+            swap_limit="0",
             inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
 
-    def test_run_does_not_wrap_when_memory_limit_is_zero_or_less(
+    def test_run_wraps_with_zero_memory_limit(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         self._make_fake_systemd_run(tmp_path / "bin", env)
@@ -2621,10 +2636,15 @@ class TestSandbox:
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
-        assert _systemd_run_command(result) == ""
+        _assert_systemd_run_command(
+            result,
+            memory_limit="0",
+            swap_limit="0",
+            inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
+        )
         assert _srt_command(result) == "echo hi"
 
-    def test_run_no_memory_limit_flag_disables_wrapping(
+    def test_run_no_memory_limit_flag_omits_memory_max_but_keeps_swap_limit(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         self._make_fake_systemd_run(tmp_path / "bin", env)
@@ -2644,7 +2664,83 @@ class TestSandbox:
 
         result = run_agm(["run", "--no-memory-limit", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
+        _assert_systemd_run_command(
+            result,
+            memory_limit=None,
+            swap_limit="0",
+            inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
+        )
+        assert _srt_command(result) == "echo hi"
+
+    def test_run_no_memory_and_swap_limit_disable_wrapping(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[run]\nmemory = "10G"\n[run.echo]\nmemory = "5G"\n'
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(
+            ["run", "--no-memory-limit", "--no-swap-limit", "echo", "hi"],
+            env=env,
+            cwd=str(work),
+        )
+        assert result.returncode == 0
         assert _systemd_run_command(result) == ""
+        assert _srt_command(result) == "echo hi"
+
+    def test_run_no_swap_limit_omits_memory_swap_max(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(["run", "--no-swap-limit", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        _assert_systemd_run_command(
+            result,
+            memory_limit="20G",
+            swap_limit=None,
+            inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
+        )
+        assert _srt_command(result) == "echo hi"
+
+    def test_run_swap_unlimited_keeps_wrapper_and_sets_property(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(["run", "--swap", "unlimited", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        _assert_systemd_run_command(
+            result,
+            memory_limit="20G",
+            swap_limit="infinity",
+            inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
+        )
         assert _srt_command(result) == "echo hi"
 
     def test_run_with_double_dash_separator(
@@ -5413,8 +5509,12 @@ class TestHelp:
         assert "$HOME/.agm/config.toml" in result.stdout
         assert "project config.toml and ./.agm/config.toml" in result.stdout
         assert '[run.<command>] alias = "<other-command>"' in result.stdout
-        assert '[run] memory = "20G"' in result.stdout or "The default is 20G" in result.stdout
+        assert '[run] memory = "20G"' in result.stdout or (
+            "The default\n               memory limit is 20G" in result.stdout
+        )
         assert "--memory LIMIT" in result.stdout
+        assert "--swap LIMIT" in result.stdout
+        assert "--no-swap-limit" in result.stdout
         assert "MemoryMax=LIMIT" in result.stdout
         assert "-f, --file SETTINGS" in result.stdout
         assert "Use this settings file directly" in result.stdout

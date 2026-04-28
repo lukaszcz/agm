@@ -80,7 +80,9 @@ class RunArgs:
     no_sandbox: bool
     no_patch: bool
     memory: str | None
+    swap: str | None
     no_memory_limit: bool
+    no_swap_limit: bool
     settings_file: str | None
 
 

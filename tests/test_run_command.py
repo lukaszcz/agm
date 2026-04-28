@@ -83,12 +83,13 @@ def test_run_delegates_sandbox_execution_to_srt(
             "systemd-run",
             "--user",
             "--scope",
+            "-q",
             "-p",
             "MemoryMax=20G",
             "--unit",
-            captured["process_prefix"][6],
+            captured["process_prefix"][7],
         ],
-        "interrupt_cleanup_cmd": ["systemctl", "--user", "stop", captured["process_prefix"][6]],
+        "interrupt_cleanup_cmd": ["systemctl", "--user", "stop", captured["process_prefix"][7]],
     }
 
 

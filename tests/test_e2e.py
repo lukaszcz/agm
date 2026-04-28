@@ -387,7 +387,7 @@ def _assert_systemd_run_command(
 ) -> None:
     command = _systemd_run_command(result)
     pattern = (
-        rf"--user --scope -p MemoryMax={re.escape(memory_limit)} "
+        rf"--user --scope -q -p MemoryMax={re.escape(memory_limit)} "
         rf"--unit agm-run-[0-9a-f]+\.scope {re.escape(inner_command)}"
     )
     assert re.fullmatch(pattern, command), command
@@ -2009,6 +2009,9 @@ class TestSandbox:
             "    --user|--scope)\n"
             "      shift\n"
             "      ;;\n"
+            "    -q)\n"
+            "      shift\n"
+            "      ;;\n"
             "    -p)\n"
             "      shift 2\n"
             "      ;;\n"
@@ -2521,7 +2524,7 @@ class TestSandbox:
         assert f"{work / '.sandbox' / 'printf.json'}" in result.stdout
         assert f"dry-run:   patch proj dir path: {proj_dir}" in result.stdout
         assert "dry-run: command [sandbox]:" in result.stdout
-        assert "systemd-run --user --scope -p MemoryMax=5G" in result.stdout
+        assert "systemd-run --user --scope -q -p MemoryMax=5G" in result.stdout
         assert "srt --settings" in result.stdout
         assert "-- printf hi" in result.stdout
 

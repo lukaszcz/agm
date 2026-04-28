@@ -73,7 +73,7 @@ def _memory_limit_enabled(limit: str | None) -> bool:
 
 
 def _systemd_run_prefix(limit: str) -> list[str]:
-    return ["systemd-run", "--user", "--scope", "-p", f"MemoryMax={limit}"]
+    return ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={limit}"]
 
 
 def _systemd_scope_name() -> str:

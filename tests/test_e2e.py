@@ -267,11 +267,11 @@ def _git(
     )
 
 
-def make_bare_repo(path: Path, env: dict[str, str]) -> Path:
-    """Create a bare git repo with an initial commit on *main*."""
+def make_bare_repo(path: Path, env: dict[str, str], *, initial_branch: str = "main") -> Path:
+    """Create a bare git repo with an initial commit on *initial_branch*."""
     tmp = path.parent / f"_tmpinit_{path.name}"
     tmp.mkdir(parents=True)
-    _git("init", "-b", "main", cwd=str(tmp), env=env)
+    _git("init", "-b", initial_branch, cwd=str(tmp), env=env)
     (tmp / "README.md").write_text("initial\n")
     _git("add", "README.md", cwd=str(tmp), env=env)
     _git("commit", "-m", "initial commit", cwd=str(tmp), env=env)
@@ -1627,6 +1627,29 @@ class TestFetch:
 
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/main-sync" in branches
+
+    def test_creates_tracking_branches_using_remote_default_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env, initial_branch="trunk")
+        project = _make_project(tmp_path, bare, env)
+
+        other = make_working_repo(tmp_path / "other", bare, env)
+        _git("checkout", "-b", "feat/trunk-sync", cwd=str(other), env=env)
+        (other / "trunk-sync.txt").write_text("trunk-sync.txt")
+        _git("add", ".", cwd=str(other), env=env)
+        _git("commit", "-m", "add trunk-sync.txt", cwd=str(other), env=env)
+        _git("push", "-u", "origin", "feat/trunk-sync", cwd=str(other), env=env)
+        _git("checkout", "trunk", cwd=str(other), env=env)
+
+        branches_before = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/trunk-sync" not in branches_before
+
+        result = run_agm(["fetch"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode == 0
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/trunk-sync" in branches
 
     def test_creates_tracking_branches_for_dependency_repos(
         self, tmp_path: Path, env: dict[str, str]

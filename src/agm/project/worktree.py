@@ -17,10 +17,12 @@ from agm.project.layout import (
 def sync_remote_tracking_branches(
     repo_dir: Path, *, env: dict[str, str] | None = None
 ) -> None:
-    """Create local tracking branches for origin branches not merged into origin/main."""
+    """Create local tracking branches not merged into origin's default branch."""
+
+    default_branch_ref = git_helpers.default_remote_branch_ref(repo_dir, env=env)
 
     for remote_branch in git_helpers.remote_unmerged_branches(
-        repo_dir, base_ref="origin/main", env=env
+        repo_dir, base_ref=default_branch_ref, env=env
     ):
         if remote_branch == "origin/HEAD":
             continue
@@ -30,7 +32,7 @@ def sync_remote_tracking_branches(
 
 
 def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-    """Create local tracking branches for origin branches not merged into origin/main."""
+    """Create local tracking branches not merged into origin's default branch."""
 
     repo_dir = git_helpers.git_setup(cwd)
     git_helpers.fetch_prune_origin(repo_dir, env=env)

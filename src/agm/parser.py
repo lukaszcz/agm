@@ -71,7 +71,7 @@ _HELP_TEXTS: dict[str, str] = {
 
         Fetch the main repository and all checked-out dependencies, then create
         missing local tracking branches for origin branches not merged into
-        origin/main in each repo.
+        the default origin branch in each repo.
     """),
     "loop": textwrap.dedent("""\
         agm loop [--runner COMMAND] [--selector COMMAND] [--tasks-dir DIR]

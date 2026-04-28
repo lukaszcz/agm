@@ -186,6 +186,21 @@ def remote_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | N
     )
 
 
+def default_remote_branch_ref(
+    repo_dir: Path, *, env: dict[str, str] | None = None
+) -> str:
+    """Return the local remote-tracking ref for origin's default branch."""
+
+    default_ref = symbolic_ref(repo_dir, "refs/remotes/origin/HEAD", env=env)
+    if default_ref:
+        return default_ref
+    print(
+        f"error: could not determine default branch for repo at {repo_dir}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
 def remote_unmerged_branches(
     repo_dir: Path,
     *,

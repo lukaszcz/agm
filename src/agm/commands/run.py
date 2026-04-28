@@ -136,7 +136,9 @@ def run(args: RunArgs) -> None:
     command_name = Path(run_command[0]).name or run_command[0]
     command_alias = run_config.alias_for(command_name)
     configured_memory_limit = run_config.memory_limit_for(command_name)
-    if run_args.no_sandbox:
+    if run_args.no_memory_limit:
+        effective_memory_limit = None
+    elif run_args.no_sandbox:
         effective_memory_limit = run_args.memory
     else:
         effective_memory_limit = run_args.memory or configured_memory_limit or DEFAULT_MEMORY_LIMIT

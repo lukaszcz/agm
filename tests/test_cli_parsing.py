@@ -488,6 +488,29 @@ class TestRun:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].memory == "8G"
+        assert calls[0].no_memory_limit is False
+        assert calls[0].run_command == ["echo", "hi"]
+
+    def test_run_with_unlimited_memory(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "--memory", "unlimited", "echo", "hi"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].memory == "unlimited"
+        assert calls[0].no_memory_limit is False
+        assert calls[0].run_command == ["echo", "hi"]
+
+    def test_run_with_no_memory_limit(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.run_command)
+        result = invoke(runner, ["run", "--no-memory-limit", "echo", "hi"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].memory is None
+        assert calls[0].no_memory_limit is True
         assert calls[0].run_command == ["echo", "hi"]
 
     def test_run_no_command_shows_help(self, runner: CliRunner) -> None:

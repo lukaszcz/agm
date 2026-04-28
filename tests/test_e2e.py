@@ -2066,7 +2066,8 @@ class TestSandbox:
         assert result.returncode == 0
         assert result.stderr == ""
         assert (
-            "agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [-f|--file SETTINGS] "
+            "agm run [--no-sandbox] [--no-patch] [--memory LIMIT]\n"
+            "[--no-memory-limit] [-f|--file SETTINGS] "
             "COMMAND [ARGS...]"
             in result.stdout
         )
@@ -2593,6 +2594,29 @@ class TestSandbox:
         (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
 
         result = run_agm(["run", "echo", "hi"], env=env, cwd=str(work))
+        assert result.returncode == 0
+        assert _systemd_run_command(result) == ""
+        assert _srt_command(result) == "echo hi"
+
+    def test_run_no_memory_limit_flag_disables_wrapping(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        self._make_fake_systemd_run(tmp_path / "bin", env)
+        self._make_fake_srt(tmp_path / "bin", env)
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[run]\nmemory = "10G"\n[run.echo]\nmemory = "5G"\n'
+        )
+
+        work = tmp_path / "work"
+        work.mkdir()
+        sandbox_dir = work / ".sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
+
+        result = run_agm(["run", "--no-memory-limit", "echo", "hi"], env=env, cwd=str(work))
         assert result.returncode == 0
         assert _systemd_run_command(result) == ""
         assert _srt_command(result) == "echo hi"

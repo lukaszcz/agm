@@ -12,18 +12,17 @@ Use `uv run` for all Python tooling.
 ## Project Structure
 
 Production code lives in `src/agm/`, organized by area:
-- `commands/` for CLI entrypoints and command implementations,
-- `config/` for loading and resolving configuration,
+- `commands/` for CLI entrypoints and command implementations; its directory structure must reflect the CLI command tree exactly, including nested command groups (`config/`, `dep/`, `loop/`, `tmux/`, `worktree/`),
+- `config/` for loading and resolving general and sandbox configuration,
 - `core/` for environment and process primitives shared across features,
 - `project/` for project/worktree setup and layout management,
-- `vcs/` for git integration,
-- `tmux/` for tmux session and layout logic.
+- `sandbox/` for sandbox runtime/template support,
+- `tmux/` for tmux session and layout logic,
+- `vcs/` for git integration.
 
-The directory structure of `src/agm/commands` must reflect the CLI command tree structure exactly, including nested command groups (`branch/`, `config/`, `dep/`, `tmux/`, `worktree/`, etc.).
+CLI arguments/options are defined in `src/agm/cli.py`, parser construction lives in `src/agm/parser.py`, and custom argument-value completions for CLI parameters live in `src/agm/completion.py`.
 
-CLI arguments/options are defined in `src/agm/cli.py`. Custom argument-value completions for CLI parameters live in `src/agm/completion.py`.
-
-Tests live in `tests/`. Use `test_cli_parsing.py` for parser coverage, `test_project_utils.py` for focused utilities, and `test_e2e.py` for full CLI workflows.
+Tests live in `tests/`. Use `test_cli_parsing.py` for parser coverage, `test_cli_completion.py` for completion behavior, `test_command_layout.py` for command-tree structure, focused `test_*_utils.py` files for utilities, and `test_e2e.py` for full CLI workflows.
 
 Project notes and command docs are in `docs/`.
 

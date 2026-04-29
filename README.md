@@ -182,6 +182,15 @@ agm config cp target-dir
 Known files currently include `.setup.sh`, `.env`, `.env.local`, `.config`, `.agents`,
 `.opencode`, `.codex`, `.claude`, `.pi`, and `.mcp.json`.
 
+### `agm config env`
+
+Print shell statements that refresh the current checkout environment from project and branch
+`.env`, `.env.local`, and `env.sh` files. Apply them to the current shell with:
+
+```bash
+eval "$(agm config env)"
+```
+
 ### `agm worktree`
 
 Low-level worktree operations for the main project repo.

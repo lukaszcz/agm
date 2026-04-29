@@ -130,6 +130,7 @@ Loop behavior:
 |---|---|
 | `agm config copy DIRNAME` | Copy known project config files into an existing target directory |
 | `agm config cp DIRNAME` | Alias form of `agm config copy` |
+| `agm config env` | Print shell statements for refreshing the current checkout environment |
 | `agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
 | `agm tmux open [-d\|--detach] [-n\|--num-panes PANES] [SESSION]` | Open a tmux session |
 | `agm tmux close SESSION` | Close a tmux session |
@@ -147,6 +148,14 @@ Loop behavior:
 - `.claude`
 - `.pi`
 - `.mcp.json`
+
+`agm config env` uses the same environment resolution as `agm open`: project `.env`,
+project `.env.local`, project `env.sh`, then matching branch config files when the current
+checkout is a branch worktree. Apply the printed shell statements with:
+
+```bash
+eval "$(agm config env)"
+```
 
 `agm run` config lookup:
 

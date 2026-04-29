@@ -18,6 +18,11 @@ class ConfigCopyArgs:
 
 
 @dataclass(slots=True)
+class ConfigEnvArgs:
+    pass
+
+
+@dataclass(slots=True)
 class WorktreeNewArgs:
     worktrees_dir: str | None
     branch: str

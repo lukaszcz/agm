@@ -15,7 +15,7 @@ from agm.project.layout import (
     is_main_checkout_branch,
     main_repo_dir,
 )
-from agm.project.setup import load_worktree_env
+from agm.project.setup import load_current_config_env, load_worktree_env
 
 
 def test_current_project_dir_from_project_root(tmp_path: Path) -> None:
@@ -208,3 +208,26 @@ def test_load_worktree_env_applies_dotenv_precedence_before_env_sh(
     assert loaded_env["PROJECT_ENV_SH"] == "project-local"
     assert loaded_env["BRANCH_ENV_SH"] == "branch-local"
     assert loaded_env["SHARED"] == "branch-env-sh"
+
+
+def test_load_current_config_env_uses_current_project_checkout(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    config_dir = project / "config"
+    repo_dir.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    (config_dir / ".env").write_text("FROM_DOTENV=1\n", encoding="utf-8")
+    (config_dir / "env.sh").write_text(
+        'export FROM_ENV_SH="$FROM_DOTENV:$REPO_DIR"\n',
+        encoding="utf-8",
+    )
+
+    loaded_env = load_current_config_env(cwd=project, env=env)
+
+    assert loaded_env["PROJ_DIR"] == str(project)
+    assert loaded_env["REPO_DIR"] == str(repo_dir)
+    assert loaded_env["FROM_DOTENV"] == "1"
+    assert loaded_env["FROM_ENV_SH"] == f"1:{repo_dir}"

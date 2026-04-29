@@ -17,14 +17,14 @@ from agm.project.layout import (
 )
 
 
-def load_worktree_env(
+def load_config_env(
     project_dir: Path,
     branch: str | None,
     *,
     checkout_dir: Path,
     env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Return the sourced environment for a repo or worktree checkout."""
+    """Return *env* refreshed from project and branch config files."""
 
     resolved_env = dict(os.environ if env is None else env)
     resolved_env["PROJ_DIR"] = str(project_dir)
@@ -41,6 +41,39 @@ def load_worktree_env(
         )
         resolved_env = source_env_file(env_dir / "env.sh", resolved_env, cwd=checkout_dir)
     return resolved_env
+
+
+def load_worktree_env(
+    project_dir: Path,
+    branch: str | None,
+    *,
+    checkout_dir: Path,
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return the sourced environment for a repo or worktree checkout."""
+
+    return load_config_env(project_dir, branch, checkout_dir=checkout_dir, env=env)
+
+
+def load_current_config_env(
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return the config-refreshed environment for the current checkout."""
+
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    project_dir = current_project_dir(current)
+    repo_dir = project_repo_dir(project_dir)
+    try:
+        checkout_dir = git_helpers.git_setup(current)
+    except SystemExit:
+        checkout_dir = repo_dir if repo_dir.is_dir() else current
+
+    branch: str | None = None
+    if checkout_dir.resolve(strict=False) != repo_dir.resolve(strict=False):
+        branch = git_helpers.current_branch(checkout_dir, env=env)
+    return load_config_env(project_dir, branch, checkout_dir=checkout_dir, env=env)
 
 
 def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:

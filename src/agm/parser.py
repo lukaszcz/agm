@@ -121,8 +121,14 @@ _HELP_TEXTS: dict[str, str] = {
     "config": textwrap.dedent("""\
         agm config copy DIRNAME
         agm config cp   DIRNAME
+        agm config env
 
         Copy project configuration files into an existing target directory.
+        Print shell statements that refresh the current checkout environment
+        from project and branch .env, .env.local, and env.sh files.
+
+        To apply the environment to the current shell:
+          eval "$(agm config env)"
     """),
     "worktree": textwrap.dedent("""\
         agm worktree new      [-d|--dir DIR] BRANCH
@@ -279,6 +285,15 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm config copy DIRNAME
 
         Copy known project config files into an existing target directory.
+    """),
+    ("config", "env"): textwrap.dedent("""\
+        agm config env
+
+        Print shell statements that refresh the current checkout environment
+        from project and branch .env, .env.local, and env.sh files.
+
+        To apply the environment to the current shell:
+          eval "$(agm config env)"
     """),
     ("wt", "new"): textwrap.dedent("""\
         agm wt new [-d|--dir DIR] BRANCH

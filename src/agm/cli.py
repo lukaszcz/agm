@@ -10,6 +10,7 @@ import typer
 
 import agm.commands.close as close_command
 import agm.commands.config.copy as config_copy_command
+import agm.commands.config.env as config_env_command
 import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
@@ -32,6 +33,7 @@ from agm import parser as parser_helpers
 from agm.commands.args import (
     CloseArgs,
     ConfigCopyArgs,
+    ConfigEnvArgs,
     DepNewArgs,
     DepRemoveArgs,
     DepSwitchArgs,
@@ -442,6 +444,16 @@ def config_copy(
             dirname=_require_value(dirname, command_path=["config", "copy"], name="dirname"),
         )
     )
+
+
+@config_app.command(name="env")
+def config_env(
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    config_env_command.run(ConfigEnvArgs())
 
 
 @worktree_app.callback(invoke_without_command=True)

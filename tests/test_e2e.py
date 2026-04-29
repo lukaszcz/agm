@@ -651,6 +651,95 @@ class TestCpConfig:
         assert (dest / ".env").read_text() == "ALIAS=1"
 
 
+# ── agm config env ──────────────────────────────────────────────────────────
+
+
+class TestConfigEnv:
+    """agm config env: print shell statements for current checkout config."""
+
+    def test_eval_refreshes_current_shell_from_project_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "proj"
+        repo_dir = project / "repo"
+        config = project / "config"
+        repo_dir.mkdir(parents=True)
+        (project / "worktrees").mkdir()
+        config.mkdir()
+        (config / ".env").write_text("VALUE=dotenv\n", encoding="utf-8")
+        (config / ".env.local").write_text("VALUE=local\n", encoding="utf-8")
+        (config / "env.sh").write_text(
+            'export VALUE="$VALUE-env-sh"\nunset REMOVE_ME\n',
+            encoding="utf-8",
+        )
+        env["REMOVE_ME"] = "remove"
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    'printf "VALUE=%s\\nPROJ_DIR=%s\\nREPO_DIR=%s\\nREMOVE_ME=%s\\n" '
+                    '"$VALUE" "$PROJ_DIR" "$REPO_DIR" "${REMOVE_ME-unset}"'
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=project,
+            check=True,
+        )
+
+        assert result.stdout.splitlines() == [
+            "VALUE=local-env-sh",
+            f"PROJ_DIR={project}",
+            f"REPO_DIR={repo_dir}",
+            "REMOVE_ME=unset",
+        ]
+
+    def test_eval_refreshes_current_shell_from_branch_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        config = project / "config"
+        (config / ".env").write_text("VALUE=project\n", encoding="utf-8")
+        branch_config = config / "feat" / "env"
+        branch_config.mkdir(parents=True)
+        (branch_config / ".env").write_text("VALUE=branch\n", encoding="utf-8")
+        (branch_config / "env.sh").write_text(
+            'export VALUE="$VALUE-env-sh"\n',
+            encoding="utf-8",
+        )
+
+        run_agm(["wt", "new", "feat/env"], env=env, cwd=project / "repo")
+        worktree = project / "worktrees" / "feat" / "env"
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    'printf "VALUE=%s\\nPROJ_DIR=%s\\nREPO_DIR=%s\\n" '
+                    '"$VALUE" "$PROJ_DIR" "$REPO_DIR"'
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=worktree,
+            check=True,
+        )
+
+        assert result.stdout.splitlines() == [
+            "VALUE=branch-env-sh",
+            f"PROJ_DIR={project}",
+            f"REPO_DIR={worktree}",
+        ]
+
+
 # ── agm wt new ───────────────────────────────────────────────────────────────
 
 
@@ -5609,6 +5698,7 @@ class TestHelp:
             (["help", "wt", "new"], ["wt", "new", "-h"], "agm wt new"),
             (["help", "worktree", "remove"], ["worktree", "remove", "-h"], "agm worktree remove"),
             (["help", "config", "cp"], ["config", "cp", "-h"], "agm config cp"),
+            (["help", "config", "env"], ["config", "env", "-h"], "agm config env"),
             (["help", "dep", "switch"], ["dep", "switch", "-h"], "agm dep switch"),
             (["help", "tmux", "layout"], ["tmux", "layout", "-h"], "agm tmux layout"),
         ],
@@ -5640,6 +5730,7 @@ class TestHelp:
             (["fetch", "-h"], ["help", "fetch"]),
             (["config", "-h"], ["help", "config"]),
             (["config", "cp", "-h"], ["help", "config", "cp"]),
+            (["config", "env", "-h"], ["help", "config", "env"]),
             (["wt", "-h"], ["help", "wt"]),
             (["wt", "new", "-h"], ["help", "wt", "new"]),
             (["worktree", "-h"], ["help", "worktree"]),

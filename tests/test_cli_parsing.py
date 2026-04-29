@@ -67,6 +67,12 @@ class TestConfigCopy:
         result = invoke(runner, ["config", "cp"])
         assert result.exit_code != 0
 
+    def test_config_env(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.config_env_command)
+        result = invoke(runner, ["config", "env"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+
 
 class TestWorktreeNew:
     def test_wt_new(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

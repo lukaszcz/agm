@@ -6,13 +6,14 @@ AGM is an Agent Project Management CLI tool.
 
 - Python 3.12
 - Plumbum
+- Typer
 
 Use `uv run` for all Python tooling.
 
 ## Project Structure
 
 Production code lives in `src/agm/`, organized by area:
-- `commands/` for CLI entrypoints and command implementations; its directory structure must reflect the CLI command tree exactly, including nested command groups (`config/`, `dep/`, `loop/`, `tmux/`, `worktree/`),
+- `commands/` for CLI entrypoints and command implementations; its directory structure must reflect the CLI command tree exactly, including nested command groups (`config/`, `dep/`, `loop/`, `tmux/`, `worktree/`, etc.),
 - `config/` for loading and resolving general and sandbox configuration,
 - `core/` for environment and process primitives shared across features,
 - `project/` for project/worktree setup and layout management,
@@ -35,19 +36,19 @@ Additional directories:
 
 Use `just` for the standard workflow:
 
-- `just setup` creates `.venv` with Python 3.12 and installs the project plus dev dependencies via `uv`.
-- `just lint` runs `ruff check src/ tests/`.
-- `just test` runs `pytest tests/ -q`.
-- `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`.
-- `just check` runs linting, tests, and type checking together.
-- `just install` installs the `agm` CLI and copies sandbox configs into `~/.sandbox/`.
+- `just setup` creates `.venv` with Python 3.12 and installs the project plus dev dependencies via `uv`
+- `just lint` runs `ruff check src/ tests/`
+- `just test` runs `pytest tests/ -q`
+- `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`
+- `just check` runs linting, tests, and type checking together
+- `just install` installs the `agm` CLI and copies default config into `~/.agm/`
 
 Run the CLI locally with `uv run agm ...` when iterating on a command.
 
 ## Coding Style & Naming Conventions
 
 - Formatting: ruff (line length 100)
-- Typing: strict discipline (`mypy` strict + `basedpyright`); modern union syntax (`str | None`, `dict[str, int]`, `list[str]`)
+- Typing: strict discipline (`mypy` strict); modern union syntax (`str | None`, `dict[str, int]`, `list[str]`)
 - Do NOT use `type: ignore` comments. If ignoring a type rule is necessary, ALWAYS ask the user for permission and explain why.
 - Do NOT use `noqa` comment. If ignoring a lint rule is necessary, ALWAYS ask the user for permission and explain why.
 - Do not use `fmt: skip` or `fmt: off` comments. If ignoring the formatter is necessary, ask the user for permission and explain why.

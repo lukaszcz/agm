@@ -161,7 +161,7 @@ _HELP_TEXTS: dict[str, str] = {
           agm dep rm --all
               Remove the entire dependency directory, including the main repo
               checkout and any linked worktrees.
-          agm dep switch --branch
+          agm dep switch --branch DEP BRANCH
               Create DEP's BRANCH from the dependency's default branch, then
               add a worktree for it. Without this flag, BRANCH must already
               exist in the dependency repo.

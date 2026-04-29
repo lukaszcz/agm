@@ -112,7 +112,7 @@ Loop behavior:
 
 `agm dep switch` options:
 
-- `-b`, `--branch`: create `DEP`'s `BRANCH` from the dependency's default branch before adding the new worktree; without this flag, `BRANCH` must already exist
+- `-b`, `--branch DEP BRANCH`: create `DEP`'s `BRANCH` from the dependency's default branch before adding the new worktree; without this flag, `BRANCH` must already exist
 
 Dependency commands maintain dependency path environment variables in config `.env` files. For example, `deps/vyper-automation` is written as `VYPER_AUTOMATION=/path/to/proj/deps/vyper-automation/<branch>`.
 

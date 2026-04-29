@@ -5131,6 +5131,41 @@ class TestOpen:
 
         assert (project / "branch-env-sourced").exists()
 
+    def test_dotenv_files_are_applied_before_env_sh_with_branch_precedence(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        config_dir = project / "config"
+        (config_dir / ".env").write_text("VALUE=project\n", encoding="utf-8")
+        (config_dir / ".env.local").write_text("VALUE=project-local\n", encoding="utf-8")
+        (config_dir / "env.sh").write_text(
+            'printf "%s\\n" "$VALUE" > "$PROJ_DIR/project-value"\n',
+            encoding="utf-8",
+        )
+
+        branch_cfg = config_dir / "mybranch"
+        branch_cfg.mkdir(parents=True)
+        (branch_cfg / ".env").write_text("VALUE=branch\n", encoding="utf-8")
+        (branch_cfg / ".env.local").write_text("VALUE=branch-local\n", encoding="utf-8")
+        (branch_cfg / "env.sh").write_text(
+            'printf "%s\\n" "$VALUE" > "$PROJ_DIR/branch-before-env-sh"\n'
+            "export VALUE=branch-env-sh\n",
+            encoding="utf-8",
+        )
+
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "mybranch", "branch.txt", env)
+
+        run_agm(["open", "mybranch"], env=env, cwd=str(project))
+
+        assert (project / "project-value").read_text() == "project-local\n"
+        assert (project / "branch-before-env-sh").read_text() == "branch-local\n"
+
     def test_init_then_open_lifecycle(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 from agm.core.process import exit_with_output
 
 
@@ -66,6 +68,30 @@ def source_env_files(
         key, _, value = entry.partition(b"=")
         sourced_env[key.decode("utf-8")] = value.decode("utf-8", errors="surrogateescape")
     return sourced_env
+
+def load_dotenv_file(path: Path) -> dict[str, str]:
+    """Load dotenv assignments from *path* without executing shell code."""
+
+    if not path.is_file():
+        return {}
+
+    parsed = dotenv_values(path, encoding="utf-8")
+    return {
+        key: value if value is not None else ""
+        for key, value in parsed.items()
+    }
+
+
+def load_dotenv_files(
+    paths: list[Path],
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return *env* updated with dotenv values loaded from *paths* in order."""
+
+    resolved_env = dict(os.environ if env is None else env)
+    for path in paths:
+        resolved_env.update(load_dotenv_file(path))
+    return resolved_env
 
 
 def source_env_file(

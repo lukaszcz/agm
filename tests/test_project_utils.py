@@ -164,3 +164,47 @@ def test_load_worktree_env_exposes_repo_dir_to_sourced_scripts(
     assert loaded_env["REPO_DIR"] == str(checkout_dir)
     assert loaded_env["CAPTURE_PROJ_DIR"] == str(project)
     assert loaded_env["CAPTURE_REPO_DIR"] == str(checkout_dir)
+
+
+def test_load_worktree_env_applies_dotenv_precedence_before_env_sh(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    branch_config_dir = config_dir / "feat"
+    branch_config_dir.mkdir(parents=True)
+    checkout_dir = project / "worktrees" / "feat"
+    checkout_dir.mkdir(parents=True)
+
+    (config_dir / ".env").write_text("SHARED=project-dotenv\nPROJECT_ONLY=1\n", encoding="utf-8")
+    (config_dir / ".env.local").write_text(
+        "SHARED=project-local\nPROJECT_LOCAL_ONLY=1\n",
+        encoding="utf-8",
+    )
+    (config_dir / "env.sh").write_text(
+        'export PROJECT_ENV_SH="$SHARED"\nexport SHARED="project-env-sh"\n',
+        encoding="utf-8",
+    )
+
+    (branch_config_dir / ".env").write_text(
+        "SHARED=branch-dotenv\nBRANCH_ONLY=1\n",
+        encoding="utf-8",
+    )
+    (branch_config_dir / ".env.local").write_text(
+        "SHARED=branch-local\nBRANCH_LOCAL_ONLY=1\n",
+        encoding="utf-8",
+    )
+    (branch_config_dir / "env.sh").write_text(
+        'export BRANCH_ENV_SH="$SHARED"\nexport SHARED="branch-env-sh"\n',
+        encoding="utf-8",
+    )
+
+    loaded_env = load_worktree_env(project, "feat", checkout_dir=checkout_dir, env=env)
+
+    assert loaded_env["PROJECT_ONLY"] == "1"
+    assert loaded_env["PROJECT_LOCAL_ONLY"] == "1"
+    assert loaded_env["BRANCH_ONLY"] == "1"
+    assert loaded_env["BRANCH_LOCAL_ONLY"] == "1"
+    assert loaded_env["PROJECT_ENV_SH"] == "project-local"
+    assert loaded_env["BRANCH_ENV_SH"] == "branch-local"
+    assert loaded_env["SHARED"] == "branch-env-sh"

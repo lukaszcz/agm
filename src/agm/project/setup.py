@@ -7,7 +7,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core import dry_run
-from agm.core.env import source_env_files
+from agm.core.env import load_dotenv_files, source_env_file
 from agm.core.process import require_success
 from agm.project.layout import (
     branch_session_name,
@@ -30,10 +30,17 @@ def load_worktree_env(
     resolved_env["PROJ_DIR"] = str(project_dir)
     resolved_env["REPO_DIR"] = str(checkout_dir)
     config_dir = project_config_dir(project_dir)
-    env_files = [config_dir / "env.sh"]
+    config_dirs = [config_dir]
     if branch is not None:
-        env_files.append(config_dir / branch / "env.sh")
-    return source_env_files(env_files, resolved_env, cwd=checkout_dir)
+        config_dirs.append(config_dir / branch)
+
+    for env_dir in config_dirs:
+        resolved_env = load_dotenv_files(
+            [env_dir / ".env", env_dir / ".env.local"],
+            resolved_env,
+        )
+        resolved_env = source_env_file(env_dir / "env.sh", resolved_env, cwd=checkout_dir)
+    return resolved_env
 
 
 def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:

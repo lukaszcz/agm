@@ -13,10 +13,12 @@ from agm.core.fs import append_text, is_file, mkdir
 from agm.core.prompt import preprocess_prompt_file
 
 from .common import (
+    PreparedProgressInvocation,
     cleanup_temp_files,
     command_with_prompt_target,
     is_complete_output,
     loop_env,
+    prepare_progress_invocation,
     progress_file,
     prompt_file,
     run_command,
@@ -44,9 +46,8 @@ class LoopStepRuntime:
     resolved_progress_file: Path
     env: dict[str, str]
     resolved_runner_command: list[str]
-    resolved_selector_command: list[str] | None
+    progress_invocation: PreparedProgressInvocation | None
     loop_prompt: PreparedPrompt | None
-    selector_prompt: PreparedPrompt | None
     bootstrap_prompt: PreparedPrompt | None
     log_file: Path | None
 
@@ -107,13 +108,14 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     resolved_progress_file = progress_file(args)
     env = loop_env(resolved_tasks_dir)
     resolved_runner_command = runner_command(args)
-    resolved_selector_command = selector_command(args)
     validate_command(resolved_runner_command, kind="runner")
+    resolved_selector_command = selector_command(args)
+    progress_invocation: PreparedProgressInvocation | None = None
     if resolved_selector_command is not None:
-        validate_command(resolved_selector_command, kind="selector")
+        progress_invocation = prepare_progress_invocation(args, temp_files=temp_files, env=env)
 
     loop_prompt: PreparedPrompt | None = None
-    if resolved_selector_command is None:
+    if progress_invocation is None:
         loop_prompt_file = prompt_file("loop.md")
         if not is_file(loop_prompt_file):
             print(f"Error: prompt file not found: {loop_prompt_file}", file=sys.stderr)
@@ -121,7 +123,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         loop_prompt = _prepare_prompt("loop", loop_prompt_file, temp_files=temp_files, env=env)
 
     bootstrap_prompt: PreparedPrompt | None = None
-    if resolved_selector_command is None and not is_file(resolved_progress_file):
+    if progress_invocation is None and not is_file(resolved_progress_file):
         bootstrap_prompt_file = prompt_file("update_progress.md")
         if not is_file(bootstrap_prompt_file):
             print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
@@ -135,19 +137,6 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         if not dry_run.enabled():
             run_command(resolved_runner_command, bootstrap_prompt.effective_file, env=env)
 
-    selector_prompt: PreparedPrompt | None = None
-    if resolved_selector_command is not None:
-        selector_prompt_file = prompt_file("update_progress.md")
-        if not is_file(selector_prompt_file):
-            print(f"Error: prompt file not found: {selector_prompt_file}", file=sys.stderr)
-            raise SystemExit(1)
-        selector_prompt = _prepare_prompt(
-            "selector",
-            selector_prompt_file,
-            temp_files=temp_files,
-            env=env,
-        )
-
     log_file = _log_file(args)
     if log_file is not None:
         print(f"Logging to {log_file if args.log_file is not None else log_file.name}")
@@ -159,9 +148,8 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         resolved_progress_file=resolved_progress_file,
         env=env,
         resolved_runner_command=resolved_runner_command,
-        resolved_selector_command=resolved_selector_command,
+        progress_invocation=progress_invocation,
         loop_prompt=loop_prompt,
-        selector_prompt=selector_prompt,
         bootstrap_prompt=bootstrap_prompt,
         log_file=log_file,
     )
@@ -176,18 +164,35 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
         str(runtime.log_file) if runtime.log_file is not None else "disabled",
     )
     dry_run.print_detail("runner command", dry_run.format_command(runtime.resolved_runner_command))
-    selector_command_text = (
-        dry_run.format_command(runtime.resolved_selector_command)
-        if runtime.resolved_selector_command is not None
-        else "disabled"
+    has_selector_command = (
+        runtime.progress_invocation is not None
+        and runtime.progress_invocation.selector_command is not None
     )
+    selector_command_text = "disabled"
+    if has_selector_command:
+        assert runtime.progress_invocation is not None
+        assert runtime.progress_invocation.selector_command is not None
+        selector_command_text = dry_run.format_command(
+            runtime.progress_invocation.selector_command
+        )
     dry_run.print_detail("selector command", selector_command_text)
 
-    prompts = [runtime.bootstrap_prompt, runtime.selector_prompt, runtime.loop_prompt]
+    prompts = [runtime.bootstrap_prompt, runtime.loop_prompt]
     for prompt in prompts:
         if prompt is None:
             continue
         _print_dry_run_prompt(prompt.label, _dry_run_prompt_text(prompt))
+    if runtime.progress_invocation is not None:
+        _print_dry_run_prompt(
+            "selector",
+            _dry_run_prompt_text(
+                PreparedPrompt(
+                    label="selector",
+                    source_file=runtime.progress_invocation.source_prompt_file,
+                    effective_file=runtime.progress_invocation.effective_prompt_file,
+                )
+            ),
+        )
 
     if runtime.bootstrap_prompt is not None:
         _print_dry_run_command(
@@ -198,7 +203,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             ),
         )
 
-    if runtime.resolved_selector_command is None:
+    if runtime.progress_invocation is None:
         assert runtime.loop_prompt is not None
         _print_dry_run_command(
             "runner",
@@ -213,12 +218,11 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
         )
         return
 
-    assert runtime.selector_prompt is not None
     _print_dry_run_command(
         "selector",
         command_with_prompt_target(
-            runtime.resolved_selector_command,
-            runtime.selector_prompt.effective_file,
+            runtime.progress_invocation.command,
+            runtime.progress_invocation.effective_prompt_file,
         ),
     )
     dry_run.print_operation(
@@ -240,7 +244,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
         _append_log(runtime.log_file, chunk)
         _write_stream(chunk, stderr=True)
 
-    if runtime.resolved_selector_command is None:
+    if runtime.progress_invocation is None:
         assert runtime.loop_prompt is not None
         output = run_command(
             runtime.resolved_runner_command,
@@ -254,11 +258,10 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             return True
         return False
 
-    assert runtime.selector_prompt is not None
     while True:
         selector_output = run_command(
-            runtime.resolved_selector_command,
-            runtime.selector_prompt.effective_file,
+            runtime.progress_invocation.command,
+            runtime.progress_invocation.effective_prompt_file,
             env=runtime.env,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,

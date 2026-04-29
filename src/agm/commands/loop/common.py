@@ -7,14 +7,26 @@ import shlex
 import shutil
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from agm.commands.args import LoopArgs, LoopProgressArgs
 from agm.config.general import LoopConfig, load_loop_config, resolve_agm_path
 from agm.core.fs import is_file
 from agm.core.process import run_capture
+from agm.core.prompt import preprocess_prompt_file
 
 LoopCommandArgs = LoopArgs | LoopProgressArgs
+
+
+@dataclass(slots=True)
+class PreparedProgressInvocation:
+    source_prompt_file: Path
+    effective_prompt_file: Path
+    command: list[str]
+    command_kind: str
+    runner_command: list[str]
+    selector_command: list[str] | None
 
 
 def prompt_file(filename: str) -> Path:
@@ -118,6 +130,41 @@ def loop_env(tasks_dir: Path) -> dict[str, str]:
     env = dict(os.environ)
     env["TASKS_DIR"] = str(tasks_dir)
     return env
+
+
+def prepare_progress_invocation(
+    args: LoopCommandArgs,
+    *,
+    temp_files: list[Path],
+    env: dict[str, str],
+) -> PreparedProgressInvocation:
+    resolved_runner_command = runner_command(args)
+    resolved_selector_command = selector_command(args)
+    resolved_command = resolved_selector_command
+    command_kind = "selector"
+    if resolved_command is None:
+        resolved_command = resolved_runner_command
+        command_kind = "runner"
+    validate_command(resolved_command, kind=command_kind)
+
+    source_prompt_file = prompt_file("update_progress.md")
+    if not is_file(source_prompt_file):
+        print(f"Error: prompt file not found: {source_prompt_file}", file=sys.stderr)
+        raise SystemExit(1)
+
+    effective_prompt_file = preprocess_prompt_file(
+        source_prompt_file,
+        temp_files=temp_files,
+        env=env,
+    )
+    return PreparedProgressInvocation(
+        source_prompt_file=source_prompt_file,
+        effective_prompt_file=effective_prompt_file,
+        command=resolved_command,
+        command_kind=command_kind,
+        runner_command=resolved_runner_command,
+        selector_command=resolved_selector_command,
+    )
 
 
 def run_command(

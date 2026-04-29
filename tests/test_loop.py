@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from agm.commands.loop.common import is_complete_output, prompt_file, selector_result
+from agm.commands.args import LoopProgressArgs
+from agm.commands.loop.common import (
+    is_complete_output,
+    prepare_progress_invocation,
+    prompt_file,
+    selector_result,
+)
 from agm.core.prompt import preprocess_prompt_file
 
 
@@ -125,3 +131,64 @@ def test_prompt_file_prefers_home_over_install_prefix(
     monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
 
     assert prompt_file("loop.md") == home_prompt
+
+
+def test_prepare_progress_invocation_prefers_selector_when_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    prompt_dir = home / ".agm" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    prompt_path = prompt_dir / "update_progress.md"
+    prompt_path.write_text("update $TASKS_DIR\n", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.chdir(tmp_path)
+
+    args = LoopProgressArgs(
+        command_name=None,
+        runner="runner --print",
+        runner_args=[],
+        selector="selector",
+        tasks_dir="custom/tasks",
+    )
+    env = {"TASKS_DIR": str(tmp_path / "custom" / "tasks")}
+
+    invocation = prepare_progress_invocation(args, temp_files=[], env=env)
+
+    assert invocation.command == ["selector"]
+    assert invocation.command_kind == "selector"
+    assert invocation.source_prompt_file == prompt_path
+    assert invocation.effective_prompt_file.read_text(encoding="utf-8") == (
+        f"update {tmp_path / 'custom' / 'tasks'}\n"
+    )
+
+
+def test_prepare_progress_invocation_falls_back_to_runner_without_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    prompt_dir = home / ".agm" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    prompt_path = prompt_dir / "update_progress.md"
+    prompt_path.write_text("update progress\n", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.chdir(tmp_path)
+
+    args = LoopProgressArgs(
+        command_name=None,
+        runner="runner --print",
+        runner_args=["--verbose"],
+        selector=None,
+        tasks_dir=None,
+    )
+
+    invocation = prepare_progress_invocation(args, temp_files=[], env={})
+
+    assert invocation.command == ["runner", "--print", "--verbose"]
+    assert invocation.command_kind == "runner"
+    assert invocation.source_prompt_file == prompt_path
+    assert invocation.effective_prompt_file == prompt_path

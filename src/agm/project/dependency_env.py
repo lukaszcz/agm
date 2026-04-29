@@ -7,7 +7,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core.dotenv import set_dotenv_value
-from agm.core.fs import is_dir, iterdir
+from agm.core.fs import exists, is_dir, iterdir, rglob, write_text
 from agm.project.layout import project_config_dir, project_deps_dir, project_repo_dir
 
 
@@ -64,6 +64,51 @@ def update_dependency_env_var(
     env_file = config_env_file(project_dir, config_branch)
     dep_path = project_deps_dir(project_dir) / dep_name / dep_branch
     set_dotenv_value(env_file, dep_env_var_name(dep_name), str(dep_path))
+
+
+def _dependency_repo_paths(dep_dir: Path) -> list[Path]:
+    candidates = [dep_dir, *rglob(dep_dir, "*")]
+    return [
+        path
+        for path in candidates
+        if is_dir(path) and exists(path / ".git") and git_helpers.is_git_repo(path)
+    ]
+
+
+def _dependency_repo_sort_key(dep_dir: Path, repo_path: Path) -> tuple[int, str]:
+    return len(repo_path.relative_to(dep_dir).parts), str(repo_path)
+
+
+def _main_dependency_branch(dep_dir: Path) -> str | None:
+    repos = [
+        (*_dependency_repo_sort_key(dep_dir, repo_path), repo_path)
+        for repo_path in _dependency_repo_paths(dep_dir)
+    ]
+    if not repos:
+        return None
+    return git_helpers.current_branch(sorted(repos)[0][2])
+
+
+def update_main_dependency_env_vars(project_dir: Path) -> None:
+    """Create/update the main config dotenv with known dependency paths."""
+
+    env_file = config_env_file(project_dir, None)
+    if not exists(env_file):
+        write_text(env_file, "", encoding="utf-8")
+
+    deps_dir = project_deps_dir(project_dir)
+    if not is_dir(deps_dir):
+        return
+    for dep_dir in sorted(path for path in iterdir(deps_dir) if is_dir(path)):
+        branch = _main_dependency_branch(dep_dir)
+        if branch is None:
+            continue
+        update_dependency_env_var(
+            project_dir=project_dir,
+            dep_name=dep_dir.name,
+            dep_branch=branch,
+            config_branch=None,
+        )
 
 
 def update_dependency_env_vars_for_branch(

@@ -1974,7 +1974,34 @@ class TestInit:
         proj = tmp_path / "proj"
         assert (proj / "config" / "env.sh").exists()
         assert (proj / "config" / "setup.sh").exists()
+        assert (proj / "config" / ".env").read_text(encoding="utf-8") == ""
         assert os.access(proj / "config" / "setup.sh", os.X_OK)
+
+    def test_init_initializes_config_and_notes_git_repositories(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "proj.git", env)
+
+        run_agm(["init", str(bare)], env=env, cwd=str(tmp_path))
+
+        proj = tmp_path / "proj"
+        assert (proj / "config" / ".git").is_dir()
+        assert (proj / "notes" / ".git").is_dir()
+
+    def test_init_updates_existing_dependency_env_vars(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "proj"
+        dep_bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        dep = project / "deps" / "vyper-automation" / "main"
+        dep.parent.mkdir(parents=True)
+        _git("clone", str(dep_bare), str(dep), cwd=str(tmp_path), env=env)
+
+        run_agm(["init", "proj"], env=env, cwd=str(tmp_path))
+
+        assert (project / "config" / ".env").read_text(encoding="utf-8") == (
+            f"VYPER_AUTOMATION={dep}\n"
+        )
 
     def test_init_with_branch(
         self, tmp_path: Path, env: dict[str, str]
@@ -2034,6 +2061,9 @@ class TestInit:
         for d in ("repo", "deps", "worktrees", "notes", "config"):
             assert (proj / d).is_dir()
         assert not list((proj / "repo").iterdir())
+        assert (proj / "config" / ".git").is_dir()
+        assert (proj / "notes" / ".git").is_dir()
+        assert (proj / "config" / ".env").read_text(encoding="utf-8") == ""
 
     def test_init_dry_run_prints_operations_without_creating_project(
         self, tmp_path: Path, env: dict[str, str]
@@ -2088,6 +2118,9 @@ class TestInit:
         assert (proj / ".agm" / "deps").is_dir()
         assert (proj / ".agm" / "notes").is_dir()
         assert (proj / ".agm" / "worktrees").is_dir()
+        assert (proj / ".agm" / "config" / ".git").is_dir()
+        assert (proj / ".agm" / "notes" / ".git").is_dir()
+        assert (proj / ".agm" / "config" / ".env").read_text(encoding="utf-8") == ""
         assert ".agm" in (proj / ".gitignore").read_text().splitlines()
         assert (proj / "README.md").exists()
         assert (proj / "config").exists() is False
@@ -2105,6 +2138,9 @@ class TestInit:
         assert (proj / ".agm" / "notes").is_dir()
         assert (proj / ".agm" / "config").is_dir()
         assert (proj / ".agm" / "worktrees").is_dir()
+        assert (proj / ".agm" / "config" / ".git").is_dir()
+        assert (proj / ".agm" / "notes" / ".git").is_dir()
+        assert (proj / ".agm" / "config" / ".env").read_text(encoding="utf-8") == ""
         assert ".agm" in (proj / ".gitignore").read_text().splitlines()
         assert not (proj / "repo").exists()
         assert not (proj / "worktrees").exists()

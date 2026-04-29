@@ -26,7 +26,10 @@ CONFIG_FILES: list[str] = [
 
 def _copy_existing_config_files(source_dir: Path, target_dir: Path) -> None:
     existing_paths = [
-        str(source_dir / name) for name in CONFIG_FILES if (source_dir / name).exists()
+        str(source_dir / name)
+        for name in CONFIG_FILES
+        if (source_dir / name).exists()
+        and not (name == ".env" and (source_dir / name).stat().st_size == 0)
     ]
     if not existing_paths:
         return

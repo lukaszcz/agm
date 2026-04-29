@@ -10,6 +10,7 @@ import agm.vcs.git as git_helpers
 from agm.commands.args import InitArgs
 from agm.core.fs import chmod, exists, is_empty_dir, mkdir, read_text, stat, write_text
 from agm.core.process import require_success
+from agm.project.dependency_env import update_main_dependency_env_vars
 from agm.project.layout import (
     default_worktrees_dir,
     project_config_dir,
@@ -59,6 +60,12 @@ def ensure_gitignore_entry(path: Path, entry: str) -> None:
     write_text(path, f"{entry}\n", encoding="utf-8")
 
 
+def ensure_git_repo(path: Path) -> None:
+    if exists(path / ".git") and git_helpers.is_git_repo(path):
+        return
+    require_success(["git", "init", "-q", str(path)])
+
+
 def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
     layout_dirs: Sequence[Path]
     if embedded:
@@ -84,6 +91,11 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
         )
     for dirname in layout_dirs:
         mkdir(dirname, parents=True, exist_ok=True)
+
+    notes_dir = project_notes_dir(project_dir)
+    ensure_git_repo(config_dir)
+    ensure_git_repo(notes_dir)
+    update_main_dependency_env_vars(project_dir)
 
     write_file_if_missing(
         config_dir / "env.sh",

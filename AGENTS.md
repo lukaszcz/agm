@@ -9,7 +9,7 @@ AGM is an Agent Project Management CLI tool.
 
 Use `uv run` for all Python tooling.
 
-## Project Structure & Module Organization
+## Project Structure
 
 Production code lives in `src/agm/`, organized by area:
 - `commands/` for CLI entrypoints and command implementations,
@@ -59,7 +59,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - **IMPORTANT**: Follow Test Driven Development (TDD). Write failing tests first, implement changes later to make the tests pass.
 - **IMPORTANT**: For every bug found, add a regression test that fails because of the bug, then fix the bug and ensure the test passes.
 - Avoid brittle tests. Test user workflows, not implementation details.
-- Test only main app Python code under `src/agm/`, not build/install scripts, `justfile` commands or config file content.
+- Test only main app Python code under `src/agm/`, not build/install scripts, `justfile` commands or config file content. Do not test exact help messages.
 
 ## Commit Guidelines
 

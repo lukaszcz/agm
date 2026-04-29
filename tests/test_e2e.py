@@ -1258,16 +1258,45 @@ class TestClose:
 
         run_agm(["wt", "new", "feat/close-me"], env=env, cwd=str(project / "repo"))
         worktree = project / "worktrees" / "feat/close-me"
+        branch_config = project / "config" / "feat" / "close-me"
+        branch_config.mkdir(parents=True)
+        (branch_config / ".env").write_text("BRANCH_CONFIG=1\n", encoding="utf-8")
         assert worktree.is_dir()
 
         result = run_agm(["close", "feat/close-me"], env=env, cwd=str(project))
 
         assert not worktree.exists()
+        assert not branch_config.exists()
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/close-me" not in branches
         assert "Closed session proj/feat/close-me" in result.stdout
         log = tmux_log.read_text()
         assert "kill-session -t proj/feat/close-me" in log
+
+    def test_removes_branch_config_and_commits_when_config_is_versioned(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/close-config"], env=env, cwd=str(project / "repo"))
+        branch_config = project / "config" / "feat" / "close-config"
+        branch_config.mkdir(parents=True)
+        (branch_config / ".env").write_text("BRANCH_CONFIG=1\n", encoding="utf-8")
+        _git("init", "-b", "main", cwd=project / "config", env=env)
+        _git("add", ".", cwd=project / "config", env=env)
+        _git("commit", "-m", "add branch config", cwd=project / "config", env=env)
+
+        run_agm(["close", "feat/close-config"], env=env, cwd=str(project))
+
+        assert not branch_config.exists()
+        assert _git("status", "--short", cwd=project / "config", env=env).stdout == ""
+        assert (
+            _git("log", "-1", "--pretty=%s", cwd=project / "config", env=env).stdout.strip()
+            == "chore: remove config for feat/close-config"
+        )
 
     def test_requires_branch_argument(
         self, tmp_path: Path, env: dict[str, str]

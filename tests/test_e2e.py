@@ -1319,6 +1319,24 @@ class TestDepNew:
         assert (dep / "main").is_dir()
         assert (dep / "main" / "README.md").exists()
 
+    def test_updates_main_env_file(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "deps").mkdir()
+        config = project / "config"
+        config.mkdir()
+        (config / ".env").write_text("EXISTING=1\n", encoding="utf-8")
+
+        run_agm(["dep", "new", str(bare)], env=env, cwd=str(project))
+
+        assert (config / ".env").read_text(encoding="utf-8") == (
+            "EXISTING=1\n"
+            f"VYPER_AUTOMATION={project / 'deps' / 'vyper-automation' / 'main'}\n"
+        )
+
     def test_clones_with_specific_branch(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1446,6 +1464,33 @@ class TestDepSwitch:
             cwd=str(project / "deps" / "mylib" / "main"), env=env,
         ).stdout
         assert str(switched_wt) in wt_list
+
+    def test_switch_updates_branch_env_file(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        dep_clone = tmp_path / "dep-clone"
+        _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
+        _push_branch(dep_clone, bare_dep, "feat/app", "app.txt", env)
+        project = _make_project(tmp_path, bare_main, env)
+        branch = "feat/app"
+        worktree = project / "worktrees" / branch
+        _git(
+            "worktree", "add", "-b", branch, str(worktree),
+            cwd=str(project / "repo"), env=env,
+        )
+
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
+        run_agm(
+            ["dep", "switch", "vyper-automation", branch],
+            env=env, cwd=str(worktree),
+        )
+
+        branch_env = project / "config" / branch / ".env"
+        assert branch_env.read_text(encoding="utf-8") == (
+            f"VYPER_AUTOMATION={project / 'deps' / 'vyper-automation' / branch}\n"
+        )
 
     def test_switch_create_new_branch(
         self, tmp_path: Path, env: dict[str, str]
@@ -5025,6 +5070,27 @@ class TestOpen:
         assert "Detached tmux session proj/feat/test created" in result.stdout
         assert "true" not in result.stdout
         assert "cannot stat" not in result.stderr
+
+    def test_open_missing_branch_copies_dependency_env_vars(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
+
+        run_agm(["open", "feat/test"], env=env, cwd=str(project))
+
+        branch_env = project / "config" / "feat/test" / ".env"
+        expected_value = project / "deps" / "vyper-automation" / "feat/test"
+        assert branch_env.read_text(encoding="utf-8") == (
+            f"VYPER_AUTOMATION={expected_value}\n"
+        )
+        assert (project / "worktrees" / "feat/test" / ".env").read_text(
+            encoding="utf-8"
+        ) == f"VYPER_AUTOMATION={expected_value}\n"
 
     def test_open_dry_run_prints_planned_commands_without_side_effects(
         self, tmp_path: Path, env: dict[str, str]

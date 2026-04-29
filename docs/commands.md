@@ -88,8 +88,8 @@ Loop behavior:
 | `agm wt new [-d\|--dir DIR] BRANCH` | Alias form of `agm worktree new` |
 | `agm wt setup` | Alias form of `agm worktree setup` |
 | `agm wt rm [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
-| `agm dep new [-b\|--branch BRANCH] REPO_URL` | Clone a new dependency |
-| `agm dep switch [-b\|--branch] DEP BRANCH` | Switch a dependency to another branch |
+| `agm dep new [-b\|--branch BRANCH] REPO_URL` | Clone a new dependency checkout |
+| `agm dep switch [-b\|--branch] DEP BRANCH` | Add a dependency worktree for a branch |
 | `agm dep rm [--all] DEP \| DEP/BRANCH \| DEP/repo \| DEP/MAIN_BRANCH` | Remove a dependency checkout or worktree |
 
 `agm worktree new` options:
@@ -108,11 +108,13 @@ Loop behavior:
 
 `agm dep new` options:
 
-- `-b`, `--branch BRANCH`: clone `BRANCH` instead of the dependency's default branch
+- `-b`, `--branch BRANCH`: clone the dependency's initial checkout from `BRANCH` instead of the dependency's default branch
 
 `agm dep switch` options:
 
-- `-b`, `--branch`: create `BRANCH` from the dependency's default branch before adding the new worktree
+- `-b`, `--branch`: create `DEP`'s `BRANCH` from the dependency's default branch before adding the new worktree; without this flag, `BRANCH` must already exist
+
+Dependency commands maintain dependency path environment variables in config `.env` files. For example, `deps/vyper-automation` is written as `VYPER_AUTOMATION=/path/to/proj/deps/vyper-automation/<branch>`.
 
 `agm dep rm` targets:
 

@@ -150,17 +150,21 @@ _HELP_TEXTS: dict[str, str] = {
         agm dep rm     [--all] DEP | DEP/BRANCH | DEP/repo | DEP/MAIN_BRANCH
         agm dep switch [-b|--branch] DEP BRANCH
 
-        Manage project dependency checkouts under the project's dependency directory.
+        Manage dependency repos and dependency branch worktrees under deps/.
+        AGM also maintains dependency path env vars in config .env files
+        (for example, deps/vyper-automation becomes VYPER_AUTOMATION).
 
         Options:
           agm dep new --branch BRANCH
-              Clone BRANCH instead of the dependency's default branch.
+              Clone the dependency's initial checkout from BRANCH instead of
+              its default branch.
           agm dep rm --all
               Remove the entire dependency directory, including the main repo
               checkout and any linked worktrees.
           agm dep switch --branch
-              Create BRANCH from the dependency's default branch before adding
-              the new worktree.
+              Create DEP's BRANCH from the dependency's default branch, then
+              add a worktree for it. Without this flag, BRANCH must already
+              exist in the dependency repo.
 
         Targets:
           DEP/BRANCH      Remove a dependency worktree for BRANCH.
@@ -354,7 +358,9 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("dep", "switch"): textwrap.dedent("""\
         agm dep switch [-b|--branch] DEP BRANCH
 
-        Add a dependency worktree for BRANCH under deps/DEP/.
+        Add a worktree at deps/DEP/BRANCH for an existing dependency branch.
+        With -b/--branch, create DEP's BRANCH from the dependency's default
+        branch first. Updates the relevant config .env dependency path.
     """),
     ("dep", "rm"): textwrap.dedent("""\
         agm dep rm [--all] TARGET

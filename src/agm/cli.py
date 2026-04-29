@@ -598,7 +598,10 @@ def dep_switch(
         autocompletion=completion.complete_dep_branch,
     ),
     create_branch: bool = typer.Option(
-        False, "-b", "--branch", help="Create the branch from the default branch."
+        False,
+        "-b",
+        "--branch",
+        help="Create DEP's BRANCH from the dependency's default branch before adding it.",
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),

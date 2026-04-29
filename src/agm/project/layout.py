@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.core.dotenv import set_dotenv_value
+from agm.core.env import load_dotenv_file
 from agm.core.process import require_success
 
 CONFIG_FILES: list[str] = [
@@ -29,6 +31,15 @@ def _copy_existing_config_files(source_dir: Path, target_dir: Path) -> None:
     if not existing_paths:
         return
     require_success(["cp", "-r", *existing_paths, str(target_dir)])
+
+
+def _merge_branch_env_file(source_dir: Path, target_dir: Path) -> None:
+    source_env = source_dir / ".env"
+    if not source_env.is_file():
+        return
+    target_env = target_dir / ".env"
+    for key, value in load_dotenv_file(source_env).items():
+        set_dotenv_value(target_env, key, value)
 
 
 def _resolved_cwd(cwd: Path | None = None) -> Path:
@@ -183,6 +194,7 @@ def copy_config(
     *,
     project_dir: Path | None = None,
     target: Path,
+    branch: str | None = None,
     cwd: Path | None = None,
 ) -> None:
     """Copy known config files from the project config directory into *target*."""
@@ -196,3 +208,5 @@ def copy_config(
     config_dir = project_config_dir(proj_dir)
     if config_dir.is_dir():
         _copy_existing_config_files(config_dir, resolved_target)
+        if branch is not None:
+            _merge_branch_env_file(config_dir / branch, resolved_target)

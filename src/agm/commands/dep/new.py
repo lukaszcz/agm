@@ -9,6 +9,7 @@ from agm.commands.dep.common import default_branch_from_remote, derive_dep_name
 from agm.core import dry_run
 from agm.core.fs import exists, mkdir, rmdir
 from agm.core.process import require_success
+from agm.project.dependency_env import current_config_branch, update_dependency_env_var
 from agm.project.layout import current_project_dir, project_deps_dir
 
 
@@ -26,6 +27,12 @@ def run(args: DepNewArgs) -> None:
     try:
         require_success(
             ["git", "clone", "--branch", resolved_branch, args.repo_url, str(target_dir)],
+        )
+        update_dependency_env_var(
+            project_dir=project_dir,
+            dep_name=dep,
+            dep_branch=resolved_branch,
+            config_branch=current_config_branch(project_dir),
         )
     except SystemExit:
         if dry_run.enabled():

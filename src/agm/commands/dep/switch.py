@@ -8,6 +8,7 @@ import agm.vcs.git as git_helpers
 from agm.commands.args import DepSwitchArgs
 from agm.commands.dep.common import default_branch_from_repo, main_dep_repo
 from agm.core.fs import exists, is_dir, mkdir
+from agm.project.dependency_env import current_config_branch, update_dependency_env_var
 from agm.project.layout import current_project_dir, project_deps_dir
 
 
@@ -35,5 +36,11 @@ def run(args: DepSwitchArgs) -> None:
             create=True,
             start_point=default_branch,
         )
-        return
-    git_helpers.worktree_add(repo_path, target_dir, args.branch)
+    else:
+        git_helpers.worktree_add(repo_path, target_dir, args.branch)
+    update_dependency_env_var(
+        project_dir=project_dir,
+        dep_name=args.dep,
+        dep_branch=args.branch,
+        config_branch=current_config_branch(project_dir),
+    )

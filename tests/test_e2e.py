@@ -1440,6 +1440,37 @@ class TestClose:
         log = tmux_log.read_text()
         assert "kill-session -t proj/feat/close-me" in log
 
+    def test_worktree_remove_failure_happens_before_other_close_side_effects(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/dirty-close"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/dirty-close"
+        branch_config = project / "config" / "feat" / "dirty-close"
+        branch_config.mkdir(parents=True)
+        (branch_config / ".env").write_text("BRANCH_CONFIG=1\n", encoding="utf-8")
+
+        side_effect = tmp_path / "close-env-sourced"
+        env["AGM_CLOSE_SIDE_EFFECT"] = str(side_effect)
+        (project / "config" / "env.sh").write_text(
+            'printf sourced > "$AGM_CLOSE_SIDE_EFFECT"\n',
+            encoding="utf-8",
+        )
+        (worktree / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
+        _git("add", "dirty.txt", cwd=worktree, env=env)
+
+        result = run_agm(["close", "feat/dirty-close"], env=env, cwd=str(project), check=False)
+
+        assert result.returncode != 0
+        assert worktree.is_dir()
+        assert branch_config.is_dir()
+        assert not side_effect.exists()
+        assert not tmux_log.exists()
+
     def test_removes_branch_config_and_commits_when_config_is_versioned(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

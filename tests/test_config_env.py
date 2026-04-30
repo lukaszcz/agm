@@ -33,3 +33,15 @@ def test_shell_env_delta_skips_names_that_shell_cannot_assign() -> None:
     )
 
     assert statements == ["export GOOD_NAME=ok"]
+
+
+def test_shell_env_delta_skips_special_shell_parameters() -> None:
+    statements = shell_env_delta(
+        before={"_": "old-last-arg", "UID": "1000", "REMOVED": "1"},
+        after={"_": "new-last-arg", "UID": "1001", "ADDED": "1"},
+    )
+
+    assert statements == [
+        "unset REMOVED",
+        "export ADDED=1",
+    ]

@@ -41,11 +41,13 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         interrupt_cleanup_cmd: list[str] | None = None,
+        isolate_process_group: bool = False,
     ) -> int:
         calls["cmd"] = cmd
         calls["cwd"] = cwd
         calls["env"] = env
         calls["interrupt_cleanup_cmd"] = interrupt_cleanup_cmd
+        calls["isolate_process_group"] = isolate_process_group
         settings_path = Path(cmd[cmd.index("--settings") + 1])
         calls["settings"] = json.loads(settings_path.read_text())
         tracked_dir.mkdir()
@@ -75,6 +77,7 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
     assert calls["cmd"][3:6] == ["srt", "--settings", calls["cmd"][5]]
     assert calls["cmd"][6:9] == ["--", "echo", "hi"]
     assert calls["interrupt_cleanup_cmd"] == ["systemctl", "--user", "stop", "agm-run.scope"]
+    assert calls["isolate_process_group"] is True
 
     settings = calls["settings"]
     assert settings["network"]["allowedDomains"] == ["example.com"]

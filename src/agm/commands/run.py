@@ -100,6 +100,7 @@ def _run_with_optional_resource_limits(
                 cwd=cwd,
                 env=env,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                isolate_process_group=True,
             )
         )
     except KeyboardInterrupt:

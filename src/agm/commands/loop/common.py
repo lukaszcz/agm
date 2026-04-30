@@ -192,6 +192,7 @@ def run_command(
         env=env,
         stdout_callback=handle_stdout,
         stderr_callback=handle_stderr,
+        isolate_process_group=True,
     )
     if ordered_output:
         return "".join(ordered_output)

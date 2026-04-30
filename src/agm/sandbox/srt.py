@@ -195,6 +195,7 @@ def run_sandboxed(
                     cwd=cwd,
                     env=env,
                     interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+                    isolate_process_group=True,
                 )
             )
         except KeyboardInterrupt:

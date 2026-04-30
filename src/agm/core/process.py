@@ -31,6 +31,25 @@ def exit_with_output(returncode: int, stdout: str = "", stderr: str = "") -> Non
     raise SystemExit(returncode)
 
 
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        process.wait()
+
+
 def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -95,8 +114,9 @@ def run_subprocess(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    isolate_process_group: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command in its own process group and clean it up on interrupt."""
+    """Run a command and clean it up on interrupt."""
 
     process = subprocess.Popen(
         cmd,
@@ -105,7 +125,7 @@ def run_subprocess(
         stdout=subprocess.PIPE if capture_output or stdout_callback is not None else None,
         stderr=subprocess.PIPE if capture_output or stderr_callback is not None else None,
         text=False,
-        process_group=0,
+        start_new_session=isolate_process_group,
     )
 
     readers: list[threading.Thread] = []
@@ -180,7 +200,10 @@ def run_subprocess(
             stdout = None
             stderr = None
     except BaseException:
-        _kill_process_group(process)
+        if isolate_process_group:
+            _kill_process_group(process)
+        else:
+            _terminate_process(process)
         _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
         raise
     finally:
@@ -201,6 +224,7 @@ def run_foreground(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     interrupt_cleanup_cmd: list[str] | None = None,
+    isolate_process_group: bool = False,
 ) -> int:
     """Run a command inheriting stdio."""
 
@@ -209,6 +233,7 @@ def run_foreground(
         cwd=cwd,
         env=env,
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        isolate_process_group=isolate_process_group,
     )
     return result.returncode
 
@@ -221,6 +246,7 @@ def run_capture(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    isolate_process_group: bool = False,
 ) -> tuple[int, str, str]:
     """Run a command and capture stdout/stderr."""
 
@@ -232,6 +258,7 @@ def run_capture(
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
+        isolate_process_group=isolate_process_group,
     )
     return result.returncode, result.stdout or "", result.stderr or ""
 

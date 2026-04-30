@@ -74,4 +74,31 @@ def test_run_foreground_preserves_controlling_terminal_for_interactive_prompts(
 
     assert popen_kwargs.get("stdin") is None
     assert popen_kwargs.get("start_new_session") is not True
-    assert popen_kwargs["process_group"] == 0
+    assert "process_group" not in popen_kwargs
+
+
+def test_run_foreground_can_isolate_process_group_for_tree_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    popen_kwargs: dict[str, Any] = {}
+
+    class FakeProcess:
+        stdout = None
+        stderr = None
+        returncode = 0
+
+        def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> FakeProcess:
+        popen_kwargs.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    assert run_foreground(["runner"], isolate_process_group=True) == 0
+
+    assert popen_kwargs["start_new_session"] is True

@@ -11,7 +11,7 @@ from typing import cast
 import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, iterdir, mkdir, read_text, rglob, write_text
 from agm.project.layout import (
-    current_project_dir,
+    current_checkout,
     default_worktrees_dir,
     project_config_dir,
     project_deps_dir,
@@ -19,6 +19,18 @@ from agm.project.layout import (
 )
 
 TomlDict = dict[str, object]
+
+
+def current_config_branch(
+    project_dir: Path,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> str | None:
+    """Return the current branch config name, or ``None`` for the main checkout."""
+
+    result = current_checkout(project_dir, cwd=cwd, env=env)
+    return result.branch if result is not None else None
 
 
 def dep_env_var_name(dep_name: str) -> str:
@@ -73,37 +85,6 @@ def load_dependency_toml_env(
             dep_path = deps_dir / dep_name / dep_branch
             resolved_env[dep_env_var_name(dep_name)] = str(dep_path)
     return resolved_env
-
-
-def current_config_branch(
-    project_dir: Path,
-    *,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-) -> str | None:
-    """Return the current branch config name, or ``None`` for the main checkout."""
-
-    current = Path.cwd() if cwd is None else cwd.resolve()
-    resolved_project_dir = project_dir.resolve(strict=False)
-    if current_project_dir(current).resolve(strict=False) != resolved_project_dir:
-        return None
-
-    repo_dir = project_repo_dir(project_dir).resolve(strict=False)
-    if not git_helpers.is_git_repo(current):
-        if (
-            current.resolve(strict=False) == resolved_project_dir
-            and git_helpers.is_git_repo(repo_dir)
-        ):
-            checkout_dir = repo_dir
-        else:
-            return None
-    else:
-        checkout_dir = git_helpers.git_setup(current).resolve(strict=False)
-    if checkout_dir == repo_dir:
-        return None
-    if repo_dir in checkout_dir.parents:
-        return None
-    return git_helpers.current_branch(checkout_dir, env=env)
 
 
 def _toml_key(key: str) -> str:

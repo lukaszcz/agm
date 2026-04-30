@@ -35,7 +35,7 @@ def sync_remote_tracking_branches(
 def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     """Create local tracking branches not merged into origin's default branch."""
 
-    repo_dir = git_helpers.git_setup(cwd)
+    repo_dir = git_helpers.checkout_root(cwd)
     git_helpers.fetch_prune_origin(repo_dir, env=env)
     sync_remote_tracking_branches(repo_dir, env=env)
 
@@ -59,7 +59,7 @@ def ensure_worktree(
         raise SystemExit(1)
 
     project_dir = current_project_dir(current)
-    repo_dir = git_helpers.git_setup(current)
+    repo_dir = git_helpers.checkout_root(current)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     exit_if_main_checkout_branch(project_dir, branch_name, repo_branch=repo_branch)
     worktrees_path = (
@@ -111,7 +111,7 @@ def remove_worktree(
     """Remove a worktree from the current repo and delete its branch."""
 
     remove_worktree_from_repo(
-        repo_dir=git_helpers.git_setup(cwd),
+        repo_dir=git_helpers.checkout_root(cwd),
         force=force,
         branch=branch,
         env=env,

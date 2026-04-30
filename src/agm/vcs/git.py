@@ -29,8 +29,8 @@ def is_git_repo(path: Path) -> bool:
     )[0] == 0
 
 
-def git_setup(cwd: Path | None = None) -> Path:
-    """Detect the relevant git repository or worktree root."""
+def checkout_root(cwd: Path | None = None) -> Path:
+    """Return the git working-tree root for the checkout containing *cwd*."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
     if is_git_repo(current):

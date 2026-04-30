@@ -1246,7 +1246,7 @@ class TestMkWt:
     def test_from_project_root_with_repo_subdir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """git_setup() should find repo/ subdirectory automatically."""
+        """checkout_root() should find repo/ subdirectory automatically."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 

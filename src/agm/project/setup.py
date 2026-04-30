@@ -12,6 +12,7 @@ from agm.core.process import require_success
 from agm.project.dependency_env import load_dependency_toml_env
 from agm.project.layout import (
     branch_session_name,
+    current_checkout,
     project_config_dir,
     project_repo_dir,
     require_current_project_dir,
@@ -71,27 +72,31 @@ def load_current_config_env(
     current = Path.cwd() if cwd is None else cwd.resolve()
     project_dir = require_current_project_dir(current)
     repo_dir = project_repo_dir(project_dir)
-    try:
-        checkout_dir = git_helpers.git_setup(current)
-    except SystemExit:
+    result = current_checkout(project_dir, cwd=cwd, env=env)
+    if result is not None:
+        checkout_dir = result.checkout_dir
+        branch = result.branch
+    else:
         checkout_dir = repo_dir if repo_dir.is_dir() else current
-
-    branch: str | None = None
-    if checkout_dir.resolve(strict=False) != repo_dir.resolve(strict=False):
-        branch = git_helpers.current_branch(checkout_dir, env=env)
+        branch = None
     return load_config_env(project_dir, branch, checkout_dir=checkout_dir, env=env)
 
 
 def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     """Run all configured setup scripts for the current checkout."""
 
-    checkout_dir = git_helpers.git_setup(cwd)
-    project_dir = require_current_project_dir(checkout_dir)
-    branch: str | None = None
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    project_dir = require_current_project_dir(current)
     repo_dir = project_repo_dir(project_dir)
+    result = current_checkout(project_dir, cwd=cwd, env=env)
+    if result is not None:
+        checkout_dir = result.checkout_dir
+        branch = result.branch
+    else:
+        checkout_dir = repo_dir if repo_dir.is_dir() else current
+        branch = None
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
-    if checkout_dir.resolve(strict=False) != repo_dir.resolve(strict=False):
-        branch = git_helpers.current_branch(checkout_dir, env=env)
+    if branch is not None:
         target_name = branch_session_name(project_dir, branch)
     else:
         target_name = branch_session_name(project_dir, repo_branch)

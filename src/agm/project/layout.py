@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core.dotenv import set_dotenv_value
 from agm.core.env import load_dotenv_file
 from agm.core.process import require_success
+
+
+@dataclass(frozen=True)
+class CurrentCheckout:
+    """Describes the currently active worktree checkout."""
+
+    checkout_dir: Path
+    branch: str | None
+    is_main: bool
 
 CONFIG_FILES: list[str] = [
     ".setup.sh",
@@ -78,7 +89,7 @@ def current_project_dir(cwd: Path | None = None) -> Path:
     if not git_helpers.is_git_repo(current):
         return current
     try:
-        checkout_dir = git_helpers.git_setup(current)
+        checkout_dir = git_helpers.checkout_root(current)
     except SystemExit:
         return current
     for candidate in (checkout_dir, *checkout_dir.parents):
@@ -138,6 +149,65 @@ def require_current_project_dir(cwd: Path | None = None) -> Path:
     """Resolve and validate the current AGM project directory."""
 
     return require_project_dir(current_project_dir(cwd))
+
+
+def current_checkout(
+    project_dir: Path,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> CurrentCheckout | None:
+    """Return the current worktree checkout within *project_dir*.
+
+    Prefers the ``REPO_DIR`` environment variable when it points to a git
+    checkout (main or worktree) inside *project_dir*.  Falls back to
+    detecting the checkout from *cwd*.  Returns ``None`` when *cwd* is not inside
+    *project_dir* and no usable ``REPO_DIR`` override is available.
+    """
+    resolved_env = env if env is not None else os.environ
+    resolved_project_dir = project_dir.resolve(strict=False)
+    repo_dir = project_repo_dir(project_dir).resolve(strict=False)
+
+    # --- Try REPO_DIR env var first ---
+    checkout_dir: Path | None = None
+    repo_dir_var = resolved_env.get("REPO_DIR", "").strip()
+    if repo_dir_var:
+        candidate = Path(repo_dir_var).resolve(strict=False)
+        # Must be inside the project and must be a git repo
+        if (
+            candidate == resolved_project_dir or resolved_project_dir in candidate.parents
+        ) and git_helpers.is_git_repo(candidate):
+            checkout_dir = candidate
+
+    # --- Fall back to cwd-based detection ---
+    if checkout_dir is None:
+        current = Path.cwd() if cwd is None else cwd.resolve()
+        if current_project_dir(current).resolve(strict=False) != resolved_project_dir:
+            return None
+
+        if not git_helpers.is_git_repo(current):
+            if (
+                current.resolve(strict=False) == resolved_project_dir
+                and git_helpers.is_git_repo(repo_dir)
+            ):
+                checkout_dir = repo_dir
+            else:
+                return None
+        else:
+            try:
+                checkout_dir = git_helpers.checkout_root(current).resolve(strict=False)
+            except SystemExit:
+                if git_helpers.is_git_repo(repo_dir):
+                    checkout_dir = repo_dir
+                else:
+                    checkout_dir = current
+
+    # --- Determine branch / is_main ---
+    if checkout_dir == repo_dir or repo_dir in checkout_dir.parents:
+        return CurrentCheckout(checkout_dir=checkout_dir, branch=None, is_main=True)
+
+    branch = git_helpers.current_branch(checkout_dir, env=env)
+    return CurrentCheckout(checkout_dir=checkout_dir, branch=branch, is_main=False)
 
 
 def project_data_dir(project_dir: Path) -> Path:

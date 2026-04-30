@@ -8,13 +8,13 @@ from typing import Never
 
 import pytest
 
-import agm.project.dependency_env as dependency_env
 import agm.project.layout as project_helpers
 import agm.vcs.git as git_helpers
 from agm.project.dependency_env import current_config_branch
 from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
+    current_checkout,
     current_project_dir,
     is_main_checkout_branch,
     main_repo_dir,
@@ -178,12 +178,12 @@ def test_current_config_branch_ignores_cwd_from_other_project(
     current = other_project / "repo"
     current.mkdir(parents=True)
 
-    monkeypatch.setattr(dependency_env, "current_project_dir", lambda _cwd: other_project)
+    monkeypatch.setattr(project_helpers, "current_project_dir", lambda _cwd: other_project)
 
-    def fail_git_setup(_cwd: Path | None = None) -> Never:
-        raise AssertionError("git_setup should not be called for another project")
+    def fail_checkout_root(_cwd: Path | None = None) -> Never:
+        raise AssertionError("checkout_root should not be called for another project")
 
-    monkeypatch.setattr(git_helpers, "git_setup", fail_git_setup)
+    monkeypatch.setattr(git_helpers, "checkout_root", fail_checkout_root)
 
     assert current_config_branch(project, cwd=current) is None
 
@@ -254,3 +254,223 @@ def test_load_current_config_env_uses_current_project_checkout(
     assert loaded_env["REPO_DIR"] == str(repo_dir)
     assert loaded_env["FROM_DOTENV"] == "1"
     assert loaded_env["FROM_ENV_SH"] == f"1:{repo_dir}"
+
+
+# --- current_checkout ---
+
+
+def test_current_checkout_returns_none_for_cwd_outside_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "proj"
+    other_project = tmp_path / "other"
+    current = other_project / "repo"
+    current.mkdir(parents=True)
+
+    monkeypatch.setattr(project_helpers, "current_project_dir", lambda _cwd: other_project)
+
+    def fail_checkout_root(_cwd: Path | None = None) -> Never:
+        raise AssertionError("checkout_root should not be called for another project")
+
+    monkeypatch.setattr(git_helpers, "checkout_root", fail_checkout_root)
+
+    assert current_checkout(project, cwd=current) is None
+
+
+def test_current_checkout_returns_main_for_workspace_project_root(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+
+    result = current_checkout(project, cwd=project, env=env)
+
+    assert result is not None
+    assert result.is_main is True
+    assert result.branch is None
+    assert result.checkout_dir == repo_dir
+
+
+def test_current_checkout_returns_main_for_repo_dir(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+
+    result = current_checkout(project, cwd=repo_dir, env=env)
+
+    assert result is not None
+    assert result.is_main is True
+    assert result.branch is None
+    assert result.checkout_dir == repo_dir
+
+
+def test_current_checkout_returns_branch_for_worktree(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    # Need an initial commit before creating worktrees
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "commit", "--allow-empty", "-m", "init"],
+        env=env,
+        check=True,
+    )
+    # Create a worktree
+    worktree_dir = project / "worktrees" / "feat"
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "worktree", "add", "-b", "feat", str(worktree_dir)],
+        env=env,
+        check=True,
+    )
+
+    result = current_checkout(project, cwd=worktree_dir, env=env)
+
+    assert result is not None
+    assert result.is_main is False
+    assert result.branch == "feat"
+    assert result.checkout_dir == worktree_dir
+
+
+def test_current_checkout_uses_repo_dir_env_var_for_main_checkout(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    # CWD is somewhere else entirely, but REPO_DIR points to the main repo
+    other_dir = tmp_path / "somewhere"
+    other_dir.mkdir()
+    env_with_repo = {**env, "REPO_DIR": str(repo_dir)}
+
+    result = current_checkout(project, cwd=other_dir, env=env_with_repo)
+
+    assert result is not None
+    assert result.is_main is True
+    assert result.branch is None
+    assert result.checkout_dir == repo_dir
+
+
+def test_current_checkout_uses_repo_dir_env_var_for_worktree(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "commit", "--allow-empty", "-m", "init"],
+        env=env,
+        check=True,
+    )
+    worktree_dir = project / "worktrees" / "feat"
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "worktree", "add", "-b", "feat", str(worktree_dir)],
+        env=env,
+        check=True,
+    )
+    # CWD is somewhere else, but REPO_DIR points to the worktree
+    other_dir = tmp_path / "somewhere"
+    other_dir.mkdir()
+    env_with_repo = {**env, "REPO_DIR": str(worktree_dir)}
+
+    result = current_checkout(project, cwd=other_dir, env=env_with_repo)
+
+    assert result is not None
+    assert result.is_main is False
+    assert result.branch == "feat"
+    assert result.checkout_dir == worktree_dir
+
+
+def test_current_checkout_ignores_repo_dir_outside_project(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    # REPO_DIR points outside the project — should be ignored
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=outside_dir, env=env, check=True)
+    env_with_outside = {**env, "REPO_DIR": str(outside_dir)}
+
+    result = current_checkout(project, cwd=repo_dir, env=env_with_outside)
+
+    assert result is not None
+    assert result.is_main is True
+    assert result.branch is None
+    # Falls back to cwd-based detection instead of REPO_DIR
+    assert result.checkout_dir == repo_dir
+
+
+def test_current_checkout_ignores_nonexistent_repo_dir(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    env_with_bad = {**env, "REPO_DIR": "/nonexistent/path"}
+
+    result = current_checkout(project, cwd=repo_dir, env=env_with_bad)
+
+    assert result is not None
+    assert result.is_main is True
+    assert result.branch is None
+    assert result.checkout_dir == repo_dir
+
+
+def test_current_checkout_ignores_non_git_repo_dir(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    # REPO_DIR points to a non-git dir inside the project
+    non_git = project / "some-dir"
+    non_git.mkdir()
+    env_with_non_git = {**env, "REPO_DIR": str(non_git)}
+
+    result = current_checkout(project, cwd=repo_dir, env=env_with_non_git)
+
+    assert result is not None
+    assert result.is_main is True
+    assert result.branch is None
+    assert result.checkout_dir == repo_dir
+
+
+def test_current_checkout_workspace_checkout_under_repo_dir_is_main(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    repo_dir = project / "repo"
+    repo_dir.mkdir(parents=True)
+    (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    # A subdirectory of repo_dir — still main checkout
+    sub_dir = repo_dir / "src"
+    sub_dir.mkdir()
+
+    result = current_checkout(project, cwd=sub_dir, env=env)
+
+    assert result is not None
+    assert result.is_main is True
+    assert result.branch is None
+

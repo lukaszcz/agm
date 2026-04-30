@@ -906,6 +906,36 @@ class TestConfigUpdate:
         assert (project / "deps" / "vyper-automation" / "main").is_dir()
         assert not (project / "config" / "feat" / "not-checked-out" / "config.toml").exists()
 
+    def test_commits_updated_configs_when_config_is_versioned(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = _make_project(tmp_path, bare_main, env)
+        _git(
+            "worktree", "add", "-b", "feat/app",
+            str(project / "worktrees" / "feat/app"),
+            cwd=project / "repo", env=env,
+        )
+        _git("init", "-b", "main", cwd=project / "config", env=env)
+        (project / "config" / "README.md").write_text("config\n", encoding="utf-8")
+        (project / "config" / "local.txt").write_text("keep unstaged\n", encoding="utf-8")
+        _git("add", "README.md", cwd=project / "config", env=env)
+        _git("commit", "-m", "initial config", cwd=project / "config", env=env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+
+        run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
+
+        assert _git("status", "--short", cwd=project / "config", env=env).stdout == "?? local.txt\n"
+        assert (
+            _git("log", "-1", "--pretty=%s", cwd=project / "config", env=env).stdout.strip()
+            == "chore: update config"
+        )
+        committed_files = _git(
+            "show", "--pretty=", "--name-only", "HEAD", cwd=project / "config", env=env
+        ).stdout.splitlines()
+        assert committed_files == ["config.toml", "feat/app/config.toml"]
+
     def test_dependency_configs_use_dependency_worktree_names(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

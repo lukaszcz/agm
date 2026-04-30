@@ -868,6 +868,45 @@ class TestConfigEnv:
         ]
 
 
+# ── agm config update ───────────────────────────────────────────────────────
+
+
+class TestConfigUpdate:
+    """agm config update: create missing project TOML config files."""
+
+    def test_creates_main_and_branch_toml_configs(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        _git("branch", "feat/simple", cwd=project / "repo", env=env)
+        _git("branch", "feat/nested/name", cwd=project / "repo", env=env)
+
+        run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
+
+        assert (project / "config" / "config.toml").is_file()
+        assert (project / "config" / "feat" / "simple" / "config.toml").is_file()
+        assert (project / "config" / "feat" / "nested" / "name" / "config.toml").is_file()
+
+    def test_updates_dependency_configs_for_all_branches(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = _make_project(tmp_path, bare_main, env)
+        _git("branch", "feat/app", cwd=project / "repo", env=env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+
+        run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
+
+        with (project / "config" / "config.toml").open("rb") as handle:
+            main_config = cast(dict[str, object], tomllib.load(handle))
+        with (project / "config" / "feat" / "app" / "config.toml").open("rb") as handle:
+            branch_config = cast(dict[str, object], tomllib.load(handle))
+        assert main_config.get("deps") == {"vyper-automation": "main"}
+        assert branch_config.get("deps") == {"vyper-automation": "feat/app"}
+
+
 # ── agm wt new ───────────────────────────────────────────────────────────────
 
 

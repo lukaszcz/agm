@@ -11,6 +11,7 @@ import typer
 import agm.commands.close as close_command
 import agm.commands.config.copy as config_copy_command
 import agm.commands.config.env as config_env_command
+import agm.commands.config.update as config_update_command
 import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
@@ -34,6 +35,7 @@ from agm.commands.args import (
     CloseArgs,
     ConfigCopyArgs,
     ConfigEnvArgs,
+    ConfigUpdateArgs,
     DepNewArgs,
     DepRemoveArgs,
     DepSwitchArgs,
@@ -454,6 +456,16 @@ def config_env(
     del _help
     del _dry_run
     config_env_command.run(ConfigEnvArgs())
+
+
+@config_app.command(name="update")
+def config_update(
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    config_update_command.run(ConfigUpdateArgs())
 
 
 @worktree_app.callback(invoke_without_command=True)

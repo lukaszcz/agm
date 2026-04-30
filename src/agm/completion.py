@@ -36,7 +36,7 @@ _HELP_TREE: dict[str, list[str]] = {
         "help",
     ],
     "loop": ["next", "run", "step"],
-    "config": ["cp", "copy", "env"],
+    "config": ["cp", "copy", "env", "update"],
     "wt": ["new", "setup", "rm", "remove"],
     "worktree": ["new", "setup", "rm", "remove"],
     "dep": ["new", "switch", "rm"],

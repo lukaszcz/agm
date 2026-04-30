@@ -23,6 +23,11 @@ class ConfigEnvArgs:
 
 
 @dataclass(slots=True)
+class ConfigUpdateArgs:
+    pass
+
+
+@dataclass(slots=True)
 class WorktreeNewArgs:
     worktrees_dir: str | None
     branch: str

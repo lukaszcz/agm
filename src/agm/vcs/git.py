@@ -88,6 +88,16 @@ def current_branch(repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
     ).strip()
 
 
+def local_branches(repo_dir: Path, *, env: dict[str, str] | None = None) -> list[str]:
+    """Return local branch names for *repo_dir*."""
+
+    output = require_capture(
+        [*_git_args(repo_dir), "for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        env=env,
+    )
+    return sorted(line for line in output.splitlines() if line)
+
+
 def worktree_add(
     repo_dir: Path,
     path: Path,

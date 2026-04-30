@@ -226,6 +226,14 @@ def update_main_dependency_configs(project_dir: Path) -> None:
         )
 
 
+def _ensure_config_toml_file(project_dir: Path, branch: str | None) -> None:
+    config_file = config_toml_file(project_dir, branch)
+    if exists(config_file):
+        return
+    mkdir(config_file.parent, parents=True, exist_ok=True)
+    write_text(config_file, "", encoding="utf-8")
+
+
 def update_dependency_configs_for_branch(
     *,
     project_dir: Path,
@@ -243,6 +251,24 @@ def update_dependency_configs_for_branch(
             dep_branch=branch,
             config_branch=branch,
         )
+
+
+def update_all_project_dependency_configs(
+    project_dir: Path,
+    *,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Create/update main and branch config TOML files for the project."""
+
+    repo_dir = project_repo_dir(project_dir)
+    main_branch = git_helpers.current_branch(repo_dir, env=env)
+    _ensure_config_toml_file(project_dir, None)
+    update_main_dependency_configs(project_dir)
+    for branch in git_helpers.local_branches(repo_dir, env=env):
+        if branch == main_branch:
+            continue
+        _ensure_config_toml_file(project_dir, branch)
+        update_dependency_configs_for_branch(project_dir=project_dir, branch=branch)
 
 
 def ensure_dependency_configs_for_branch(

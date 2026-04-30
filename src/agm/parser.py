@@ -125,7 +125,8 @@ _HELP_TEXTS: dict[str, str] = {
 
         Copy project configuration files into an existing target directory.
         Print shell statements that refresh the current checkout environment
-        from project and branch .env, .env.local, and env.sh files.
+        from project and branch config.toml [deps] tables, .env,
+        .env.local, and env.sh files.
 
         To apply the environment to the current shell:
           eval "$(agm config env)"
@@ -295,7 +296,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm config env
 
         Print shell statements that refresh the current checkout environment
-        from project and branch .env, .env.local, and env.sh files.
+        from project and branch config.toml [deps] tables, .env,
+        .env.local, and env.sh files.
 
         To apply the environment to the current shell:
           eval "$(agm config env)"

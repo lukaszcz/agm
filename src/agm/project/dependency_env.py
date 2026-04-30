@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 from typing import cast
 
@@ -11,6 +12,8 @@ import agm.vcs.git as git_helpers
 from agm.core.dotenv import set_dotenv_value
 from agm.core.fs import exists, is_dir, iterdir, mkdir, read_text, rglob, write_text
 from agm.project.layout import project_config_dir, project_deps_dir, project_repo_dir
+
+TomlDict = dict[str, object]
 
 
 def dep_env_var_name(dep_name: str) -> str:
@@ -40,6 +43,40 @@ def config_toml_file(project_dir: Path, branch: str | None) -> Path:
     if branch is None:
         return config_dir / "config.toml"
     return config_dir / branch / "config.toml"
+
+
+def _toml_dict(value: object) -> TomlDict:
+    if isinstance(value, dict):
+        return cast(TomlDict, value)
+    return {}
+
+
+def _load_toml_file(path: Path) -> TomlDict:
+    with path.open("rb") as handle:
+        loaded = cast(object, tomllib.load(handle))
+    return _toml_dict(loaded)
+
+
+def load_dependency_toml_env(
+    *,
+    project_dir: Path,
+    config_files: list[Path],
+    env: dict[str, str],
+) -> dict[str, str]:
+    """Return *env* updated from dependency branches in config TOML files."""
+
+    resolved_env = dict(env)
+    deps_dir = project_deps_dir(project_dir)
+    for config_file in config_files:
+        if not config_file.is_file():
+            continue
+        deps_table = _toml_dict(_load_toml_file(config_file).get("deps"))
+        for dep_name, dep_branch in deps_table.items():
+            if not isinstance(dep_branch, str) or not dep_branch:
+                continue
+            dep_path = deps_dir / dep_name / dep_branch
+            resolved_env[dep_env_var_name(dep_name)] = str(dep_path)
+    return resolved_env
 
 
 def current_config_branch(

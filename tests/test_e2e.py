@@ -740,6 +740,135 @@ class TestConfigEnv:
             f"REPO_DIR={worktree}",
         ]
 
+    def test_toml_deps_set_dependency_env_before_env_sh(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "proj"
+        repo_dir = project / "repo"
+        config = project / "config"
+        repo_dir.mkdir(parents=True)
+        (project / "worktrees").mkdir()
+        config.mkdir()
+        (config / "config.toml").write_text(
+            '[deps]\nvyper-automation = "feat/app"\n',
+            encoding="utf-8",
+        )
+        (config / "env.sh").write_text(
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=project,
+            check=True,
+        )
+
+        expected_dep = project / "deps" / "vyper-automation" / "feat/app"
+        assert result.stdout.splitlines() == [
+            f"VYPER_AUTOMATION={expected_dep}",
+            f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
+        ]
+
+    def test_dotenv_overrides_toml_deps_before_env_sh(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "proj"
+        repo_dir = project / "repo"
+        config = project / "config"
+        repo_dir.mkdir(parents=True)
+        (project / "worktrees").mkdir()
+        config.mkdir()
+        (config / "config.toml").write_text(
+            '[deps]\nvyper-automation = "feat/app"\n',
+            encoding="utf-8",
+        )
+        (config / ".env").write_text("VYPER_AUTOMATION=/custom/dep\n", encoding="utf-8")
+        (config / "env.sh").write_text(
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=project,
+            check=True,
+        )
+
+        assert result.stdout.splitlines() == [
+            "VYPER_AUTOMATION=/custom/dep",
+            "DEP_SEEN_BY_ENV_SH=/custom/dep/from-env-sh",
+        ]
+
+    def test_branch_toml_deps_override_project_toml_deps(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        config = project / "config"
+        (config / "config.toml").write_text(
+            '[deps]\nvyper-automation = "main"\n',
+            encoding="utf-8",
+        )
+
+        run_agm(["wt", "new", "feat/env"], env=env, cwd=project / "repo")
+        worktree = project / "worktrees" / "feat" / "env"
+        branch_config = config / "feat" / "env"
+        branch_config.mkdir(parents=True, exist_ok=True)
+        (branch_config / "config.toml").write_text(
+            '[deps]\nvyper-automation = "feat/app"\n',
+            encoding="utf-8",
+        )
+        (branch_config / "env.sh").write_text(
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=worktree,
+            check=True,
+        )
+
+        expected_dep = project / "deps" / "vyper-automation" / "feat/app"
+        assert result.stdout.splitlines() == [
+            f"VYPER_AUTOMATION={expected_dep}",
+            f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
+        ]
+
 
 # ── agm wt new ───────────────────────────────────────────────────────────────
 

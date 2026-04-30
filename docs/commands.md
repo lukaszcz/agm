@@ -151,9 +151,10 @@ Dependency commands track selected dependency branches in config `config.toml` `
 - `.pi`
 - `.mcp.json`
 
-`agm config env` uses the same environment resolution as `agm open`: project `.env`,
-project `.env.local`, project `env.sh`, then matching branch config files when the current
-checkout is a branch worktree. Apply the printed shell statements with:
+`agm config env` uses the same environment resolution as `agm open`: project and branch
+`config.toml` `[deps]` tables first, then project `.env`, project `.env.local`, project
+`env.sh`, and matching branch config files when the current checkout is a branch worktree.
+Apply the printed shell statements with:
 
 ```bash
 eval "$(agm config env)"

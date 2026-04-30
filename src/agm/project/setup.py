@@ -9,6 +9,7 @@ import agm.vcs.git as git_helpers
 from agm.core import dry_run
 from agm.core.env import load_dotenv_files, source_env_file
 from agm.core.process import require_success
+from agm.project.dependency_env import load_dependency_toml_env
 from agm.project.layout import (
     branch_session_name,
     current_project_dir,
@@ -34,6 +35,11 @@ def load_config_env(
     if branch is not None:
         config_dirs.append(config_dir / branch)
 
+    resolved_env = load_dependency_toml_env(
+        project_dir=project_dir,
+        config_files=[env_dir / "config.toml" for env_dir in config_dirs],
+        env=resolved_env,
+    )
     for env_dir in config_dirs:
         resolved_env = load_dotenv_files(
             [env_dir / ".env", env_dir / ".env.local"],

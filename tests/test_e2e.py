@@ -353,6 +353,15 @@ def _make_project(
     return project
 
 
+def _make_workspace_project(
+    tmp_path: Path,
+    env: dict[str, str],
+    name: str = "proj",
+) -> Path:
+    bare = make_bare_repo(tmp_path / f"{name}-origin.git", env)
+    return _make_project(tmp_path, bare, env, name=name)
+
+
 def _srt_settings(result: subprocess.CompletedProcess[str]) -> _SrtSettings:
     """Extract the JSON settings dict from fake srt stdout."""
     for line in result.stdout.splitlines():
@@ -415,12 +424,9 @@ class TestCpConfig:
     def test_ignores_files_from_current_dir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "repo").mkdir()
-        (project / "worktrees").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / ".env").write_text("FROM_CONFIG=1")
 
         src = project / "repo"
@@ -439,12 +445,9 @@ class TestCpConfig:
     def test_copies_files_from_project_config_dir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "repo").mkdir()
-        (project / "worktrees").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / ".env").write_text("FROM_CONFIG=1")
 
         dest = tmp_path / "dest"
@@ -477,12 +480,9 @@ class TestCpConfig:
     def test_auto_detects_project_from_worktrees_subdir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "repo").mkdir()
-        (project / "worktrees").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / ".env").write_text("FROM_WT=1")
 
         wt = project / "worktrees" / "feat-x"
@@ -554,11 +554,9 @@ class TestCpConfig:
     def test_auto_detects_project_from_project_root(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "repo").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / ".env").write_text("FROM_ROOT=1")
 
         dest = tmp_path / "dest"
@@ -568,7 +566,7 @@ class TestCpConfig:
 
         assert (dest / ".env").read_text() == "FROM_ROOT=1"
 
-    def test_missing_files_are_silently_ignored(
+    def test_invalid_project_layout_is_rejected(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         src = tmp_path / "src"
@@ -576,8 +574,10 @@ class TestCpConfig:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        result = run_agm(["config", "cp", str(dest)], env=env, cwd=str(src))
-        assert result.returncode == 0
+        result = run_agm(["config", "cp", str(dest)], env=env, cwd=str(src), check=False)
+
+        assert result.returncode != 0
+        assert "not a valid AGM project directory" in result.stderr
 
     def test_requires_dirname_argument(
         self, tmp_path: Path, env: dict[str, str]
@@ -592,12 +592,9 @@ class TestCpConfig:
     def test_relative_dirname_resolved_to_cwd(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "repo").mkdir()
-        (project / "worktrees").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / ".env").write_text("REL=1")
 
         src = project / "repo"
@@ -610,12 +607,9 @@ class TestCpConfig:
     def test_copies_all_recognized_file_types(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "repo").mkdir()
-        (project / "worktrees").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
 
         src = project / "repo"
         dest = tmp_path / "dest"
@@ -635,10 +629,7 @@ class TestCpConfig:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """The 'config copy' alias works identically to 'config cp'."""
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "repo").mkdir()
-        (project / "config").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         (project / "config" / ".env").write_text("ALIAS=1")
 
         src = project / "repo"
@@ -659,12 +650,10 @@ class TestConfigEnv:
     def test_eval_refreshes_current_shell_from_project_config(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
+        project = _make_workspace_project(tmp_path, env)
         repo_dir = project / "repo"
         config = project / "config"
-        repo_dir.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / ".env").write_text("VALUE=dotenv\n", encoding="utf-8")
         (config / ".env.local").write_text("VALUE=local\n", encoding="utf-8")
         (config / "env.sh").write_text(
@@ -741,12 +730,9 @@ class TestConfigEnv:
     def test_toml_deps_set_dependency_env_before_env_sh(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        repo_dir = project / "repo"
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        repo_dir.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / "config.toml").write_text(
             '[deps]\nvyper-automation = "feat/app"\n',
             encoding="utf-8",
@@ -782,12 +768,9 @@ class TestConfigEnv:
     def test_dotenv_overrides_toml_deps_before_env_sh(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        repo_dir = project / "repo"
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        repo_dir.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / "config.toml").write_text(
             '[deps]\nvyper-automation = "feat/app"\n',
             encoding="utf-8",
@@ -874,27 +857,42 @@ class TestConfigEnv:
 class TestConfigUpdate:
     """agm config update: create missing project TOML config files."""
 
-    def test_creates_main_and_branch_toml_configs(
+    def test_creates_main_and_checked_out_branch_toml_configs(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
-        _git("branch", "feat/simple", cwd=project / "repo", env=env)
-        _git("branch", "feat/nested/name", cwd=project / "repo", env=env)
+        _git(
+            "worktree", "add", "-b", "feat/simple",
+            str(project / "worktrees" / "feat/simple"),
+            cwd=project / "repo", env=env,
+        )
+        _git(
+            "worktree", "add", "-b", "feat/nested/name",
+            str(project / "worktrees" / "feat/nested/name"),
+            cwd=project / "repo", env=env,
+        )
+        _git("branch", "feat/not-checked-out", cwd=project / "repo", env=env)
 
         run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
 
         assert (project / "config" / "config.toml").is_file()
         assert (project / "config" / "feat" / "simple" / "config.toml").is_file()
         assert (project / "config" / "feat" / "nested" / "name" / "config.toml").is_file()
+        assert not (project / "config" / "feat" / "not-checked-out" / "config.toml").exists()
 
-    def test_updates_dependency_configs_for_all_branches(
+    def test_updates_dependency_configs_for_checked_out_branches(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare_main = make_bare_repo(tmp_path / "main.git", env)
         bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
         project = _make_project(tmp_path, bare_main, env)
-        _git("branch", "feat/app", cwd=project / "repo", env=env)
+        _git(
+            "worktree", "add", "-b", "feat/app",
+            str(project / "worktrees" / "feat/app"),
+            cwd=project / "repo", env=env,
+        )
+        _git("branch", "feat/not-checked-out", cwd=project / "repo", env=env)
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
 
         run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
@@ -904,7 +902,49 @@ class TestConfigUpdate:
         with (project / "config" / "feat" / "app" / "config.toml").open("rb") as handle:
             branch_config = cast(dict[str, object], tomllib.load(handle))
         assert main_config.get("deps") == {"vyper-automation": "main"}
-        assert branch_config.get("deps") == {"vyper-automation": "feat/app"}
+        assert branch_config.get("deps") == {"vyper-automation": "main"}
+        assert (project / "deps" / "vyper-automation" / "main").is_dir()
+        assert not (project / "config" / "feat" / "not-checked-out" / "config.toml").exists()
+
+    def test_dependency_configs_use_dependency_worktree_names(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        dep_clone = tmp_path / "dep-clone"
+        _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
+        _push_branch(dep_clone, bare_dep, "feat/app", "app.txt", env)
+        _push_branch(dep_clone, bare_dep, "other/main", "main.txt", env)
+        _push_branch(dep_clone, bare_dep, "other/feature", "feature.txt", env)
+        project = _make_project(tmp_path, bare_main, env)
+        branch = "feat/app"
+        worktree = project / "worktrees" / branch
+        _git(
+            "worktree", "add", "-b", branch, str(worktree),
+            cwd=project / "repo", env=env,
+        )
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+        run_agm(
+            ["dep", "switch", "vyper-automation", branch],
+            env=env, cwd=str(worktree),
+        )
+        _git("checkout", "other/main", cwd=project / "deps" / "vyper-automation" / "main", env=env)
+        _git(
+            "checkout", "other/feature",
+            cwd=project / "deps" / "vyper-automation" / branch,
+            env=env,
+        )
+
+        run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
+
+        with (project / "config" / "config.toml").open("rb") as handle:
+            main_config = cast(dict[str, object], tomllib.load(handle))
+        with (project / "config" / branch / "config.toml").open("rb") as handle:
+            branch_config = cast(dict[str, object], tomllib.load(handle))
+        assert main_config.get("deps") == {"vyper-automation": "main"}
+        assert branch_config.get("deps") == {"vyper-automation": branch}
+        assert (project / "deps" / "vyper-automation" / "main").is_dir()
+        assert (project / "deps" / "vyper-automation" / branch).is_dir()
 
 
 # ── agm wt new ───────────────────────────────────────────────────────────────
@@ -913,11 +953,24 @@ class TestConfigUpdate:
 class TestMkWt:
     """agm wt new: create or check out git worktrees."""
 
-    def test_new_checks_out_existing_branch(
+    def test_low_level_new_works_on_plain_git_repo(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         work = make_working_repo(tmp_path / "work", bare, env)
+        wt_dir = tmp_path / "plain-worktrees"
+        wt_dir.mkdir()
+
+        run_agm(["wt", "new", "-d", str(wt_dir), "plain-branch"], env=env, cwd=str(work))
+
+        assert (wt_dir / "plain-branch").is_dir()
+
+    def test_new_checks_out_existing_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         _push_branch(work, bare, "feat/x", "x.txt", env)
         _git("branch", "-D", "feat/x", cwd=str(work), env=env)
@@ -940,7 +993,8 @@ class TestMkWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
@@ -964,7 +1018,8 @@ class TestMkWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         _git("checkout", "-b", "existing-local", cwd=str(work), env=env)
         (work / "local.txt").write_text("local\n")
@@ -993,7 +1048,8 @@ class TestMkWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         _push_branch(work, bare, "existing-remote", "remote.txt", env)
         _git("branch", "-D", "existing-remote", cwd=str(work), env=env)
@@ -1019,7 +1075,8 @@ class TestMkWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
@@ -1035,7 +1092,8 @@ class TestMkWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         custom = tmp_path / "my-worktrees"
         custom.mkdir()
@@ -1132,7 +1190,8 @@ class TestMkWt:
     ) -> None:
         """A relative -d path should be resolved against CWD."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
         (work / "relwt").mkdir()
 
         run_agm(
@@ -1237,7 +1296,8 @@ class TestMkWt:
     ) -> None:
         """``wt new`` checks out an existing remote branch into a worktree."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         _push_branch(work, bare, "feat/long", "long.txt", env)
         _git("branch", "-D", "feat/long", cwd=str(work), env=env)
@@ -1264,11 +1324,29 @@ class TestMkWt:
 class TestRmWt:
     """agm wt rm: remove git worktrees."""
 
-    def test_removes_worktree_and_branch(
+    def test_low_level_remove_works_on_plain_git_repo(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         work = make_working_repo(tmp_path / "work", bare, env)
+        wt_dir = tmp_path / "plain-worktrees"
+        wt_dir.mkdir()
+        _git(
+            "worktree", "add", "-b", "plain-remove",
+            str(wt_dir / "plain-remove"),
+            cwd=work, env=env,
+        )
+
+        run_agm(["wt", "rm", "plain-remove"], env=env, cwd=str(work))
+
+        assert not (wt_dir / "plain-remove").exists()
+
+    def test_removes_worktree_and_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
@@ -1289,7 +1367,8 @@ class TestRmWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
@@ -1325,7 +1404,8 @@ class TestRmWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         result = run_agm(
             ["wt", "rm", "no-such-branch"], env=env, cwd=str(work), check=False,
@@ -1359,7 +1439,8 @@ class TestRmWt:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         result = run_agm(["wt", "rm"], env=env, cwd=str(work), check=False)
         assert result.returncode != 0
@@ -1370,7 +1451,8 @@ class TestRmWt:
     ) -> None:
         """'worktree remove' works identically to 'wt rm'."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
-        work = make_working_repo(tmp_path / "work", bare, env)
+        project = _make_project(tmp_path, bare, env)
+        work = project / "repo"
 
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
@@ -1535,9 +1617,7 @@ class TestDepNew:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "deps").mkdir()
+        project = _make_workspace_project(tmp_path, env)
 
         run_agm(["dep", "new", str(bare)], env=env, cwd=str(project))
 
@@ -1550,11 +1630,9 @@ class TestDepNew:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "deps").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / ".env").write_text("EXISTING=1\n", encoding="utf-8")
 
         run_agm(["dep", "new", str(bare)], env=env, cwd=str(project))
@@ -1565,11 +1643,9 @@ class TestDepNew:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "deps").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         config = project / "config"
-        config.mkdir()
+        config.mkdir(exist_ok=True)
         (config / "config.toml").write_text('[run]\nrunner = "existing"\n', encoding="utf-8")
 
         run_agm(["dep", "new", str(bare)], env=env, cwd=str(project))
@@ -1588,9 +1664,7 @@ class TestDepNew:
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
         _push_branch(clone, bare, "v2", "v2.txt", env)
 
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "deps").mkdir()
+        project = _make_workspace_project(tmp_path, env)
 
         run_agm(
             ["dep", "new", "-b", "v2", str(bare)],
@@ -1603,10 +1677,8 @@ class TestDepNew:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
-        project = tmp_path / "proj"
-        project.mkdir()
+        project = _make_workspace_project(tmp_path, env)
         deps = project / "deps"
-        deps.mkdir()
         (deps / "mylib").mkdir()
 
         result = run_agm(
@@ -1620,9 +1692,7 @@ class TestDepNew:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "some-lib.git", env)
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "deps").mkdir()
+        project = _make_workspace_project(tmp_path, env)
 
         run_agm(["dep", "new", str(bare)], env=env, cwd=str(project))
 
@@ -1664,9 +1734,7 @@ class TestDepSwitch:
         tmp_path: Path, bare: Path, env: dict[str, str],
     ) -> Path:
         """Create deps/mylib/main/ by cloning *bare* directly (no agm)."""
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "deps").mkdir()
+        project = _make_workspace_project(tmp_path, env)
         dep_main = project / "deps" / "mylib" / "main"
         dep_main.mkdir(parents=True)
         _git(
@@ -1739,6 +1807,69 @@ class TestDepSwitch:
             parsed = cast(dict[str, object], tomllib.load(handle))
         assert parsed.get("deps") == {"vyper-automation": branch, "other": "stable"}
 
+    def test_switch_accepts_existing_dependency_worktree_directory_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        dep_clone = tmp_path / "dep-clone"
+        _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
+        _push_branch(dep_clone, bare_dep, "feat/app", "app.txt", env)
+        _push_branch(dep_clone, bare_dep, "other/feature", "feature.txt", env)
+        project = _make_project(tmp_path, bare_main, env)
+        branch = "feat/app"
+        worktree = project / "worktrees" / branch
+        _git(
+            "worktree", "add", "-b", branch, str(worktree),
+            cwd=project / "repo", env=env,
+        )
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+        run_agm(["dep", "switch", "vyper-automation", branch], env=env, cwd=str(worktree))
+        _git(
+            "checkout", "other/feature",
+            cwd=project / "deps" / "vyper-automation" / branch,
+            env=env,
+        )
+
+        run_agm(["dep", "switch", "vyper-automation", branch], env=env, cwd=str(worktree))
+
+        with (project / "config" / branch / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("deps") == {"vyper-automation": branch}
+
+    def test_switch_accepts_existing_dependency_worktree_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        dep_clone = tmp_path / "dep-clone"
+        _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
+        _push_branch(dep_clone, bare_dep, "feat/app", "app.txt", env)
+        _push_branch(dep_clone, bare_dep, "other/feature", "feature.txt", env)
+        project = _make_project(tmp_path, bare_main, env)
+        branch = "feat/app"
+        worktree = project / "worktrees" / branch
+        _git(
+            "worktree", "add", "-b", branch, str(worktree),
+            cwd=project / "repo", env=env,
+        )
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+        run_agm(["dep", "switch", "vyper-automation", branch], env=env, cwd=str(worktree))
+        _git(
+            "checkout", "other/feature",
+            cwd=project / "deps" / "vyper-automation" / branch,
+            env=env,
+        )
+
+        run_agm(
+            ["dep", "switch", "vyper-automation", "other/feature"],
+            env=env, cwd=str(worktree),
+        )
+
+        with (project / "config" / branch / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("deps") == {"vyper-automation": branch}
+
     def test_switch_create_new_branch(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1763,9 +1894,7 @@ class TestDepSwitch:
     def test_switch_error_when_dep_missing(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / "deps").mkdir()
+        project = _make_workspace_project(tmp_path, env)
 
         result = run_agm(
             ["dep", "switch", "nonexistent", "main"],
@@ -1774,19 +1903,22 @@ class TestDepSwitch:
         assert result.returncode != 0
         assert "does not exist" in result.stderr
 
-    def test_switch_error_when_target_exists(
+    def test_switch_selects_existing_dependency_checkout_name(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
         project = self._setup_dep(tmp_path, bare, env)
+        config = project / "config"
+        config.mkdir(exist_ok=True)
 
-        # Switching to "main" fails because deps/mylib/main/ already exists.
-        result = run_agm(
+        run_agm(
             ["dep", "switch", "mylib", "main"],
-            env=env, cwd=str(project), check=False,
+            env=env, cwd=str(project),
         )
-        assert result.returncode != 0
-        assert "already exists" in result.stderr
+
+        with (config / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("deps") == {"mylib": "main"}
 
     def test_switch_with_slashed_branch_name(
         self, tmp_path: Path, env: dict[str, str]
@@ -1847,6 +1979,43 @@ class TestDepRemove:
         assert (dep_dir / "main").is_dir()
         branches = _git("branch", cwd=str(dep_dir / "main"), env=env).stdout
         assert "feat/remove" not in branches
+
+    def test_removes_dependency_worktree_by_directory_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/remove", "remove.txt", env)
+        _push_branch(clone, bare, "other/remove", "other.txt", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        run_agm(["dep", "switch", "mylib", "feat/remove"], env=env, cwd=str(project))
+        dep_worktree = project / "deps" / "mylib" / "feat/remove"
+        _git("checkout", "other/remove", cwd=dep_worktree, env=env)
+
+        run_agm(["dep", "rm", "mylib/feat/remove"], env=env, cwd=str(project))
+
+        dep_dir = project / "deps" / "mylib"
+        assert not dep_worktree.exists()
+        branches = _git("branch", cwd=str(dep_dir / "main"), env=env).stdout
+        assert "other/remove" not in branches
+
+    def test_removes_dependency_worktree_by_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "mylib.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/remove", "remove.txt", env)
+        _push_branch(clone, bare, "other/remove", "other.txt", env)
+        project = TestDepSwitch._setup_dep(tmp_path, bare, env)
+        run_agm(["dep", "switch", "mylib", "feat/remove"], env=env, cwd=str(project))
+        dep_worktree = project / "deps" / "mylib" / "feat/remove"
+        _git("checkout", "other/remove", cwd=dep_worktree, env=env)
+
+        run_agm(["dep", "rm", "mylib/other/remove"], env=env, cwd=str(project))
+
+        assert not dep_worktree.exists()
 
     def test_removes_all_dependency_worktrees_and_repo(
         self, tmp_path: Path, env: dict[str, str]
@@ -1966,6 +2135,7 @@ class TestFetch:
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
+        (project / ".agm").mkdir()
 
         result = run_agm(["fetch"], env=env, cwd=str(project))
 
@@ -5365,7 +5535,8 @@ class TestOpen:
         branch_config = project / "config" / "feat/test" / "config.toml"
         with branch_config.open("rb") as handle:
             parsed = cast(dict[str, object], tomllib.load(handle))
-        assert parsed.get("deps") == {"vyper-automation": "feat/test"}
+        assert parsed.get("deps") == {"vyper-automation": "main"}
+        assert (project / "deps" / "vyper-automation" / "main").is_dir()
 
     def test_open_missing_branch_uses_created_dependency_config_for_env(
         self, tmp_path: Path, env: dict[str, str]
@@ -5380,7 +5551,8 @@ class TestOpen:
         run_agm(["open", "feat/test"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
-        expected_dep_path = project / "deps" / "vyper-automation" / "feat/test"
+        expected_dep_path = project / "deps" / "vyper-automation" / "main"
+        assert expected_dep_path.is_dir()
         assert f"-e VYPER_AUTOMATION={expected_dep_path}" in log
 
     def test_open_missing_branch_preserves_existing_dependency_config(
@@ -6307,9 +6479,9 @@ class TestEdgeCases:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """Copying config to a non-existent destination: files are not copied."""
-        src = tmp_path / "src"
-        src.mkdir()
-        (src / ".env").write_text("KEY=val")
+        project = _make_workspace_project(tmp_path, env)
+        src = project / "repo"
+        (project / "config" / ".env").write_text("KEY=val")
 
         run_agm(
             ["config", "cp", str(tmp_path / "nonexistent")],

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Never
 
 import pytest
 
+import agm.project.dependency_env as dependency_env
 import agm.project.layout as project_helpers
+import agm.vcs.git as git_helpers
+from agm.project.dependency_env import current_config_branch
 from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
@@ -166,6 +170,24 @@ def test_load_worktree_env_exposes_repo_dir_to_sourced_scripts(
     assert loaded_env["CAPTURE_REPO_DIR"] == str(checkout_dir)
 
 
+def test_current_config_branch_ignores_cwd_from_other_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "proj"
+    other_project = tmp_path / "other"
+    current = other_project / "repo"
+    current.mkdir(parents=True)
+
+    monkeypatch.setattr(dependency_env, "current_project_dir", lambda _cwd: other_project)
+
+    def fail_git_setup(_cwd: Path | None = None) -> Never:
+        raise AssertionError("git_setup should not be called for another project")
+
+    monkeypatch.setattr(git_helpers, "git_setup", fail_git_setup)
+
+    assert current_config_branch(project, cwd=current) is None
+
+
 def test_load_worktree_env_applies_dotenv_precedence_before_env_sh(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
@@ -217,6 +239,7 @@ def test_load_current_config_env_uses_current_project_checkout(
     repo_dir = project / "repo"
     config_dir = project / "config"
     repo_dir.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
     config_dir.mkdir(parents=True)
     (project / "worktrees").mkdir()
     (config_dir / ".env").write_text("FROM_DOTENV=1\n", encoding="utf-8")

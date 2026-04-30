@@ -10,7 +10,13 @@ from typing import cast
 
 import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, iterdir, mkdir, read_text, rglob, write_text
-from agm.project.layout import project_config_dir, project_deps_dir, project_repo_dir
+from agm.project.layout import (
+    current_project_dir,
+    default_worktrees_dir,
+    project_config_dir,
+    project_deps_dir,
+    project_repo_dir,
+)
 
 TomlDict = dict[str, object]
 
@@ -78,11 +84,21 @@ def current_config_branch(
     """Return the current branch config name, or ``None`` for the main checkout."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
-    repo_dir = project_repo_dir(project_dir).resolve(strict=False)
-    try:
-        checkout_dir = git_helpers.git_setup(current).resolve(strict=False)
-    except SystemExit:
+    resolved_project_dir = project_dir.resolve(strict=False)
+    if current_project_dir(current).resolve(strict=False) != resolved_project_dir:
         return None
+
+    repo_dir = project_repo_dir(project_dir).resolve(strict=False)
+    if not git_helpers.is_git_repo(current):
+        if (
+            current.resolve(strict=False) == resolved_project_dir
+            and git_helpers.is_git_repo(repo_dir)
+        ):
+            checkout_dir = repo_dir
+        else:
+            return None
+    else:
+        checkout_dir = git_helpers.git_setup(current).resolve(strict=False)
     if checkout_dir == repo_dir:
         return None
     if repo_dir in checkout_dir.parents:
@@ -198,14 +214,25 @@ def _dependency_repo_sort_key(dep_dir: Path, repo_path: Path) -> tuple[int, str]
     return len(repo_path.relative_to(dep_dir).parts), str(repo_path)
 
 
-def _main_dependency_branch(dep_dir: Path) -> str | None:
+def _dependency_checkout_name(dep_dir: Path, repo_path: Path) -> str:
+    return repo_path.relative_to(dep_dir).as_posix()
+
+
+def _main_dependency_checkout_name(dep_dir: Path) -> str | None:
     repos = [
         (*_dependency_repo_sort_key(dep_dir, repo_path), repo_path)
         for repo_path in _dependency_repo_paths(dep_dir)
     ]
     if not repos:
         return None
-    return git_helpers.current_branch(sorted(repos)[0][2])
+    return _dependency_checkout_name(dep_dir, sorted(repos)[0][2])
+
+
+def _dependency_config_checkout_name(dep_dir: Path, config_branch: str) -> str | None:
+    branch_path = dep_dir / config_branch
+    if exists(branch_path / ".git") and git_helpers.is_git_repo(branch_path):
+        return _dependency_checkout_name(dep_dir, branch_path)
+    return _main_dependency_checkout_name(dep_dir)
 
 
 def update_main_dependency_configs(project_dir: Path) -> None:
@@ -215,13 +242,13 @@ def update_main_dependency_configs(project_dir: Path) -> None:
     if not is_dir(deps_dir):
         return
     for dep_dir in sorted(path for path in iterdir(deps_dir) if is_dir(path)):
-        branch = _main_dependency_branch(dep_dir)
-        if branch is None:
+        checkout_name = _main_dependency_checkout_name(dep_dir)
+        if checkout_name is None:
             continue
         update_dependency_toml_config(
             project_dir=project_dir,
             dep_name=dep_dir.name,
-            dep_branch=branch,
+            dep_branch=checkout_name,
             config_branch=None,
         )
 
@@ -245,12 +272,33 @@ def update_dependency_configs_for_branch(
     if not is_dir(deps_dir):
         return
     for dep_dir in sorted(path for path in iterdir(deps_dir) if is_dir(path)):
+        checkout_name = _dependency_config_checkout_name(dep_dir, branch)
+        if checkout_name is None:
+            continue
         update_dependency_toml_config(
             project_dir=project_dir,
             dep_name=dep_dir.name,
-            dep_branch=branch,
+            dep_branch=checkout_name,
             config_branch=branch,
         )
+
+
+def _checked_out_project_worktree_branches(
+    project_dir: Path,
+    *,
+    env: dict[str, str] | None = None,
+) -> list[str]:
+    repo_dir = project_repo_dir(project_dir)
+    worktrees_dir = default_worktrees_dir(project_dir).resolve(strict=False)
+    branches: set[str] = set()
+    for worktree in git_helpers.worktree_list(repo_dir, env=env):
+        if worktree.branch is None:
+            continue
+        worktree_path = worktree.path.resolve(strict=False)
+        if worktree_path == worktrees_dir or worktrees_dir not in worktree_path.parents:
+            continue
+        branches.add(worktree.branch)
+    return sorted(branches)
 
 
 def update_all_project_dependency_configs(
@@ -264,7 +312,7 @@ def update_all_project_dependency_configs(
     main_branch = git_helpers.current_branch(repo_dir, env=env)
     _ensure_config_toml_file(project_dir, None)
     update_main_dependency_configs(project_dir)
-    for branch in git_helpers.local_branches(repo_dir, env=env):
+    for branch in _checked_out_project_worktree_branches(project_dir, env=env):
         if branch == main_branch:
             continue
         _ensure_config_toml_file(project_dir, branch)
@@ -291,9 +339,12 @@ def ensure_dependency_configs_for_branch(
         existing_branch = existing_deps.get(dep_dir.name)
         if isinstance(existing_branch, str) and existing_branch:
             continue
+        checkout_name = _dependency_config_checkout_name(dep_dir, branch)
+        if checkout_name is None:
+            continue
         update_dependency_toml_config(
             project_dir=project_dir,
             dep_name=dep_dir.name,
-            dep_branch=branch,
+            dep_branch=checkout_name,
             config_branch=branch,
         )

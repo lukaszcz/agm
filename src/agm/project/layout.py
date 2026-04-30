@@ -106,6 +106,40 @@ def is_workspace_project(project_dir: Path) -> bool:
     return (project_dir / "repo").is_dir()
 
 
+def is_embedded_project(project_dir: Path) -> bool:
+    """Return whether *project_dir* uses the embedded layout."""
+
+    return (project_dir / ".agm").is_dir() and git_helpers.is_git_repo(project_dir)
+
+
+def is_project_dir(project_dir: Path) -> bool:
+    """Return whether *project_dir* is a valid AGM project directory."""
+
+    return is_embedded_project(project_dir) or git_helpers.is_git_repo(project_dir / "repo")
+
+
+def require_project_dir(project_dir: Path) -> Path:
+    """Return *project_dir* or exit when it is not a valid AGM project."""
+
+    resolved = project_dir.resolve()
+    if is_project_dir(resolved):
+        return resolved
+    print(
+        (
+            f"error: {resolved} is not a valid AGM project directory "
+            "(expected embedded layout with a git repo and .agm/, or workspace layout with repo/)"
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+def require_current_project_dir(cwd: Path | None = None) -> Path:
+    """Resolve and validate the current AGM project directory."""
+
+    return require_project_dir(current_project_dir(cwd))
+
+
 def project_data_dir(project_dir: Path) -> Path:
     """Return the AGM data directory for *project_dir*."""
 
@@ -203,7 +237,10 @@ def copy_config(
     """Copy known config files from the project config directory into *target*."""
 
     current = _resolved_cwd(cwd)
-    proj_dir = current_project_dir(current) if project_dir is None else project_dir.resolve()
+    if project_dir is None:
+        proj_dir = require_current_project_dir(current)
+    else:
+        proj_dir = project_dir.resolve()
     resolved_target = target if target.is_absolute() else current / target
     if not resolved_target.is_dir():
         return

@@ -13,9 +13,9 @@ from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
-    current_project_dir,
     is_main_checkout_branch,
     project_repo_dir,
+    require_current_project_dir,
 )
 from agm.project.setup import load_worktree_env
 from agm.project.worktree import ensure_worktree
@@ -111,7 +111,7 @@ def open_session(
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
-    proj_dir = current_project_dir(current)
+    proj_dir = require_current_project_dir(current)
     repo_branch = git_helpers.current_branch(project_repo_dir(proj_dir))
 
     if branch is None:
@@ -147,7 +147,7 @@ def new_session(
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
-    proj_dir = current_project_dir(current)
+    proj_dir = require_current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
     ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
@@ -180,7 +180,7 @@ def checkout_session(
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
-    proj_dir = current_project_dir(current)
+    proj_dir = require_current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
     ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
@@ -213,7 +213,7 @@ def smart_open_session(
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
-    proj_dir = current_project_dir(current)
+    proj_dir = require_current_project_dir(current)
 
     repo_dir = project_repo_dir(proj_dir)
     if is_main_checkout_branch(

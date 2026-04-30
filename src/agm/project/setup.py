@@ -12,9 +12,9 @@ from agm.core.process import require_success
 from agm.project.dependency_env import load_dependency_toml_env
 from agm.project.layout import (
     branch_session_name,
-    current_project_dir,
     project_config_dir,
     project_repo_dir,
+    require_current_project_dir,
 )
 
 
@@ -69,7 +69,7 @@ def load_current_config_env(
     """Return the config-refreshed environment for the current checkout."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
-    project_dir = current_project_dir(current)
+    project_dir = require_current_project_dir(current)
     repo_dir = project_repo_dir(project_dir)
     try:
         checkout_dir = git_helpers.git_setup(current)
@@ -86,7 +86,7 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
     """Run all configured setup scripts for the current checkout."""
 
     checkout_dir = git_helpers.git_setup(cwd)
-    project_dir = current_project_dir(checkout_dir)
+    project_dir = require_current_project_dir(checkout_dir)
     branch: str | None = None
     repo_dir = project_repo_dir(project_dir)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)

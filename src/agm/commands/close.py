@@ -11,10 +11,10 @@ from agm.core import fs
 from agm.core.process import exit_with_output, require_success, run_capture
 from agm.project.layout import (
     branch_session_name,
-    current_project_dir,
     is_main_checkout_branch,
     project_config_dir,
     project_repo_dir,
+    require_current_project_dir,
 )
 from agm.project.setup import load_worktree_env
 from agm.project.worktree import remove_worktree
@@ -85,7 +85,7 @@ def _remove_branch_config(*, proj_dir: Path, branch: str, env: dict[str, str]) -
 
 def close_session(*, branch: str, cwd: Path | None = None) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
-    proj_dir = current_project_dir(current)
+    proj_dir = require_current_project_dir(current)
     repo_dir = project_repo_dir(proj_dir)
     repo_branch = git_helpers.current_branch(repo_dir)
     if is_main_checkout_branch(proj_dir, branch, repo_branch=repo_branch):

@@ -10,11 +10,11 @@ from agm.core import dry_run
 from agm.core.fs import exists, mkdir, rmdir
 from agm.core.process import require_success
 from agm.project.dependency_env import current_config_branch, update_dependency_config
-from agm.project.layout import current_project_dir, project_deps_dir
+from agm.project.layout import project_deps_dir, require_current_project_dir
 
 
 def run(args: DepNewArgs) -> None:
-    project_dir = current_project_dir()
+    project_dir = require_current_project_dir()
     dep = derive_dep_name(args.repo_url)
     dep_dir = project_deps_dir(project_dir) / dep
     if exists(dep_dir):

@@ -89,12 +89,13 @@ Loop behavior:
 | `agm wt setup` | Alias form of `agm worktree setup` |
 | `agm wt rm [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
 | `agm dep new [-b\|--branch BRANCH] REPO_URL` | Clone a new dependency checkout |
-| `agm dep switch [-b\|--branch] DEP BRANCH` | Add a dependency worktree for a branch |
-| `agm dep rm [--all] DEP \| DEP/BRANCH \| DEP/repo \| DEP/MAIN_BRANCH` | Remove a dependency checkout or worktree |
+| `agm dep switch [-b\|--branch] DEP BRANCH` | Select or add a dependency checkout |
+| `agm dep rm --all DEP` | Remove an entire dependency directory |
+| `agm dep rm DEP/NAME_OR_BRANCH \| DEP/repo \| DEP/MAIN_CHECKOUT` | Remove a dependency checkout or worktree |
 
 `agm worktree new` options:
 
-- `-d`, `--dir DIR`: create the worktree under `DIR` instead of the project's default worktrees directory
+- `-d`, `--dir DIR`: use `agm worktree new --dir DIR BRANCH` to create the worktree under `DIR` instead of the project's default worktrees directory
 
 `agm worktree setup` runs executable setup scripts, in this order:
 
@@ -104,27 +105,27 @@ Loop behavior:
 
 `agm worktree remove` options:
 
-- `-f`, `--force`: force removal even when git reports uncommitted or locked state
+- `-f`, `--force`: use `agm worktree remove --force BRANCH` to force removal even when git reports uncommitted or locked state
 
 `agm dep new` options:
 
-- `-b`, `--branch BRANCH`: clone the dependency's initial checkout from `BRANCH` instead of the dependency's default branch
+- `-b`, `--branch BRANCH`: use `agm dep new --branch BRANCH REPO_URL` to clone the dependency's initial checkout from `BRANCH` instead of the dependency's default branch
 
 `agm dep switch` options:
 
-- `-b`, `--branch DEP BRANCH`: create `DEP`'s `BRANCH` from the dependency's default branch before adding the new worktree; without this flag, `BRANCH` must already exist
+- `-b`, `--branch`: use `agm dep switch --branch DEP BRANCH` to create `DEP`'s `BRANCH` from the dependency's default branch before adding the new worktree; without this flag, `BRANCH` must already exist
 
-Dependency commands track selected dependency branches in config `config.toml` `[deps]` tables. Environment loading turns those entries into dependency path variables, so `[deps].vyper-automation = "branch"` provides `VYPER_AUTOMATION=/path/to/proj/deps/vyper-automation/branch` before `.env` and `env.sh` are loaded.
+Dependency commands track selected dependency checkout names in config `config.toml` `[deps]` tables. Environment loading turns those entries into dependency path variables, so `[deps].vyper-automation = "feat/app"` provides `VYPER_AUTOMATION=/path/to/proj/deps/vyper-automation/feat/app` before `.env` and `env.sh` are loaded.
 
 `agm dep rm` targets:
 
-- `DEP/BRANCH`: remove a dependency worktree for `BRANCH`
+- `DEP/NAME_OR_BRANCH`: remove a dependency checkout by directory name under `deps/DEP/` or by checked-out branch name
 - `DEP/repo`: remove the main dependency checkout
-- `DEP/MAIN_BRANCH`: remove the main dependency checkout by branch name
+- `DEP/MAIN_CHECKOUT`: remove the main dependency checkout by directory name
 
 `agm dep rm` options:
 
-- `--all`: remove the entire dependency directory, including the main checkout and any linked worktrees
+- `--all DEP`: use `agm dep rm --all DEP` to remove the entire dependency directory, including the main checkout and any linked worktrees
 
 ## Configuration, sandboxing, and tmux
 

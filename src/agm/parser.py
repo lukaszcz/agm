@@ -138,30 +138,33 @@ _HELP_TEXTS: dict[str, str] = {
         agm worktree new      [-d|--dir DIR] BRANCH
         agm worktree setup
         agm worktree remove   [-f|--force] BRANCH
-        agm wt new | wt setup | wt rm
+        agm wt new            [-d|--dir DIR] BRANCH
+        agm wt setup
+        agm wt rm             [-f|--force] BRANCH
 
         Low-level git worktree management.
 
         Options:
-          agm worktree new --dir DIR
+          agm worktree new --dir DIR BRANCH
               Create the worktree under DIR instead of the default project
               worktrees directory.
-          agm worktree remove --force
+          agm worktree remove --force BRANCH
               Force removal even when git reports uncommitted or locked state.
     """),
     "dep": textwrap.dedent("""\
         agm dep new    [-b|--branch BRANCH] REPO_URL
-        agm dep rm     [--all] DEP | DEP/BRANCH | DEP/repo | DEP/MAIN_BRANCH
+        agm dep rm     --all DEP
+        agm dep rm     DEP/NAME_OR_BRANCH | DEP/repo | DEP/MAIN_CHECKOUT
         agm dep switch [-b|--branch] DEP BRANCH
 
         Manage dependency repos and dependency branch worktrees under deps/.
-        AGM tracks dependency branches in config.toml [deps] tables.
+        AGM tracks dependency checkout names in config.toml [deps] tables.
 
         Options:
-          agm dep new --branch BRANCH
+          agm dep new --branch BRANCH REPO_URL
               Clone the dependency's initial checkout from BRANCH instead of
               its default branch.
-          agm dep rm --all
+          agm dep rm --all DEP
               Remove the entire dependency directory, including the main repo
               checkout and any linked worktrees.
           agm dep switch --branch DEP BRANCH
@@ -170,9 +173,10 @@ _HELP_TEXTS: dict[str, str] = {
               exist in the dependency repo.
 
         Targets:
-          DEP/BRANCH      Remove a dependency worktree for BRANCH.
-          DEP/repo        Remove the main dependency checkout.
-          DEP/MAIN_BRANCH Remove the main dependency checkout by branch name.
+          DEP/NAME_OR_BRANCH Remove a dependency checkout by directory name
+                             under deps/DEP/ or by checked-out branch name.
+          DEP/repo           Remove the main dependency checkout.
+          DEP/MAIN_CHECKOUT  Remove the main dependency checkout by directory name.
     """),
     "run": textwrap.dedent("""\
         agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]
@@ -368,15 +372,18 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("dep", "switch"): textwrap.dedent("""\
         agm dep switch [-b|--branch] DEP BRANCH
 
-        Add a worktree at deps/DEP/BRANCH for an existing dependency branch.
-        With -b/--branch, create DEP's BRANCH from the dependency's default
-        branch first. Updates the relevant config.toml [deps] entry.
+        Select an existing dependency checkout by directory name or checked-out
+        branch name. If neither exists, add a worktree at deps/DEP/BRANCH for
+        an existing dependency branch. With -b/--branch, create DEP's BRANCH
+        from the dependency's default branch first. Updates the relevant
+        config.toml [deps] entry with the dependency checkout directory name.
     """),
     ("dep", "rm"): textwrap.dedent("""\
-        agm dep rm [--all] TARGET
+        agm dep rm --all DEP
+        agm dep rm TARGET
 
-        Remove a dependency worktree by DEP/BRANCH, or remove the main checkout
-        with DEP/repo, DEP/MAIN_BRANCH, or --all DEP.
+        Remove a dependency worktree by DEP/NAME_OR_BRANCH, or remove the main
+        checkout with DEP/repo, DEP/MAIN_CHECKOUT, or --all DEP.
     """),
     ("tmux", "open"): textwrap.dedent("""\
         agm tmux open [-d|--detach] [-n|--num-panes PANES] [SESSION]

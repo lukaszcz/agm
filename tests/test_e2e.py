@@ -474,8 +474,6 @@ class TestCpConfig:
         )
         assert result.returncode != 0
 
-        assert not (dest / ".env").exists()
-
     def test_auto_detects_project_from_worktrees_subdir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1478,7 +1476,7 @@ class TestDepNew:
         assert (dep / "main").is_dir()
         assert (dep / "main" / "README.md").exists()
 
-    def test_updates_main_env_file(
+    def test_preserves_main_env_file(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
@@ -1491,10 +1489,7 @@ class TestDepNew:
 
         run_agm(["dep", "new", str(bare)], env=env, cwd=str(project))
 
-        assert (config / ".env").read_text(encoding="utf-8") == (
-            "EXISTING=1\n"
-            f"VYPER_AUTOMATION={project / 'deps' / 'vyper-automation' / 'main'}\n"
-        )
+        assert (config / ".env").read_text(encoding="utf-8") == "EXISTING=1\n"
 
     def test_updates_main_toml_deps_config(
         self, tmp_path: Path, env: dict[str, str]
@@ -1641,33 +1636,6 @@ class TestDepSwitch:
             cwd=str(project / "deps" / "mylib" / "main"), env=env,
         ).stdout
         assert str(switched_wt) in wt_list
-
-    def test_switch_updates_branch_env_file(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        bare_main = make_bare_repo(tmp_path / "main.git", env)
-        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
-        dep_clone = tmp_path / "dep-clone"
-        _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
-        _push_branch(dep_clone, bare_dep, "feat/app", "app.txt", env)
-        project = _make_project(tmp_path, bare_main, env)
-        branch = "feat/app"
-        worktree = project / "worktrees" / branch
-        _git(
-            "worktree", "add", "-b", branch, str(worktree),
-            cwd=str(project / "repo"), env=env,
-        )
-
-        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
-        run_agm(
-            ["dep", "switch", "vyper-automation", branch],
-            env=env, cwd=str(worktree),
-        )
-
-        branch_env = project / "config" / branch / ".env"
-        assert branch_env.read_text(encoding="utf-8") == (
-            f"VYPER_AUTOMATION={project / 'deps' / 'vyper-automation' / branch}\n"
-        )
 
     def test_switch_updates_branch_toml_deps_config(
         self, tmp_path: Path, env: dict[str, str]
@@ -2154,7 +2122,6 @@ class TestInit:
         proj = tmp_path / "proj"
         assert (proj / "config" / "env.sh").exists()
         assert (proj / "config" / "setup.sh").exists()
-        assert (proj / "config" / ".env").read_text(encoding="utf-8") == ""
         assert os.access(proj / "config" / "setup.sh", os.X_OK)
 
     def test_init_initializes_config_and_notes_git_repositories(
@@ -2168,7 +2135,7 @@ class TestInit:
         assert (proj / "config" / ".git").is_dir()
         assert (proj / "notes" / ".git").is_dir()
 
-    def test_init_updates_existing_dependency_env_vars(
+    def test_init_updates_existing_dependency_toml_config(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         project = tmp_path / "proj"
@@ -2179,9 +2146,9 @@ class TestInit:
 
         run_agm(["init", "proj"], env=env, cwd=str(tmp_path))
 
-        assert (project / "config" / ".env").read_text(encoding="utf-8") == (
-            f"VYPER_AUTOMATION={dep}\n"
-        )
+        with (project / "config" / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("deps") == {"vyper-automation": "main"}
 
     def test_init_with_branch(
         self, tmp_path: Path, env: dict[str, str]
@@ -2243,7 +2210,6 @@ class TestInit:
         assert not list((proj / "repo").iterdir())
         assert (proj / "config" / ".git").is_dir()
         assert (proj / "notes" / ".git").is_dir()
-        assert (proj / "config" / ".env").read_text(encoding="utf-8") == ""
 
     def test_init_dry_run_prints_operations_without_creating_project(
         self, tmp_path: Path, env: dict[str, str]
@@ -2300,7 +2266,6 @@ class TestInit:
         assert (proj / ".agm" / "worktrees").is_dir()
         assert (proj / ".agm" / "config" / ".git").is_dir()
         assert (proj / ".agm" / "notes" / ".git").is_dir()
-        assert (proj / ".agm" / "config" / ".env").read_text(encoding="utf-8") == ""
         assert ".agm" in (proj / ".gitignore").read_text().splitlines()
         assert (proj / "README.md").exists()
         assert (proj / "config").exists() is False
@@ -2320,7 +2285,6 @@ class TestInit:
         assert (proj / ".agm" / "worktrees").is_dir()
         assert (proj / ".agm" / "config" / ".git").is_dir()
         assert (proj / ".agm" / "notes" / ".git").is_dir()
-        assert (proj / ".agm" / "config" / ".env").read_text(encoding="utf-8") == ""
         assert ".agm" in (proj / ".gitignore").read_text().splitlines()
         assert not (proj / "repo").exists()
         assert not (proj / "worktrees").exists()
@@ -5316,7 +5280,7 @@ class TestOpen:
         assert "true" not in result.stdout
         assert "cannot stat" not in result.stderr
 
-    def test_open_missing_branch_copies_dependency_env_vars(
+    def test_open_missing_branch_copies_dependency_toml_config(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -5328,14 +5292,10 @@ class TestOpen:
 
         run_agm(["open", "feat/test"], env=env, cwd=str(project))
 
-        branch_env = project / "config" / "feat/test" / ".env"
-        expected_value = project / "deps" / "vyper-automation" / "feat/test"
-        assert branch_env.read_text(encoding="utf-8") == (
-            f"VYPER_AUTOMATION={expected_value}\n"
-        )
-        assert (project / "worktrees" / "feat/test" / ".env").read_text(
-            encoding="utf-8"
-        ) == f"VYPER_AUTOMATION={expected_value}\n"
+        branch_config = project / "config" / "feat/test" / "config.toml"
+        with branch_config.open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("deps") == {"vyper-automation": "feat/test"}
 
     def test_open_dry_run_prints_planned_commands_without_side_effects(
         self, tmp_path: Path, env: dict[str, str]

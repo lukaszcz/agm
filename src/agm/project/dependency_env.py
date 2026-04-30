@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import cast
 
 import agm.vcs.git as git_helpers
-from agm.core.dotenv import set_dotenv_value
 from agm.core.fs import exists, is_dir, iterdir, mkdir, read_text, rglob, write_text
 from agm.project.layout import project_config_dir, project_deps_dir, project_repo_dir
 
@@ -25,15 +24,6 @@ def dep_env_var_name(dep_name: str) -> str:
     if name[0].isdigit():
         return f"_{name}"
     return name
-
-
-def config_env_file(project_dir: Path, branch: str | None) -> Path:
-    """Return the config dotenv file for the main repo or *branch*."""
-
-    config_dir = project_config_dir(project_dir)
-    if branch is None:
-        return config_dir / ".env"
-    return config_dir / branch / ".env"
 
 
 def config_toml_file(project_dir: Path, branch: str | None) -> Path:
@@ -178,20 +168,6 @@ def update_dependency_toml_config(
     write_text(config_file, updated, encoding="utf-8")
 
 
-def update_dependency_env_var(
-    *,
-    project_dir: Path,
-    dep_name: str,
-    dep_branch: str,
-    config_branch: str | None,
-) -> None:
-    """Update one dependency environment variable in the relevant config dotenv."""
-
-    env_file = config_env_file(project_dir, config_branch)
-    dep_path = project_deps_dir(project_dir) / dep_name / dep_branch
-    set_dotenv_value(env_file, dep_env_var_name(dep_name), str(dep_path))
-
-
 def update_dependency_config(
     *,
     project_dir: Path,
@@ -199,14 +175,8 @@ def update_dependency_config(
     dep_branch: str,
     config_branch: str | None,
 ) -> None:
-    """Update dependency config in both legacy dotenv and TOML files."""
+    """Update one dependency branch in the relevant config TOML file."""
 
-    update_dependency_env_var(
-        project_dir=project_dir,
-        dep_name=dep_name,
-        dep_branch=dep_branch,
-        config_branch=config_branch,
-    )
     update_dependency_toml_config(
         project_dir=project_dir,
         dep_name=dep_name,
@@ -238,12 +208,8 @@ def _main_dependency_branch(dep_dir: Path) -> str | None:
     return git_helpers.current_branch(sorted(repos)[0][2])
 
 
-def update_main_dependency_env_vars(project_dir: Path) -> None:
-    """Create/update the main config dotenv with known dependency paths."""
-
-    env_file = config_env_file(project_dir, None)
-    if not exists(env_file):
-        write_text(env_file, "", encoding="utf-8")
+def update_main_dependency_configs(project_dir: Path) -> None:
+    """Create/update the main config TOML with known dependency branches."""
 
     deps_dir = project_deps_dir(project_dir)
     if not is_dir(deps_dir):
@@ -252,12 +218,6 @@ def update_main_dependency_env_vars(project_dir: Path) -> None:
         branch = _main_dependency_branch(dep_dir)
         if branch is None:
             continue
-        update_dependency_env_var(
-            project_dir=project_dir,
-            dep_name=dep_dir.name,
-            dep_branch=branch,
-            config_branch=None,
-        )
         update_dependency_toml_config(
             project_dir=project_dir,
             dep_name=dep_dir.name,
@@ -266,23 +226,17 @@ def update_main_dependency_env_vars(project_dir: Path) -> None:
         )
 
 
-def update_dependency_env_vars_for_branch(
+def update_dependency_configs_for_branch(
     *,
     project_dir: Path,
     branch: str,
 ) -> None:
-    """Update branch config dotenv values for all project dependencies."""
+    """Update branch config TOML values for all project dependencies."""
 
     deps_dir = project_deps_dir(project_dir)
     if not is_dir(deps_dir):
         return
     for dep_dir in sorted(path for path in iterdir(deps_dir) if is_dir(path)):
-        update_dependency_env_var(
-            project_dir=project_dir,
-            dep_name=dep_dir.name,
-            dep_branch=branch,
-            config_branch=branch,
-        )
         update_dependency_toml_config(
             project_dir=project_dir,
             dep_name=dep_dir.name,

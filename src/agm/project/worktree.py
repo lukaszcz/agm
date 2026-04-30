@@ -6,7 +6,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core.process import require_success
-from agm.project.dependency_env import update_dependency_env_vars_for_branch
+from agm.project.dependency_env import update_dependency_configs_for_branch
 from agm.project.layout import (
     copy_config,
     current_project_dir,
@@ -96,7 +96,7 @@ def ensure_worktree(
         create=create_branch,
         env=env,
     )
-    update_dependency_env_vars_for_branch(project_dir=project_dir, branch=branch_name)
+    update_dependency_configs_for_branch(project_dir=project_dir, branch=branch_name)
     copy_config(project_dir=project_dir, target=dirname, branch=branch_name, cwd=current)
     return dirname
 

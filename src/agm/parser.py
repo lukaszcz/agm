@@ -151,8 +151,9 @@ _HELP_TEXTS: dict[str, str] = {
         agm dep switch [-b|--branch] DEP BRANCH
 
         Manage dependency repos and dependency branch worktrees under deps/.
-        AGM also maintains dependency path env vars in config .env files
-        (for example, deps/vyper-automation becomes VYPER_AUTOMATION).
+        AGM also tracks dependency branches in config.toml [deps] tables and
+        dependency path env vars in config .env files (for example,
+        deps/vyper-automation becomes VYPER_AUTOMATION).
 
         Options:
           agm dep new --branch BRANCH
@@ -360,7 +361,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Add a worktree at deps/DEP/BRANCH for an existing dependency branch.
         With -b/--branch, create DEP's BRANCH from the dependency's default
-        branch first. Updates the relevant config .env dependency path.
+        branch first. Updates the relevant config.toml [deps] entry and
+        config .env dependency path.
     """),
     ("dep", "rm"): textwrap.dedent("""\
         agm dep rm [--all] TARGET

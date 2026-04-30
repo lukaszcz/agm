@@ -19,6 +19,7 @@ import stat
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -1366,6 +1367,24 @@ class TestDepNew:
             f"VYPER_AUTOMATION={project / 'deps' / 'vyper-automation' / 'main'}\n"
         )
 
+    def test_updates_main_toml_deps_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "deps").mkdir()
+        config = project / "config"
+        config.mkdir()
+        (config / "config.toml").write_text('[run]\nrunner = "existing"\n', encoding="utf-8")
+
+        run_agm(["dep", "new", str(bare)], env=env, cwd=str(project))
+
+        with (config / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("run") == {"runner": "existing"}
+        assert parsed.get("deps") == {"vyper-automation": "main"}
+
     def test_clones_with_specific_branch(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -1520,6 +1539,38 @@ class TestDepSwitch:
         assert branch_env.read_text(encoding="utf-8") == (
             f"VYPER_AUTOMATION={project / 'deps' / 'vyper-automation' / branch}\n"
         )
+
+    def test_switch_updates_branch_toml_deps_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        dep_clone = tmp_path / "dep-clone"
+        _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
+        _push_branch(dep_clone, bare_dep, "feat/app", "app.txt", env)
+        project = _make_project(tmp_path, bare_main, env)
+        branch = "feat/app"
+        worktree = project / "worktrees" / branch
+        _git(
+            "worktree", "add", "-b", branch, str(worktree),
+            cwd=str(project / "repo"), env=env,
+        )
+        branch_config = project / "config" / branch
+        branch_config.mkdir(parents=True)
+        (branch_config / "config.toml").write_text(
+            '[deps]\nvyper-automation = "main"\nother = "stable"\n',
+            encoding="utf-8",
+        )
+
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
+        run_agm(
+            ["dep", "switch", "vyper-automation", branch],
+            env=env, cwd=str(worktree),
+        )
+
+        with (branch_config / "config.toml").open("rb") as handle:
+            parsed = cast(dict[str, object], tomllib.load(handle))
+        assert parsed.get("deps") == {"vyper-automation": branch, "other": "stable"}
 
     def test_switch_create_new_branch(
         self, tmp_path: Path, env: dict[str, str]

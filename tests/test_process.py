@@ -5,8 +5,11 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
-from agm.core.process import run_capture
+import pytest
+
+from agm.core.process import run_capture, run_foreground
 
 
 def test_run_capture_streams_stdout_and_stderr_before_process_exit(tmp_path: Path) -> None:
@@ -43,3 +46,32 @@ def test_run_capture_streams_stdout_and_stderr_before_process_exit(tmp_path: Pat
         stream == "stderr" and chunk == "err-1" and elapsed < 0.9
         for stream, chunk, elapsed in events
     )
+
+
+def test_run_foreground_preserves_controlling_terminal_for_interactive_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    popen_kwargs: dict[str, Any] = {}
+
+    class FakeProcess:
+        stdout = None
+        stderr = None
+        returncode = 0
+
+        def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> FakeProcess:
+        popen_kwargs.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    assert run_foreground(["git", "fetch"]) == 0
+
+    assert popen_kwargs.get("stdin") is None
+    assert popen_kwargs.get("start_new_session") is not True
+    assert popen_kwargs["process_group"] == 0

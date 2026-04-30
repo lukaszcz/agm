@@ -105,7 +105,7 @@ def run_subprocess(
         stdout=subprocess.PIPE if capture_output or stdout_callback is not None else None,
         stderr=subprocess.PIPE if capture_output or stderr_callback is not None else None,
         text=False,
-        start_new_session=True,
+        process_group=0,
     )
 
     readers: list[threading.Thread] = []

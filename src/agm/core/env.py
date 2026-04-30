@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +11,40 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 from agm.core.process import exit_with_output
+
+_SHELL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_SHELL_ENV_ASSIGNMENT_SKIP_NAMES = frozenset(
+    {
+        "_",
+        "BASHOPTS",
+        "BASHPID",
+        "DISPLAY",
+        "EUID",
+        "LOGNAME",
+        "OLDPWD",
+        "PPID",
+        "PWD",
+        "SHELL",
+        "SHELLOPTS",
+        "SHLVL",
+        "TERM",
+        "TMUX",
+        "UID",
+        "USER",
+    }
+)
+
+
+def is_shell_identifier(name: str) -> bool:
+    """Return whether *name* has shell variable identifier syntax."""
+
+    return _SHELL_IDENTIFIER_RE.fullmatch(name) is not None
+
+
+def is_safe_shell_env_assignment_name(name: str) -> bool:
+    """Return whether AGM may safely emit or inject *name* as a shell env assignment."""
+
+    return is_shell_identifier(name) and name not in _SHELL_ENV_ASSIGNMENT_SKIP_NAMES
 
 
 def agm_installation_prefix() -> Path | None:

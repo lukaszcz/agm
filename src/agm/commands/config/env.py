@@ -3,31 +3,11 @@
 from __future__ import annotations
 
 import os
-import re
 import shlex
 
 from agm.commands.args import ConfigEnvArgs
+from agm.core.env import is_safe_shell_env_assignment_name
 from agm.project.setup import load_current_config_env
-
-_SHELL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-_BASH_SPECIAL_PARAMETER_NAMES = frozenset(
-    {
-        "_",
-        "BASHOPTS",
-        "BASHPID",
-        "EUID",
-        "PPID",
-        "SHELLOPTS",
-        "UID",
-    }
-)
-
-
-def _is_shell_assignable_name(name: str) -> bool:
-    return (
-        _SHELL_IDENTIFIER_RE.fullmatch(name) is not None
-        and name not in _BASH_SPECIAL_PARAMETER_NAMES
-    )
 
 
 def shell_env_delta(
@@ -39,10 +19,10 @@ def shell_env_delta(
 
     statements: list[str] = []
     for name in sorted(before.keys() - after.keys()):
-        if _is_shell_assignable_name(name):
+        if is_safe_shell_env_assignment_name(name):
             statements.append(f"unset {name}")
     for name in sorted(after):
-        if not _is_shell_assignable_name(name) or before.get(name) == after[name]:
+        if not is_safe_shell_env_assignment_name(name) or before.get(name) == after[name]:
             continue
         statements.append(f"export {name}={shlex.quote(after[name])}")
     return statements

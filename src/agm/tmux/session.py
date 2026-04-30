@@ -9,21 +9,9 @@ import sys
 from pathlib import Path
 
 from agm.core import dry_run
+from agm.core.env import is_safe_shell_env_assignment_name
 from agm.parser import exit_with_usage_error
 from agm.tmux.layout import apply_layout
-
-SKIP_NAMES: set[str] = {
-    "TMUX",
-    "TERM",
-    "DISPLAY",
-    "PWD",
-    "OLDPWD",
-    "SHELL",
-    "SHLVL",
-    "LOGNAME",
-    "USER",
-    "_",
-}
 
 SKIP_PREFIXES: tuple[str, ...] = ("TMUX_", "TERM_", "SSH_", "DBUS_", "XDG_")
 
@@ -41,7 +29,7 @@ def validate_pane_count(command_path: list[str], pane_count: str | None) -> int:
 def _filter_env(env: dict[str, str]) -> list[tuple[str, str]]:
     filtered: list[tuple[str, str]] = []
     for name, value in env.items():
-        if name in SKIP_NAMES:
+        if not is_safe_shell_env_assignment_name(name):
             continue
         if any(name.startswith(prefix) for prefix in SKIP_PREFIXES):
             continue

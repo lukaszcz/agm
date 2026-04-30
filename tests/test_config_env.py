@@ -37,8 +37,22 @@ def test_shell_env_delta_skips_names_that_shell_cannot_assign() -> None:
 
 def test_shell_env_delta_skips_special_shell_parameters() -> None:
     statements = shell_env_delta(
-        before={"_": "old-last-arg", "UID": "1000", "REMOVED": "1"},
-        after={"_": "new-last-arg", "UID": "1001", "ADDED": "1"},
+        before={
+            "_": "old-last-arg",
+            "PWD": "/old",
+            "OLDPWD": "/previous",
+            "SHLVL": "1",
+            "UID": "1000",
+            "REMOVED": "1",
+        },
+        after={
+            "_": "new-last-arg",
+            "PWD": "/new",
+            "OLDPWD": "/old",
+            "SHLVL": "2",
+            "UID": "1001",
+            "ADDED": "1",
+        },
     )
 
     assert statements == [

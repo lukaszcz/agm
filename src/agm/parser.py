@@ -49,20 +49,25 @@ _HELP_TEXTS: dict[str, str] = {
         the corresponding tmux session.
     """),
     "init": textwrap.dedent("""\
-        agm init [--embedded | --workspace] [-b|--branch BRANCH] PROJECT_NAME
+        agm init [--embedded | --workspace]
+        agm init [--embedded | --workspace] PROJECT_NAME
         agm init [--embedded | --workspace] [-b|--branch BRANCH] [PROJECT_NAME] REPO_URL
+        agm init --clone [--embedded | --workspace] [-b|--branch BRANCH] REPO_URL
 
-        Initialize a new project directory. When REPO_URL is provided, agm also
-        clones it into repo/ by default, or into the project root with
-        --embedded. If PROJECT_NAME is omitted in that form, it is derived from
-        the repo URL. Without an explicit layout flag, agm chooses the embedded
-        layout when the target project directory is already a git repo;
-        otherwise it chooses the workspace layout.
+        Initialize a project. Without PROJECT_NAME, agm initializes the current
+        directory. With PROJECT_NAME, agm initializes a child directory with that
+        name. When REPO_URL is provided, agm also clones it into repo/ by default,
+        or into the project root with --embedded. Use --clone with a URL-only init
+        to initialize a child directory derived from the repo URL. Without an
+        explicit layout flag, agm chooses the embedded layout when the target
+        project directory is already a git repo; otherwise it chooses the
+        workspace layout.
 
         Options:
           --embedded   Force the embedded layout with AGM data under .agm/.
           --workspace  Force the workspace layout with repo/, deps/, notes/,
                        worktrees/, and config/ under the project root.
+          --clone      Initialize a new project directory derived from REPO_URL.
           -b, --branch BRANCH
                        Clone this branch when REPO_URL is provided.
     """),
@@ -272,7 +277,7 @@ _HELP_ALIASES: dict[str, str] = {
 _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("open", "Open a project session"),
     ("close", "Close a project session"),
-    ("init", "Initialize a new project"),
+    ("init", "Initialize a project"),
     ("dep", "Manage project dependency checkouts"),
     (
         "fetch",

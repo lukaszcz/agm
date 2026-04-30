@@ -125,12 +125,14 @@ def use_embedded_layout(args: InitArgs, *, project_dir: Path, repo_url: str) -> 
 
 def run(args: InitArgs) -> None:
     positional: list[str] = args.positional
-    if not positional or len(positional) > 2:
+    if len(positional) > 2:
         raise SystemExit(1)
 
     proj = ""
     repo_url = ""
-    if len(positional) == 1:
+    if not positional:
+        pass
+    elif len(positional) == 1:
         if looks_like_repo_url(positional[0]):
             repo_url = positional[0]
         else:
@@ -139,13 +141,16 @@ def run(args: InitArgs) -> None:
         proj = positional[0]
         repo_url = positional[1]
 
-    if not proj and not repo_url:
+    if args.clone and not repo_url:
+        print("error: --clone requires REPO_URL", file=sys.stderr)
         raise SystemExit(1)
-    if not proj:
+    if args.branch is not None and not repo_url:
+        print("error: --branch requires REPO_URL", file=sys.stderr)
+        raise SystemExit(1)
+    if args.clone and not proj:
         proj = derive_project_name(repo_url)
 
-    base_dir = Path.cwd()
-    project_dir = base_dir / proj
+    project_dir = Path.cwd() / proj if proj else Path.cwd()
     embedded_layout = use_embedded_layout(args, project_dir=project_dir, repo_url=repo_url)
     if not repo_url:
         configure_project_dir(project_dir, embedded=embedded_layout)
@@ -153,7 +158,13 @@ def run(args: InitArgs) -> None:
 
     repo_dir = project_repo_dir(project_dir) if embedded_layout else project_dir / "repo"
     if exists(repo_dir) and not is_empty_dir(repo_dir):
-        display_dir = proj if embedded_layout else f"{proj}/repo"
+        try:
+            relative_repo_dir = repo_dir.relative_to(Path.cwd())
+        except ValueError:
+            display_dir = str(repo_dir)
+        else:
+            relative_display = str(relative_repo_dir)
+            display_dir = "current directory" if relative_display == "." else relative_display
         print(f"error: {display_dir} already exists and is not empty", file=sys.stderr)
         raise SystemExit(1)
 

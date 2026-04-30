@@ -306,6 +306,17 @@ class TestInit:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].positional == ["https://github.com/org/repo.git"]
+        assert calls[0].clone is False
+
+    def test_init_with_clone(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "--clone", "https://github.com/org/repo.git"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].positional == ["https://github.com/org/repo.git"]
+        assert calls[0].clone is True
 
     def test_init_with_branch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
@@ -345,9 +356,14 @@ class TestInit:
         assert calls[0].workspace is True
         assert calls[0].positional == ["myproj"]
 
-    def test_init_missing_args(self, runner: CliRunner) -> None:
+    def test_init_without_args(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
         result = invoke(runner, ["init"])
-        assert result.exit_code != 0
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].positional == []
 
 
 class TestOpen:

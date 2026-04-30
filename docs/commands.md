@@ -18,8 +18,10 @@ Global options:
 |---|---|
 | `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Open the main checkout or a branch worktree, creating or checking it out when needed |
 | `agm close BRANCH` | Remove a branch worktree and close its tmux session |
-| `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] PROJECT_NAME` | Initialize a project directory without cloning a repo |
-| `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] [PROJECT_NAME] REPO_URL` | Initialize a project directory and clone a repo |
+| `agm init [--embedded \| --workspace]` | Initialize the current directory without cloning a repo |
+| `agm init [--embedded \| --workspace] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
+| `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
+| `agm init --clone [--embedded \| --workspace] [-b\|--branch BRANCH] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
 | `agm fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
 
 `agm open` behavior:
@@ -45,13 +47,17 @@ Global options:
 
 - `--embedded`: force the embedded layout with AGM data under `.agm/`
 - `--workspace`: force the workspace layout with `repo/`, `deps/`, `notes/`, `worktrees/`, and `config/`
+- `--clone`: initialize a child directory derived from `REPO_URL` when no `PROJECT_NAME` is provided
 - `-b`, `--branch BRANCH`: clone this branch when `REPO_URL` is provided
 
 `agm init` layout selection:
 
 - with `REPO_URL`, the default is the workspace layout unless `--embedded` is provided
-- without `REPO_URL`, AGM chooses the embedded layout only when the target project directory already exists and is a git repo
+- without `REPO_URL`, AGM chooses the embedded layout only when the target project directory is a git repo
 - otherwise it chooses the workspace layout
+- without `PROJECT_NAME`, AGM initializes the current directory
+- with `PROJECT_NAME`, AGM initializes a child directory with that name
+- with `--clone REPO_URL`, AGM initializes a child directory derived from the URL
 
 ## Loop automation
 

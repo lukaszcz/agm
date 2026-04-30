@@ -82,6 +82,7 @@ class InitArgs:
     branch: str | None
     embedded: bool
     workspace: bool
+    clone: bool
 
 
 @dataclass(slots=True)

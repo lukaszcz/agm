@@ -2352,12 +2352,23 @@ class TestInit:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "myproject.git", env)
-
-        run_agm(["init", str(bare)], env=env, cwd=str(tmp_path))
-
         proj = tmp_path / "myproject"
+        proj.mkdir()
+
+        run_agm(["init", str(bare)], env=env, cwd=str(proj))
+
         assert proj.is_dir()
         assert (proj / "repo" / "README.md").exists()
+        assert not (proj / "myproject").exists()
+
+    def test_init_clone_with_url_only_uses_derived_directory(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "myproject.git", env)
+
+        run_agm(["init", "--clone", str(bare)], env=env, cwd=str(tmp_path))
+
+        assert (tmp_path / "myproject" / "repo" / "README.md").exists()
 
     def test_init_with_name_and_url(
         self, tmp_path: Path, env: dict[str, str]
@@ -2375,10 +2386,11 @@ class TestInit:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
-
-        run_agm(["init", str(bare)], env=env, cwd=str(tmp_path))
-
         proj = tmp_path / "proj"
+        proj.mkdir()
+
+        run_agm(["init", str(bare)], env=env, cwd=str(proj))
+
         for d in ("repo", "deps", "worktrees", "notes", "config"):
             assert (proj / d).is_dir(), f"{d}/ should exist"
 
@@ -2386,10 +2398,11 @@ class TestInit:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
-
-        run_agm(["init", str(bare)], env=env, cwd=str(tmp_path))
-
         proj = tmp_path / "proj"
+        proj.mkdir()
+
+        run_agm(["init", str(bare)], env=env, cwd=str(proj))
+
         assert (proj / "config" / "env.sh").exists()
         assert (proj / "config" / "setup.sh").exists()
         assert os.access(proj / "config" / "setup.sh", os.X_OK)
@@ -2398,10 +2411,11 @@ class TestInit:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
-
-        run_agm(["init", str(bare)], env=env, cwd=str(tmp_path))
-
         proj = tmp_path / "proj"
+        proj.mkdir()
+
+        run_agm(["init", str(bare)], env=env, cwd=str(proj))
+
         assert (proj / "config" / ".git").is_dir()
         assert (proj / "notes" / ".git").is_dir()
 
@@ -2424,6 +2438,8 @@ class TestInit:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
+        proj = tmp_path / "proj"
+        proj.mkdir()
 
         clone = tmp_path / "tmp-clone"
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
@@ -2431,16 +2447,29 @@ class TestInit:
 
         run_agm(
             ["init", "-b", "dev", str(bare)],
-            env=env, cwd=str(tmp_path),
+            env=env, cwd=str(proj),
         )
 
-        proj = tmp_path / "proj"
         assert (proj / "repo" / "dev.txt").exists()
         head = _git(
             "rev-parse", "--abbrev-ref", "HEAD",
             cwd=str(proj / "repo"), env=env,
         ).stdout.strip()
         assert head == "dev"
+
+    def test_init_branch_without_repo_url_errors(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(
+            ["init", "-b", "dev", "proj"],
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "--branch requires REPO_URL" in result.stderr
+        assert not (tmp_path / "proj").exists()
 
     def test_error_when_repo_not_empty(
         self, tmp_path: Path, env: dict[str, str]
@@ -2452,7 +2481,7 @@ class TestInit:
         (proj / "repo" / "existing.txt").write_text("exists")
 
         result = run_agm(
-            ["init", str(bare)], env=env, cwd=str(tmp_path), check=False,
+            ["init", str(bare)], env=env, cwd=str(proj), check=False,
         )
         assert result.returncode != 0
         assert "already exists" in result.stderr
@@ -2461,10 +2490,12 @@ class TestInit:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
+        project = tmp_path / "proj"
+        project.mkdir()
 
         result = run_agm(
             ["init", "-b", "no-such-branch", str(bare)],
-            env=env, cwd=str(tmp_path), check=False,
+            env=env, cwd=str(project), check=False,
         )
         assert result.returncode != 0
         assert "no-such-branch" in result.stderr.lower() or result.returncode == 128
@@ -2481,13 +2512,27 @@ class TestInit:
         assert (proj / "config" / ".git").is_dir()
         assert (proj / "notes" / ".git").is_dir()
 
+    def test_init_initializes_current_directory_for_workspace_layout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "myproj"
+        project.mkdir()
+
+        run_agm(["init"], env=env, cwd=str(project))
+
+        for dirname in ("repo", "deps", "worktrees", "notes", "config"):
+            assert (project / dirname).is_dir()
+        assert not (project / "myproj").exists()
+
     def test_init_dry_run_prints_operations_without_creating_project(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
+        project = tmp_path / "sample"
+
         result = run_agm(["--dry-run", "init", "sample"], env=env, cwd=str(tmp_path))
 
         assert result.returncode == 0
-        assert not (tmp_path / "sample").exists()
+        assert not project.exists()
         assert "dry-run: agm mkdir" in result.stdout
         assert "dry-run: agm write-file" in result.stdout
         assert "dry-run: agm chmod" in result.stdout
@@ -2498,7 +2543,7 @@ class TestInit:
         bare = make_bare_repo(tmp_path / "proj.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
 
-        result = run_agm(["init", "proj"], env=env, cwd=str(tmp_path))
+        result = run_agm(["init"], env=env, cwd=str(project))
 
         assert "git repo detected, choosing embedded layout" in result.stdout.lower()
         assert (project / ".agm" / "config").is_dir()
@@ -2514,7 +2559,7 @@ class TestInit:
         bare = make_bare_repo(tmp_path / "proj.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
 
-        result = run_agm(["init", "--workspace", "proj"], env=env, cwd=str(tmp_path))
+        result = run_agm(["init", "--workspace"], env=env, cwd=str(project))
 
         assert "git repo detected" not in result.stdout.lower()
         assert (project / "repo").is_dir()
@@ -2524,10 +2569,11 @@ class TestInit:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "embedded.git", env)
-
-        run_agm(["init", "--embedded", str(bare)], env=env, cwd=str(tmp_path))
-
         proj = tmp_path / "embedded"
+        proj.mkdir()
+
+        run_agm(["init", "--embedded", str(bare)], env=env, cwd=str(proj))
+
         assert (proj / ".git").is_dir()
         assert (proj / ".agm").is_dir()
         assert (proj / ".agm" / "config").is_dir()
@@ -2560,14 +2606,13 @@ class TestInit:
         assert not (proj / "worktrees").exists()
         assert not (proj / "config").exists()
 
-    def test_error_no_args(
+    def test_init_without_args_initializes_current_directory(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        result = run_agm(
-            ["init"], env=env, cwd=str(tmp_path), check=False,
-        )
-        assert result.returncode != 0
-        assert "usage" in result.stderr.lower()
+        run_agm(["init"], env=env, cwd=str(tmp_path))
+
+        assert (tmp_path / "repo").is_dir()
+        assert (tmp_path / "config" / ".git").is_dir()
 
     def test_config_templates_are_not_overwritten(
         self, tmp_path: Path, env: dict[str, str]
@@ -6263,6 +6308,17 @@ class TestHelp:
         assert "agm adds the project notes, deps, and" in result.stdout
         assert "repo .git paths to filesystem.allowWrite" in result.stdout
 
+    def test_init_help_shows_branch_only_for_repo_url_forms(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        result = run_agm(["help", "init"], env=env, cwd=str(tmp_path))
+
+        assert "agm init [--embedded | --workspace] PROJECT_NAME" in result.stdout
+        assert (
+            "agm init [--embedded | --workspace] [-b|--branch BRANCH] PROJECT_NAME"
+            not in result.stdout
+        )
+
     def test_help_aliases_resolve(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -6365,7 +6421,6 @@ class TestHelp:
     @pytest.mark.parametrize(
         ("argv", "help_argv", "error_text"),
         [
-            (["init"], ["init", "-h"], "error: the following arguments are required"),
             (
                 ["config", "cp"],
                 ["config", "cp", "-h"],
@@ -6523,10 +6578,10 @@ class TestEdgeCases:
     def test_init_derives_name_from_bare_url(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Name derivation strips .git suffix from URLs."""
+        """--clone name derivation strips .git suffix from URLs."""
         bare = make_bare_repo(tmp_path / "my-cool-project.git", env)
 
-        run_agm(["init", str(bare)], env=env, cwd=str(tmp_path))
+        run_agm(["init", "--clone", str(bare)], env=env, cwd=str(tmp_path))
 
         assert (tmp_path / "my-cool-project" / "repo").is_dir()
 

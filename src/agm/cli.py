@@ -699,6 +699,11 @@ def init(
     arg2: str | None = typer.Argument(None, metavar="arg"),
     embedded: bool = typer.Option(False, "--embedded", help="Force the embedded layout."),
     workspace: bool = typer.Option(False, "--workspace", help="Force the workspace layout."),
+    clone: bool = typer.Option(
+        False,
+        "--clone",
+        help="Initialize a new project directory derived from the repository URL.",
+    ),
     branch: str | None = typer.Option(
         None, "-b", "--branch", help="Clone this branch when a repository URL is provided."
     ),
@@ -709,16 +714,14 @@ def init(
     del _dry_run
     if embedded and workspace:
         exit_with_usage_error(["init"], "error: --embedded and --workspace are mutually exclusive")
-    if arg1 is None:
-        _missing_arguments(["init"], ["arg"])
-    assert arg1 is not None
-    positional: list[str] = [arg1] if arg2 is None else [arg1, arg2]
+    positional: list[str] = [] if arg1 is None else [arg1] if arg2 is None else [arg1, arg2]
     init_command.run(
         InitArgs(
             positional=positional,
             branch=branch,
             embedded=embedded,
             workspace=workspace,
+            clone=clone,
         )
     )
 

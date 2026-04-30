@@ -243,3 +243,31 @@ def update_dependency_configs_for_branch(
             dep_branch=branch,
             config_branch=branch,
         )
+
+
+def ensure_dependency_configs_for_branch(
+    *,
+    project_dir: Path,
+    branch: str,
+) -> None:
+    """Create missing branch config TOML values for project dependencies."""
+
+    deps_dir = project_deps_dir(project_dir)
+    if not is_dir(deps_dir):
+        return
+
+    config_file = config_toml_file(project_dir, branch)
+    existing_deps: TomlDict = {}
+    if config_file.is_file():
+        existing_deps = _toml_dict(_load_toml_file(config_file).get("deps"))
+
+    for dep_dir in sorted(path for path in iterdir(deps_dir) if is_dir(path)):
+        existing_branch = existing_deps.get(dep_dir.name)
+        if isinstance(existing_branch, str) and existing_branch:
+            continue
+        update_dependency_toml_config(
+            project_dir=project_dir,
+            dep_name=dep_dir.name,
+            dep_branch=branch,
+            config_branch=branch,
+        )

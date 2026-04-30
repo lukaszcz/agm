@@ -9,6 +9,7 @@ import agm.vcs.git as git_helpers
 from agm.commands.args import OpenArgs
 from agm.core.fs import mkdir
 from agm.parser import exit_with_usage_error
+from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
@@ -125,6 +126,7 @@ def open_session(
             )
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
+        ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     create_tmux_session(
         detach=detached,
@@ -148,6 +150,7 @@ def new_session(
     proj_dir = current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
+    ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
@@ -180,6 +183,7 @@ def checkout_session(
     proj_dir = current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
+    ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(

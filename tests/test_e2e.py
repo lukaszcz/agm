@@ -5297,6 +5297,44 @@ class TestOpen:
             parsed = cast(dict[str, object], tomllib.load(handle))
         assert parsed.get("deps") == {"vyper-automation": "feat/test"}
 
+    def test_open_missing_branch_uses_created_dependency_config_for_env(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
+
+        run_agm(["open", "feat/test"], env=env, cwd=str(project))
+
+        log = tmux_log.read_text()
+        expected_dep_path = project / "deps" / "vyper-automation" / "feat/test"
+        assert f"-e VYPER_AUTOMATION={expected_dep_path}" in log
+
+    def test_open_missing_branch_preserves_existing_dependency_config(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
+        branch_config = project / "config" / "feat/test"
+        branch_config.mkdir(parents=True)
+        (branch_config / "config.toml").write_text(
+            '[deps]\nvyper-automation = "main"\n',
+            encoding="utf-8",
+        )
+
+        run_agm(["open", "feat/test"], env=env, cwd=str(project))
+
+        log = tmux_log.read_text()
+        expected_dep_path = project / "deps" / "vyper-automation" / "main"
+        assert f"-e VYPER_AUTOMATION={expected_dep_path}" in log
+
     def test_open_dry_run_prints_planned_commands_without_side_effects(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

@@ -11,13 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from agm.commands.args import LoopArgs, LoopProgressArgs
+from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.config.general import LoopConfig, load_loop_config, resolve_agm_path
 from agm.core.fs import is_file
 from agm.core.process import run_capture
 from agm.core.prompt import expand_prompt_env_vars, preprocess_prompt_file
 
-LoopCommandArgs = LoopArgs | LoopProgressArgs
+LoopCommandArgs = LoopArgs | LoopNextArgs
 
 
 @dataclass(slots=True)
@@ -29,7 +29,7 @@ class ResolvedPrompt:
 
 
 @dataclass(slots=True)
-class PreparedProgressInvocation:
+class PreparedSelectInvocation:
     source_prompt_file: Path
     effective_prompt_file: Path
     command: list[str]
@@ -168,6 +168,27 @@ def resolve_prompt_source(args: LoopCommandArgs) -> str | Path | None:
     return None
 
 
+def resolve_selector_prompt_source(args: LoopCommandArgs) -> str | Path | None:
+    """Resolve the selector prompt source from CLI args and config.
+
+    Returns the prompt text (str), prompt file path (Path), or None when
+    neither --selector-prompt nor --selector-prompt-file is specified.
+    """
+    configured = configured_loop_settings(args.command_name)
+    if args.selector_prompt is not None:
+        return args.selector_prompt
+    if args.selector_prompt_file is not None:
+        return Path(args.selector_prompt_file)
+    if configured.selector_prompt is not None:
+        return configured.selector_prompt
+    if configured.selector_prompt_file is not None:
+        resolved = Path(configured.selector_prompt_file)
+        if not resolved.is_absolute():
+            resolved = Path.cwd() / resolved
+        return resolved
+    return None
+
+
 def prepare_prompt_from_source(
     source: str | Path,
     *,
@@ -207,12 +228,12 @@ def loop_env(tasks_dir: Path, *, task_file: Path | None = None) -> dict[str, str
     return env
 
 
-def prepare_progress_invocation(
+def prepare_select_invocation(
     args: LoopCommandArgs,
     *,
     temp_files: list[Path],
     env: dict[str, str],
-) -> PreparedProgressInvocation:
+) -> PreparedSelectInvocation:
     resolved_runner_command = runner_command(args)
     resolved_selector_command = selector_command(args)
     resolved_command = resolved_selector_command
@@ -222,17 +243,26 @@ def prepare_progress_invocation(
         command_kind = "runner"
     validate_command(resolved_command, kind=command_kind)
 
-    source_prompt_file = prompt_file("update_progress.md")
-    if not is_file(source_prompt_file):
-        print(f"Error: prompt file not found: {source_prompt_file}", file=sys.stderr)
-        raise SystemExit(1)
-
-    effective_prompt_file = preprocess_prompt_file(
-        source_prompt_file,
-        temp_files=temp_files,
-        env=env,
-    )
-    return PreparedProgressInvocation(
+    selector_prompt_source = resolve_selector_prompt_source(args)
+    if selector_prompt_source is not None:
+        resolved = prepare_prompt_from_source(
+            selector_prompt_source, temp_files=temp_files, env=env
+        )
+        source_prompt_file = (
+            resolved.source if isinstance(resolved.source, Path) else resolved.effective_file
+        )
+        effective_prompt_file = resolved.effective_file
+    else:
+        source_prompt_file = prompt_file("select.md")
+        if not is_file(source_prompt_file):
+            print(f"Error: prompt file not found: {source_prompt_file}", file=sys.stderr)
+            raise SystemExit(1)
+        effective_prompt_file = preprocess_prompt_file(
+            source_prompt_file,
+            temp_files=temp_files,
+            env=env,
+        )
+    return PreparedSelectInvocation(
         source_prompt_file=source_prompt_file,
         effective_prompt_file=effective_prompt_file,
         command=resolved_command,

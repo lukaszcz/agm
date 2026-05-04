@@ -164,7 +164,7 @@ agm loop next review --selector "codex exec"
 
 **Selector mode** (default):
 
-- AGM runs the selector with `@update_progress.md`; if the selector returns `COMPLETE`
+- AGM runs the selector with `@select.md`; if the selector returns `COMPLETE`
   after whitespace is removed, the loop stops
 - otherwise the selector output is treated as the next task path and the runner is invoked
   with that task file
@@ -179,7 +179,7 @@ agm loop next review --selector "codex exec"
 **Subcommands**:
 
 - `agm loop step` — single loop iteration (same runner, selector, and logging as `run`)
-- `agm loop next` — run `update_progress.md` once; requires selector mode
+- `agm loop next` — run `select.md` once; requires selector mode
 
 **Logging** — by default writes `loop-YYYYMMDD-HHMMSS.log` in the current directory;
 `--log-file PATH` writes to a specific file; `--no-log` disables file logging.

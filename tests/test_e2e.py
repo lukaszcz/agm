@@ -3853,7 +3853,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        prompt_dir.joinpath("update_progress.md").write_text("select task\n")
+        prompt_dir.joinpath("select.md").write_text("select task\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -3999,7 +3999,7 @@ class TestLoop:
 
         prompt_dir = prefix / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        bootstrap_prompt = prompt_dir / "update_progress.md"
+        bootstrap_prompt = prompt_dir / "select.md"
         bootstrap_prompt.write_text("update progress\n")
         prompt_file = prompt_dir / "loop.md"
         prompt_file.write_text("loop prompt\n")
@@ -4061,7 +4061,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("progress $PROMPT_VALUE ${MISSING}\n")
         loop_prompt = prompt_dir / "loop.md"
         loop_prompt.write_text("loop $PROMPT_VALUE ${MISSING}\n")
@@ -4117,7 +4117,7 @@ class TestLoop:
         work.mkdir()
         tasks_dir = work / "custom" / "tasks"
 
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text(f"progress $TASKS_DIR\nliteral {tasks_dir}\n")
         loop_prompt = prompt_dir / "loop.md"
         loop_prompt.write_text(f"loop $TASKS_DIR\nliteral {tasks_dir}\n")
@@ -4407,7 +4407,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -4542,7 +4542,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -4619,7 +4619,7 @@ class TestLoop:
         (tasks_dir / "task-1.md").write_text("task one\n")
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text(f"update $TASKS_DIR\nliteral {tasks_dir}\n")
 
         result = run_agm(
@@ -4690,7 +4690,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -4754,7 +4754,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -4823,7 +4823,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -4864,7 +4864,7 @@ class TestLoop:
         )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        bootstrap_prompt = prompt_dir / "update_progress.md"
+        bootstrap_prompt = prompt_dir / "select.md"
         bootstrap_prompt.write_text("update progress\n")
         prompt_file = prompt_dir / "loop.md"
         prompt_file.write_text("loop prompt\n")
@@ -4913,7 +4913,7 @@ class TestLoop:
         )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("pick $TASK_LABEL\n")
 
         work = tmp_path / "work"
@@ -4961,7 +4961,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        bootstrap_prompt = prompt_dir / "update_progress.md"
+        bootstrap_prompt = prompt_dir / "select.md"
         bootstrap_prompt.write_text("progress $PROMPT_VALUE\n")
         loop_prompt = prompt_dir / "loop.md"
         loop_prompt.write_text("loop $PROMPT_VALUE\n")
@@ -5243,7 +5243,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -5286,7 +5286,7 @@ class TestLoop:
                 except ProcessLookupError:
                     pass
 
-    def test_loop_next_runs_selector_with_update_progress_prompt(
+    def test_loop_next_runs_selector_with_select_prompt(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
@@ -5323,7 +5323,7 @@ class TestLoop:
         )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -5363,7 +5363,7 @@ class TestLoop:
         (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "runner"\n')
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update $TASKS_DIR\n")
 
         work = tmp_path / "work"
@@ -5405,7 +5405,7 @@ class TestLoop:
         )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update $TASK_LABEL\n")
 
         work = tmp_path / "work"
@@ -5419,7 +5419,7 @@ class TestLoop:
         assert "dry-run:   selector command: selector" in result.stdout
         assert "dry-run:   runner command: runner" in result.stdout
         assert "dry-run:   execution command: selector" in result.stdout
-        assert f"dry-run: prompt [progress]: {selector_prompt} -> " in result.stdout
+        assert f"dry-run: prompt [selector]: {selector_prompt} -> " in result.stdout
         assert "(preprocessed)" in result.stdout
         assert "dry-run: command [selector]:" in result.stdout
         assert not Path(env["FAKE_SELECTOR_LOG"]).exists()
@@ -5444,7 +5444,7 @@ class TestLoop:
         (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "runner"\n')
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -5458,7 +5458,7 @@ class TestLoop:
         assert "dry-run:   selector command: disabled" in result.stdout
         assert "dry-run:   runner command: runner" in result.stdout
         assert "dry-run:   execution command: runner" in result.stdout
-        assert f"dry-run: prompt [progress]: {selector_prompt}" in result.stdout
+        assert f"dry-run: prompt [selector]: {selector_prompt}" in result.stdout
         assert "dry-run: command [runner]:" in result.stdout
         assert not Path(env["FAKE_RUNNER_LOG"]).exists()
 
@@ -5482,7 +5482,7 @@ class TestLoop:
         (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "runner"\n')
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -5526,7 +5526,7 @@ class TestLoop:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"
@@ -5536,7 +5536,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         # No --selector and no --no-selector: selector mode is the default,
-        # so the runner is used as the selector command with update_progress.md.
+        # so the runner is used as the selector command with select.md.
         result = run_agm(["loop", "run", "--runner", "runner"], env=env, cwd=str(work))
 
         assert result.returncode == 0
@@ -5544,7 +5544,7 @@ class TestLoop:
         assert f"Selected task: {tasks_dir / 'task-1.md'}" in result.stdout
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
-        # The runner was invoked with the update_progress.md prompt (selector role)
+        # The runner was invoked with the select.md prompt (selector role)
         # and also with the task file (runner role).
         selector_log_lines = Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines()
         assert f"@{selector_prompt}" in selector_log_lines
@@ -5587,7 +5587,7 @@ class TestLoop:
         )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
-        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
 
         work = tmp_path / "work"

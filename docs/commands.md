@@ -85,7 +85,7 @@ Prompt file path:
 
 Selector mode (default):
 
-- AGM runs the selector with `@update_progress.md`
+- AGM runs the selector with `@select.md`
 - if the selector returns `COMPLETE` after whitespace is removed, AGM stops
 - otherwise the selector output is treated as the next task path and AGM runs the runner with that task file
 - when no explicit selector command is configured, the runner command is used for the progress update
@@ -98,7 +98,7 @@ No-selector mode (`--no-selector` / `no_selector = true`):
 Subcommands:
 
 - `agm loop step` performs a single loop iteration using the same runner, selector, and logging behavior as `agm loop run`
-- `agm loop next` runs `update_progress.md` once using the resolved selector, or the resolved runner when no selector is configured — it requires selector mode; `--no-selector` is an error for `loop next`
+- `agm loop next` runs `select.md` once using the resolved selector, or the resolved runner when no selector is configured — it requires selector mode; `--no-selector` is an error for `loop next`
 
 Logging:
 

@@ -41,7 +41,7 @@ from agm.commands.args import (
     DepSwitchArgs,
     InitArgs,
     LoopArgs,
-    LoopProgressArgs,
+    LoopNextArgs,
     OpenArgs,
     RunArgs,
     TmuxCloseArgs,
@@ -178,6 +178,8 @@ def _parse_loop_args(
     log_file: str | None = None
     prompt: str | None = None
     prompt_file: str | None = None
+    selector_prompt: str | None = None
+    selector_prompt_file: str | None = None
     index = 0
 
     while index < len(raw_args):
@@ -225,6 +227,16 @@ def _parse_loop_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--selector-prompt":
+            selector_prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--selector-prompt-file":
+            selector_prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
         break
 
     if selector is not None and no_selector:
@@ -234,6 +246,11 @@ def _parse_loop_args(
     if prompt is not None and prompt_file is not None:
         exit_with_usage_error(
             command_path, "error: --prompt and --prompt-file are mutually exclusive"
+        )
+    if selector_prompt is not None and selector_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            "error: --selector-prompt and --selector-prompt-file are mutually exclusive",
         )
     remaining = raw_args[index:]
     if not remaining:
@@ -253,6 +270,8 @@ def _parse_loop_args(
                 log_file=log_file,
                 prompt=prompt,
                 prompt_file=prompt_file,
+                selector_prompt=selector_prompt,
+                selector_prompt_file=selector_prompt_file,
             )
         print_help_for_command_path(command_path)
         raise typer.Exit()
@@ -273,18 +292,22 @@ def _parse_loop_args(
         log_file=log_file,
         prompt=prompt,
         prompt_file=prompt_file,
+        selector_prompt=selector_prompt,
+        selector_prompt_file=selector_prompt_file,
     )
 
 
 def _parse_loop_next_args(
     raw_args: list[str], *, command_path: Sequence[str] = ("loop", "next")
-) -> LoopProgressArgs:
+) -> LoopNextArgs:
     runner: str | None = None
     selector: str | None = None
     no_selector = False
     tasks_dir: str | None = None
     prompt: str | None = None
     prompt_file: str | None = None
+    selector_prompt: str | None = None
+    selector_prompt_file: str | None = None
     index = 0
 
     while index < len(raw_args):
@@ -320,6 +343,16 @@ def _parse_loop_next_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--selector-prompt":
+            selector_prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--selector-prompt-file":
+            selector_prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
         break
 
     if selector is not None and no_selector:
@@ -330,13 +363,18 @@ def _parse_loop_next_args(
         exit_with_usage_error(
             command_path, "error: --prompt and --prompt-file are mutually exclusive"
         )
+    if selector_prompt is not None and selector_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            "error: --selector-prompt and --selector-prompt-file are mutually exclusive",
+        )
     remaining = raw_args[index:]
     command_name: str | None = None
     runner_args: list[str] = []
     if remaining:
         command_name = remaining[0]
         runner_args = run_command.normalize_run_command(remaining[1:])
-    return LoopProgressArgs(
+    return LoopNextArgs(
         command_name=command_name,
         runner=runner,
         runner_args=runner_args,
@@ -345,6 +383,8 @@ def _parse_loop_next_args(
         tasks_dir=tasks_dir,
         prompt=prompt,
         prompt_file=prompt_file,
+        selector_prompt=selector_prompt,
+        selector_prompt_file=selector_prompt_file,
     )
 
 

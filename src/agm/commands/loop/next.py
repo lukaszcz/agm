@@ -5,14 +5,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from agm.commands.args import LoopProgressArgs
+from agm.commands.args import LoopNextArgs
 from agm.core import dry_run
 
 from .common import (
     cleanup_temp_files,
     command_with_prompt_target,
     loop_env,
-    prepare_progress_invocation,
+    prepare_select_invocation,
     run_command,
     tasks_dir,
     use_selector_mode,
@@ -29,7 +29,7 @@ def _print_dry_run_prompt(label: str, prompt_text: str) -> None:
     print(f"dry-run: prompt [{label}]: {prompt_text}")
 
 
-def run(args: LoopProgressArgs) -> None:
+def run(args: LoopNextArgs) -> None:
     temp_files: list[Path] = []
     resolved_tasks_dir = tasks_dir(args)
     env = loop_env(resolved_tasks_dir)
@@ -43,7 +43,7 @@ def run(args: LoopProgressArgs) -> None:
         raise SystemExit(1)
 
     try:
-        invocation = prepare_progress_invocation(args, temp_files=temp_files, env=env)
+        invocation = prepare_select_invocation(args, temp_files=temp_files, env=env)
 
         if dry_run.enabled():
             dry_run.print_configuration("loop-next")
@@ -60,7 +60,7 @@ def run(args: LoopProgressArgs) -> None:
             dry_run.print_detail("selector command", selector_text)
             dry_run.print_detail("execution command", dry_run.format_command(invocation.command))
             _print_dry_run_prompt(
-                "progress",
+                "selector",
                 _dry_run_prompt_text(
                     invocation.source_prompt_file,
                     invocation.effective_prompt_file,

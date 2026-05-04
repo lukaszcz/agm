@@ -104,10 +104,12 @@ class LoopArgs:
     log_file: str | None
     prompt: str | None
     prompt_file: str | None
+    selector_prompt: str | None
+    selector_prompt_file: str | None
 
 
 @dataclass(slots=True)
-class LoopProgressArgs:
+class LoopNextArgs:
     command_name: str | None
     runner: str | None
     runner_args: list[str]
@@ -116,6 +118,8 @@ class LoopProgressArgs:
     tasks_dir: str | None
     prompt: str | None
     prompt_file: str | None
+    selector_prompt: str | None
+    selector_prompt_file: str | None
 
 
 @dataclass(slots=True)

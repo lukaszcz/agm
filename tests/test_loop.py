@@ -6,14 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from agm.commands.args import LoopArgs, LoopProgressArgs
+from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.commands.loop.common import (
     is_complete_output,
     loop_env,
-    prepare_progress_invocation,
     prepare_prompt_from_source,
+    prepare_select_invocation,
     prompt_file,
     resolve_prompt_source,
+    resolve_selector_prompt_source,
     selector_result,
     use_selector_mode,
 )
@@ -137,20 +138,20 @@ def test_prompt_file_prefers_home_over_install_prefix(
     assert prompt_file("loop.md") == home_prompt
 
 
-def test_prepare_progress_invocation_prefers_selector_when_configured(
+def test_prepare_select_invocation_prefers_selector_when_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
     prompt_dir = home / ".agm" / "prompts"
     prompt_dir.mkdir(parents=True)
-    prompt_path = prompt_dir / "update_progress.md"
+    prompt_path = prompt_dir / "select.md"
     prompt_path.write_text("update $TASKS_DIR\n", encoding="utf-8")
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
     monkeypatch.chdir(tmp_path)
 
-    args = LoopProgressArgs(
+    args = LoopNextArgs(
         command_name=None,
         runner="runner --print",
         runner_args=[],
@@ -159,10 +160,12 @@ def test_prepare_progress_invocation_prefers_selector_when_configured(
         tasks_dir="custom/tasks",
         prompt=None,
         prompt_file=None,
+        selector_prompt=None,
+        selector_prompt_file=None,
     )
     env = {"TASKS_DIR": str(tmp_path / "custom" / "tasks")}
 
-    invocation = prepare_progress_invocation(args, temp_files=[], env=env)
+    invocation = prepare_select_invocation(args, temp_files=[], env=env)
 
     assert invocation.command == ["selector"]
     assert invocation.command_kind == "selector"
@@ -172,20 +175,20 @@ def test_prepare_progress_invocation_prefers_selector_when_configured(
     )
 
 
-def test_prepare_progress_invocation_falls_back_to_runner_without_selector(
+def test_prepare_select_invocation_falls_back_to_runner_without_selector(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
     prompt_dir = home / ".agm" / "prompts"
     prompt_dir.mkdir(parents=True)
-    prompt_path = prompt_dir / "update_progress.md"
+    prompt_path = prompt_dir / "select.md"
     prompt_path.write_text("update progress\n", encoding="utf-8")
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
     monkeypatch.chdir(tmp_path)
 
-    args = LoopProgressArgs(
+    args = LoopNextArgs(
         command_name=None,
         runner="runner --print",
         runner_args=["--verbose"],
@@ -194,9 +197,11 @@ def test_prepare_progress_invocation_falls_back_to_runner_without_selector(
         tasks_dir=None,
         prompt=None,
         prompt_file=None,
+        selector_prompt=None,
+        selector_prompt_file=None,
     )
 
-    invocation = prepare_progress_invocation(args, temp_files=[], env={})
+    invocation = prepare_select_invocation(args, temp_files=[], env={})
 
     assert invocation.command == ["runner", "--print", "--verbose"]
     assert invocation.command_kind == "runner"
@@ -222,6 +227,8 @@ def test_use_selector_mode_is_default_when_no_flags_or_config(
         log_file=None,
         prompt=None,
         prompt_file=None,
+        selector_prompt=None,
+        selector_prompt_file=None,
     )
     assert use_selector_mode(args) is True
 
@@ -244,6 +251,8 @@ def test_use_selector_mode_is_disabled_by_cli_no_selector(
         log_file=None,
         prompt=None,
         prompt_file=None,
+        selector_prompt=None,
+        selector_prompt_file=None,
     )
     assert use_selector_mode(args) is False
 
@@ -268,6 +277,8 @@ def test_use_selector_mode_is_disabled_by_config_no_selector(
         log_file=None,
         prompt=None,
         prompt_file=None,
+        selector_prompt=None,
+        selector_prompt_file=None,
     )
     assert use_selector_mode(args) is False
 
@@ -280,7 +291,7 @@ def test_use_selector_mode_cli_no_selector_overrides_config(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
 
-    args = LoopProgressArgs(
+    args = LoopNextArgs(
         command_name=None,
         runner=None,
         runner_args=[],
@@ -289,6 +300,8 @@ def test_use_selector_mode_cli_no_selector_overrides_config(
         tasks_dir=None,
         prompt=None,
         prompt_file=None,
+        selector_prompt=None,
+        selector_prompt_file=None,
     )
     assert use_selector_mode(args) is False
 
@@ -312,6 +325,8 @@ class TestResolvePromptSource:
             log_file=None,
             prompt=None,
             prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
         )
         assert resolve_prompt_source(args) is None
 
@@ -333,6 +348,8 @@ class TestResolvePromptSource:
             log_file=None,
             prompt="do the thing",
             prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
         )
         result = resolve_prompt_source(args)
         assert result == "do the thing"
@@ -355,6 +372,8 @@ class TestResolvePromptSource:
             log_file=None,
             prompt=None,
             prompt_file="/path/to/prompt.md",
+            selector_prompt=None,
+            selector_prompt_file=None,
         )
         result = resolve_prompt_source(args)
         assert result == Path("/path/to/prompt.md")
@@ -377,6 +396,8 @@ class TestResolvePromptSource:
             log_file=None,
             prompt="inline text",
             prompt_file="/path/to/prompt.md",
+            selector_prompt=None,
+            selector_prompt_file=None,
         )
         result = resolve_prompt_source(args)
         assert result == "inline text"
@@ -401,6 +422,8 @@ class TestResolvePromptSource:
             log_file=None,
             prompt=None,
             prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
         )
         result = resolve_prompt_source(args)
         assert result == "config prompt"
@@ -427,6 +450,8 @@ class TestResolvePromptSource:
             log_file=None,
             prompt=None,
             prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
         )
         result = resolve_prompt_source(args)
         assert result == tmp_path / "my-prompt.md"
@@ -451,6 +476,8 @@ class TestResolvePromptSource:
             log_file=None,
             prompt="cli text",
             prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
         )
         result = resolve_prompt_source(args)
         assert result == "cli text"
@@ -535,3 +562,319 @@ class TestLoopEnv:
     def test_no_task_file_by_default(self) -> None:
         env = loop_env(Path("/tmp/tasks"))
         assert "TASK_FILE" not in env
+
+
+class TestResolveSelectorPromptSource:
+    def test_returns_none_when_no_selector_prompt_specified(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+        )
+        assert resolve_selector_prompt_source(args) is None
+
+    def test_returns_selector_prompt_text_from_cli(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt="custom selector prompt",
+            selector_prompt_file=None,
+        )
+        result = resolve_selector_prompt_source(args)
+        assert result == "custom selector prompt"
+
+    def test_returns_path_from_cli_selector_prompt_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file="/path/to/selector-prompt.md",
+        )
+        result = resolve_selector_prompt_source(args)
+        assert result == Path("/path/to/selector-prompt.md")
+
+    def test_cli_selector_prompt_overrides_selector_prompt_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt="inline text",
+            selector_prompt_file="/path/to/selector-prompt.md",
+        )
+        result = resolve_selector_prompt_source(args)
+        assert result == "inline text"
+
+    def test_returns_selector_prompt_from_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nselector_prompt = "config selector prompt"\n'
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+        )
+        result = resolve_selector_prompt_source(args)
+        assert result == "config selector prompt"
+
+    def test_returns_selector_prompt_file_from_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nselector_prompt_file = "my-selector-prompt.md"\n'
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+        )
+        result = resolve_selector_prompt_source(args)
+        assert result == tmp_path / "my-selector-prompt.md"
+
+    def test_cli_overrides_config_selector_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nselector_prompt = "config selector prompt"\n'
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt="cli selector text",
+            selector_prompt_file=None,
+        )
+        result = resolve_selector_prompt_source(args)
+        assert result == "cli selector text"
+
+    def test_absolute_config_path_is_not_prefixed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nselector_prompt_file = "/absolute/selector-prompt.md"\n'
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+        )
+        result = resolve_selector_prompt_source(args)
+        assert result == Path("/absolute/selector-prompt.md")
+
+
+class TestPrepareProgressInvocationSelectorPrompt:
+    def test_selector_prompt_overrides_default_prompt_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        default_prompt = prompt_dir / "select.md"
+        default_prompt.write_text("default update\n", encoding="utf-8")
+
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopNextArgs(
+            command_name=None,
+            runner="runner",
+            runner_args=[],
+            selector="selector",
+            no_selector=False,
+            tasks_dir=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt="custom selector $TASKS_DIR",
+            selector_prompt_file=None,
+        )
+        env = {"TASKS_DIR": "/tmp/tasks"}
+
+        invocation = prepare_select_invocation(args, temp_files=[], env=env)
+
+        assert invocation.source_prompt_file != default_prompt
+        assert invocation.effective_prompt_file.read_text(encoding="utf-8") == (
+            "custom selector /tmp/tasks"
+        )
+
+    def test_selector_prompt_file_overrides_default_prompt_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        default_prompt = prompt_dir / "select.md"
+        default_prompt.write_text("default update\n", encoding="utf-8")
+
+        custom_prompt = tmp_path / "custom-selector.md"
+        custom_prompt.write_text("select task from $TASKS_DIR\n", encoding="utf-8")
+
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopNextArgs(
+            command_name=None,
+            runner="runner",
+            runner_args=[],
+            selector="selector",
+            no_selector=False,
+            tasks_dir=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=str(custom_prompt),
+        )
+        env = {"TASKS_DIR": "/my/tasks"}
+
+        invocation = prepare_select_invocation(args, temp_files=[], env=env)
+
+        assert invocation.source_prompt_file == custom_prompt
+        assert invocation.effective_prompt_file.read_text(encoding="utf-8") == (
+            "select task from /my/tasks\n"
+        )
+
+    def test_no_selector_prompt_uses_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        default_prompt = prompt_dir / "select.md"
+        default_prompt.write_text("default update $TASKS_DIR\n", encoding="utf-8")
+
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        args = LoopNextArgs(
+            command_name=None,
+            runner="runner",
+            runner_args=[],
+            selector="selector",
+            no_selector=False,
+            tasks_dir=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+        )
+        env = {"TASKS_DIR": "/default/tasks"}
+
+        invocation = prepare_select_invocation(args, temp_files=[], env=env)
+
+        assert invocation.source_prompt_file == default_prompt
+        assert invocation.effective_prompt_file.read_text(encoding="utf-8") == (
+            "default update /default/tasks\n"
+        )

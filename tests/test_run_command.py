@@ -366,3 +366,169 @@ def test_run_zero_memory_limit_still_wraps(
     assert "MemoryMax=0" in process_prefix
     assert "MemorySwapMax=0" in process_prefix
     assert captured["interrupt_cleanup_cmd"] is not None
+
+
+def test_run_alias_with_flags_splits_into_separate_args_no_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
+    (tmp_path / "home").mkdir()
+
+    monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
+    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(
+        run_command,
+        "load_run_config",
+        lambda **_: RunConfig(
+            aliases={"claude": "claude --dangerously-skip-permissions"},
+            default_memory_limit=None,
+            command_memory_limits={},
+            default_swap_limit=None,
+            command_swap_limits={},
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_foreground(
+        cmd: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        interrupt_cleanup_cmd: list[str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> int:
+        captured.update(cmd=cmd)
+        return 0
+
+    monkeypatch.setattr(run_command, "run_foreground", fake_run_foreground)
+
+    with pytest.raises(SystemExit):
+        run_command.run(
+            RunArgs(
+                run_command=["claude", "--some-arg"],
+                no_sandbox=True,
+                no_patch=False,
+                memory=None,
+                swap=None,
+                no_memory_limit=True,
+                no_swap_limit=True,
+                settings_file=None,
+            )
+        )
+
+    assert captured["cmd"] == ["claude", "--dangerously-skip-permissions", "--some-arg"]
+
+
+def test_run_alias_with_flags_splits_into_separate_args_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
+    (tmp_path / "home").mkdir()
+
+    monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
+    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(
+        run_command,
+        "load_run_config",
+        lambda **_: RunConfig(
+            aliases={"claude": "claude --dangerously-skip-permissions"},
+            default_memory_limit=None,
+            command_memory_limits={},
+            default_swap_limit=None,
+            command_swap_limits={},
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_sandboxed(
+        *,
+        command: list[str],
+        cwd: Path,
+        env: dict[str, str],
+        home: Path,
+        proj_dir: Path | None,
+        command_name: str,
+        alias_command_name: str | None,
+        settings_file: str | None,
+        patch_proj_dir: Path | None,
+        process_prefix: list[str] | None = None,
+        interrupt_cleanup_cmd: list[str] | None = None,
+    ) -> None:
+        captured.update(
+            command=command,
+            command_name=command_name,
+            alias_command_name=alias_command_name,
+        )
+
+    monkeypatch.setattr(run_command.srt, "run_sandboxed", fake_run_sandboxed)
+
+    run_command.run(
+        RunArgs(
+            run_command=["claude", "--some-arg"],
+            no_sandbox=False,
+            no_patch=False,
+            memory=None,
+            swap=None,
+            no_memory_limit=True,
+            no_swap_limit=True,
+            settings_file=None,
+        )
+    )
+
+    assert captured["command"] == ["claude", "--dangerously-skip-permissions", "--some-arg"]
+    assert captured["command_name"] == "claude"
+    assert captured["alias_command_name"] == "claude"
+
+
+def test_run_simple_alias_no_flags_no_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
+    (tmp_path / "home").mkdir()
+
+    monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
+    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(
+        run_command,
+        "load_run_config",
+        lambda **_: RunConfig(
+            aliases={"myagent": "claude"},
+            default_memory_limit=None,
+            command_memory_limits={},
+            default_swap_limit=None,
+            command_swap_limits={},
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_foreground(
+        cmd: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        interrupt_cleanup_cmd: list[str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> int:
+        captured.update(cmd=cmd)
+        return 0
+
+    monkeypatch.setattr(run_command, "run_foreground", fake_run_foreground)
+
+    with pytest.raises(SystemExit):
+        run_command.run(
+            RunArgs(
+                run_command=["myagent", "--some-arg"],
+                no_sandbox=True,
+                no_patch=False,
+                memory=None,
+                swap=None,
+                no_memory_limit=True,
+                no_swap_limit=True,
+                settings_file=None,
+            )
+        )
+
+    assert captured["cmd"] == ["claude", "--some-arg"]

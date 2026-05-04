@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -140,7 +141,8 @@ def run(args: RunArgs) -> None:
         effective_swap_limit = run_args.swap or configured_swap_limit or DEFAULT_SWAP_LIMIT
     effective_run_command = list(run_command)
     if command_alias is not None:
-        effective_run_command[0] = command_alias
+        alias_parts = shlex.split(command_alias)
+        effective_run_command = [*alias_parts, *effective_run_command[1:]]
     process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
         resolved_env, effective_memory_limit, effective_swap_limit
     )

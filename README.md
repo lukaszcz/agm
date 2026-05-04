@@ -146,8 +146,43 @@ agm loop step fix_tests --log-file loop.log
 agm loop next review --selector "codex exec"
 ```
 
-Loop configuration is loaded from merged `config.toml` files via `[loop]` and optional
-`[loop.<command>]` overrides.
+**Config** — Loop configuration is loaded from merged `config.toml` files:
+
+- `[loop]` defines default `runner`, `selector`, `no_selector`, and `tasks_dir`
+- `[loop.<command>]` overrides the base loop config for a specific prompt command
+- `agm loop CMD` is shorthand for `agm loop run CMD` when `CMD` is not a built-in
+  subcommand, and selects `[loop.CMD]` overrides
+- CLI flags (`--runner`, `--selector`, `--no-selector`, `--tasks-dir`) override config
+  values; `RUNNER_ARGS` are appended to the final runner command
+
+**Prompt file path** — AGM passes the resolved prompt file path to the runner/selector:
+
+- by default it is appended as `@<path>` to the command
+- use `%%` or `%{PROMPT_FILE}` in the command to insert the path at a specific position
+  — when either placeholder is present, it is replaced with the path and no `@<path>`
+  suffix is appended
+
+**Selector mode** (default):
+
+- AGM runs the selector with `@update_progress.md`; if the selector returns `COMPLETE`
+  after whitespace is removed, the loop stops
+- otherwise the selector output is treated as the next task path and the runner is invoked
+  with that task file
+- when no explicit selector command is configured, the runner command is used for the
+  progress update
+
+**No-selector mode** (`--no-selector` / `no_selector = true`):
+
+- AGM appends the loop prompt to the runner command; stops when the runner response is
+  `COMPLETE` after whitespace is removed
+
+**Subcommands**:
+
+- `agm loop step` — single loop iteration (same runner, selector, and logging as `run`)
+- `agm loop next` — run `update_progress.md` once; requires selector mode
+
+**Logging** — by default writes `loop-YYYYMMDD-HHMMSS.log` in the current directory;
+`--log-file PATH` writes to a specific file; `--no-log` disables file logging.
 
 ### `agm run`
 

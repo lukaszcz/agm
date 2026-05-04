@@ -122,6 +122,12 @@ _HELP_TEXTS: dict[str, str] = {
           by default, or writes to ``--log-file PATH``. ``--no-log`` disables
           file logging entirely. The command prints each step header and stops
           when the active mode reports completion.
+          By default, AGM appends the prompt file path as a trailing
+          ``@<path>`` argument to the runner/selector command. To control
+          where the path appears, use the ``%%`` or ``%{PROMPT_FILE}``
+          placeholder in the command — it is replaced with the resolved
+          prompt file path. If neither placeholder is present, the ``@<path>``
+          suffix is appended as usual.
           ``agm loop step`` performs a single loop iteration using the same
           runner, selector, and logging behavior as ``agm loop run``.
           ``agm loop next`` runs ``update_progress.md`` once using the

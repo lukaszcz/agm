@@ -3,3 +3,14 @@ Read ${TASKS_DIR}/PROGRESS.md and ${TASKS_DIR}/TASK_INDEX.md. Choose a task that
 CRITICAL: Before you stop, always update ${TASKS_DIR}/PROGRESS.md and commit in ${TASKS_DIR}
 
 CRITICAL: If you are CERTAIN that ALL tasks are complete, reply COMPLETE on a single line, with NO other text in the reply and NO other lines.
+
+## Format of PROGRESS.md
+
+Only three sections:
+1. Task status for each task
+    - done / blocked / unblocked (not started / in progress)
+2. Next unblocked task
+3. Completion log
+    - ONE line per task as each task lands (explicitly state this requirement)
+
+Keep PROGRESS.md concise.

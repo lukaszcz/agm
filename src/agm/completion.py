@@ -25,6 +25,7 @@ _HELP_TREE: dict[str, list[str]] = {
         "open",
         "close",
         "init",
+        "setup",
         "fetch",
         "config",
         "wt",
@@ -37,8 +38,8 @@ _HELP_TREE: dict[str, list[str]] = {
     ],
     "loop": ["next", "run", "step"],
     "config": ["cp", "copy", "env", "update"],
-    "wt": ["new", "setup", "rm", "remove"],
-    "worktree": ["new", "setup", "rm", "remove"],
+    "wt": ["new", "rm", "remove"],
+    "worktree": ["new", "rm", "remove"],
     "dep": ["new", "switch", "rm"],
     "tmux": ["open", "close", "layout"],
 }

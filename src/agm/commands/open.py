@@ -93,7 +93,7 @@ def queue_setup_and_focus_session(
         raise AssertionError("detached tmux session creation did not return a session name")
     queue_command_in_session(
         session_name=created_session,
-        command=[sys.executable, "-m", "agm.cli", "wt", "setup"],
+        command=["agm", "setup"],
         cwd=repo_path,
         env=env,
     )

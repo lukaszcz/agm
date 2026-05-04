@@ -141,10 +141,8 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "worktree": textwrap.dedent("""\
         agm worktree new      [-d|--dir DIR] BRANCH
-        agm worktree setup
         agm worktree remove   [-f|--force] BRANCH
         agm wt new            [-d|--dir DIR] BRANCH
-        agm wt setup
         agm wt rm             [-f|--force] BRANCH
 
         Low-level git worktree management.
@@ -155,6 +153,11 @@ _HELP_TEXTS: dict[str, str] = {
               worktrees directory.
           agm worktree remove --force BRANCH
               Force removal even when git reports uncommitted or locked state.
+    """),
+    "setup": textwrap.dedent("""\
+        agm setup
+
+        Run configured setup scripts for the current checkout.
     """),
     "dep": textwrap.dedent("""\
         agm dep new    [-b|--branch BRANCH] REPO_URL
@@ -278,6 +281,7 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("open", "Open a project session"),
     ("close", "Close a project session"),
     ("init", "Initialize a project"),
+    ("setup", "Run setup scripts for the current checkout"),
     ("dep", "Manage project dependency checkouts"),
     (
         "fetch",
@@ -323,11 +327,6 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Create a new branch worktree or check out an existing branch.
     """),
-    ("wt", "setup"): textwrap.dedent("""\
-        agm wt setup
-
-        Run configured setup scripts for the current repo or worktree checkout.
-    """),
     ("wt", "rm"): textwrap.dedent("""\
         agm wt rm [-f|--force] BRANCH
 
@@ -358,11 +357,6 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm worktree new [-d|--dir DIR] BRANCH
 
         Create a new branch worktree or check out an existing branch.
-    """),
-    ("worktree", "setup"): textwrap.dedent("""\
-        agm worktree setup
-
-        Run configured setup scripts for the current repo or worktree checkout.
     """),
     ("worktree", "remove"): textwrap.dedent("""\
         agm worktree remove [-f|--force] BRANCH

@@ -120,10 +120,15 @@ class TestWorktreeNew:
         assert result.exit_code != 0
 
 
-class TestWorktreeSetup:
-    def test_wt_setup(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.worktree_setup_command)
-        result = invoke(runner, ["wt", "setup"])
+class TestSetup:
+    def test_setup(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[None] = []
+
+        def record() -> None:
+            calls.append(None)
+
+        monkeypatch.setattr(cli.setup_command, "run", record)
+        result = invoke(runner, ["setup"])
         assert result.exit_code == 0
         assert len(calls) == 1
 

@@ -23,12 +23,12 @@ import agm.commands.loop.run as loop_run_command
 import agm.commands.loop.step as loop_step_command
 import agm.commands.open as open_command
 import agm.commands.run as run_command
+import agm.commands.setup as setup_command
 import agm.commands.tmux.close as tmux_close_command
 import agm.commands.tmux.layout as tmux_layout_command
 import agm.commands.tmux.open as tmux_open_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
-import agm.commands.worktree.setup as worktree_setup_command
 from agm import completion
 from agm import parser as parser_helpers
 from agm.commands.args import (
@@ -49,7 +49,6 @@ from agm.commands.args import (
     TmuxOpenArgs,
     WorktreeNewArgs,
     WorktreeRemoveArgs,
-    WorktreeSetupArgs,
 )
 from agm.core import dry_run
 from agm.parser import (
@@ -508,11 +507,11 @@ def new(
     )
 
 
-@worktree_app.command()
+@app.command()
 def setup(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
     del _help
     del _dry_run
-    worktree_setup_command.run(WorktreeSetupArgs(wt_command="setup"))
+    setup_command.run()
 
 
 @worktree_app.command(name="rm")

@@ -34,11 +34,6 @@ class WorktreeNewArgs:
 
 
 @dataclass(slots=True)
-class WorktreeSetupArgs:
-    wt_command: str | None
-
-
-@dataclass(slots=True)
 class WorktreeRemoveArgs:
     force: bool
     branch: str

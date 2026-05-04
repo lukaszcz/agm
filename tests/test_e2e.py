@@ -1162,7 +1162,7 @@ class TestMkWt:
 
         assert not (project / "worktrees" / "setup-test" / ".setup-ran").exists()
 
-    def test_wt_setup_runs_project_setup_script(
+    def test_setup_runs_project_setup_script(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -1173,14 +1173,14 @@ class TestMkWt:
         setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "setup-test"], env=env, cwd=str(project / "repo"))
-        result = run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "setup-test"))
+        result = run_agm(["setup"], env=env, cwd=str(project / "worktrees" / "setup-test"))
 
         assert (project / "worktrees" / "setup-test" / ".setup-ran").exists()
         assert "Running setup for" in result.stdout
         assert "Setup complete" in result.stdout
         assert "true" not in result.stdout
 
-    def test_wt_setup_runs_dot_setup_sh(
+    def test_setup_runs_dot_setup_sh(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """A .setup.sh copied into the worktree should be executed."""
@@ -1192,11 +1192,11 @@ class TestMkWt:
         dot_setup.chmod(dot_setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "dotsetup"], env=env, cwd=str(project / "repo"))
-        run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "dotsetup"))
+        run_agm(["setup"], env=env, cwd=str(project / "worktrees" / "dotsetup"))
 
         assert (project / "worktrees" / "dotsetup" / ".dot-setup-ran").exists()
 
-    def test_wt_setup_runs_dotconfig_setup_sh(
+    def test_setup_runs_dotconfig_setup_sh(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """A .config/setup.sh copied into the worktree should be executed."""
@@ -1211,7 +1211,7 @@ class TestMkWt:
         setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "dc-setup"], env=env, cwd=str(project / "repo"))
-        run_agm(["wt", "setup"], env=env, cwd=str(project / "worktrees" / "dc-setup"))
+        run_agm(["setup"], env=env, cwd=str(project / "worktrees" / "dc-setup"))
 
         assert (project / "worktrees" / "dc-setup" / ".dotconfig-setup-ran").exists()
 

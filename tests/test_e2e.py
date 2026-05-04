@@ -1615,6 +1615,34 @@ class TestClose:
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
 
+    def test_close_succeeds_when_branch_config_not_tracked_by_git(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """Regression: branch config dir exists but is not tracked by git."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/untracked-config"], env=env, cwd=str(project / "repo"))
+        # Versioned config/ repo but the branch subdir is not yet committed.
+        _git("init", "-b", "main", cwd=project / "config", env=env)
+        (project / "config" / "README.md").write_text("config\n", encoding="utf-8")
+        _git("add", "README.md", cwd=project / "config", env=env)
+        _git("commit", "-m", "init config", cwd=project / "config", env=env)
+        branch_config = project / "config" / "feat" / "untracked-config"
+        branch_config.mkdir(parents=True)
+        (branch_config / ".env").write_text("UNTRACKED=1\n", encoding="utf-8")
+
+        result = run_agm(
+            ["close", "feat/untracked-config"],
+            env=env, cwd=str(project),
+        )
+
+        assert result.returncode == 0
+        assert not branch_config.exists()
+        assert "fatal" not in (result.stdout + result.stderr)
+
     def test_removes_embedded_project_worktree_from_repo_subdir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

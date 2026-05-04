@@ -64,10 +64,16 @@ def _remove_branch_config(*, proj_dir: Path, branch: str, env: dict[str, str]) -
     if config_git_root is None or relative_config_path is None:
         return
 
-    require_success(
+    returncode, _stdout, stderr = run_capture(
         ["git", "-C", str(config_git_root), "add", "-A", "--", str(relative_config_path)],
         env=env,
     )
+    if returncode != 0:
+        # git add fails with "pathspec did not match any files" when the
+        # directory was never tracked – that is harmless.
+        if "did not match any files" not in stderr:
+            exit_with_output(returncode, stderr=stderr)
+        return
     if not _has_staged_changes(config_git_root, relative_config_path, env=env):
         return
     require_success(

@@ -969,8 +969,18 @@ class TestTopLevel:
         assert result.exit_code != 0
 
     def test_show_completion_is_available(self, runner: CliRunner) -> None:
-        result = invoke(runner, ["--show-completion"])
-        assert result.exit_code == 0
+        import unittest.mock
+
+        import shellingham
+
+        # shellingham.detect_shell() fails when no known shell is in the
+        # process tree (e.g. running under pi or in certain CI environments),
+        # making --show-completion flaky. Mock it so the test is deterministic.
+        with unittest.mock.patch.object(
+            shellingham, "detect_shell", return_value=("bash", "/bin/bash")
+        ):
+            result = invoke(runner, ["--show-completion"])
+            assert result.exit_code == 0
 
 
 class TestHelpTextCoverage:

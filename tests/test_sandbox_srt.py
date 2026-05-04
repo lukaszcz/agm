@@ -54,6 +54,7 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
         tracked_file.write_text("")
         return 0
 
+    monkeypatch.setattr(srt, "require_srt_installed", lambda _path=None: None)
     monkeypatch.setattr(srt, "run_foreground", fake_run_foreground)
     with pytest.raises(SystemExit) as exc_info:
         srt.run_sandboxed(

@@ -172,6 +172,7 @@ def _parse_loop_args(
 ) -> LoopArgs:
     runner: str | None = None
     selector: str | None = None
+    no_selector = False
     tasks_dir: str | None = None
     no_log = False
     log_file: str | None = None
@@ -194,6 +195,10 @@ def _parse_loop_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--no-selector":
+            no_selector = True
+            index += 1
+            continue
         if token == "--tasks-dir":
             tasks_dir, index = _loop_option_value(
                 raw_args, index, command_path=command_path, option=token
@@ -210,6 +215,10 @@ def _parse_loop_args(
             continue
         break
 
+    if selector is not None and no_selector:
+        exit_with_usage_error(
+            command_path, "error: --selector and --no-selector are mutually exclusive"
+        )
     remaining = raw_args[index:]
     if not remaining:
         if command_optional:
@@ -222,6 +231,7 @@ def _parse_loop_args(
                 runner=runner,
                 runner_args=[],
                 selector=selector,
+                no_selector=no_selector,
                 tasks_dir=tasks_dir,
                 no_log=no_log,
                 log_file=log_file,
@@ -239,6 +249,7 @@ def _parse_loop_args(
         runner=runner,
         runner_args=runner_args,
         selector=selector,
+        no_selector=no_selector,
         tasks_dir=tasks_dir,
         no_log=no_log,
         log_file=log_file,
@@ -250,6 +261,7 @@ def _parse_loop_next_args(
 ) -> LoopProgressArgs:
     runner: str | None = None
     selector: str | None = None
+    no_selector = False
     tasks_dir: str | None = None
     index = 0
 
@@ -267,6 +279,10 @@ def _parse_loop_next_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--no-selector":
+            no_selector = True
+            index += 1
+            continue
         if token == "--tasks-dir":
             tasks_dir, index = _loop_option_value(
                 raw_args, index, command_path=command_path, option=token
@@ -274,6 +290,10 @@ def _parse_loop_next_args(
             continue
         break
 
+    if selector is not None and no_selector:
+        exit_with_usage_error(
+            command_path, "error: --selector and --no-selector are mutually exclusive"
+        )
     remaining = raw_args[index:]
     command_name: str | None = None
     runner_args: list[str] = []
@@ -285,6 +305,7 @@ def _parse_loop_next_args(
         runner=runner,
         runner_args=runner_args,
         selector=selector,
+        no_selector=no_selector,
         tasks_dir=tasks_dir,
     )
 

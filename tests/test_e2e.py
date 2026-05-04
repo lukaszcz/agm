@@ -193,11 +193,11 @@ def _install_fake_claude(directory: Path, env: dict[str, str]) -> Path:
         "#!/bin/bash\n"
         'state_file="${FAKE_CLAUDE_STATE:?FAKE_CLAUDE_STATE must be set}"\n'
         'log_file="${FAKE_CLAUDE_LOG:?FAKE_CLAUDE_LOG must be set}"\n'
-        'count=0\n'
+        "count=0\n"
         'if [[ -f "$state_file" ]]; then\n'
         '  count="$(cat "$state_file")"\n'
         "fi\n"
-        'count=$((count + 1))\n'
+        "count=$((count + 1))\n"
         'printf "%s" "$count" > "$state_file"\n'
         'echo "$*" >> "$log_file"\n'
         'case "$count" in\n'
@@ -366,7 +366,7 @@ def _srt_settings(result: subprocess.CompletedProcess[str]) -> _SrtSettings:
     """Extract the JSON settings dict from fake srt stdout."""
     for line in result.stdout.splitlines():
         if line.startswith("SETTINGS:"):
-            raw: object = json.loads(line[len("SETTINGS:"):])
+            raw: object = json.loads(line[len("SETTINGS:") :])
             if not isinstance(raw, dict):
                 raise ValueError(f"Expected JSON object in srt output:\n{result.stdout}")
             return cast(_SrtSettings, raw)
@@ -377,7 +377,7 @@ def _srt_command(result: subprocess.CompletedProcess[str]) -> str:
     """Extract the forwarded command string from fake srt stdout."""
     for line in result.stdout.splitlines():
         if line.startswith("COMMAND:"):
-            return line[len("COMMAND:"):]
+            return line[len("COMMAND:") :]
     return ""
 
 
@@ -385,7 +385,7 @@ def _systemd_run_command(result: subprocess.CompletedProcess[str]) -> str:
     """Extract the forwarded systemd-run argument string from stdout."""
     for line in result.stdout.splitlines():
         if line.startswith("SYSTEMD_RUN:"):
-            return line[len("SYSTEMD_RUN:"):]
+            return line[len("SYSTEMD_RUN:") :]
     return ""
 
 
@@ -421,9 +421,7 @@ def _assert_systemd_run_command(
 class TestCpConfig:
     """agm config cp: copy configuration files."""
 
-    def test_ignores_files_from_current_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_ignores_files_from_current_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = _make_workspace_project(tmp_path, env)
         config = project / "config"
         config.mkdir(exist_ok=True)
@@ -432,7 +430,7 @@ class TestCpConfig:
         src = project / "repo"
         (src / ".env").write_text("FROM_CWD=1")
         (src / ".claude").mkdir()
-        (src / ".claude" / "settings.json").write_text("{\"cwd\":true}")
+        (src / ".claude" / "settings.json").write_text('{"cwd":true}')
 
         dest = tmp_path / "dest"
         dest.mkdir()
@@ -566,9 +564,7 @@ class TestCpConfig:
 
         assert (dest / ".env").read_text() == "FROM_ROOT=1"
 
-    def test_invalid_project_layout_is_rejected(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_invalid_project_layout_is_rejected(self, tmp_path: Path, env: dict[str, str]) -> None:
         src = tmp_path / "src"
         src.mkdir()
         dest = tmp_path / "dest"
@@ -579,9 +575,7 @@ class TestCpConfig:
         assert result.returncode != 0
         assert "not a valid AGM project directory" in result.stderr
 
-    def test_requires_dirname_argument(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_requires_dirname_argument(self, tmp_path: Path, env: dict[str, str]) -> None:
         src = tmp_path / "src"
         src.mkdir()
 
@@ -589,9 +583,7 @@ class TestCpConfig:
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
 
-    def test_relative_dirname_resolved_to_cwd(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_relative_dirname_resolved_to_cwd(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = _make_workspace_project(tmp_path, env)
         config = project / "config"
         config.mkdir(exist_ok=True)
@@ -604,9 +596,7 @@ class TestCpConfig:
 
         assert (src / "target" / ".env").read_text() == "REL=1"
 
-    def test_copies_all_recognized_file_types(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_copies_all_recognized_file_types(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = _make_workspace_project(tmp_path, env)
         config = project / "config"
         config.mkdir(exist_ok=True)
@@ -615,8 +605,16 @@ class TestCpConfig:
         dest = tmp_path / "dest"
         dest.mkdir()
 
-        files = [".setup.sh", ".env", ".env.local", ".mcp.json",
-                 ".agents", ".opencode", ".codex", ".pi"]
+        files = [
+            ".setup.sh",
+            ".env",
+            ".env.local",
+            ".mcp.json",
+            ".agents",
+            ".opencode",
+            ".codex",
+            ".pi",
+        ]
         for f in files:
             (config / f).write_text(f"content of {f}")
 
@@ -625,9 +623,7 @@ class TestCpConfig:
         for f in files:
             assert (dest / f).read_text() == f"content of {f}"
 
-    def test_config_copy_long_alias(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_config_copy_long_alias(self, tmp_path: Path, env: dict[str, str]) -> None:
         """The 'config copy' alias works identically to 'config cp'."""
         project = _make_workspace_project(tmp_path, env)
         (project / "config" / ".env").write_text("ALIAS=1")
@@ -863,14 +859,22 @@ class TestConfigUpdate:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         _git(
-            "worktree", "add", "-b", "feat/simple",
+            "worktree",
+            "add",
+            "-b",
+            "feat/simple",
             str(project / "worktrees" / "feat/simple"),
-            cwd=project / "repo", env=env,
+            cwd=project / "repo",
+            env=env,
         )
         _git(
-            "worktree", "add", "-b", "feat/nested/name",
+            "worktree",
+            "add",
+            "-b",
+            "feat/nested/name",
             str(project / "worktrees" / "feat/nested/name"),
-            cwd=project / "repo", env=env,
+            cwd=project / "repo",
+            env=env,
         )
         _git("branch", "feat/not-checked-out", cwd=project / "repo", env=env)
 
@@ -888,9 +892,13 @@ class TestConfigUpdate:
         bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
         project = _make_project(tmp_path, bare_main, env)
         _git(
-            "worktree", "add", "-b", "feat/app",
+            "worktree",
+            "add",
+            "-b",
+            "feat/app",
             str(project / "worktrees" / "feat/app"),
-            cwd=project / "repo", env=env,
+            cwd=project / "repo",
+            env=env,
         )
         _git("branch", "feat/not-checked-out", cwd=project / "repo", env=env)
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
@@ -913,9 +921,13 @@ class TestConfigUpdate:
         bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
         project = _make_project(tmp_path, bare_main, env)
         _git(
-            "worktree", "add", "-b", "feat/app",
+            "worktree",
+            "add",
+            "-b",
+            "feat/app",
             str(project / "worktrees" / "feat/app"),
-            cwd=project / "repo", env=env,
+            cwd=project / "repo",
+            env=env,
         )
         _git("init", "-b", "main", cwd=project / "config", env=env)
         (project / "config" / "README.md").write_text("config\n", encoding="utf-8")
@@ -950,17 +962,24 @@ class TestConfigUpdate:
         branch = "feat/app"
         worktree = project / "worktrees" / branch
         _git(
-            "worktree", "add", "-b", branch, str(worktree),
-            cwd=project / "repo", env=env,
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            str(worktree),
+            cwd=project / "repo",
+            env=env,
         )
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
         run_agm(
             ["dep", "switch", "vyper-automation", branch],
-            env=env, cwd=str(worktree),
+            env=env,
+            cwd=str(worktree),
         )
         _git("checkout", "other/main", cwd=project / "deps" / "vyper-automation" / "main", env=env)
         _git(
-            "checkout", "other/feature",
+            "checkout",
+            "other/feature",
             cwd=project / "deps" / "vyper-automation" / branch,
             env=env,
         )
@@ -995,9 +1014,7 @@ class TestMkWt:
 
         assert (wt_dir / "plain-branch").is_dir()
 
-    def test_new_checks_out_existing_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_new_checks_out_existing_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
@@ -1014,14 +1031,15 @@ class TestMkWt:
         assert (wt_dir / "feat/x" / "x.txt").read_text() == "x.txt"
         # Verify the worktree is on the correct branch.
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(wt_dir / "feat/x"), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt_dir / "feat/x"),
+            env=env,
         ).stdout.strip()
         assert head == "feat/x"
 
-    def test_create_new_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_create_new_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
@@ -1031,7 +1049,8 @@ class TestMkWt:
 
         run_agm(
             ["wt", "new", "-d", str(wt_dir), "new-branch"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
 
         assert (wt_dir / "new-branch").is_dir()
@@ -1039,8 +1058,11 @@ class TestMkWt:
         assert "new-branch" in branches
         # Verify the worktree is on the new branch.
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(wt_dir / "new-branch"), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt_dir / "new-branch"),
+            env=env,
         ).stdout.strip()
         assert head == "new-branch"
 
@@ -1068,7 +1090,9 @@ class TestMkWt:
 
         assert (wt_dir / "existing-local" / "local.txt").read_text() == "local\n"
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
             cwd=str(wt_dir / "existing-local"),
             env=env,
         ).stdout.strip()
@@ -1095,15 +1119,15 @@ class TestMkWt:
 
         assert (wt_dir / "existing-remote" / "remote.txt").read_text() == "remote.txt"
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
             cwd=str(wt_dir / "existing-remote"),
             env=env,
         ).stdout.strip()
         assert head == "existing-remote"
 
-    def test_new_branch_contains_same_files(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_new_branch_contains_same_files(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
@@ -1113,14 +1137,13 @@ class TestMkWt:
 
         run_agm(
             ["wt", "new", "-d", str(wt_dir), "copy-branch"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
 
         assert (wt_dir / "copy-branch" / "README.md").read_text() == "initial\n"
 
-    def test_custom_worktrees_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_custom_worktrees_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
@@ -1130,14 +1153,13 @@ class TestMkWt:
 
         run_agm(
             ["wt", "new", "-d", str(custom), "test-branch"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
 
         assert (custom / "test-branch").is_dir()
 
-    def test_copies_config_files_to_worktree(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_copies_config_files_to_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         (project / "config" / ".env").write_text("PROJ=1")
@@ -1162,9 +1184,7 @@ class TestMkWt:
 
         assert not (project / "worktrees" / "setup-test" / ".setup-ran").exists()
 
-    def test_setup_runs_project_setup_script(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_setup_runs_project_setup_script(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -1180,9 +1200,7 @@ class TestMkWt:
         assert "Setup complete" in result.stdout
         assert "true" not in result.stdout
 
-    def test_setup_runs_dot_setup_sh(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_setup_runs_dot_setup_sh(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A .setup.sh copied into the worktree should be executed."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -1196,9 +1214,7 @@ class TestMkWt:
 
         assert (project / "worktrees" / "dotsetup" / ".dot-setup-ran").exists()
 
-    def test_setup_runs_dotconfig_setup_sh(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_setup_runs_dotconfig_setup_sh(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A .config/setup.sh copied into the worktree should be executed."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -1215,9 +1231,7 @@ class TestMkWt:
 
         assert (project / "worktrees" / "dc-setup" / ".dotconfig-setup-ran").exists()
 
-    def test_relative_worktrees_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_relative_worktrees_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A relative -d path should be resolved against CWD."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -1226,26 +1240,26 @@ class TestMkWt:
 
         run_agm(
             ["wt", "new", "-d", "relwt", "rel-branch"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
 
         assert (work / "relwt" / "rel-branch").is_dir()
 
-    def test_error_when_not_git_repo(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_when_not_git_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         not_git = tmp_path / "not-git"
         not_git.mkdir()
 
         result = run_agm(
-            ["wt", "new", "test"], env=env, cwd=str(not_git), check=False,
+            ["wt", "new", "test"],
+            env=env,
+            cwd=str(not_git),
+            check=False,
         )
         assert result.returncode != 0
         assert "not a git repository" in result.stderr.lower()
 
-    def test_from_project_root_with_repo_subdir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_from_project_root_with_repo_subdir(self, tmp_path: Path, env: dict[str, str]) -> None:
         """checkout_root() should find repo/ subdirectory automatically."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -1255,14 +1269,13 @@ class TestMkWt:
 
         run_agm(
             ["wt", "new", "-d", str(wt_dir), "from-root"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         assert (wt_dir / "from-root").is_dir()
 
-    def test_default_worktrees_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_default_worktrees_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Without -d, uses <project>/worktrees/ if it exists."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -1295,27 +1308,29 @@ class TestMkWt:
 
         assert (project / ".agm" / "worktrees" / "embedded-subdir").is_dir()
 
-    def test_rejects_repo_alias_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_rejects_repo_alias_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
         result = run_agm(
-            ["wt", "new", "repo"], env=env, cwd=str(project / "repo"), check=False,
+            ["wt", "new", "repo"],
+            env=env,
+            cwd=str(project / "repo"),
+            check=False,
         )
 
         assert result.returncode != 0
         assert "repo checkout" in (result.stdout + result.stderr).lower()
 
-    def test_rejects_main_repo_branch_name(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_rejects_main_repo_branch_name(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
         result = run_agm(
-            ["wt", "new", "main"], env=env, cwd=str(project / "repo"), check=False,
+            ["wt", "new", "main"],
+            env=env,
+            cwd=str(project / "repo"),
+            check=False,
         )
 
         assert result.returncode != 0
@@ -1337,13 +1352,17 @@ class TestMkWt:
 
         run_agm(
             ["wt", "new", "-d", str(wt_dir), "feat/long"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
 
         assert (wt_dir / "feat/long" / "long.txt").exists()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(wt_dir / "feat/long"), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt_dir / "feat/long"),
+            env=env,
         ).stdout.strip()
         assert head == "feat/long"
 
@@ -1362,18 +1381,20 @@ class TestRmWt:
         wt_dir = tmp_path / "plain-worktrees"
         wt_dir.mkdir()
         _git(
-            "worktree", "add", "-b", "plain-remove",
+            "worktree",
+            "add",
+            "-b",
+            "plain-remove",
             str(wt_dir / "plain-remove"),
-            cwd=work, env=env,
+            cwd=work,
+            env=env,
         )
 
         run_agm(["wt", "rm", "plain-remove"], env=env, cwd=str(work))
 
         assert not (wt_dir / "plain-remove").exists()
 
-    def test_removes_worktree_and_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_removes_worktree_and_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
@@ -1381,9 +1402,13 @@ class TestRmWt:
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
         _git(
-            "worktree", "add", "-b", "to-remove",
+            "worktree",
+            "add",
+            "-b",
+            "to-remove",
             str(wt_dir / "to-remove"),
-            cwd=str(work), env=env,
+            cwd=str(work),
+            env=env,
         )
         assert (wt_dir / "to-remove").is_dir()
 
@@ -1393,9 +1418,7 @@ class TestRmWt:
         branches = _git("branch", cwd=str(work), env=env).stdout
         assert "to-remove" not in branches
 
-    def test_force_removes_dirty_worktree(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_force_removes_dirty_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
@@ -1403,9 +1426,13 @@ class TestRmWt:
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
         _git(
-            "worktree", "add", "-b", "dirty-branch",
+            "worktree",
+            "add",
+            "-b",
+            "dirty-branch",
             str(wt_dir / "dirty-branch"),
-            cwd=str(work), env=env,
+            cwd=str(work),
+            env=env,
         )
 
         # Make worktree dirty with staged changes.
@@ -1414,7 +1441,10 @@ class TestRmWt:
 
         # Normal removal should fail because worktree is dirty.
         result = run_agm(
-            ["wt", "rm", "dirty-branch"], env=env, cwd=str(work), check=False,
+            ["wt", "rm", "dirty-branch"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
         assert result.returncode != 0
         assert "dirty" in result.stderr.lower() or "changes" in result.stderr.lower()
@@ -1425,28 +1455,31 @@ class TestRmWt:
         run_agm(["wt", "rm", "-f", "dirty-branch"], env=env, cwd=str(work))
         assert not (wt_dir / "dirty-branch").exists()
         r = _git(
-            "rev-parse", "--verify", "dirty-branch",
-            cwd=str(work), env=env, check=False,
+            "rev-parse",
+            "--verify",
+            "dirty-branch",
+            cwd=str(work),
+            env=env,
+            check=False,
         )
         assert r.returncode != 0, "branch should be deleted"
 
-    def test_error_for_nonexistent_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_for_nonexistent_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
 
         result = run_agm(
-            ["wt", "rm", "no-such-branch"], env=env, cwd=str(work), check=False,
+            ["wt", "rm", "no-such-branch"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
         assert result.returncode != 0
         output = (result.stdout + result.stderr).lower()
         assert "no-such-branch" in output
 
-    def test_from_project_root_with_repo_subdir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_from_project_root_with_repo_subdir(self, tmp_path: Path, env: dict[str, str]) -> None:
         """agm wt rm should find repo/ when run from the project root."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -1454,9 +1487,13 @@ class TestRmWt:
         wt_dir = tmp_path / "wts"
         wt_dir.mkdir()
         _git(
-            "worktree", "add", "-b", "removable",
+            "worktree",
+            "add",
+            "-b",
+            "removable",
             str(wt_dir / "removable"),
-            cwd=str(project / "repo"), env=env,
+            cwd=str(project / "repo"),
+            env=env,
         )
 
         run_agm(["wt", "rm", "removable"], env=env, cwd=str(project))
@@ -1465,9 +1502,7 @@ class TestRmWt:
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "removable" not in branches
 
-    def test_requires_branch_argument(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_requires_branch_argument(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         work = project / "repo"
@@ -1476,9 +1511,7 @@ class TestRmWt:
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
 
-    def test_worktree_remove_long_alias(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_worktree_remove_long_alias(self, tmp_path: Path, env: dict[str, str]) -> None:
         """'worktree remove' works identically to 'wt rm'."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -1487,9 +1520,13 @@ class TestRmWt:
         wt_dir = tmp_path / "worktrees"
         wt_dir.mkdir()
         _git(
-            "worktree", "add", "-b", "long-rm",
+            "worktree",
+            "add",
+            "-b",
+            "long-rm",
             str(wt_dir / "long-rm"),
-            cwd=str(work), env=env,
+            cwd=str(work),
+            env=env,
         )
 
         run_agm(["worktree", "remove", "long-rm"], env=env, cwd=str(work))
@@ -1498,9 +1535,7 @@ class TestRmWt:
         branches = _git("branch", cwd=str(work), env=env).stdout
         assert "long-rm" not in branches
 
-    def test_rejects_removing_repo_alias_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_rejects_removing_repo_alias_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -1608,9 +1643,7 @@ class TestClose:
             == "chore: remove config for feat/close-config"
         )
 
-    def test_requires_branch_argument(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_requires_branch_argument(self, tmp_path: Path, env: dict[str, str]) -> None:
         result = run_agm(["close"], env=env, cwd=str(tmp_path), check=False)
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
@@ -1636,7 +1669,8 @@ class TestClose:
 
         result = run_agm(
             ["close", "feat/untracked-config"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         assert result.returncode == 0
@@ -1671,9 +1705,7 @@ class TestClose:
 class TestDepNew:
     """agm dep new: clone dependencies."""
 
-    def test_clones_dependency(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_clones_dependency(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
         project = _make_workspace_project(tmp_path, env)
 
@@ -1684,9 +1716,7 @@ class TestDepNew:
         assert (dep / "main").is_dir()
         assert (dep / "main" / "README.md").exists()
 
-    def test_preserves_main_env_file(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_preserves_main_env_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
         project = _make_workspace_project(tmp_path, env)
         config = project / "config"
@@ -1697,9 +1727,7 @@ class TestDepNew:
 
         assert (config / ".env").read_text(encoding="utf-8") == "EXISTING=1\n"
 
-    def test_updates_main_toml_deps_config(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_updates_main_toml_deps_config(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "vyper-automation.git", env)
         project = _make_workspace_project(tmp_path, env)
         config = project / "config"
@@ -1713,9 +1741,7 @@ class TestDepNew:
         assert parsed.get("run") == {"runner": "existing"}
         assert parsed.get("deps") == {"vyper-automation": "main"}
 
-    def test_clones_with_specific_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_clones_with_specific_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "lib.git", env)
 
         clone = tmp_path / "tmp-clone"
@@ -1726,14 +1752,13 @@ class TestDepNew:
 
         run_agm(
             ["dep", "new", "-b", "v2", str(bare)],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         assert (project / "deps" / "lib" / "v2" / "v2.txt").exists()
 
-    def test_error_when_dep_already_exists(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_when_dep_already_exists(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
         project = _make_workspace_project(tmp_path, env)
         deps = project / "deps"
@@ -1741,14 +1766,14 @@ class TestDepNew:
 
         result = run_agm(
             ["dep", "new", str(bare)],
-            env=env, cwd=str(project), check=False,
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
         assert "already exists" in result.stderr
 
-    def test_derives_name_from_url(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_derives_name_from_url(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "some-lib.git", env)
         project = _make_workspace_project(tmp_path, env)
 
@@ -1756,9 +1781,7 @@ class TestDepNew:
 
         assert (project / "deps" / "some-lib").is_dir()
 
-    def test_clones_dependency_from_repo_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_clones_dependency_from_repo_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare_main = make_bare_repo(tmp_path / "main.git", env)
         bare_dep = make_bare_repo(tmp_path / "mylib.git", env)
         project = _make_project(tmp_path, bare_main, env)
@@ -1769,11 +1792,12 @@ class TestDepNew:
         assert dep.is_dir()
         assert (dep / "README.md").exists()
 
-    def test_no_subcommand_shows_help(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_no_subcommand_shows_help(self, tmp_path: Path, env: dict[str, str]) -> None:
         result = run_agm(
-            ["dep"], env=env, cwd=str(tmp_path), check=False,
+            ["dep"],
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         expected = run_agm(["help", "dep"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
@@ -1789,21 +1813,26 @@ class TestDepSwitch:
 
     @staticmethod
     def _setup_dep(
-        tmp_path: Path, bare: Path, env: dict[str, str],
+        tmp_path: Path,
+        bare: Path,
+        env: dict[str, str],
     ) -> Path:
         """Create deps/mylib/main/ by cloning *bare* directly (no agm)."""
         project = _make_workspace_project(tmp_path, env)
         dep_main = project / "deps" / "mylib" / "main"
         dep_main.mkdir(parents=True)
         _git(
-            "clone", "--branch", "main", str(bare), str(dep_main),
-            cwd=str(tmp_path), env=env,
+            "clone",
+            "--branch",
+            "main",
+            str(bare),
+            str(dep_main),
+            cwd=str(tmp_path),
+            env=env,
         )
         return project
 
-    def test_switch_to_existing_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_switch_to_existing_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
 
         # Push a feature branch.
@@ -1815,21 +1844,28 @@ class TestDepSwitch:
 
         run_agm(
             ["dep", "switch", "mylib", "feat/new"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         switched_wt = project / "deps" / "mylib" / "feat/new"
         assert (switched_wt / "new.txt").exists()
         # Verify the worktree is on the correct branch.
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(switched_wt), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(switched_wt),
+            env=env,
         ).stdout.strip()
         assert head == "feat/new"
         # Verify it's linked as a worktree of the original clone.
         wt_list = _git(
-            "worktree", "list", "--porcelain",
-            cwd=str(project / "deps" / "mylib" / "main"), env=env,
+            "worktree",
+            "list",
+            "--porcelain",
+            cwd=str(project / "deps" / "mylib" / "main"),
+            env=env,
         ).stdout
         assert str(switched_wt) in wt_list
 
@@ -1845,8 +1881,13 @@ class TestDepSwitch:
         branch = "feat/app"
         worktree = project / "worktrees" / branch
         _git(
-            "worktree", "add", "-b", branch, str(worktree),
-            cwd=str(project / "repo"), env=env,
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            str(worktree),
+            cwd=str(project / "repo"),
+            env=env,
         )
         branch_config = project / "config" / branch
         branch_config.mkdir(parents=True)
@@ -1858,7 +1899,8 @@ class TestDepSwitch:
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
         run_agm(
             ["dep", "switch", "vyper-automation", branch],
-            env=env, cwd=str(worktree),
+            env=env,
+            cwd=str(worktree),
         )
 
         with (branch_config / "config.toml").open("rb") as handle:
@@ -1878,13 +1920,19 @@ class TestDepSwitch:
         branch = "feat/app"
         worktree = project / "worktrees" / branch
         _git(
-            "worktree", "add", "-b", branch, str(worktree),
-            cwd=project / "repo", env=env,
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            str(worktree),
+            cwd=project / "repo",
+            env=env,
         )
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
         run_agm(["dep", "switch", "vyper-automation", branch], env=env, cwd=str(worktree))
         _git(
-            "checkout", "other/feature",
+            "checkout",
+            "other/feature",
             cwd=project / "deps" / "vyper-automation" / branch,
             env=env,
         )
@@ -1908,35 +1956,41 @@ class TestDepSwitch:
         branch = "feat/app"
         worktree = project / "worktrees" / branch
         _git(
-            "worktree", "add", "-b", branch, str(worktree),
-            cwd=project / "repo", env=env,
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            str(worktree),
+            cwd=project / "repo",
+            env=env,
         )
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
         run_agm(["dep", "switch", "vyper-automation", branch], env=env, cwd=str(worktree))
         _git(
-            "checkout", "other/feature",
+            "checkout",
+            "other/feature",
             cwd=project / "deps" / "vyper-automation" / branch,
             env=env,
         )
 
         run_agm(
             ["dep", "switch", "vyper-automation", "other/feature"],
-            env=env, cwd=str(worktree),
+            env=env,
+            cwd=str(worktree),
         )
 
         with (project / "config" / branch / "config.toml").open("rb") as handle:
             parsed = cast(dict[str, object], tomllib.load(handle))
         assert parsed.get("deps") == {"vyper-automation": branch}
 
-    def test_switch_create_new_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_switch_create_new_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
         project = self._setup_dep(tmp_path, bare, env)
 
         run_agm(
             ["dep", "switch", "-b", "mylib", "my-new-branch"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         new_wt = project / "deps" / "mylib" / "my-new-branch"
@@ -1944,19 +1998,22 @@ class TestDepSwitch:
         assert (new_wt / "README.md").exists()
         # Verify the new branch exists and is checked out.
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(new_wt), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(new_wt),
+            env=env,
         ).stdout.strip()
         assert head == "my-new-branch"
 
-    def test_switch_error_when_dep_missing(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_switch_error_when_dep_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = _make_workspace_project(tmp_path, env)
 
         result = run_agm(
             ["dep", "switch", "nonexistent", "main"],
-            env=env, cwd=str(project), check=False,
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
         assert "does not exist" in result.stderr
@@ -1971,16 +2028,15 @@ class TestDepSwitch:
 
         run_agm(
             ["dep", "switch", "mylib", "main"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         with (config / "config.toml").open("rb") as handle:
             parsed = cast(dict[str, object], tomllib.load(handle))
         assert parsed.get("deps") == {"mylib": "main"}
 
-    def test_switch_with_slashed_branch_name(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_switch_with_slashed_branch_name(self, tmp_path: Path, env: dict[str, str]) -> None:
         """dep switch with slashed branch names creates nested dirs."""
         bare = make_bare_repo(tmp_path / "mylib.git", env)
 
@@ -1992,27 +2048,31 @@ class TestDepSwitch:
 
         run_agm(
             ["dep", "switch", "mylib", "feat/deep/name"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         switched = project / "deps" / "mylib" / "feat/deep/name"
         assert (switched / "deep.txt").exists()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(switched), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(switched),
+            env=env,
         ).stdout.strip()
         assert head == "feat/deep/name"
 
-    def test_switch_nonexistent_remote_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_switch_nonexistent_remote_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         """dep switch to a branch that doesn't exist fails."""
         bare = make_bare_repo(tmp_path / "mylib.git", env)
         project = self._setup_dep(tmp_path, bare, env)
 
         result = run_agm(
             ["dep", "switch", "mylib", "no-such-branch"],
-            env=env, cwd=str(project), check=False,
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
 
@@ -2020,9 +2080,7 @@ class TestDepSwitch:
 class TestDepRemove:
     """agm dep rm: remove dependency worktrees and repositories."""
 
-    def test_removes_dependency_worktree(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_removes_dependency_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "mylib.git", env)
         clone = tmp_path / "tmp-clone"
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
@@ -2133,9 +2191,7 @@ class TestDepRemove:
 class TestFetch:
     """agm fetch: fetch repo and dependencies."""
 
-    def test_fetches_main_repo(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_fetches_main_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -2143,9 +2199,7 @@ class TestFetch:
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
 
-    def test_fetches_dependencies(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_fetches_dependencies(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare_main = make_bare_repo(tmp_path / "main.git", env)
         bare_dep = make_bare_repo(tmp_path / "dep.git", env)
 
@@ -2176,9 +2230,7 @@ class TestFetch:
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/mylib/main" in result.stdout
 
-    def test_no_deps_dir_ok(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_no_deps_dir_ok(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = tmp_path / "proj"
         project.mkdir()
@@ -2188,9 +2240,7 @@ class TestFetch:
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
 
-    def test_fetches_embedded_project_main_repo(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_fetches_embedded_project_main_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
         (project / ".agm").mkdir()
@@ -2200,21 +2250,20 @@ class TestFetch:
         assert result.returncode == 0
         assert "Fetching ." in result.stdout
 
-    def test_error_when_repo_missing(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_when_repo_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = tmp_path / "proj"
         project.mkdir()
 
         result = run_agm(
-            ["fetch"], env=env, cwd=str(project), check=False,
+            ["fetch"],
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
         assert "error" in result.stderr.lower()
 
-    def test_picks_up_new_remote_commits(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_picks_up_new_remote_commits(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -2228,7 +2277,11 @@ class TestFetch:
         run_agm(["fetch"], env=env, cwd=str(project))
 
         log = _git(
-            "log", "--oneline", "origin/main", cwd=str(project / "repo"), env=env,
+            "log",
+            "--oneline",
+            "origin/main",
+            cwd=str(project / "repo"),
+            env=env,
         ).stdout
         assert "new commit" in log
 
@@ -2294,9 +2347,7 @@ class TestFetch:
         branches = _git("branch", cwd=str(dep_wt), env=env).stdout
         assert "feat/dep-sync" in branches
 
-    def test_fetches_multiple_dependencies(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_fetches_multiple_dependencies(self, tmp_path: Path, env: dict[str, str]) -> None:
         """fetch picks up all dependencies under deps/."""
         bare_main = make_bare_repo(tmp_path / "main.git", env)
         bare_dep1 = make_bare_repo(tmp_path / "dep1.git", env)
@@ -2376,9 +2427,7 @@ class TestFetch:
 class TestInit:
     """agm init: initialise new projects."""
 
-    def test_init_with_url_only(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_with_url_only(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "myproject.git", env)
         proj = tmp_path / "myproject"
         proj.mkdir()
@@ -2398,21 +2447,18 @@ class TestInit:
 
         assert (tmp_path / "myproject" / "repo" / "README.md").exists()
 
-    def test_init_with_name_and_url(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_with_name_and_url(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "repo.git", env)
 
         run_agm(
             ["init", "custom-name", str(bare)],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         assert (tmp_path / "custom-name" / "repo" / "README.md").exists()
 
-    def test_creates_directory_structure(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_creates_directory_structure(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
         proj = tmp_path / "proj"
         proj.mkdir()
@@ -2422,9 +2468,7 @@ class TestInit:
         for d in ("repo", "deps", "worktrees", "notes", "config"):
             assert (proj / d).is_dir(), f"{d}/ should exist"
 
-    def test_creates_config_templates(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_creates_config_templates(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
         proj = tmp_path / "proj"
         proj.mkdir()
@@ -2462,9 +2506,7 @@ class TestInit:
             parsed = cast(dict[str, object], tomllib.load(handle))
         assert parsed.get("deps") == {"vyper-automation": "main"}
 
-    def test_init_with_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_with_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
         proj = tmp_path / "proj"
         proj.mkdir()
@@ -2475,19 +2517,21 @@ class TestInit:
 
         run_agm(
             ["init", "-b", "dev", str(bare)],
-            env=env, cwd=str(proj),
+            env=env,
+            cwd=str(proj),
         )
 
         assert (proj / "repo" / "dev.txt").exists()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(proj / "repo"), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(proj / "repo"),
+            env=env,
         ).stdout.strip()
         assert head == "dev"
 
-    def test_init_branch_without_repo_url_errors(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_branch_without_repo_url_errors(self, tmp_path: Path, env: dict[str, str]) -> None:
         result = run_agm(
             ["init", "-b", "dev", "proj"],
             env=env,
@@ -2499,9 +2543,7 @@ class TestInit:
         assert "--branch requires REPO_URL" in result.stderr
         assert not (tmp_path / "proj").exists()
 
-    def test_error_when_repo_not_empty(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_when_repo_not_empty(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
 
         proj = tmp_path / "proj"
@@ -2509,21 +2551,24 @@ class TestInit:
         (proj / "repo" / "existing.txt").write_text("exists")
 
         result = run_agm(
-            ["init", str(bare)], env=env, cwd=str(proj), check=False,
+            ["init", str(bare)],
+            env=env,
+            cwd=str(proj),
+            check=False,
         )
         assert result.returncode != 0
         assert "already exists" in result.stderr
 
-    def test_init_with_nonexistent_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_with_nonexistent_branch(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "proj.git", env)
         project = tmp_path / "proj"
         project.mkdir()
 
         result = run_agm(
             ["init", "-b", "no-such-branch", str(bare)],
-            env=env, cwd=str(project), check=False,
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
         assert "no-such-branch" in result.stderr.lower() or result.returncode == 128
@@ -2593,9 +2638,7 @@ class TestInit:
         assert (project / "repo").is_dir()
         assert (project / "config").is_dir()
 
-    def test_init_embedded_with_url_only(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_embedded_with_url_only(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "embedded.git", env)
         proj = tmp_path / "embedded"
         proj.mkdir()
@@ -2692,7 +2735,7 @@ class TestSandbox:
             "# Mock srt — see _make_fake_srt docstring for correspondence\n"
             "# to real srt behaviour.\n"
             'settings_file=""\n'
-            'while [[ $# -gt 0 ]]; do\n'
+            "while [[ $# -gt 0 ]]; do\n"
             '  case "$1" in\n'
             "    --settings)\n"
             "      shift\n"
@@ -2709,7 +2752,7 @@ class TestSandbox:
             'if [[ -n "$settings_file" && -f "$settings_file" ]]; then\n'
             '  echo "SETTINGS:$(cat "$settings_file")"\n'
             "fi\n"
-            'if [[ $# -gt 0 ]]; then\n'
+            "if [[ $# -gt 0 ]]; then\n"
             '  echo "COMMAND:$*"\n'
             "fi\n"
             "exit 0\n"
@@ -2725,7 +2768,7 @@ class TestSandbox:
         systemd_run.write_text(
             "#!/bin/bash\n"
             'echo "SYSTEMD_RUN:$*"\n'
-            'while [[ $# -gt 0 ]]; do\n'
+            "while [[ $# -gt 0 ]]; do\n"
             '  case "$1" in\n'
             "    --user|--scope)\n"
             "      shift\n"
@@ -2749,9 +2792,7 @@ class TestSandbox:
         systemd_run.chmod(systemd_run.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = str(directory) + ":" + env["PATH"]
 
-    def test_error_when_srt_missing(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_when_srt_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
         # Build a PATH that has everything except ``srt``.  For each PATH
         # directory that contains ``srt``, symlink all *other* executables
         # into a replacement directory so bash/zsh/scripts are still found.
@@ -2774,26 +2815,29 @@ class TestSandbox:
         work.mkdir()
 
         result = run_agm(
-            ["run", "echo", "hi"], env=env, cwd=str(work), check=False,
+            ["run", "echo", "hi"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
         assert result.returncode != 0
         assert "srt is not installed" in result.stderr
 
-    def test_help_when_command_missing(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_help_when_command_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         result = run_agm(
-            ["run"], env=env, cwd=str(tmp_path), check=False,
+            ["run"],
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         assert result.returncode == 0
         assert result.stderr == ""
         assert (
             "agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]\n"
             "[--no-memory-limit] [--no-swap-limit] [-f|--file SETTINGS] "
-            "COMMAND [ARGS...]"
-            in result.stdout
+            "COMMAND [ARGS...]" in result.stdout
         )
 
     def test_no_sandbox_runs_command_without_srt_or_settings(
@@ -2811,22 +2855,21 @@ class TestSandbox:
         assert result.stdout.strip() == "hello"
         assert result.stderr == ""
 
-    def test_error_when_no_settings_file(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_when_no_settings_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
         work = tmp_path / "work"
         work.mkdir()
 
         result = run_agm(
-            ["run", "echo", "hi"], env=env, cwd=str(work), check=False,
+            ["run", "echo", "hi"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
         assert result.returncode != 0
         assert "no sandbox settings file found" in result.stderr.lower()
 
-    def test_uses_home_settings(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_uses_home_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         home = Path(env["HOME"])
@@ -2843,9 +2886,7 @@ class TestSandbox:
         parsed = _srt_settings(result)
         assert parsed["network"]["allowedDomains"] == ["example.com"]
 
-    def test_uses_local_settings(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_uses_local_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         work = tmp_path / "work"
@@ -2879,9 +2920,7 @@ class TestSandbox:
         parsed = _srt_settings(result)
         assert parsed["filesystem"]["allowWrite"] == ["."]
 
-    def test_uses_proj_dir_sandbox_settings(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_uses_proj_dir_sandbox_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         proj_dir = tmp_path / "project"
@@ -2899,9 +2938,7 @@ class TestSandbox:
         parsed = _srt_settings(result)
         assert parsed["network"]["allowedDomains"] == ["proj.com"]
 
-    def test_merges_home_and_local_settings(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_merges_home_and_local_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         home = Path(env["HOME"])
@@ -2931,9 +2968,7 @@ class TestSandbox:
         assert merged["network"]["allowedDomains"] == ["local.com"]
         assert merged["filesystem"]["allowWrite"] == ["/home"]
 
-    def test_merges_proj_dir_and_cwd_settings(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_merges_proj_dir_and_cwd_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         proj_dir = tmp_path / "project"
@@ -2968,9 +3003,7 @@ class TestSandbox:
             str(proj_dir / ".git"),
         ]
 
-    def test_merge_overrides_ignore_violations(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_merge_overrides_ignore_violations(self, tmp_path: Path, env: dict[str, str]) -> None:
         """ignoreViolations in local should completely replace home's."""
         self._make_fake_srt(tmp_path / "bin", env)
 
@@ -3036,9 +3069,7 @@ class TestSandbox:
         assert merged["enabled"] is False
         assert merged["enableWeakerNestedSandbox"] is True
 
-    def test_explicit_settings_file(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_explicit_settings_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         work = tmp_path / "work"
@@ -3047,27 +3078,27 @@ class TestSandbox:
         sf.write_text(json.dumps(_settings(network=_network_settings("custom.com"))))
 
         result = run_agm(
-            ["run", "-f", str(sf), "echo", "hi"], env=env, cwd=str(work),
+            ["run", "-f", str(sf), "echo", "hi"],
+            env=env,
+            cwd=str(work),
         )
         assert result.returncode == 0
         merged = _srt_settings(result)
         assert merged["network"]["allowedDomains"] == ["custom.com"]
 
-    def test_explicit_settings_file_not_found(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_explicit_settings_file_not_found(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         result = run_agm(
             ["run", "-f", "/nonexistent.json", "echo"],
-            env=env, cwd=str(tmp_path), check=False,
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         assert result.returncode != 0
         assert "not found" in result.stderr.lower()
 
-    def test_proj_dir_patching(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_proj_dir_patching(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         project = tmp_path / "project"
@@ -3090,9 +3121,7 @@ class TestSandbox:
         assert str(project / "repo" / ".git") in parsed["filesystem"]["allowWrite"]
         assert str(project) not in parsed["filesystem"]["allowWrite"]
 
-    def test_no_patch_flag(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_no_patch_flag(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         project = tmp_path / "project"
@@ -3108,7 +3137,9 @@ class TestSandbox:
         env["PROJ_DIR"] = str(project)
 
         result = run_agm(
-            ["run", "--no-patch", "echo", "hi"], env=env, cwd=str(work),
+            ["run", "--no-patch", "echo", "hi"],
+            env=env,
+            cwd=str(work),
         )
         assert result.returncode == 0
         parsed = _srt_settings(result)
@@ -3117,21 +3148,19 @@ class TestSandbox:
         assert str(project / "deps") not in parsed["filesystem"]["allowWrite"]
         assert str(project / "repo" / ".git") not in parsed["filesystem"]["allowWrite"]
 
-    def test_invalid_option(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_invalid_option(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         result = run_agm(
             ["run", "--bad-opt", "echo"],
-            env=env, cwd=str(tmp_path), check=False,
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         assert result.returncode != 0
         assert "unrecognized" in result.stderr.lower() or "bad-opt" in result.stderr
 
-    def test_f_and_no_patch_together(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_f_and_no_patch_together(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
 
         work = tmp_path / "work"
@@ -3143,7 +3172,8 @@ class TestSandbox:
 
         result = run_agm(
             ["run", "--no-patch", "-f", str(sf), "echo"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
         assert result.returncode == 0
         parsed = _srt_settings(result)
@@ -3151,9 +3181,7 @@ class TestSandbox:
         assert "/proj/notes" not in parsed["filesystem"]["allowWrite"]
         assert "/proj/deps" not in parsed["filesystem"]["allowWrite"]
 
-    def test_run_forwards_command_to_srt(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_run_forwards_command_to_srt(self, tmp_path: Path, env: dict[str, str]) -> None:
         """The command after agm run options is forwarded to srt."""
         self._make_fake_systemd_run(tmp_path / "bin", env)
         self._make_fake_srt(tmp_path / "bin", env)
@@ -3166,7 +3194,8 @@ class TestSandbox:
 
         result = run_agm(
             ["run", "npm", "test", "--coverage"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
         assert result.returncode == 0
         _assert_systemd_run_command(
@@ -3331,9 +3360,7 @@ class TestSandbox:
             inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
 
-    def test_run_wraps_with_zero_memory_limit(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_run_wraps_with_zero_memory_limit(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_systemd_run(tmp_path / "bin", env)
         self._make_fake_srt(tmp_path / "bin", env)
 
@@ -3456,9 +3483,7 @@ class TestSandbox:
         )
         assert _srt_command(result) == "echo hi"
 
-    def test_run_with_double_dash_separator(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_run_with_double_dash_separator(self, tmp_path: Path, env: dict[str, str]) -> None:
         """agm run -- command works with an explicit separator."""
         self._make_fake_srt(tmp_path / "bin", env)
 
@@ -3470,7 +3495,8 @@ class TestSandbox:
 
         result = run_agm(
             ["run", "--", "echo", "hello"],
-            env=env, cwd=str(work),
+            env=env,
+            cwd=str(work),
         )
         assert result.returncode == 0
         assert _srt_command(result) == "echo hello"
@@ -3508,7 +3534,9 @@ class TestSandbox:
         (sandbox_dir / "echo.json").write_text(json.dumps(_settings(enabled=True)))
 
         result = run_agm(
-            ["run", "/bin/echo", "hello"], env=env, cwd=str(work),
+            ["run", "/bin/echo", "hello"],
+            env=env,
+            cwd=str(work),
         )
         assert result.returncode == 0
         assert _srt_command(result) == "/bin/echo hello"
@@ -3589,9 +3617,7 @@ class TestSandbox:
         assert _srt_command(result) == "printf hello"
         assert _srt_settings(result)["network"]["allowedDomains"] == ["echo.com"]
 
-    def test_interrupt_kills_run_process_tree(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_interrupt_kills_run_process_tree(self, tmp_path: Path, env: dict[str, str]) -> None:
         ready_file = tmp_path / "run.ready"
         child_pid_file = tmp_path / "run-child.pid"
 
@@ -3723,11 +3749,11 @@ class TestLoop:
             command_name="runner",
             script=(
                 f'state_file="{state_file}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'if [[ "$count" == "1" ]]; then\n'
                 '  printf "runner line 1\\n"\n'
@@ -3752,7 +3778,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         process = subprocess.Popen(
-            [sys.executable, "-m", "agm.cli", "loop", "run", "--runner", "runner"],
+            [sys.executable, "-m", "agm.cli", "loop", "run", "--no-selector", "--runner", "runner"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -3802,11 +3828,11 @@ class TestLoop:
             command_name="selector",
             script=(
                 'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'if [[ "$count" == "1" ]]; then\n'
                 '  printf "task-1.md\\n"\n'
@@ -3889,9 +3915,7 @@ class TestLoop:
                 process.kill()
                 process.communicate()
 
-    def test_runs_loop_prompt_until_complete(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_runs_loop_prompt_until_complete(self, tmp_path: Path, env: dict[str, str]) -> None:
         _install_fake_claude(tmp_path / "bin", env)
         env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
         env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
@@ -3907,7 +3931,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--no-selector", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to loop-" in result.stdout
@@ -3932,9 +3956,7 @@ class TestLoop:
         )
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
-    def test_uses_prompt_from_agm_install_prefix(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_uses_prompt_from_agm_install_prefix(self, tmp_path: Path, env: dict[str, str]) -> None:
         _install_fake_claude(tmp_path / "bin", env)
         env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
         env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
@@ -3956,7 +3978,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--no-selector", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -3985,7 +4007,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--no-selector", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
@@ -4018,11 +4040,11 @@ class TestLoop:
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
                 'state_file="${FAKE_RUNNER_STATE:?FAKE_RUNNER_STATE must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'prompt_arg="$1"\n'
                 'prompt_file="${prompt_arg#@}"\n'
@@ -4047,14 +4069,13 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "--runner", "runner", "runner"], env=env, cwd=str(work))
+        result = run_agm(
+            ["loop", "--no-selector", "--runner", "runner", "runner"], env=env, cwd=str(work)
+        )
 
         assert result.returncode == 0
         assert Path(env["FAKE_RUNNER_LOG"]).read_text() == (
-            "---\n"
-            "progress expanded ${MISSING}\n"
-            "---\n"
-            "loop expanded ${MISSING}\n"
+            "---\nprogress expanded ${MISSING}\n---\nloop expanded ${MISSING}\n"
         )
 
     def test_preprocesses_loop_prompts_with_resolved_tasks_dir(
@@ -4070,11 +4091,11 @@ class TestLoop:
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
                 'state_file="${FAKE_RUNNER_STATE:?FAKE_RUNNER_STATE must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'prompt_arg="$1"\n'
                 'prompt_file="${prompt_arg#@}"\n'
@@ -4102,7 +4123,15 @@ class TestLoop:
         loop_prompt.write_text(f"loop $TASKS_DIR\nliteral {tasks_dir}\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--tasks-dir", "custom/tasks", "runner"],
+            [
+                "loop",
+                "--no-selector",
+                "--runner",
+                "runner",
+                "--tasks-dir",
+                "custom/tasks",
+                "runner",
+            ],
             env=env,
             cwd=str(work),
         )
@@ -4113,16 +4142,16 @@ class TestLoop:
             f"---\nloop {tasks_dir}\nliteral {tasks_dir}\n"
         )
 
-    def test_uses_configured_loop_command(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_uses_configured_loop_command(self, tmp_path: Path, env: dict[str, str]) -> None:
         _install_fake_claude(tmp_path / "bin", env)
         env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
         env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
 
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude --print"\n')
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude --print"\nno_selector = true\n'
+        )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_file = prompt_dir / "loop.md"
@@ -4136,9 +4165,9 @@ class TestLoop:
         result = run_agm(["loop", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"--print @{prompt_file}"
-        ] * 2
+        assert (
+            Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"--print @{prompt_file}"] * 2
+        )
 
     def test_loop_run_uses_configured_runner_when_command_is_omitted(
         self, tmp_path: Path, env: dict[str, str]
@@ -4149,7 +4178,9 @@ class TestLoop:
 
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude --print"\n')
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude --print"\nno_selector = true\n'
+        )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_file = prompt_dir / "loop.md"
@@ -4163,9 +4194,9 @@ class TestLoop:
         result = run_agm(["loop", "run"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"--print @{prompt_file}"
-        ] * 2
+        assert (
+            Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"--print @{prompt_file}"] * 2
+        )
 
     def test_uses_command_specific_loop_config_for_positional_command(
         self, tmp_path: Path, env: dict[str, str]
@@ -4177,7 +4208,7 @@ class TestLoop:
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            '[loop]\nrunner = "claude -p"\ntasks_dir = "global/tasks"\n'
+            '[loop]\nrunner = "claude -p"\ntasks_dir = "global/tasks"\nno_selector = true\n'
             '[loop.codex]\nrunner = "claude --print"\ntasks_dir = "codex/tasks"\n'
         )
         prompt_dir = home / ".agm" / "prompts"
@@ -4193,9 +4224,9 @@ class TestLoop:
         result = run_agm(["loop", "codex"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"--print @{prompt_file}"
-        ] * 2
+        assert (
+            Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"--print @{prompt_file}"] * 2
+        )
 
     def test_cli_loop_runner_overrides_configured_loop_runner(
         self, tmp_path: Path, env: dict[str, str]
@@ -4206,7 +4237,9 @@ class TestLoop:
 
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude --print"\n')
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude --print"\nno_selector = true\n'
+        )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_file = prompt_dir / "loop.md"
@@ -4220,9 +4253,10 @@ class TestLoop:
         result = run_agm(["loop", "--runner", "claude --stream", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"--stream @{prompt_file}"
-        ] * 2
+        assert (
+            Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines()
+            == [f"--stream @{prompt_file}"] * 2
+        )
 
     def test_loop_passes_runner_args_after_positional_command(
         self, tmp_path: Path, env: dict[str, str]
@@ -4242,12 +4276,15 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "claude", "-p", "--model", "sonnet"], env=env, cwd=str(work))
+        result = run_agm(
+            ["loop", "--no-selector", "claude", "-p", "--model", "sonnet"], env=env, cwd=str(work)
+        )
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"-p -p --model sonnet @{prompt_file}"
-        ] * 2
+        assert (
+            Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines()
+            == [f"-p -p --model sonnet @{prompt_file}"] * 2
+        )
 
     def test_loop_replaces_percent_placeholder_in_cli_runner(
         self, tmp_path: Path, env: dict[str, str]
@@ -4267,7 +4304,11 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--runner", 'claude -p "@%%"', "claude"], env=env, cwd=str(work))
+        result = run_agm(
+            ["loop", "--no-selector", "--runner", 'claude -p "@%%"', "claude"],
+            env=env,
+            cwd=str(work),
+        )
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -4282,7 +4323,7 @@ class TestLoop:
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            '[loop]\nrunner = "claude -p %{PROMPT_FILE}"\n'
+            '[loop]\nrunner = "claude -p %{PROMPT_FILE}"\nno_selector = true\n'
         )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
@@ -4317,12 +4358,12 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "claude", "--", "-p", "%%"], env=env, cwd=str(work))
+        result = run_agm(
+            ["loop", "--no-selector", "claude", "--", "-p", "%%"], env=env, cwd=str(work)
+        )
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"-p -p {prompt_file}"
-        ] * 2
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p -p {prompt_file}"] * 2
 
     def test_runs_selector_then_runner_until_selector_returns_complete(
         self, tmp_path: Path, env: dict[str, str]
@@ -4338,11 +4379,11 @@ class TestLoop:
             script=(
                 'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
                 'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'echo "$*" >> "$log_file"\n'
                 'case "$count" in\n'
@@ -4425,11 +4466,11 @@ class TestLoop:
             script=(
                 f'state_file="{state_file}"\n'
                 f'log_file="{runner_log}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'echo "$*" >> "$log_file"\n'
                 'if [[ "$count" == "1" ]]; then\n'
@@ -4452,7 +4493,9 @@ class TestLoop:
         tasks_dir.mkdir(parents=True)
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "run", "--runner", "runner"], env=env, cwd=str(work))
+        result = run_agm(
+            ["loop", "run", "--no-selector", "--runner", "runner"], env=env, cwd=str(work)
+        )
 
         assert result.returncode == 0
         assert "Completed." in result.stdout
@@ -4473,11 +4516,11 @@ class TestLoop:
             script=(
                 f'state_file="{selector_state}"\n'
                 f'log_file="{selector_log}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'echo "$*" >> "$log_file"\n'
                 'if [[ "$count" == "1" ]]; then\n'
@@ -4492,9 +4535,7 @@ class TestLoop:
             env,
             command_name="runner",
             script=(
-                f'log_file="{runner_log}"\n'
-                'echo "$*" >> "$log_file"\n'
-                'printf "implemented task\\n"\n'
+                f'log_file="{runner_log}"\necho "$*" >> "$log_file"\nprintf "implemented task\\n"\n'
             ),
         )
 
@@ -4539,11 +4580,11 @@ class TestLoop:
             script=(
                 'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
                 'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'printf "%s|%s\\n" "$TASKS_DIR" "$*" >> "$log_file"\n'
                 'prompt_arg="$1"\n'
@@ -4621,11 +4662,11 @@ class TestLoop:
             script=(
                 'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
                 'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'echo "$*" >> "$log_file"\n'
                 'case "$count" in\n'
@@ -4686,11 +4727,11 @@ class TestLoop:
             command_name="selector",
             script=(
                 'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'case "$count" in\n'
                 '  1) printf "custom/tasks/task-1.md\\n" ;;\n'
@@ -4752,11 +4793,11 @@ class TestLoop:
             script=(
                 'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
                 'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
-                'count=0\n'
+                "count=0\n"
                 'if [[ -f "$state_file" ]]; then\n'
                 '  count="$(cat "$state_file")"\n'
                 "fi\n"
-                'count=$((count + 1))\n'
+                "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
                 'echo "$*" >> "$log_file"\n'
                 'case "$count" in\n'
@@ -4811,16 +4852,16 @@ class TestLoop:
             f"@{tasks_dir / 'task-1.md'}"
         ]
 
-    def test_uses_configured_loop_tasks_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_uses_configured_loop_tasks_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         _install_fake_claude(tmp_path / "bin", env)
         env["FAKE_CLAUDE_STATE"] = str(tmp_path / "claude-count")
         env["FAKE_CLAUDE_LOG"] = str(tmp_path / "claude.log")
 
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\ntasks_dir = "custom/tasks"\nno_selector = true\n'
+        )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         bootstrap_prompt = prompt_dir / "update_progress.md"
@@ -4929,7 +4970,7 @@ class TestLoop:
         work.mkdir()
 
         result = run_agm(
-            ["--dry-run", "loop", "run", "--runner", "runner"],
+            ["--dry-run", "loop", "run", "--no-selector", "--runner", "runner"],
             env=env,
             cwd=str(work),
         )
@@ -4955,7 +4996,9 @@ class TestLoop:
 
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\ntasks_dir = "custom/tasks"\nno_selector = true\n'
+        )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_file = prompt_dir / "loop.md"
@@ -4969,9 +5012,7 @@ class TestLoop:
         result = run_agm(["loop", "--tasks-dir", "cli/tasks", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"-p @{prompt_file}"
-        ] * 2
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
     def test_no_log_disables_loop_log_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         _install_fake_claude(tmp_path / "bin", env)
@@ -5015,7 +5056,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--no-log", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--no-selector", "--no-log", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to loop-" not in result.stdout
@@ -5043,13 +5084,14 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "claude", "--no-log"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--no-selector", "claude", "--no-log"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to loop-" in result.stdout
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"-p --no-log @{prompt_file}"
-        ] * 2
+        assert (
+            Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines()
+            == [f"-p --no-log @{prompt_file}"] * 2
+        )
         assert len(list(work.glob("loop-*.log"))) == 1
 
     def test_log_file_writes_loop_output_to_explicit_path(
@@ -5071,7 +5113,9 @@ class TestLoop:
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         log_file = tmp_path / "logs" / "custom-loop.log"
-        result = run_agm(["loop", "--log-file", str(log_file), "claude"], env=env, cwd=str(work))
+        result = run_agm(
+            ["loop", "--no-selector", "--log-file", str(log_file), "claude"], env=env, cwd=str(work)
+        )
 
         assert result.returncode == 0
         assert f"Logging to {log_file}" in result.stdout
@@ -5127,7 +5171,16 @@ class TestLoop:
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         process = subprocess.Popen(
-            [sys.executable, "-m", "agm.cli", "loop", "--runner", "runner", "runner"],
+            [
+                sys.executable,
+                "-m",
+                "agm.cli",
+                "loop",
+                "--no-selector",
+                "--runner",
+                "runner",
+                "runner",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -5409,6 +5462,94 @@ class TestLoop:
         assert "dry-run: command [runner]:" in result.stdout
         assert not Path(env["FAKE_RUNNER_LOG"]).exists()
 
+    def test_loop_next_errors_with_no_selector_flag(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'echo "$*" >> "${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'printf "should not run\\n"\n'
+            ),
+        )
+
+        home = Path(env["HOME"])
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "runner"\n')
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["loop", "next", "--no-selector"], env=env, cwd=str(work), check=False)
+
+        assert result.returncode != 0
+        assert "requires selector mode" in result.stderr
+        assert not Path(env["FAKE_RUNNER_LOG"]).exists()
+
+    def test_loop_run_uses_selector_mode_by_default(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["FAKE_SELECTOR_STATE"] = str(tmp_path / "selector-count")
+        env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
+        env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
+
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'state_file="${FAKE_SELECTOR_STATE:?FAKE_SELECTOR_STATE must be set}"\n'
+                'log_file="${FAKE_SELECTOR_LOG:?FAKE_SELECTOR_LOG must be set}"\n'
+                "count=0\n"
+                'if [[ -f "$state_file" ]]; then\n'
+                '  count="$(cat "$state_file")"\n'
+                "fi\n"
+                "count=$((count + 1))\n"
+                'printf "%s" "$count" > "$state_file"\n'
+                'echo "$*" >> "$log_file"\n'
+                'case "$count" in\n'
+                '  1) printf "task-1.md\\n" ;;\n'
+                '  2) printf " COMPLETE \\n" ;;\n'
+                '  *) printf "COMPLETE\\n" ;;\n'
+                "esac\n"
+            ),
+        )
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        selector_prompt = prompt_dir / "update_progress.md"
+        selector_prompt.write_text("update progress\n")
+
+        work = tmp_path / "work"
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "task-1.md").write_text("task one\n")
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        # No --selector and no --no-selector: selector mode is the default,
+        # so the runner is used as the selector command with update_progress.md.
+        result = run_agm(["loop", "run", "--runner", "runner"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "Step 1" in result.stdout
+        assert f"Selected task: {tasks_dir / 'task-1.md'}" in result.stdout
+        assert "Step 2" in result.stdout
+        assert "Completed." in result.stdout
+        # The runner was invoked with the update_progress.md prompt (selector role)
+        # and also with the task file (runner role).
+        selector_log_lines = Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines()
+        assert f"@{selector_prompt}" in selector_log_lines
+        assert f"@{tasks_dir / 'task-1.md'}" in selector_log_lines
+
     def test_loop_step_performs_one_loop_iteration(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -5479,7 +5620,9 @@ class TestLoop:
 
         home = Path(env["HOME"])
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude --print"\n')
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude --print"\nno_selector = true\n'
+        )
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_file = prompt_dir / "loop.md"
@@ -5496,9 +5639,7 @@ class TestLoop:
         assert "Step 1" in result.stdout
         assert "Step 2" not in result.stdout
         assert "Completed." not in result.stdout
-        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
-            f"--print @{prompt_file}"
-        ]
+        assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"--print @{prompt_file}"]
 
 
 # ── agm open ────────────────────────────────────────────────────────────────
@@ -5508,9 +5649,7 @@ class TestLoop:
 class TestOpen:
     """agm open: project session management."""
 
-    def test_open_repo_target(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_open_repo_target(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env, name="myproj")
         tmux_log = tmp_path / "tmux.log"
@@ -5585,9 +5724,7 @@ class TestOpen:
         assert "-s proj/feat/x" in log
         assert wt.is_dir()
 
-    def test_open_with_pane_count(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_open_with_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         tmux_log = tmp_path / "tmux.log"
@@ -5721,9 +5858,7 @@ class TestOpen:
         assert "switch-client" not in log
         assert "Detached tmux session proj/feat/detached created" in result.stdout
 
-    def test_open_missing_branch_with_pane_count(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_open_missing_branch_with_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         tmux_log = tmp_path / "tmux.log"
@@ -5734,18 +5869,20 @@ class TestOpen:
         log = tmux_log.read_text()
         assert log.count("split-window") == 1  # 2 panes = 1 split
 
-    def test_open_missing_branch_with_parent(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_open_missing_branch_with_parent(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         _git(
-            "worktree", "add", "-b", "develop",
+            "worktree",
+            "add",
+            "-b",
+            "develop",
             str(project / "worktrees" / "develop"),
-            cwd=str(project / "repo"), env=env,
+            cwd=str(project / "repo"),
+            env=env,
         )
         (project / "worktrees" / "develop" / "dev.txt").write_text("dev")
         _git("add", ".", cwd=str(project / "worktrees" / "develop"), env=env)
@@ -5753,7 +5890,8 @@ class TestOpen:
 
         run_agm(
             ["open", "-p", "develop", "feat/from-dev"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
 
         wt = project / "worktrees" / "feat/from-dev"
@@ -5773,15 +5911,15 @@ class TestOpen:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["open", "-n", "3", "feat/p"], env=env, cwd=str(project),
+            ["open", "-n", "3", "feat/p"],
+            env=env,
+            cwd=str(project),
         )
 
         log = tmux_log.read_text()
         assert log.count("split-window") == 2  # 3 panes
 
-    def test_open_existing_branch_with_parent(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_open_existing_branch_with_parent(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         clone = tmp_path / "tmp-clone"
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
@@ -5792,69 +5930,68 @@ class TestOpen:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
-            ["open", "-p", "main", "feat/q"], env=env, cwd=str(project),
+            ["open", "-p", "main", "feat/q"],
+            env=env,
+            cwd=str(project),
         )
 
         assert (project / "worktrees" / "feat/q" / "q.txt").exists()
 
-    def test_error_open_without_target(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_error_open_without_target(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["open"], env=env, cwd=str(project), check=False,
+            ["open"],
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
         assert "target" in result.stderr.lower() or "branch" in result.stderr.lower()
 
-    def test_invalid_pane_count(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_invalid_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["open", "-n", "abc", "repo"], env=env, cwd=str(project), check=False,
+            ["open", "-n", "abc", "repo"],
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
         assert "pane count must be a positive integer" in result.stderr
 
-    def test_no_subcommand_shows_help(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_no_subcommand_shows_help(self, tmp_path: Path, env: dict[str, str]) -> None:
         result = run_agm(
-            [], env=env, cwd=str(tmp_path), check=False,
+            [],
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         expected = run_agm(["help"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
         assert result.stderr == ""
         assert result.stdout == expected.stdout
 
-    def test_sources_project_env_file(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_sources_project_env_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env, name="proj")
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        (project / "config" / "env.sh").write_text(
-            f'touch "{project}/env-sourced"\n'
-        )
+        (project / "config" / "env.sh").write_text(f'touch "{project}/env-sourced"\n')
 
         run_agm(["open", "repo"], env=env, cwd=str(project))
 
         assert (project / "env-sourced").exists()
 
-    def test_sources_branch_env_file(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_sources_branch_env_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env, name="proj")
         tmux_log = tmp_path / "tmux.log"
@@ -5862,9 +5999,7 @@ class TestOpen:
 
         branch_cfg = project / "config" / "mybranch"
         branch_cfg.mkdir(parents=True)
-        (branch_cfg / "env.sh").write_text(
-            f'touch "{project}/branch-env-sourced"\n'
-        )
+        (branch_cfg / "env.sh").write_text(f'touch "{project}/branch-env-sourced"\n')
 
         clone = tmp_path / "tmp-clone"
         _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
@@ -5909,9 +6044,7 @@ class TestOpen:
         assert (project / "project-value").read_text() == "project-local\n"
         assert (project / "branch-before-env-sh").read_text() == "branch-local\n"
 
-    def test_init_then_open_lifecycle(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_then_open_lifecycle(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
@@ -5925,7 +6058,11 @@ class TestOpen:
         assert wt.is_dir()
         assert (wt / "README.md").exists()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD", cwd=str(wt), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt),
+            env=env,
         ).stdout.strip()
         assert head == "feat/lifecycle"
         log = tmux_log.read_text()
@@ -5940,9 +6077,7 @@ class TestOpen:
 class TestTmuxOpenSession:
     """agm tmux open: create tmux sessions with tiled pane layout."""
 
-    def test_creates_session_default_panes(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_creates_session_default_panes(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
@@ -5956,9 +6091,7 @@ class TestTmuxOpenSession:
         # Default is 4 panes → 3 splits.
         assert log.count("split-window") == 3
 
-    def test_custom_pane_count(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_custom_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         work = tmp_path / "work"
@@ -5969,9 +6102,7 @@ class TestTmuxOpenSession:
         log = tmux_log.read_text()
         assert log.count("split-window") == 5
 
-    def test_single_pane(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_single_pane(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         work = tmp_path / "work"
@@ -5983,9 +6114,7 @@ class TestTmuxOpenSession:
         assert "new-session" in log
         assert "split-window" not in log
 
-    def test_detached_session(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_detached_session(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         work = tmp_path / "work"
@@ -5998,9 +6127,7 @@ class TestTmuxOpenSession:
         assert "-s my-session" in log
         assert "Detached tmux session" in result.stdout
 
-    def test_long_detach_flag(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_long_detach_flag(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         work = tmp_path / "work"
@@ -6012,9 +6139,7 @@ class TestTmuxOpenSession:
         assert "-dP" in log
         assert "Detached" in result.stdout
 
-    def test_session_name_from_argument(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_session_name_from_argument(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         work = tmp_path / "work"
@@ -6051,7 +6176,9 @@ class TestTmuxOpenSession:
         work.mkdir()
 
         result = run_agm(
-            ["tmux", "open", "-d", "-n", "3", "sess"], env=env, cwd=str(work),
+            ["tmux", "open", "-d", "-n", "3", "sess"],
+            env=env,
+            cwd=str(work),
         )
 
         log = tmux_log.read_text()
@@ -6082,30 +6209,32 @@ class TestTmuxCloseSession:
 class TestTmuxOpenErrors:
     """agm tmux open: argument validation."""
 
-    def test_invalid_pane_count(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_invalid_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         work = tmp_path / "work"
         work.mkdir()
 
         result = run_agm(
-            ["tmux", "open", "-n", "abc"], env=env, cwd=str(work), check=False,
+            ["tmux", "open", "-n", "abc"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
         assert result.returncode != 0
         assert "invalid pane count" in result.stderr.lower()
 
-    def test_too_many_positional_args(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_too_many_positional_args(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         work = tmp_path / "work"
         work.mkdir()
 
         result = run_agm(
-            ["tmux", "open", "a", "b"], env=env, cwd=str(work), check=False,
+            ["tmux", "open", "a", "b"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
         assert result.returncode != 0
         assert "unexpected extra argument" in result.stderr.lower()
@@ -6118,15 +6247,14 @@ class TestTmuxOpenErrors:
 class TestTmuxLayout:
     """agm tmux layout: apply tiled pane layout."""
 
-    def test_single_pane_layout(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_single_pane_layout(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "1"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6135,15 +6263,14 @@ class TestTmuxLayout:
         # Single-pane layout body: WxH,0,0,0
         assert "200x50,0,0,0" in log
 
-    def test_four_pane_layout(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_four_pane_layout(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "4", "--window", "@1"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6153,15 +6280,14 @@ class TestTmuxLayout:
         for idx in range(4):
             assert f",{idx}" in log
 
-    def test_nine_pane_layout(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_nine_pane_layout(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "9"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6169,15 +6295,14 @@ class TestTmuxLayout:
         for idx in range(9):
             assert f",{idx}" in log
 
-    def test_two_pane_layout(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_two_pane_layout(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "2"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6186,16 +6311,15 @@ class TestTmuxLayout:
         assert ",0" in log
         assert ",1" in log
 
-    def test_layout_has_checksum(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_layout_has_checksum(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Layout string must start with a 4-hex-digit checksum."""
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "4"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6203,28 +6327,28 @@ class TestTmuxLayout:
         match = re.search(r"select-layout -t @0 ([0-9a-f]{4},\S+)", log)
         assert match, f"expected checksum,layout in: {log}"
 
-    def test_missing_args(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_missing_args(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["tmux", "layout"], env=env, cwd=str(tmp_path), check=False,
+            ["tmux", "layout"],
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         assert result.returncode != 0
         assert "usage" in result.stderr.lower() or "argument" in result.stderr.lower()
 
-    def test_five_pane_layout(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_five_pane_layout(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Non-square pane count: 5 panes → 2 rows (3+2)."""
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "5"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6232,16 +6356,15 @@ class TestTmuxLayout:
         for idx in range(5):
             assert f",{idx}" in log
 
-    def test_seven_pane_layout(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_seven_pane_layout(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Non-square pane count: 7 panes → 2 rows (4+3)."""
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "7"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6249,15 +6372,14 @@ class TestTmuxLayout:
         for idx in range(7):
             assert f",{idx}" in log
 
-    def test_queries_current_window_dimensions(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_queries_current_window_dimensions(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(
             ["tmux", "layout", "4"],
-            env=env, cwd=str(tmp_path),
+            env=env,
+            cwd=str(tmp_path),
         )
 
         log = tmux_log.read_text()
@@ -6272,27 +6394,41 @@ class TestTmuxLayout:
 class TestHelp:
     """agm help: overview and per-command help."""
 
-    def test_overview_lists_all_commands(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_overview_lists_all_commands(self, tmp_path: Path, env: dict[str, str]) -> None:
         result = run_agm(["help"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
         assert "agm - Agent Management Framework" in result.stdout
         assert "Commands:" in result.stdout
         assert "--install-completion" in result.stdout
         assert "--show-completion" in result.stdout
-        for cmd in ("open", "init", "fetch",
-                     "close", "config", "worktree", "dep", "run",
-                     "tmux", "help"):
+        for cmd in (
+            "open",
+            "init",
+            "fetch",
+            "close",
+            "config",
+            "worktree",
+            "dep",
+            "run",
+            "tmux",
+            "help",
+        ):
             assert cmd in result.stdout, f"'{cmd}' missing from overview"
 
-    def test_help_for_each_canonical_command(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_help_for_each_canonical_command(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Every canonical command has a detailed help entry."""
-        for cmd in ("open", "init", "fetch",
-                     "close", "config", "worktree", "dep", "run",
-                     "tmux", "help"):
+        for cmd in (
+            "open",
+            "init",
+            "fetch",
+            "close",
+            "config",
+            "worktree",
+            "dep",
+            "run",
+            "tmux",
+            "help",
+        ):
             result = run_agm(["help", cmd], env=env, cwd=str(tmp_path))
             assert result.returncode == 0, f"help {cmd} failed"
             assert f"agm {cmd}" in result.stdout, f"help {cmd} missing header"
@@ -6347,9 +6483,7 @@ class TestHelp:
             not in result.stdout
         )
 
-    def test_help_aliases_resolve(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_help_aliases_resolve(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Aliases show help for the canonical command."""
         alias_map = {"wt": "worktree"}
         for alias, canonical in alias_map.items():
@@ -6416,11 +6550,12 @@ class TestHelp:
         assert result.stdout == expected.stdout
         assert result.stderr == expected.stderr
 
-    def test_help_unknown_command(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_help_unknown_command(self, tmp_path: Path, env: dict[str, str]) -> None:
         result = run_agm(
-            ["help", "bogus"], env=env, cwd=str(tmp_path), check=False,
+            ["help", "bogus"],
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         assert result.returncode == 1
         assert "unknown command" in result.stderr
@@ -6484,49 +6619,53 @@ class TestHelp:
 class TestEdgeCases:
     """Edge cases across various commands."""
 
-    def test_branch_name_with_slashes(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_branch_name_with_slashes(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Branch names with nested slashes (feat/auth/login) work."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
         run_agm(
             ["wt", "new", "feat/auth/login"],
-            env=env, cwd=str(project / "repo"),
+            env=env,
+            cwd=str(project / "repo"),
         )
 
         wt = project / "worktrees" / "feat/auth/login"
         assert wt.is_dir()
         assert (wt / "README.md").exists()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD", cwd=str(wt), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt),
+            env=env,
         ).stdout.strip()
         assert head == "feat/auth/login"
 
-    def test_branch_name_with_dots(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_branch_name_with_dots(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Branch names with dots (release/v2.1.0) work."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
         run_agm(
             ["wt", "new", "release/v2.1.0"],
-            env=env, cwd=str(project / "repo"),
+            env=env,
+            cwd=str(project / "repo"),
         )
 
         wt = project / "worktrees" / "release/v2.1.0"
         assert wt.is_dir()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD", cwd=str(wt), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt),
+            env=env,
         ).stdout.strip()
         assert head == "release/v2.1.0"
 
     @needs_zsh
-    def test_pane_count_zero(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_pane_count_zero(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Pane count of 0 should be rejected."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -6534,15 +6673,16 @@ class TestEdgeCases:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["open", "-n", "0", "repo"], env=env, cwd=str(project), check=False,
+            ["open", "-n", "0", "repo"],
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
         assert "pane count must be a positive integer" in result.stderr
 
     @needs_zsh
-    def test_negative_pane_count(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_negative_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Negative pane count should be rejected."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -6550,13 +6690,14 @@ class TestEdgeCases:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         result = run_agm(
-            ["open", "-n", "-1", "repo"], env=env, cwd=str(project), check=False,
+            ["open", "-n", "-1", "repo"],
+            env=env,
+            cwd=str(project),
+            check=False,
         )
         assert result.returncode != 0
 
-    def test_malformed_json_settings(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_malformed_json_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Malformed JSON in sandbox settings causes a JSON parse error."""
         TestSandbox._make_fake_srt(tmp_path / "bin", env)
 
@@ -6567,14 +6708,15 @@ class TestEdgeCases:
         (sandbox_dir / "echo.json").write_text("{invalid json")
 
         result = run_agm(
-            ["run", "echo", "hi"], env=env, cwd=str(work), check=False,
+            ["run", "echo", "hi"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
         # The merge step emits a JSON decode traceback on stderr.
         assert "json" in result.stderr.lower()
 
-    def test_worktree_already_exists(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_worktree_already_exists(self, tmp_path: Path, env: dict[str, str]) -> None:
         """An existing branch worktree is reused by ``wt new``."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -6584,7 +6726,9 @@ class TestEdgeCases:
 
         result = run_agm(
             ["wt", "new", "dupe-branch"],
-            env=env, cwd=str(project / "repo"), check=False,
+            env=env,
+            cwd=str(project / "repo"),
+            check=False,
         )
         assert result.returncode == 0
 
@@ -6598,14 +6742,13 @@ class TestEdgeCases:
 
         run_agm(
             ["config", "cp", str(tmp_path / "nonexistent")],
-            env=env, cwd=str(src),
+            env=env,
+            cwd=str(src),
         )
         # cpconfig.sh does not create the target directory — nothing is copied.
         assert not (tmp_path / "nonexistent").exists()
 
-    def test_init_derives_name_from_bare_url(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_derives_name_from_bare_url(self, tmp_path: Path, env: dict[str, str]) -> None:
         """--clone name derivation strips .git suffix from URLs."""
         bare = make_bare_repo(tmp_path / "my-cool-project.git", env)
 
@@ -6614,9 +6757,7 @@ class TestEdgeCases:
         assert (tmp_path / "my-cool-project" / "repo").is_dir()
 
     @needs_zsh
-    def test_large_pane_count(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_large_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A larger pane count (16) should work without error."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -6635,9 +6776,7 @@ class TestEdgeCases:
 class TestWorkflows:
     """Multi-step user workflows that combine several agm commands."""
 
-    def test_full_branch_lifecycle(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_full_branch_lifecycle(self, tmp_path: Path, env: dict[str, str]) -> None:
         """init → wt new → verify → wt rm → verify cleanup."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
 
@@ -6649,7 +6788,8 @@ class TestWorkflows:
         # Step 2: create a branch worktree
         run_agm(
             ["wt", "new", "feat/lifecycle"],
-            env=env, cwd=str(project / "repo"),
+            env=env,
+            cwd=str(project / "repo"),
         )
         wt = project / "worktrees" / "feat/lifecycle"
         assert wt.is_dir()
@@ -6658,15 +6798,14 @@ class TestWorkflows:
         # Step 3: remove the worktree
         run_agm(
             ["wt", "rm", "feat/lifecycle"],
-            env=env, cwd=str(project / "repo"),
+            env=env,
+            cwd=str(project / "repo"),
         )
         assert not wt.exists()
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/lifecycle" not in branches
 
-    def test_dep_workflow(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_dep_workflow(self, tmp_path: Path, env: dict[str, str]) -> None:
         """init → dep new → dep switch → fetch verifies dependency management."""
         bare_main = make_bare_repo(tmp_path / "main.git", env)
         bare_dep = make_bare_repo(tmp_path / "mylib.git", env)
@@ -6687,7 +6826,8 @@ class TestWorkflows:
         # Step 3: switch dep to feature branch
         run_agm(
             ["dep", "switch", "mylib", "feat/dep-feature"],
-            env=env, cwd=str(project),
+            env=env,
+            cwd=str(project),
         )
         assert (project / "deps" / "mylib" / "feat/dep-feature" / "dep.txt").exists()
 
@@ -6696,9 +6836,7 @@ class TestWorkflows:
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/" in result.stdout
 
-    def test_config_copied_to_new_worktree(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_config_copied_to_new_worktree(self, tmp_path: Path, env: dict[str, str]) -> None:
         """init → add config → wt new: config files are propagated."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
 
@@ -6712,7 +6850,8 @@ class TestWorkflows:
         # Create a new branch — config should be copied automatically.
         run_agm(
             ["wt", "new", "feat/with-config"],
-            env=env, cwd=str(project / "repo"),
+            env=env,
+            cwd=str(project / "repo"),
         )
 
         wt = project / "worktrees" / "feat/with-config"
@@ -6720,9 +6859,7 @@ class TestWorkflows:
         assert (wt / ".mcp.json").read_text() == '{"key": "value"}'
 
     @needs_zsh
-    def test_init_then_open_then_new_sessions(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_init_then_open_then_new_sessions(self, tmp_path: Path, env: dict[str, str]) -> None:
         """init → open repo → open feature branch → verify both."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         tmux_log = tmp_path / "tmux.log"
@@ -6743,9 +6880,7 @@ class TestWorkflows:
         assert "-s proj/feat/work" in log
         assert (project / "worktrees" / "feat/work" / "README.md").exists()
 
-    def test_multiple_worktrees_isolated(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_multiple_worktrees_isolated(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Two worktrees from the same repo are independent."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -6766,17 +6901,23 @@ class TestWorkflows:
 
         # Verify each is on its own branch.
         head_a = _git(
-            "rev-parse", "--abbrev-ref", "HEAD", cwd=str(wt_a), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt_a),
+            env=env,
         ).stdout.strip()
         head_b = _git(
-            "rev-parse", "--abbrev-ref", "HEAD", cwd=str(wt_b), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt_b),
+            env=env,
         ).stdout.strip()
         assert head_a == "branch-a"
         assert head_b == "branch-b"
 
-    def test_fetch_then_checkout(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_fetch_then_checkout(self, tmp_path: Path, env: dict[str, str]) -> None:
         """fetch discovers remote branches, then wt new checks one out."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -6793,18 +6934,21 @@ class TestWorkflows:
         # Check out the synced branch into a worktree.
         run_agm(
             ["wt", "new", "feat/synced"],
-            env=env, cwd=str(project / "repo"),
+            env=env,
+            cwd=str(project / "repo"),
         )
         wt = project / "worktrees" / "feat/synced"
         assert (wt / "synced.txt").exists()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD", cwd=str(wt), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(wt),
+            env=env,
         ).stdout.strip()
         assert head == "feat/synced"
 
-    def test_parallel_worktrees_remove_one(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_parallel_worktrees_remove_one(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Create two worktrees, remove one, verify the other is unaffected."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
@@ -6827,7 +6971,10 @@ class TestWorkflows:
         # Surviving worktree is still healthy.
         assert (project / "worktrees" / "branch-keep" / "README.md").exists()
         head = _git(
-            "rev-parse", "--abbrev-ref", "HEAD",
-            cwd=str(project / "worktrees" / "branch-keep"), env=env,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=str(project / "worktrees" / "branch-keep"),
+            env=env,
         ).stdout.strip()
         assert head == "branch-keep"

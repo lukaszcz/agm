@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from agm.commands.args import LoopProgressArgs
@@ -14,6 +15,7 @@ from .common import (
     prepare_progress_invocation,
     run_command,
     tasks_dir,
+    use_selector_mode,
 )
 
 
@@ -31,6 +33,14 @@ def run(args: LoopProgressArgs) -> None:
     temp_files: list[Path] = []
     resolved_tasks_dir = tasks_dir(args)
     env = loop_env(resolved_tasks_dir)
+
+    if not use_selector_mode(args):
+        print(
+            "Error: agm loop next requires selector mode. "
+            "Remove --no-selector to enable it.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     try:
         invocation = prepare_progress_invocation(args, temp_files=temp_files, env=env)

@@ -98,6 +98,7 @@ class LoopArgs:
     runner: str | None
     runner_args: list[str]
     selector: str | None
+    no_selector: bool
     tasks_dir: str | None
     no_log: bool
     log_file: str | None
@@ -109,6 +110,7 @@ class LoopProgressArgs:
     runner: str | None
     runner_args: list[str]
     selector: str | None
+    no_selector: bool
     tasks_dir: str | None
 
 

@@ -82,6 +82,18 @@ def selector_command(args: LoopCommandArgs) -> list[str] | None:
     return split_command(selector, kind="selector")
 
 
+def use_selector_mode(args: LoopCommandArgs) -> bool:
+    """Return True when selector-based mode should be used.
+
+    Selector mode is the default. ``--no-selector`` on the CLI or
+    ``no_selector = true`` in config.toml disables it.
+    """
+    configured = configured_loop_settings(args.command_name)
+    if args.no_selector or configured.no_selector:
+        return False
+    return True
+
+
 def tasks_dir(args: LoopCommandArgs) -> Path:
     configured_tasks_dir = configured_loop_settings(args.command_name).tasks_dir
     selected = args.tasks_dir if args.tasks_dir is not None else configured_tasks_dir

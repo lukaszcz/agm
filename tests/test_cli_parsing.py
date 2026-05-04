@@ -614,6 +614,7 @@ class TestLoop:
         assert calls[0].runner is None
         assert calls[0].runner_args == []
         assert calls[0].selector is None
+        assert calls[0].no_selector is False
 
     def test_loop_with_runner(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -644,6 +645,26 @@ class TestLoop:
         assert len(calls) == 1
         assert calls[0].command_name == "codex"
         assert calls[0].selector == "claude -p"
+        assert calls[0].no_selector is False
+
+    def test_loop_with_no_selector(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--no-selector", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].selector is None
+        assert calls[0].no_selector is True
+
+    def test_loop_rejects_selector_with_no_selector(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--selector", "cmd", "--no-selector", "claude"])
+        assert result.exit_code != 0
+        assert len(calls) == 0
 
     def test_loop_with_tasks_dir(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -705,6 +726,7 @@ class TestLoop:
         assert calls[0].runner is None
         assert calls[0].runner_args == []
         assert calls[0].selector is None
+        assert calls[0].no_selector is False
         assert calls[0].tasks_dir is None
 
     def test_loop_run_without_positional_command(
@@ -718,7 +740,18 @@ class TestLoop:
         assert calls[0].runner is None
         assert calls[0].runner_args == []
         assert calls[0].selector is None
+        assert calls[0].no_selector is False
         assert calls[0].tasks_dir is None
+
+    def test_loop_run_with_no_selector(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_run_command)
+        result = invoke(runner, ["loop", "run", "--no-selector", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].no_selector is True
 
     def test_loop_shorthand_dispatches_to_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -739,6 +772,7 @@ class TestLoop:
         assert calls[0].runner is None
         assert calls[0].runner_args == []
         assert calls[0].selector is None
+        assert calls[0].no_selector is False
         assert calls[0].tasks_dir is None
 
     def test_loop_next_with_positional_command_and_runner_args(
@@ -760,6 +794,25 @@ class TestLoop:
         assert len(calls) == 1
         assert calls[0].command_name == "claude"
         assert calls[0].selector == "codex exec"
+        assert calls[0].no_selector is False
+
+    def test_loop_next_with_no_selector(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        result = invoke(runner, ["loop", "next", "--no-selector", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].no_selector is True
+
+    def test_loop_next_rejects_selector_with_no_selector(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        result = invoke(runner, ["loop", "next", "--selector", "cmd", "--no-selector"])
+        assert result.exit_code != 0
+        assert len(calls) == 0
 
     def test_loop_step_with_positional_command_and_runner_args(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -782,7 +835,18 @@ class TestLoop:
         assert calls[0].runner is None
         assert calls[0].runner_args == []
         assert calls[0].selector is None
+        assert calls[0].no_selector is False
         assert calls[0].tasks_dir is None
+
+    def test_loop_step_with_no_selector(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_step_command)
+        result = invoke(runner, ["loop", "step", "--no-selector", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].no_selector is True
 
 
 class TestTmuxOpen:

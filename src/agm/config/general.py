@@ -98,6 +98,7 @@ class LoopConfig:
 
     runner: str | None
     selector: str | None
+    no_selector: bool
     tasks_dir: str | None
 
 
@@ -152,12 +153,15 @@ def load_loop_config(
         selected_loop_table = _merge_config(loop_table, command_table)
     runner = selected_loop_table.get("runner")
     selector = selected_loop_table.get("selector")
+    no_selector_raw = selected_loop_table.get("no_selector")
     tasks_dir = selected_loop_table.get("tasks_dir")
     resolved_runner = runner if isinstance(runner, str) and runner.strip() else None
     resolved_selector = selector if isinstance(selector, str) and selector.strip() else None
+    resolved_no_selector = bool(no_selector_raw) if isinstance(no_selector_raw, bool) else False
     resolved_tasks_dir = tasks_dir if isinstance(tasks_dir, str) and tasks_dir.strip() else None
     return LoopConfig(
         runner=resolved_runner,
         selector=resolved_selector,
+        no_selector=resolved_no_selector,
         tasks_dir=resolved_tasks_dir,
     )

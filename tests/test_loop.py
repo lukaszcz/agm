@@ -6,12 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from agm.commands.args import LoopProgressArgs
+from agm.commands.args import LoopArgs, LoopProgressArgs
 from agm.commands.loop.common import (
     is_complete_output,
     prepare_progress_invocation,
     prompt_file,
     selector_result,
+    use_selector_mode,
 )
 from agm.core.prompt import preprocess_prompt_file
 
@@ -151,6 +152,7 @@ def test_prepare_progress_invocation_prefers_selector_when_configured(
         runner="runner --print",
         runner_args=[],
         selector="selector",
+        no_selector=False,
         tasks_dir="custom/tasks",
     )
     env = {"TASKS_DIR": str(tmp_path / "custom" / "tasks")}
@@ -183,6 +185,7 @@ def test_prepare_progress_invocation_falls_back_to_runner_without_selector(
         runner="runner --print",
         runner_args=["--verbose"],
         selector=None,
+        no_selector=False,
         tasks_dir=None,
     )
 
@@ -192,3 +195,84 @@ def test_prepare_progress_invocation_falls_back_to_runner_without_selector(
     assert invocation.command_kind == "runner"
     assert invocation.source_prompt_file == prompt_path
     assert invocation.effective_prompt_file == prompt_path
+
+
+def test_use_selector_mode_is_default_when_no_flags_or_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    args = LoopArgs(
+        command_name=None,
+        runner=None,
+        runner_args=[],
+        selector=None,
+        no_selector=False,
+        tasks_dir=None,
+        no_log=False,
+        log_file=None,
+    )
+    assert use_selector_mode(args) is True
+
+
+def test_use_selector_mode_is_disabled_by_cli_no_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    args = LoopArgs(
+        command_name=None,
+        runner=None,
+        runner_args=[],
+        selector=None,
+        no_selector=True,
+        tasks_dir=None,
+        no_log=False,
+        log_file=None,
+    )
+    assert use_selector_mode(args) is False
+
+
+def test_use_selector_mode_is_disabled_by_config_no_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[loop]\nno_selector = true\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    args = LoopArgs(
+        command_name=None,
+        runner=None,
+        runner_args=[],
+        selector=None,
+        no_selector=False,
+        tasks_dir=None,
+        no_log=False,
+        log_file=None,
+    )
+    assert use_selector_mode(args) is False
+
+
+def test_use_selector_mode_cli_no_selector_overrides_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Config doesn't set no_selector, but CLI does
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    args = LoopProgressArgs(
+        command_name=None,
+        runner=None,
+        runner_args=[],
+        selector=None,
+        no_selector=True,
+        tasks_dir=None,
+    )
+    assert use_selector_mode(args) is False

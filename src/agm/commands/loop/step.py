@@ -24,10 +24,10 @@ from .common import (
     run_command,
     runner_command,
     selected_task_text,
-    selector_command,
     selector_result,
     step_header_text,
     tasks_dir,
+    use_selector_mode,
     validate_command,
 )
 
@@ -109,9 +109,8 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     env = loop_env(resolved_tasks_dir)
     resolved_runner_command = runner_command(args)
     validate_command(resolved_runner_command, kind="runner")
-    resolved_selector_command = selector_command(args)
     progress_invocation: PreparedProgressInvocation | None = None
-    if resolved_selector_command is not None:
+    if use_selector_mode(args):
         progress_invocation = prepare_progress_invocation(args, temp_files=temp_files, env=env)
 
     loop_prompt: PreparedPrompt | None = None

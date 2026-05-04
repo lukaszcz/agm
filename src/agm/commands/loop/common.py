@@ -9,14 +9,23 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from agm.commands.args import LoopArgs, LoopProgressArgs
 from agm.config.general import LoopConfig, load_loop_config, resolve_agm_path
 from agm.core.fs import is_file
 from agm.core.process import run_capture
-from agm.core.prompt import preprocess_prompt_file
+from agm.core.prompt import expand_prompt_env_vars, preprocess_prompt_file
 
 LoopCommandArgs = LoopArgs | LoopProgressArgs
+
+
+@dataclass(slots=True)
+class ResolvedPrompt:
+    """Resolved prompt source: either inline text or a file path."""
+
+    source: str | Path
+    effective_file: Path
 
 
 @dataclass(slots=True)
@@ -138,9 +147,63 @@ def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
     return [*command, f"@{target}"]
 
 
-def loop_env(tasks_dir: Path) -> dict[str, str]:
+def resolve_prompt_source(args: LoopCommandArgs) -> str | Path | None:
+    """Resolve the prompt source from CLI args and config.
+
+    Returns the prompt text (str), prompt file path (Path), or None when
+    neither --prompt nor --prompt-file is specified.
+    """
+    configured = configured_loop_settings(args.command_name)
+    if args.prompt is not None:
+        return args.prompt
+    if args.prompt_file is not None:
+        return Path(args.prompt_file)
+    if configured.prompt is not None:
+        return configured.prompt
+    if configured.prompt_file is not None:
+        resolved = Path(configured.prompt_file)
+        if not resolved.is_absolute():
+            resolved = Path.cwd() / resolved
+        return resolved
+    return None
+
+
+def prepare_prompt_from_source(
+    source: str | Path,
+    *,
+    temp_files: list[Path],
+    env: dict[str, str],
+) -> ResolvedPrompt:
+    """Create a preprocessed prompt file from inline text or a file path.
+
+    When ``source`` is a string it is written to a temporary file and then
+    preprocessed.  When ``source`` is a ``Path`` the file is preprocessed
+    in place (same as ``loop.md`` handling).
+    """
+    if isinstance(source, str):
+        expanded = expand_prompt_env_vars(source, env=env)
+        with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
+            handle.write(expanded)
+            temp_path = Path(handle.name)
+        temp_files.append(temp_path)
+        return ResolvedPrompt(source=source, effective_file=temp_path)
+
+    source_path = source
+    if not is_file(source_path):
+        print(
+            f"Error: prompt file not found: {source_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    effective = preprocess_prompt_file(source_path, temp_files=temp_files, env=env)
+    return ResolvedPrompt(source=source_path, effective_file=effective)
+
+
+def loop_env(tasks_dir: Path, *, task_file: Path | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env["TASKS_DIR"] = str(tasks_dir)
+    if task_file is not None:
+        env["TASK_FILE"] = str(task_file)
     return env
 
 

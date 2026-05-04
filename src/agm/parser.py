@@ -80,14 +80,20 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "loop": textwrap.dedent("""\
         agm loop [--runner COMMAND] [--selector COMMAND|--no-selector]
-                 [--tasks-dir DIR] [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+                 [--tasks-dir DIR] [--no-log|--log-file PATH]
+                 [--prompt TEXT|--prompt-file PATH]
+                 CMD [RUNNER_ARGS...]
         agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
                      [--tasks-dir DIR] [--no-log|--log-file PATH]
+                     [--prompt TEXT|--prompt-file PATH]
                      [CMD [RUNNER_ARGS...]]
         agm loop step [--runner COMMAND] [--selector COMMAND|--no-selector]
-                      [--tasks-dir DIR] [--no-log|--log-file PATH] CMD [RUNNER_ARGS...]
+                      [--tasks-dir DIR] [--no-log|--log-file PATH]
+                      [--prompt TEXT|--prompt-file PATH]
+                      CMD [RUNNER_ARGS...]
         agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
-                      [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
+                      [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
+                      [CMD [RUNNER_ARGS...]]
 
         Repeatedly run a prompt command until the selected loop mode reports
         completion, perform one loop iteration, or run the progress-update
@@ -99,6 +105,10 @@ _HELP_TEXTS: dict[str, str] = {
           command prefix. [loop] no_selector = true disables the selector and
           switches to no-selector mode. [loop] tasks_dir = ".agent-files/tasks"
           sets the tasks directory checked for ``PROGRESS.md`` and task files.
+          [loop] prompt = "text" or [loop] prompt_file = "path" set the prompt
+          text or file, overriding the default task file (selector mode) or
+          loop.md (no-selector mode). ``--prompt`` and ``--prompt-file`` are
+          mutually exclusive and override the config values.
           ``agm loop CMD`` is shorthand for ``agm loop run CMD`` when ``CMD``
           is not a built-in subcommand, and still selects ``[loop.CMD]``
           overrides; those values override ``[loop]``. ``agm loop --runner "..."``,
@@ -128,6 +138,15 @@ _HELP_TEXTS: dict[str, str] = {
           placeholder in the command — it is replaced with the resolved
           prompt file path. If neither placeholder is present, the ``@<path>``
           suffix is appended as usual.
+          ``--prompt TEXT`` or ``--prompt-file PATH`` (or the corresponding
+          config.toml ``prompt`` / ``prompt_file`` keys) specify the prompt
+          to feed the runner, replacing the default task file in selector
+          mode or the loop.md prompt file in no-selector mode. The prompt
+          text is saved to a temporary file and processed with env var
+          substitution, just like loop.md. ``%%`` and ``%{PROMPT_FILE}`` in
+          the command string resolve to this processed prompt file. In
+          selector mode, the selected task file path is available in the
+          ``TASK_FILE`` environment variable passed to the runner.
           ``agm loop step`` performs a single loop iteration using the same
           runner, selector, and logging behavior as ``agm loop run``.
           ``agm loop next`` runs ``update_progress.md`` once using the
@@ -346,7 +365,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     """),
     ("loop", "next"): textwrap.dedent("""\
         agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
-                      [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]
+                      [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
+                      [CMD [RUNNER_ARGS...]]
 
         Run the update-progress prompt once using the resolved selector, or
         the resolved runner when no selector is configured. Requires selector
@@ -355,20 +375,24 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("loop", "run"): textwrap.dedent("""\
         agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
                      [--tasks-dir DIR] [--no-log|--log-file PATH]
+                     [--prompt TEXT|--prompt-file PATH]
                      [CMD [RUNNER_ARGS...]]
 
         Run the loop prompt until completion. Selector mode is the default;
         ``--no-selector`` switches to the no-selector loop-prompt mode.
-        Bare ``agm loop CMD`` is a shorthand for this command when ``CMD`` is
-        not a built-in subcommand.
+        ``--prompt TEXT`` or ``--prompt-file PATH`` overrides the default
+        prompt file. Bare ``agm loop CMD`` is a shorthand for this command
+        when ``CMD`` is not a built-in subcommand.
     """),
     ("loop", "step"): textwrap.dedent("""\
         agm loop step [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--no-log|--log-file PATH]
+                      [--prompt TEXT|--prompt-file PATH]
                       CMD [RUNNER_ARGS...]
 
         Perform one loop iteration using the same runner and selector
-        resolution as ``agm loop run``.
+        resolution as ``agm loop run``. ``--prompt TEXT`` or
+        ``--prompt-file PATH`` overrides the default prompt file.
     """),
     ("worktree", "new"): textwrap.dedent("""\
         agm worktree new [-d|--dir DIR] BRANCH

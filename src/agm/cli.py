@@ -176,6 +176,8 @@ def _parse_loop_args(
     tasks_dir: str | None = None
     no_log = False
     log_file: str | None = None
+    prompt: str | None = None
+    prompt_file: str | None = None
     index = 0
 
     while index < len(raw_args):
@@ -213,11 +215,25 @@ def _parse_loop_args(
             no_log = True
             index += 1
             continue
+        if token == "--prompt":
+            prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--prompt-file":
+            prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
         break
 
     if selector is not None and no_selector:
         exit_with_usage_error(
             command_path, "error: --selector and --no-selector are mutually exclusive"
+        )
+    if prompt is not None and prompt_file is not None:
+        exit_with_usage_error(
+            command_path, "error: --prompt and --prompt-file are mutually exclusive"
         )
     remaining = raw_args[index:]
     if not remaining:
@@ -235,6 +251,8 @@ def _parse_loop_args(
                 tasks_dir=tasks_dir,
                 no_log=no_log,
                 log_file=log_file,
+                prompt=prompt,
+                prompt_file=prompt_file,
             )
         print_help_for_command_path(command_path)
         raise typer.Exit()
@@ -253,6 +271,8 @@ def _parse_loop_args(
         tasks_dir=tasks_dir,
         no_log=no_log,
         log_file=log_file,
+        prompt=prompt,
+        prompt_file=prompt_file,
     )
 
 
@@ -263,6 +283,8 @@ def _parse_loop_next_args(
     selector: str | None = None
     no_selector = False
     tasks_dir: str | None = None
+    prompt: str | None = None
+    prompt_file: str | None = None
     index = 0
 
     while index < len(raw_args):
@@ -288,11 +310,25 @@ def _parse_loop_next_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--prompt":
+            prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--prompt-file":
+            prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
         break
 
     if selector is not None and no_selector:
         exit_with_usage_error(
             command_path, "error: --selector and --no-selector are mutually exclusive"
+        )
+    if prompt is not None and prompt_file is not None:
+        exit_with_usage_error(
+            command_path, "error: --prompt and --prompt-file are mutually exclusive"
         )
     remaining = raw_args[index:]
     command_name: str | None = None
@@ -307,6 +343,8 @@ def _parse_loop_next_args(
         selector=selector,
         no_selector=no_selector,
         tasks_dir=tasks_dir,
+        prompt=prompt,
+        prompt_file=prompt_file,
     )
 
 

@@ -102,6 +102,8 @@ class LoopArgs:
     tasks_dir: str | None
     no_log: bool
     log_file: str | None
+    prompt: str | None
+    prompt_file: str | None
 
 
 @dataclass(slots=True)
@@ -112,6 +114,8 @@ class LoopProgressArgs:
     selector: str | None
     no_selector: bool
     tasks_dir: str | None
+    prompt: str | None
+    prompt_file: str | None
 
 
 @dataclass(slots=True)

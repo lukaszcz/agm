@@ -100,6 +100,8 @@ class LoopConfig:
     selector: str | None
     no_selector: bool
     tasks_dir: str | None
+    prompt: str | None
+    prompt_file: str | None
 
 
 def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
@@ -159,9 +161,17 @@ def load_loop_config(
     resolved_selector = selector if isinstance(selector, str) and selector.strip() else None
     resolved_no_selector = bool(no_selector_raw) if isinstance(no_selector_raw, bool) else False
     resolved_tasks_dir = tasks_dir if isinstance(tasks_dir, str) and tasks_dir.strip() else None
+    prompt = selected_loop_table.get("prompt")
+    prompt_file = selected_loop_table.get("prompt_file")
+    resolved_prompt = prompt if isinstance(prompt, str) and prompt.strip() else None
+    resolved_prompt_file = (
+        prompt_file if isinstance(prompt_file, str) and prompt_file.strip() else None
+    )
     return LoopConfig(
         runner=resolved_runner,
         selector=resolved_selector,
         no_selector=resolved_no_selector,
         tasks_dir=resolved_tasks_dir,
+        prompt=resolved_prompt,
+        prompt_file=resolved_prompt_file,
     )

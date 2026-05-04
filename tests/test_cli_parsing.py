@@ -848,6 +848,88 @@ class TestLoop:
         assert calls[0].command_name == "claude"
         assert calls[0].no_selector is True
 
+    def test_loop_with_prompt(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--prompt", "fix the bug", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].prompt == "fix the bug"
+        assert calls[0].prompt_file is None
+
+    def test_loop_with_prompt_file(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(runner, ["loop", "--prompt-file", "/tmp/task.md", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "claude"
+        assert calls[0].prompt is None
+        assert calls[0].prompt_file == "/tmp/task.md"
+
+    def test_loop_rejects_prompt_with_prompt_file(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_command)
+        result = invoke(
+            runner, ["loop", "--prompt", "text", "--prompt-file", "file.md", "claude"]
+        )
+        assert result.exit_code != 0
+        assert len(calls) == 0
+
+    def test_loop_run_with_prompt(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_run_command)
+        result = invoke(runner, ["loop", "run", "--prompt", "hello", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].prompt == "hello"
+        assert calls[0].prompt_file is None
+
+    def test_loop_step_with_prompt_file(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_step_command)
+        result = invoke(runner, ["loop", "step", "--prompt-file", "task.md", "claude"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].prompt is None
+        assert calls[0].prompt_file == "task.md"
+
+    def test_loop_next_with_prompt(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        result = invoke(runner, ["loop", "next", "--prompt", "do it"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].prompt == "do it"
+        assert calls[0].prompt_file is None
+
+    def test_loop_next_with_prompt_file(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        result = invoke(runner, ["loop", "next", "--prompt-file", "prompt.md"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].prompt is None
+        assert calls[0].prompt_file == "prompt.md"
+
+    def test_loop_next_rejects_prompt_with_prompt_file(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        result = invoke(
+            runner, ["loop", "next", "--prompt", "text", "--prompt-file", "file.md"]
+        )
+        assert result.exit_code != 0
+        assert len(calls) == 0
+
 
 class TestTmuxOpen:
     def test_tmux_open_bare(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

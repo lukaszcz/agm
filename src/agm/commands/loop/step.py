@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,13 +15,16 @@ from agm.core.prompt import preprocess_prompt_file
 
 from .common import (
     PreparedProgressInvocation,
+    ResolvedPrompt,
     cleanup_temp_files,
     command_with_prompt_target,
     is_complete_output,
     loop_env,
     prepare_progress_invocation,
+    prepare_prompt_from_source,
     progress_file,
     prompt_file,
+    resolve_prompt_source,
     run_command,
     runner_command,
     selected_task_text,
@@ -48,6 +52,7 @@ class LoopStepRuntime:
     resolved_runner_command: list[str]
     progress_invocation: PreparedProgressInvocation | None
     loop_prompt: PreparedPrompt | None
+    resolved_prompt: ResolvedPrompt | None
     bootstrap_prompt: PreparedPrompt | None
     log_file: Path | None
 
@@ -106,6 +111,14 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     temp_files: list[Path] = []
     resolved_tasks_dir = tasks_dir(args)
     resolved_progress_file = progress_file(args)
+
+    prompt_source = resolve_prompt_source(args)
+    resolved_prompt: ResolvedPrompt | None = None
+    if prompt_source is not None:
+        resolved_prompt = prepare_prompt_from_source(
+            prompt_source, temp_files=temp_files, env=dict(os.environ)
+        )
+
     env = loop_env(resolved_tasks_dir)
     resolved_runner_command = runner_command(args)
     validate_command(resolved_runner_command, kind="runner")
@@ -114,7 +127,17 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         progress_invocation = prepare_progress_invocation(args, temp_files=temp_files, env=env)
 
     loop_prompt: PreparedPrompt | None = None
-    if progress_invocation is None:
+    if resolved_prompt is not None:
+        loop_prompt = PreparedPrompt(
+            label="prompt",
+            source_file=(
+                resolved_prompt.source
+                if isinstance(resolved_prompt.source, Path)
+                else resolved_prompt.effective_file
+            ),
+            effective_file=resolved_prompt.effective_file,
+        )
+    elif progress_invocation is None:
         loop_prompt_file = prompt_file("loop.md")
         if not is_file(loop_prompt_file):
             print(f"Error: prompt file not found: {loop_prompt_file}", file=sys.stderr)
@@ -149,6 +172,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         resolved_runner_command=resolved_runner_command,
         progress_invocation=progress_invocation,
         loop_prompt=loop_prompt,
+        resolved_prompt=resolved_prompt,
         bootstrap_prompt=bootstrap_prompt,
         log_file=log_file,
     )
@@ -215,6 +239,8 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             "loop-runner",
             "runner command repeats until output is COMPLETE",
         )
+        if runtime.resolved_prompt is not None:
+            dry_run.print_detail("explicit prompt", str(runtime.resolved_prompt.effective_file))
         return
 
     _print_dry_run_command(
@@ -275,10 +301,22 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
     selected_task_output = selected_task_text(next_task)
     _append_log(runtime.log_file, "\n" + selected_task_output)
     _write_stream("\n" + selected_task_output)
+
+    if runtime.resolved_prompt is not None:
+        runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
+        runner_target = (
+            runtime.loop_prompt.effective_file
+            if runtime.loop_prompt is not None
+            else runtime.resolved_prompt.effective_file
+        )
+    else:
+        runner_env = runtime.env
+        runner_target = next_task
+
     run_command(
         runtime.resolved_runner_command,
-        next_task,
-        env=runtime.env,
+        runner_target,
+        env=runner_env,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
     )

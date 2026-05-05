@@ -8,6 +8,7 @@ import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -55,11 +56,14 @@ def configured_loop_settings(command_name: str | None) -> LoopConfig:
 
 
 def step_header_text(step: int) -> str:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    label = f"Step {step}  ({now})"
+    sep = "-" * 61
     return (
         "\n"
-        "-------------------------------------------------------------\n"
-        f"                        Step {step}\n"
-        "-------------------------------------------------------------\n"
+        f"{sep}\n"
+        f"{label.center(61)}\n"
+        f"{sep}\n"
         "\n"
     )
 

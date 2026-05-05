@@ -3940,20 +3940,11 @@ class TestLoop:
         assert "Completed." in result.stdout
 
         log_file = next(work.glob("loop-*.log"))
-        assert log_file.read_text() == (
-            "\n"
-            "-------------------------------------------------------------\n"
-            "                        Step 1\n"
-            "-------------------------------------------------------------\n"
-            "\n"
-            "keep going\n"
-            "\n"
-            "-------------------------------------------------------------\n"
-            "                        Step 2\n"
-            "-------------------------------------------------------------\n"
-            "\n"
-            "  COMPLETE  \n"
-        )
+        log_text = log_file.read_text()
+        assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
+        assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
+        assert "keep going\n" in log_text
+        assert "  COMPLETE  \n" in log_text
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
     def test_uses_prompt_from_agm_install_prefix(self, tmp_path: Path, env: dict[str, str]) -> None:
@@ -4013,14 +4004,9 @@ class TestLoop:
         assert "Step 1" in result.stdout
         assert "Step 2" not in result.stdout
         log_file = next(work.glob("loop-*.log"))
-        assert log_file.read_text() == (
-            "\n"
-            "-------------------------------------------------------------\n"
-            "                        Step 1\n"
-            "-------------------------------------------------------------\n"
-            "\n"
-            "  COMPLETE  \n"
-        )
+        log_text = log_file.read_text()
+        assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
+        assert "  COMPLETE  \n" in log_text
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
             f"-p @{bootstrap_prompt}",
             f"-p @{prompt_file}",
@@ -4435,23 +4421,13 @@ class TestLoop:
             f"@{tasks_dir / 'task-1.md'}"
         ]
         log_file = next(work.glob("loop-*.log"))
-        assert log_file.read_text() == (
-            "\n"
-            "-------------------------------------------------------------\n"
-            "                        Step 1\n"
-            "-------------------------------------------------------------\n"
-            "\n"
-            "task-1.md\n"
-            f"\nSelected task: {tasks_dir / 'task-1.md'}\n"
-            "\n"
-            "implemented task\n"
-            "\n"
-            "-------------------------------------------------------------\n"
-            "                        Step 2\n"
-            "-------------------------------------------------------------\n"
-            "\n"
-            " COMPLETE \n"
-        )
+        log_text = log_file.read_text()
+        assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
+        assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
+        assert "task-1.md\n" in log_text
+        assert f"\nSelected task: {tasks_dir / 'task-1.md'}\n" in log_text
+        assert "implemented task\n" in log_text
+        assert " COMPLETE \n" in log_text
 
     def test_loop_run_treats_only_last_runner_output_line_as_completion_signal(
         self, tmp_path: Path, env: dict[str, str]
@@ -5120,20 +5096,11 @@ class TestLoop:
         assert result.returncode == 0
         assert f"Logging to {log_file}" in result.stdout
         assert not list(work.glob("loop-*.log"))
-        assert log_file.read_text() == (
-            "\n"
-            "-------------------------------------------------------------\n"
-            "                        Step 1\n"
-            "-------------------------------------------------------------\n"
-            "\n"
-            "keep going\n"
-            "\n"
-            "-------------------------------------------------------------\n"
-            "                        Step 2\n"
-            "-------------------------------------------------------------\n"
-            "\n"
-            "  COMPLETE  \n"
-        )
+        log_text = log_file.read_text()
+        assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
+        assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
+        assert "keep going\n" in log_text
+        assert "  COMPLETE  \n" in log_text
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
     def test_interrupt_kills_loop_runner_process_tree(

@@ -155,6 +155,15 @@ agm loop next review --selector "codex exec"
 - CLI flags (`--runner`, `--selector`, `--no-selector`, `--tasks-dir`) override config
   values; `RUNNER_ARGS` are appended to the final runner command
 
+**Prompt preprocessing** — Before a prompt file is passed to the runner or selector, AGM
+expands environment variable references in the prompt content using `$VAR` or `${VAR}` syntax.
+Unrecognized variables are left unchanged. When expansions modify the content, AGM writes the
+expanded text to a temporary file; otherwise the original file path is used. Beyond the process
+environment, AGM provides:
+
+- `TASKS_DIR` — the resolved tasks directory path
+- `TASK_FILE` — the selected task file path (selector mode; set in the runner process environment at runtime)
+
 **Prompt file path** — AGM passes the resolved prompt file path to the runner/selector:
 
 - by default it is appended as `@<path>` to the command

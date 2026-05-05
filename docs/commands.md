@@ -77,6 +77,15 @@ Loop config is loaded from merged `config.toml` files:
 - `RUNNER_ARGS` are appended to the final runner command after AGM resolves `--runner`, config, or the built-in default
 - bare `agm loop` prints help text
 
+Prompt preprocessing:
+
+- before a prompt file is passed to the runner or selector, AGM expands environment variable references in the prompt content using `$VAR` or `${VAR}` syntax
+- unrecognized variables are left unchanged
+- when expansions modify the content, AGM writes the expanded text to a temporary file; otherwise the original file path is used
+- beyond the process environment, AGM provides:
+  - `TASKS_DIR` — the resolved tasks directory path
+  - `TASK_FILE` — the selected task file path (selector mode; set in the runner process environment at runtime)
+
 Prompt file path:
 
 - AGM passes the resolved prompt file path to the runner/selector command

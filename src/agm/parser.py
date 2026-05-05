@@ -162,6 +162,18 @@ _HELP_TEXTS: dict[str, str] = {
           selector, replacing the default ``select.md`` prompt.
           The prompt text is saved to a temporary file and processed with
           env var substitution, just like the default prompt.
+
+        Prompt preprocessing:
+          Before a prompt file is passed to the runner or selector, AGM
+          expands environment variable references in the prompt content
+          using ``$VAR`` or ``${VAR}`` syntax. Unrecognized variables are
+          left unchanged. When expansions modify the content, AGM writes
+          the expanded text to a temporary file; otherwise the original
+          file path is used. Beyond the process environment, AGM provides:
+            TASKS_DIR  the resolved tasks directory path
+            TASK_FILE  the selected task file path (selector mode; set
+                       in the runner process environment at runtime)
+
           ``agm loop step`` performs a single loop iteration using the same
           runner, selector, and logging behavior as ``agm loop run``.
           ``agm loop next`` runs ``select.md`` once using the
@@ -388,7 +400,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         the resolved runner when no selector is configured. Requires selector
         mode; ``--no-selector`` is an error for this subcommand.
         ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
-        the default select.md prompt.
+        the default select.md prompt. Prompt files are preprocessed for
+        environment variable expansion; see ``agm help loop`` for details.
     """),
     ("loop", "run"): textwrap.dedent("""\
         agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
@@ -401,7 +414,9 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         ``--no-selector`` switches to the no-selector loop-prompt mode.
         ``--prompt TEXT`` or ``--prompt-file PATH`` overrides the default
         prompt file. ``--selector-prompt TEXT`` or ``--selector-prompt-file
-        PATH`` overrides the default select.md selector prompt.
+        PATH`` overrides the default select.md selector prompt. Prompt files
+        are preprocessed for environment variable expansion; see
+        ``agm help loop`` for details.
         Bare ``agm loop CMD`` is a shorthand for this command when ``CMD``
         is not a built-in subcommand.
     """),
@@ -416,7 +431,9 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         resolution as ``agm loop run``. ``--prompt TEXT`` or
         ``--prompt-file PATH`` overrides the default prompt file.
         ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
-        the default select.md selector prompt.
+        the default select.md selector prompt. Prompt files are
+        preprocessed for environment variable expansion; see
+        ``agm help loop`` for details.
     """),
     ("worktree", "new"): textwrap.dedent("""\
         agm worktree new [-d|--dir DIR] BRANCH

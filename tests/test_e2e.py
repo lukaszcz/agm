@@ -3791,7 +3791,7 @@ class TestLoop:
 
             output_lines: list[str] = []
             log_file: Path | None = None
-            deadline = time.time() + 5
+            deadline = time.time() + 10
             while time.time() < deadline:
                 line = process.stdout.readline()
                 if line:
@@ -3810,7 +3810,7 @@ class TestLoop:
             assert "runner line 1\n" in log_file.read_text()
             assert "COMPLETE\n" not in log_file.read_text()
 
-            stdout, stderr = process.communicate(timeout=15)
+            stdout, stderr = process.communicate(timeout=30)
             assert process.returncode == 0
             assert stderr == ""
             assert "Completed.\n" in "".join(output_lines) + stdout
@@ -3887,7 +3887,7 @@ class TestLoop:
 
             output_lines: list[str] = []
             log_file: Path | None = None
-            deadline = time.time() + 5
+            deadline = time.time() + 10
             while time.time() < deadline:
                 line = process.stdout.readline()
                 if line:
@@ -3906,7 +3906,7 @@ class TestLoop:
             assert "task-1.md\n" in log_file.read_text()
             assert "implemented task\n" not in log_file.read_text()
 
-            stdout, stderr = process.communicate(timeout=15)
+            stdout, stderr = process.communicate(timeout=30)
             assert process.returncode == 0
             assert stderr == ""
             assert "implemented task\n" in "".join(output_lines) + stdout

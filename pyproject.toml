@@ -21,6 +21,7 @@ packages = ["src/agm"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--cov=agm", "--cov-fail-under=100"]
 
 [tool.mypy]
 python_version = "3.12"

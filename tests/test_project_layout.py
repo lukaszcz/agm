@@ -891,3 +891,27 @@ def test_current_project_dir_none_when_no_markers_and_not_git(
     # Returns the plain dir itself as fallback
     result = current_project_dir(plain)
     assert result == plain
+
+
+def test_current_project_dir_checkout_root_finds_project_in_parents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When checkout_root returns a dir whose parent has project markers,
+    the second for loop returns the project via return on line 98."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / ".agm").mkdir()
+    checkout = project / "subdir"
+    checkout.mkdir()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+
+    monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda _path: True)
+    monkeypatch.setattr(
+        layout_module.git_helpers,
+        "checkout_root",
+        lambda _cwd=None: checkout,
+    )
+
+    result = current_project_dir(cwd)
+    assert result == project

@@ -9,7 +9,7 @@ setup:
     uv pip install --python .venv/bin/python -e ".[dev]" --group dev
 
 # Run the test suite
-check_coverage := "80"
+check_coverage := "100"
 test:
     uv run python -m pytest tests/ -q -n auto --cov=agm --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 

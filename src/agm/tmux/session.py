@@ -106,11 +106,6 @@ def create_tmux_session(
                     ["tmux", "switch-client", "-t", planned_session],
                     cwd=current,
                 )
-            elif not detach:
-                dry_run.print_command(
-                    ["tmux", "attach-session", "-t", planned_session],
-                    cwd=current,
-                )
             print(f"Detached tmux session {planned_session} created")
             return planned_session
         result = subprocess.run(

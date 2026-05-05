@@ -9,8 +9,9 @@ setup:
     uv pip install --python .venv/bin/python -e ".[dev]" --group dev
 
 # Run the test suite
+check_coverage := "80"
 test:
-    uv run python -m pytest tests/ -q
+    uv run python -m pytest tests/ -q --cov=agm --cov-fail-under={{check_coverage}}
 
 # Lint with ruff
 lint:

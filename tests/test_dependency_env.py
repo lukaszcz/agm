@@ -1,0 +1,1209 @@
+"""Comprehensive tests for agm.project.dependency_env."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+import agm.project.dependency_env as dep_env_module
+from agm.project.dependency_env import (
+    _ensure_config_toml_file,
+    _is_deps_table_header,
+    _is_table_header,
+    _line_sets_toml_key,
+    _load_toml_file,
+    _set_toml_deps_value,
+    _toml_dict,
+    _toml_key,
+    _toml_string,
+    config_toml_file,
+    dep_env_var_name,
+    ensure_dependency_configs_for_branch,
+    load_dependency_toml_env,
+    update_all_project_dependency_configs,
+    update_dependency_config,
+    update_dependency_configs_for_branch,
+    update_dependency_toml_config,
+    update_main_dependency_configs,
+)
+from agm.vcs.git import WorktreeInfo
+
+# ---------------------------------------------------------------------------
+# dep_env_var_name
+# ---------------------------------------------------------------------------
+
+
+class TestDepEnvVarName:
+    def test_simple_lowercase(self) -> None:
+        assert dep_env_var_name("mylib") == "MYLIB"
+
+    def test_simple_uppercase(self) -> None:
+        assert dep_env_var_name("MYLIB") == "MYLIB"
+
+    def test_mixed_case(self) -> None:
+        assert dep_env_var_name("MyLib") == "MYLIB"
+
+    def test_hyphen_replaced_by_underscore(self) -> None:
+        assert dep_env_var_name("my-lib") == "MY_LIB"
+
+    def test_dot_replaced_by_underscore(self) -> None:
+        assert dep_env_var_name("my.lib") == "MY_LIB"
+
+    def test_space_replaced_by_underscore(self) -> None:
+        assert dep_env_var_name("my lib") == "MY_LIB"
+
+    def test_multiple_non_alnum_collapsed(self) -> None:
+        assert dep_env_var_name("my--lib") == "MY_LIB"
+
+    def test_leading_digit_gets_underscore_prefix(self) -> None:
+        assert dep_env_var_name("1lib") == "_1LIB"
+
+    def test_all_digits_gets_underscore_prefix(self) -> None:
+        assert dep_env_var_name("123") == "_123"
+
+    def test_empty_string_returns_dep(self) -> None:
+        assert dep_env_var_name("") == "DEP"
+
+    def test_only_special_chars_returns_dep(self) -> None:
+        assert dep_env_var_name("---") == "DEP"
+
+    def test_only_special_chars_mixed_returns_dep(self) -> None:
+        assert dep_env_var_name("...") == "DEP"
+
+    def test_underscores_preserved(self) -> None:
+        assert dep_env_var_name("my_lib") == "MY_LIB"
+
+    def test_leading_underscore_stripped_then_uppercased(self) -> None:
+        # leading/trailing _ are stripped by .strip("_") before checking digit
+        assert dep_env_var_name("_mylib") == "MYLIB"
+
+    def test_numbers_in_middle(self) -> None:
+        assert dep_env_var_name("lib2go") == "LIB2GO"
+
+    def test_single_letter(self) -> None:
+        assert dep_env_var_name("a") == "A"
+
+    def test_digit_only_after_stripping(self) -> None:
+        # "-1-" → strip "_" → "1" → starts with digit → "_1"
+        assert dep_env_var_name("-1-") == "_1"
+
+    def test_complex_name(self) -> None:
+        assert dep_env_var_name("some-complex.dep_name") == "SOME_COMPLEX_DEP_NAME"
+
+
+# ---------------------------------------------------------------------------
+# config_toml_file
+# ---------------------------------------------------------------------------
+
+
+class TestConfigTomlFile:
+    def test_no_branch_returns_config_dir_config_toml(self, tmp_path: Path) -> None:
+        # workspace layout: data_dir = project_dir, config_dir = project_dir / "config"
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        result = config_toml_file(project_dir, None)
+        assert result == project_dir / "config" / "config.toml"
+
+    def test_branch_returns_config_dir_branch_config_toml(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        result = config_toml_file(project_dir, "feat/x")
+        assert result == project_dir / "config" / "feat/x" / "config.toml"
+
+    def test_embedded_layout_uses_agm_subdir(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / ".agm").mkdir()
+        result = config_toml_file(project_dir, None)
+        assert result == project_dir / ".agm" / "config" / "config.toml"
+
+    def test_embedded_layout_with_branch(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / ".agm").mkdir()
+        result = config_toml_file(project_dir, "main")
+        assert result == project_dir / ".agm" / "config" / "main" / "config.toml"
+
+
+# ---------------------------------------------------------------------------
+# _toml_dict
+# ---------------------------------------------------------------------------
+
+
+class TestTomlDict:
+    def test_dict_is_returned_as_is(self) -> None:
+        d: dict[str, object] = {"key": "value"}
+        result = _toml_dict(d)
+        assert result == {"key": "value"}
+
+    def test_none_returns_empty_dict(self) -> None:
+        assert _toml_dict(None) == {}
+
+    def test_string_returns_empty_dict(self) -> None:
+        assert _toml_dict("string") == {}
+
+    def test_int_returns_empty_dict(self) -> None:
+        assert _toml_dict(42) == {}
+
+    def test_list_returns_empty_dict(self) -> None:
+        assert _toml_dict([1, 2, 3]) == {}
+
+    def test_empty_dict_returns_empty_dict(self) -> None:
+        assert _toml_dict({}) == {}
+
+    def test_nested_dict_returned_correctly(self) -> None:
+        d: dict[str, object] = {"a": {"b": 1}}
+        result = _toml_dict(d)
+        assert result == {"a": {"b": 1}}
+
+
+# ---------------------------------------------------------------------------
+# _toml_key
+# ---------------------------------------------------------------------------
+
+
+class TestTomlKey:
+    def test_simple_alphanumeric_key(self) -> None:
+        assert _toml_key("mykey") == "mykey"
+
+    def test_key_with_underscore(self) -> None:
+        assert _toml_key("my_key") == "my_key"
+
+    def test_key_with_hyphen(self) -> None:
+        assert _toml_key("my-key") == "my-key"
+
+    def test_key_with_digits(self) -> None:
+        assert _toml_key("key123") == "key123"
+
+    def test_key_with_dot_is_quoted(self) -> None:
+        assert _toml_key("my.key") == '"my.key"'
+
+    def test_key_with_space_is_quoted(self) -> None:
+        assert _toml_key("my key") == '"my key"'
+
+    def test_empty_string_is_quoted(self) -> None:
+        assert _toml_key("") == '""'
+
+    def test_key_with_slash_is_quoted(self) -> None:
+        assert _toml_key("feat/x") == '"feat/x"'
+
+    def test_key_with_special_chars_is_quoted(self) -> None:
+        assert _toml_key("a@b") == '"a@b"'
+
+    def test_uppercase_letters_are_bare(self) -> None:
+        assert _toml_key("MyKey") == "MyKey"
+
+    def test_mixed_alnum_underscore_hyphen(self) -> None:
+        assert _toml_key("My-Key_1") == "My-Key_1"
+
+
+# ---------------------------------------------------------------------------
+# _toml_string
+# ---------------------------------------------------------------------------
+
+
+class TestTomlString:
+    def test_simple_string(self) -> None:
+        assert _toml_string("hello") == '"hello"'
+
+    def test_string_with_special_chars(self) -> None:
+        assert _toml_string("feat/x") == '"feat/x"'
+
+    def test_empty_string(self) -> None:
+        assert _toml_string("") == '""'
+
+    def test_string_with_backslash(self) -> None:
+        assert _toml_string("a\\b") == '"a\\\\b"'
+
+    def test_string_with_quotes(self) -> None:
+        assert _toml_string('say "hello"') == '"say \\"hello\\""'
+
+
+# ---------------------------------------------------------------------------
+# _is_table_header
+# ---------------------------------------------------------------------------
+
+
+class TestIsTableHeader:
+    def test_simple_table_header(self) -> None:
+        assert _is_table_header("[section]") is True
+
+    def test_table_header_with_leading_whitespace(self) -> None:
+        assert _is_table_header("  [section]") is True
+
+    def test_table_header_with_trailing_whitespace(self) -> None:
+        assert _is_table_header("[section]  ") is True
+
+    def test_table_header_with_comment(self) -> None:
+        assert _is_table_header("[section] # comment") is True
+
+    def test_deps_table_header(self) -> None:
+        assert _is_table_header("[deps]") is True
+
+    def test_dotted_table_header(self) -> None:
+        assert _is_table_header("[section.sub]") is True
+
+    def test_array_of_tables_not_matched(self) -> None:
+        # [[array]] has double brackets — not matched (only single [])
+        assert _is_table_header("[[array]]") is False
+
+    def test_plain_key_value_not_matched(self) -> None:
+        assert _is_table_header("key = value") is False
+
+    def test_comment_line_not_matched(self) -> None:
+        assert _is_table_header("# comment") is False
+
+    def test_empty_brackets_not_matched(self) -> None:
+        # "[]" — the pattern is [^\]]+ so at least one char required
+        assert _is_table_header("[]") is False
+
+    def test_empty_string_not_matched(self) -> None:
+        assert _is_table_header("") is False
+
+
+# ---------------------------------------------------------------------------
+# _is_deps_table_header
+# ---------------------------------------------------------------------------
+
+
+class TestIsDepsTableHeader:
+    def test_exact_deps_header(self) -> None:
+        assert _is_deps_table_header("[deps]") is True
+
+    def test_deps_header_with_leading_space(self) -> None:
+        assert _is_deps_table_header("  [deps]") is True
+
+    def test_deps_header_with_comment(self) -> None:
+        assert _is_deps_table_header("[deps] # comment") is True
+
+    def test_deps_header_with_trailing_space(self) -> None:
+        assert _is_deps_table_header("[deps]  ") is True
+
+    def test_other_section_not_matched(self) -> None:
+        assert _is_deps_table_header("[other]") is False
+
+    def test_deps_subsection_not_matched(self) -> None:
+        assert _is_deps_table_header("[deps.sub]") is False
+
+    def test_empty_string_not_matched(self) -> None:
+        assert _is_deps_table_header("") is False
+
+    def test_key_value_not_matched(self) -> None:
+        assert _is_deps_table_header("deps = true") is False
+
+
+# ---------------------------------------------------------------------------
+# _line_sets_toml_key
+# ---------------------------------------------------------------------------
+
+
+class TestLineSetsTomlKey:
+    def test_bare_key_match(self) -> None:
+        assert _line_sets_toml_key("mylib = \"main\"\n", "mylib") is True
+
+    def test_bare_key_no_match(self) -> None:
+        assert _line_sets_toml_key("other = \"main\"\n", "mylib") is False
+
+    def test_quoted_key_match(self) -> None:
+        assert _line_sets_toml_key('"feat/x" = "branch"\n', "feat/x") is True
+
+    def test_quoted_key_no_match(self) -> None:
+        assert _line_sets_toml_key('"feat/y" = "branch"\n', "feat/x") is False
+
+    def test_key_with_leading_spaces(self) -> None:
+        assert _line_sets_toml_key("  mylib = \"main\"\n", "mylib") is True
+
+    def test_comment_line_not_matched(self) -> None:
+        assert _line_sets_toml_key("# mylib = \"main\"\n", "mylib") is False
+
+    def test_empty_line_not_matched(self) -> None:
+        assert _line_sets_toml_key("", "mylib") is False
+
+    def test_section_header_not_matched(self) -> None:
+        assert _line_sets_toml_key("[deps]", "deps") is False
+
+    def test_bare_key_prefix_no_match(self) -> None:
+        # "mylib2 = ..." should not match "mylib"
+        assert _line_sets_toml_key("mylib2 = \"main\"\n", "mylib") is False
+
+    def test_quoted_key_with_special_chars_match(self) -> None:
+        assert _line_sets_toml_key('"some.dep" = "branch"\n', "some.dep") is True
+
+    def test_key_with_hyphen(self) -> None:
+        assert _line_sets_toml_key("my-lib = \"main\"\n", "my-lib") is True
+
+    def test_key_with_underscore(self) -> None:
+        assert _line_sets_toml_key("my_lib = \"main\"\n", "my_lib") is True
+
+
+# ---------------------------------------------------------------------------
+# _set_toml_deps_value
+# ---------------------------------------------------------------------------
+
+
+class TestSetTomlDepsValue:
+    def test_empty_content_creates_deps_section(self) -> None:
+        result = _set_toml_deps_value("", "mylib", "main")
+        assert "[deps]" in result
+        assert 'mylib = "main"' in result
+
+    def test_adds_deps_section_to_existing_content(self) -> None:
+        content = "[other]\nkey = \"value\"\n"
+        result = _set_toml_deps_value(content, "mylib", "main")
+        assert "[deps]" in result
+        assert 'mylib = "main"' in result
+
+    def test_updates_existing_dep_entry(self) -> None:
+        content = "[deps]\nmylib = \"old\"\n"
+        result = _set_toml_deps_value(content, "mylib", "new")
+        assert 'mylib = "new"' in result
+        assert 'mylib = "old"' not in result
+
+    def test_adds_new_dep_to_existing_deps_section(self) -> None:
+        content = "[deps]\nexisting = \"branch\"\n"
+        result = _set_toml_deps_value(content, "newlib", "feat")
+        assert 'existing = "branch"' in result
+        assert 'newlib = "feat"' in result
+
+    def test_dep_with_special_name_is_quoted(self) -> None:
+        result = _set_toml_deps_value("", "feat/x", "branch")
+        assert '"feat/x"' in result
+        assert '"branch"' in result
+
+    def test_preserves_other_sections_after_deps(self) -> None:
+        content = "[deps]\nmylib = \"main\"\n\n[other]\nkey = \"value\"\n"
+        result = _set_toml_deps_value(content, "mylib", "new")
+        assert "[other]" in result
+        assert 'key = "value"' in result
+        assert 'mylib = "new"' in result
+
+    def test_new_dep_inserted_before_next_section(self) -> None:
+        content = "[deps]\nexisting = \"branch\"\n\n[other]\nkey = \"value\"\n"
+        result = _set_toml_deps_value(content, "newlib", "feat")
+        # newlib should appear before [other]
+        assert result.index('newlib = "feat"') < result.index("[other]")
+
+    def test_deps_section_at_end_of_file_no_trailing_newline(self) -> None:
+        # content with no trailing newline — separator should be added
+        content = "[other]\nkey = \"value\""
+        result = _set_toml_deps_value(content, "mylib", "main")
+        assert "[deps]" in result
+        assert 'mylib = "main"' in result
+
+    def test_content_with_trailing_newline(self) -> None:
+        content = "[other]\nkey = \"value\"\n"
+        result = _set_toml_deps_value(content, "mylib", "main")
+        assert "[deps]\n" in result
+
+    def test_update_second_dep_in_section(self) -> None:
+        content = "[deps]\nfirst = \"a\"\nsecond = \"old\"\n"
+        result = _set_toml_deps_value(content, "second", "new")
+        assert 'first = "a"' in result
+        assert 'second = "new"' in result
+        assert 'second = "old"' not in result
+
+    def test_result_is_valid_toml(self, tmp_path: Path) -> None:
+        import tomllib
+
+        content = "[deps]\nexisting = \"branch\"\n"
+        result = _set_toml_deps_value(content, "newlib", "feat")
+        toml_file = tmp_path / "test.toml"
+        toml_file.write_bytes(result.encode())
+        with toml_file.open("rb") as f:
+            parsed = tomllib.load(f)
+        assert parsed["deps"]["existing"] == "branch"  # type: ignore[index]
+        assert parsed["deps"]["newlib"] == "feat"  # type: ignore[index]
+
+    def test_update_result_is_valid_toml(self, tmp_path: Path) -> None:
+        import tomllib
+
+        content = "[deps]\nmylib = \"old\"\n"
+        result = _set_toml_deps_value(content, "mylib", "new")
+        toml_file = tmp_path / "test.toml"
+        toml_file.write_bytes(result.encode())
+        with toml_file.open("rb") as f:
+            parsed = tomllib.load(f)
+        assert parsed["deps"]["mylib"] == "new"  # type: ignore[index]
+
+    def test_deps_with_comment_header(self) -> None:
+        content = "[deps] # my deps\nmylib = \"old\"\n"
+        result = _set_toml_deps_value(content, "mylib", "new")
+        assert 'mylib = "new"' in result
+        assert 'mylib = "old"' not in result
+
+    def test_deps_section_with_leading_spaces_in_header(self) -> None:
+        content = "  [deps]\nmylib = \"old\"\n"
+        result = _set_toml_deps_value(content, "mylib", "new")
+        assert 'mylib = "new"' in result
+
+    def test_multiple_calls_idempotent_on_same_dep(self) -> None:
+        content = ""
+        result1 = _set_toml_deps_value(content, "mylib", "main")
+        result2 = _set_toml_deps_value(result1, "mylib", "main")
+        assert result1 == result2
+
+
+# ---------------------------------------------------------------------------
+# _load_toml_file
+# ---------------------------------------------------------------------------
+
+
+class TestLoadTomlFile:
+    def test_loads_simple_toml(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
+        result = _load_toml_file(toml_file)
+        assert result["deps"] == {"mylib": "main"}
+
+    def test_loads_empty_toml(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_bytes(b"")
+        result = _load_toml_file(toml_file)
+        assert result == {}
+
+    def test_loads_nested_toml(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_content = "[section]\nkey = \"value\"\n[deps]\nlib = \"branch\"\n"
+        toml_file.write_text(toml_content, encoding="utf-8")
+        result = _load_toml_file(toml_file)
+        assert result["section"] == {"key": "value"}
+        assert result["deps"] == {"lib": "branch"}
+
+    def test_returns_toml_dict_type(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text("key = 42\n", encoding="utf-8")
+        result = _load_toml_file(toml_file)
+        assert isinstance(result, dict)
+        assert result["key"] == 42
+
+
+# ---------------------------------------------------------------------------
+# load_dependency_toml_env
+# ---------------------------------------------------------------------------
+
+
+class TestLoadDependencyTomlEnv:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_returns_env_unchanged_when_no_config_files(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        env: dict[str, str] = {"EXISTING": "value"}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[],
+            env=env,
+        )
+        assert result == {"EXISTING": "value"}
+
+    def test_returns_env_unchanged_when_config_file_missing(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        missing = project_dir / "config" / "config.toml"
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[missing],
+            env=env,
+        )
+        assert result == {}
+
+    def test_loads_dep_branch_from_config_file(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        expected_path = str(project_dir / "deps" / "mylib" / "main")
+        assert result["MYLIB"] == expected_path
+
+    def test_skips_empty_dep_branch(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = ""\n', encoding="utf-8")
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        assert "MYLIB" not in result
+
+    def test_skips_non_string_dep_branch(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text("[deps]\nmylib = 42\n", encoding="utf-8")
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        assert "MYLIB" not in result
+
+    def test_multiple_config_files_later_wins(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        branch_config_dir = config_dir / "feat"
+        branch_config_dir.mkdir()
+        main_file = config_dir / "config.toml"
+        main_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
+        branch_file = branch_config_dir / "config.toml"
+        branch_file.write_text('[deps]\nmylib = "feat"\n', encoding="utf-8")
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[main_file, branch_file],
+            env=env,
+        )
+        expected_path = str(project_dir / "deps" / "mylib" / "feat")
+        assert result["MYLIB"] == expected_path
+
+    def test_multiple_deps_loaded(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nlib-a = "main"\nlib-b = "dev"\n', encoding="utf-8")
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        assert result["LIB_A"] == str(project_dir / "deps" / "lib-a" / "main")
+        assert result["LIB_B"] == str(project_dir / "deps" / "lib-b" / "dev")
+
+    def test_preserves_existing_env_vars(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
+        env = {"EXISTING": "preserved"}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        assert result["EXISTING"] == "preserved"
+
+    def test_does_not_mutate_original_env(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
+        env: dict[str, str] = {}
+        load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        assert env == {}
+
+    def test_dep_with_special_name_creates_correct_env_var(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\n"my-dep" = "main"\n', encoding="utf-8")
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        assert result["MY_DEP"] == str(project_dir / "deps" / "my-dep" / "main")
+
+    def test_no_deps_table_in_config(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text("[other]\nkey = \"value\"\n", encoding="utf-8")
+        env: dict[str, str] = {}
+        result = load_dependency_toml_env(
+            project_dir=project_dir,
+            config_files=[config_file],
+            env=env,
+        )
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# update_dependency_toml_config / update_dependency_config
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateDependencyTomlConfig:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_creates_config_toml_for_main(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        update_dependency_toml_config(
+            project_dir=project_dir,
+            dep_name="mylib",
+            dep_branch="main",
+            config_branch=None,
+        )
+        config_file = project_dir / "config" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert 'mylib = "main"' in content
+
+    def test_creates_config_toml_for_branch(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        update_dependency_toml_config(
+            project_dir=project_dir,
+            dep_name="mylib",
+            dep_branch="feat",
+            config_branch="feat",
+        )
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert 'mylib = "feat"' in content
+
+    def test_updates_existing_dep_entry(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = "old"\n', encoding="utf-8")
+        update_dependency_toml_config(
+            project_dir=project_dir,
+            dep_name="mylib",
+            dep_branch="new",
+            config_branch=None,
+        )
+        content = config_file.read_text(encoding="utf-8")
+        assert 'mylib = "new"' in content
+        assert 'mylib = "old"' not in content
+
+    def test_creates_parent_directories(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        # Branch config directories don't exist yet
+        update_dependency_toml_config(
+            project_dir=project_dir,
+            dep_name="mylib",
+            dep_branch="main",
+            config_branch="feat/nested",
+        )
+        config_file = project_dir / "config" / "feat" / "nested" / "config.toml"
+        assert config_file.exists()
+
+    def test_update_dependency_config_is_alias(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        update_dependency_config(
+            project_dir=project_dir,
+            dep_name="mylib",
+            dep_branch="main",
+            config_branch=None,
+        )
+        config_file = project_dir / "config" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert 'mylib = "main"' in content
+
+
+# ---------------------------------------------------------------------------
+# _ensure_config_toml_file
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureConfigTomlFile:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_creates_empty_config_toml_when_missing(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        _ensure_config_toml_file(project_dir, None)
+        config_file = project_dir / "config" / "config.toml"
+        assert config_file.exists()
+        assert config_file.read_text(encoding="utf-8") == ""
+
+    def test_does_not_overwrite_existing_config_toml(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
+        _ensure_config_toml_file(project_dir, None)
+        content = config_file.read_text(encoding="utf-8")
+        assert 'mylib = "main"' in content
+
+    def test_creates_branch_config_toml_when_missing(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        _ensure_config_toml_file(project_dir, "feat")
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert config_file.exists()
+        assert config_file.read_text(encoding="utf-8") == ""
+
+    def test_creates_parent_dirs_for_branch(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        _ensure_config_toml_file(project_dir, "feat/nested")
+        config_file = project_dir / "config" / "feat" / "nested" / "config.toml"
+        assert config_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# update_main_dependency_configs
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateMainDependencyConfigs:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_does_nothing_when_no_deps_dir(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        # No deps dir — should not raise
+        update_main_dependency_configs(project_dir)
+        config_file = project_dir / "config" / "config.toml"
+        assert not config_file.exists()
+
+    def test_writes_dep_from_git_repo_in_dep_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        branch_dir = dep_dir / "main"
+        branch_dir.mkdir()
+        # Create a real git repo so is_git_repo returns True
+        subprocess.run(["git", "init", "-b", "main"], cwd=branch_dir, env=env, check=True)
+        # Mock is_git_repo to avoid calling the real git
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        update_main_dependency_configs(project_dir)
+        config_file = project_dir / "config" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert "mylib" in content
+        assert "main" in content
+
+    def test_skips_dep_dir_with_no_git_repo(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        # No git repos inside dep_dir
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: False)
+        update_main_dependency_configs(project_dir)
+        config_file = project_dir / "config" / "config.toml"
+        assert not config_file.exists()
+
+    def test_multiple_deps_all_written(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        for dep_name in ["liba", "libb"]:
+            dep_dir = deps_dir / dep_name
+            dep_dir.mkdir()
+            branch_dir = dep_dir / "main"
+            branch_dir.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=branch_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        update_main_dependency_configs(project_dir)
+        config_file = project_dir / "config" / "config.toml"
+        content = config_file.read_text(encoding="utf-8")
+        assert "liba" in content
+        assert "libb" in content
+
+
+# ---------------------------------------------------------------------------
+# update_dependency_configs_for_branch
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateDependencyConfigsForBranch:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_does_nothing_when_no_deps_dir(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        # Should not raise
+        update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert not config_file.exists()
+
+    def test_writes_dep_config_for_branch_with_matching_checkout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        # Create a branch checkout directory matching the config branch
+        branch_dir = dep_dir / "feat"
+        branch_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=branch_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert "mylib" in content
+        assert "feat" in content
+
+    def test_falls_back_to_main_checkout_when_no_branch_checkout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        # Only a "main" checkout, no "feat" checkout
+        main_dir = dep_dir / "main"
+        main_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert "mylib" in content
+        assert "main" in content
+
+
+# ---------------------------------------------------------------------------
+# ensure_dependency_configs_for_branch
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureDependencyConfigsForBranch:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_does_nothing_when_no_deps_dir(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        # No error and no config file created
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert not config_file.exists()
+
+    def test_fills_missing_dep_entry(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        main_dir = dep_dir / "main"
+        main_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert "mylib" in content
+
+    def test_does_not_overwrite_existing_dep_entry(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        main_dir = dep_dir / "main"
+        main_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        # Pre-create config with existing entry
+        config_dir = project_dir / "config" / "feat"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = "existing-branch"\n', encoding="utf-8")
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        content = config_file.read_text(encoding="utf-8")
+        assert 'mylib = "existing-branch"' in content
+
+    def test_fills_missing_but_preserves_existing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        for dep_name in ["liba", "libb"]:
+            dep_dir = deps_dir / dep_name
+            dep_dir.mkdir()
+            main_dir = dep_dir / "main"
+            main_dir.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        # Pre-create config with only liba entry
+        config_dir = project_dir / "config" / "feat"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nliba = "custom-branch"\n', encoding="utf-8")
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        content = config_file.read_text(encoding="utf-8")
+        assert 'liba = "custom-branch"' in content
+        assert "libb" in content
+
+
+# ---------------------------------------------------------------------------
+# update_all_project_dependency_configs
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateAllProjectDependencyConfigs:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_creates_main_config_toml(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "current_branch",
+            lambda _repo_dir, **_kwargs: "main",
+        )
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "worktree_list",
+            lambda _repo_dir, **_kwargs: [],
+        )
+        update_all_project_dependency_configs(project_dir)
+        config_file = project_dir / "config" / "config.toml"
+        assert config_file.exists()
+
+    def test_creates_branch_config_toml_for_worktrees(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        worktrees_dir = project_dir / "worktrees"
+        worktrees_dir.mkdir()
+        feat_dir = worktrees_dir / "feat"
+        feat_dir.mkdir()
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "current_branch",
+            lambda _repo_dir, **_kwargs: "main",
+        )
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "worktree_list",
+            lambda _repo_dir, **_kwargs: [
+                WorktreeInfo(path=feat_dir, branch="feat"),
+            ],
+        )
+        update_all_project_dependency_configs(project_dir)
+        branch_config_file = project_dir / "config" / "feat" / "config.toml"
+        assert branch_config_file.exists()
+
+    def test_skips_branch_config_for_main_branch_worktree(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        worktrees_dir = project_dir / "worktrees"
+        worktrees_dir.mkdir()
+        main_wt_dir = worktrees_dir / "main"
+        main_wt_dir.mkdir()
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "current_branch",
+            lambda _repo_dir, **_kwargs: "main",
+        )
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "worktree_list",
+            lambda _repo_dir, **_kwargs: [
+                WorktreeInfo(path=main_wt_dir, branch="main"),
+            ],
+        )
+        update_all_project_dependency_configs(project_dir)
+        # Branch config for "main" should NOT be created
+        branch_config_file = project_dir / "config" / "main" / "config.toml"
+        assert not branch_config_file.exists()
+
+    def test_skips_worktree_with_no_branch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        worktrees_dir = project_dir / "worktrees"
+        worktrees_dir.mkdir()
+        detached_dir = worktrees_dir / "detached"
+        detached_dir.mkdir()
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "current_branch",
+            lambda _repo_dir, **_kwargs: "main",
+        )
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "worktree_list",
+            lambda _repo_dir, **_kwargs: [
+                WorktreeInfo(path=detached_dir, branch=None),
+            ],
+        )
+        update_all_project_dependency_configs(project_dir)
+        # No branch config should be created
+        assert not (project_dir / "config" / "detached").exists()
+
+    def test_skips_worktree_outside_worktrees_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        # A worktree that is not in the default worktrees dir
+        outside_dir = tmp_path / "outside-worktree"
+        outside_dir.mkdir()
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "current_branch",
+            lambda _repo_dir, **_kwargs: "main",
+        )
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "worktree_list",
+            lambda _repo_dir, **_kwargs: [
+                WorktreeInfo(path=outside_dir, branch="feat"),
+            ],
+        )
+        update_all_project_dependency_configs(project_dir)
+        # No branch config should be created for external worktrees
+        branch_config_file = project_dir / "config" / "feat" / "config.toml"
+        assert not branch_config_file.exists()
+
+    def test_passes_env_to_git_calls(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        captured_envs: list[dict[str, str] | None] = []
+
+        def fake_current_branch(
+            _repo_dir: Path, *, env: dict[str, str] | None = None
+        ) -> str:
+            captured_envs.append(env)
+            return "main"
+
+        def fake_worktree_list(
+            _repo_dir: Path, *, env: dict[str, str] | None = None
+        ) -> list[WorktreeInfo]:
+            captured_envs.append(env)
+            return []
+
+        monkeypatch.setattr(dep_env_module.git_helpers, "current_branch", fake_current_branch)
+        monkeypatch.setattr(dep_env_module.git_helpers, "worktree_list", fake_worktree_list)
+
+        test_env = {"MY_VAR": "value"}
+        update_all_project_dependency_configs(project_dir, env=test_env)
+
+        assert all(e == test_env for e in captured_envs)
+
+    def test_worktrees_dir_is_the_default(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Worktrees directory is project_dir/worktrees (workspace layout)."""
+        project_dir = self._workspace_project(tmp_path)
+        worktrees_dir = project_dir / "worktrees"
+        worktrees_dir.mkdir()
+        feat_dir = worktrees_dir / "feat"
+        feat_dir.mkdir()
+
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "current_branch",
+            lambda _repo_dir, **_kwargs: "main",
+        )
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "worktree_list",
+            lambda _repo_dir, **_kwargs: [
+                WorktreeInfo(path=feat_dir, branch="feat"),
+            ],
+        )
+        update_all_project_dependency_configs(project_dir)
+        branch_config = project_dir / "config" / "feat" / "config.toml"
+        assert branch_config.exists()

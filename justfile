@@ -11,7 +11,7 @@ setup:
 # Run the test suite
 check_coverage := "80"
 test:
-    uv run python -m pytest tests/ -q -n auto --cov=agm --cov-fail-under={{check_coverage}}
+    uv run python -m pytest tests/ -q -n auto --cov=agm --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 
 # Lint with ruff
 lint:

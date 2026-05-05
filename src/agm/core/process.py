@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -115,8 +116,15 @@ def run_subprocess(
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
     isolate_process_group: bool = False,
+    idle_timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command and clean it up on interrupt."""
+    """Run a command and clean it up on interrupt.
+
+    When *idle_timeout* is set (in seconds), the process is killed via
+    ``_kill_process_group`` if no output chunk is received for that
+    duration.  Requires *isolate_process_group=True* so the entire
+    process tree can be cleaned up.
+    """
 
     process = subprocess.Popen(
         cmd,
@@ -166,12 +174,34 @@ def run_subprocess(
                 "stderr": codecs.getincrementaldecoder("utf-8")(errors="replace"),
             }
             active_readers = len(readers)
+            last_chunk_time = time.monotonic()
             while active_readers > 0:
-                stream_name, chunk = stream_queue.get()
+                try:
+                    if idle_timeout is not None:
+                        remaining = idle_timeout - (time.monotonic() - last_chunk_time)
+                        if remaining <= 0:
+                            raise queue.Empty
+                        stream_name, chunk = stream_queue.get(timeout=remaining)
+                    else:
+                        stream_name, chunk = stream_queue.get()
+                except queue.Empty:
+                    # Idle timeout: no output received within the deadline.
+                    if isolate_process_group:
+                        _kill_process_group(process)
+                    else:
+                        _terminate_process(process)
+                    _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
+                    print(
+                        f"Idle timeout ({idle_timeout}s) exceeded, "
+                        "process terminated.",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(124)
                 if chunk is None:
                     active_readers -= 1
                     continue
 
+                last_chunk_time = time.monotonic()
                 text = decoders[stream_name].decode(chunk)
                 if not text:
                     continue
@@ -225,6 +255,7 @@ def run_foreground(
     env: dict[str, str] | None = None,
     interrupt_cleanup_cmd: list[str] | None = None,
     isolate_process_group: bool = False,
+    idle_timeout: float | None = None,
 ) -> int:
     """Run a command inheriting stdio."""
 
@@ -234,6 +265,7 @@ def run_foreground(
         env=env,
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         isolate_process_group=isolate_process_group,
+        idle_timeout=idle_timeout,
     )
     return result.returncode
 
@@ -247,6 +279,7 @@ def run_capture(
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
     isolate_process_group: bool = False,
+    idle_timeout: float | None = None,
 ) -> tuple[int, str, str]:
     """Run a command and capture stdout/stderr."""
 
@@ -259,6 +292,7 @@ def run_capture(
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
         isolate_process_group=isolate_process_group,
+        idle_timeout=idle_timeout,
     )
     return result.returncode, result.stdout or "", result.stderr or ""
 

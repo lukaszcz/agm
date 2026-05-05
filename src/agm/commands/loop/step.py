@@ -25,6 +25,7 @@ from .common import (
     progress_file,
     prompt_file,
     resolve_prompt_source,
+    resolved_timeout,
     run_command,
     runner_command,
     selected_task_text,
@@ -55,6 +56,7 @@ class LoopStepRuntime:
     resolved_prompt: ResolvedPrompt | None
     bootstrap_prompt: PreparedPrompt | None
     log_file: Path | None
+    idle_timeout: float | None
 
 
 def _log_file(args: LoopArgs) -> Path | None:
@@ -157,12 +159,19 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
             env=env,
         )
         if not dry_run.enabled():
-            run_command(resolved_runner_command, bootstrap_prompt.effective_file, env=env)
+            run_command(
+                resolved_runner_command,
+                bootstrap_prompt.effective_file,
+                env=env,
+                idle_timeout=resolved_timeout(args),
+            )
 
     log_file = _log_file(args)
     if log_file is not None:
         print(f"Logging to {log_file if args.log_file is not None else log_file.name}")
         mkdir(log_file.parent, parents=True, exist_ok=True)
+
+    timeout = resolved_timeout(args)
 
     return LoopStepRuntime(
         temp_files=temp_files,
@@ -175,6 +184,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         resolved_prompt=resolved_prompt,
         bootstrap_prompt=bootstrap_prompt,
         log_file=log_file,
+        idle_timeout=timeout,
     )
 
 
@@ -187,6 +197,10 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
         str(runtime.log_file) if runtime.log_file is not None else "disabled",
     )
     dry_run.print_detail("runner command", dry_run.format_command(runtime.resolved_runner_command))
+    dry_run.print_detail(
+        "idle timeout",
+        f"{runtime.idle_timeout}s" if runtime.idle_timeout is not None else "disabled",
+    )
     has_selector_command = (
         runtime.select_invocation is not None
         and runtime.select_invocation.selector_command is not None
@@ -277,6 +291,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             env=runtime.env,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
+            idle_timeout=runtime.idle_timeout,
         )
         if is_complete_output(output):
             print("\nCompleted.")
@@ -290,6 +305,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             env=runtime.env,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
+            idle_timeout=runtime.idle_timeout,
         )
         next_task = selector_result(selector_output, tasks_dir=runtime.resolved_tasks_dir)
         if next_task is None:
@@ -319,6 +335,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
         env=runner_env,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
+        idle_timeout=runtime.idle_timeout,
     )
     return False
 

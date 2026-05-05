@@ -50,6 +50,7 @@ from agm.commands.args import (
     WorktreeNewArgs,
     WorktreeRemoveArgs,
 )
+from agm.config.general import parse_timeout
 from agm.core import dry_run
 from agm.parser import (
     exit_with_usage_error,
@@ -180,6 +181,7 @@ def _parse_loop_args(
     prompt_file: str | None = None
     selector_prompt: str | None = None
     selector_prompt_file: str | None = None
+    timeout: float | None = None
     index = 0
 
     while index < len(raw_args):
@@ -237,6 +239,15 @@ def _parse_loop_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--timeout":
+            timeout_str, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            try:
+                timeout = parse_timeout(timeout_str)
+            except ValueError as exc:
+                exit_with_usage_error(command_path, f"error: {exc}")
+            continue
         break
 
     if selector is not None and no_selector:
@@ -272,6 +283,7 @@ def _parse_loop_args(
                 prompt_file=prompt_file,
                 selector_prompt=selector_prompt,
                 selector_prompt_file=selector_prompt_file,
+                timeout=timeout,
             )
         print_help_for_command_path(command_path)
         raise typer.Exit()
@@ -294,6 +306,7 @@ def _parse_loop_args(
         prompt_file=prompt_file,
         selector_prompt=selector_prompt,
         selector_prompt_file=selector_prompt_file,
+        timeout=timeout,
     )
 
 
@@ -308,6 +321,7 @@ def _parse_loop_next_args(
     prompt_file: str | None = None
     selector_prompt: str | None = None
     selector_prompt_file: str | None = None
+    timeout: float | None = None
     index = 0
 
     while index < len(raw_args):
@@ -353,6 +367,15 @@ def _parse_loop_next_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--timeout":
+            timeout_str, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            try:
+                timeout = parse_timeout(timeout_str)
+            except ValueError as exc:
+                exit_with_usage_error(command_path, f"error: {exc}")
+            continue
         break
 
     if selector is not None and no_selector:
@@ -385,6 +408,7 @@ def _parse_loop_next_args(
         prompt_file=prompt_file,
         selector_prompt=selector_prompt,
         selector_prompt_file=selector_prompt_file,
+        timeout=timeout,
     )
 
 

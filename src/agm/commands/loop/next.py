@@ -13,6 +13,7 @@ from .common import (
     command_with_prompt_target,
     loop_env,
     prepare_select_invocation,
+    resolved_timeout,
     run_command,
     tasks_dir,
     use_selector_mode,
@@ -33,6 +34,7 @@ def run(args: LoopNextArgs) -> None:
     temp_files: list[Path] = []
     resolved_tasks_dir = tasks_dir(args)
     env = loop_env(resolved_tasks_dir)
+    timeout = resolved_timeout(args)
 
     if not use_selector_mode(args):
         print(
@@ -72,7 +74,15 @@ def run(args: LoopNextArgs) -> None:
             )
             return
 
-        print(run_command(invocation.command, invocation.effective_prompt_file, env=env), end="")
+        print(
+            run_command(
+                invocation.command,
+                invocation.effective_prompt_file,
+                env=env,
+                idle_timeout=timeout,
+            ),
+            end="",
+        )
     except KeyboardInterrupt:
         print("\nInterrupted")
         raise SystemExit(130)

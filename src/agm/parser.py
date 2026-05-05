@@ -83,20 +83,24 @@ _HELP_TEXTS: dict[str, str] = {
                  [--tasks-dir DIR] [--no-log|--log-file PATH]
                  [--prompt TEXT|--prompt-file PATH]
                  [--selector-prompt TEXT|--selector-prompt-file PATH]
+                 [--timeout DURATION]
                  CMD [RUNNER_ARGS...]
         agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
                      [--tasks-dir DIR] [--no-log|--log-file PATH]
                      [--prompt TEXT|--prompt-file PATH]
                      [--selector-prompt TEXT|--selector-prompt-file PATH]
+                     [--timeout DURATION]
                      [CMD [RUNNER_ARGS...]]
         agm loop step [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--no-log|--log-file PATH]
                       [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--timeout DURATION]
                       CMD [RUNNER_ARGS...]
         agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--timeout DURATION]
                       [CMD [RUNNER_ARGS...]]
 
         Repeatedly run a prompt command until the selected loop mode reports
@@ -109,6 +113,11 @@ _HELP_TEXTS: dict[str, str] = {
           command prefix. [loop] no_selector = true disables the selector and
           switches to no-selector mode. [loop] tasks_dir = ".agent-files/tasks"
           sets the tasks directory checked for ``PROGRESS.md`` and task files.
+          [loop] timeout = "30m" sets an idle timeout that kills the runner
+          process tree when no output is received for the given duration.
+          Accepts seconds (plain number or ``Ns``), minutes (``Nm``), or
+          hours (``Nh``). Disabled by default. ``--timeout DURATION``
+          overrides the config value.
           [loop] prompt = "text" or [loop] prompt_file = "path" set the prompt
           text or file, overriding the default task file (selector mode) or
           loop.md (no-selector mode). ``--prompt`` and ``--prompt-file`` are
@@ -394,28 +403,32 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--timeout DURATION]
                       [CMD [RUNNER_ARGS...]]
 
         Run the update-progress prompt once using the resolved selector, or
         the resolved runner when no selector is configured. Requires selector
         mode; ``--no-selector`` is an error for this subcommand.
         ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
-        the default select.md prompt. Prompt files are preprocessed for
-        environment variable expansion; see ``agm help loop`` for details.
+        the default select.md prompt. ``--timeout DURATION`` sets an idle
+        timeout; see ``agm help loop`` for details. Prompt files are
+        preprocessed for environment variable expansion.
     """),
     ("loop", "run"): textwrap.dedent("""\
         agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
                      [--tasks-dir DIR] [--no-log|--log-file PATH]
                      [--prompt TEXT|--prompt-file PATH]
                      [--selector-prompt TEXT|--selector-prompt-file PATH]
+                     [--timeout DURATION]
                      [CMD [RUNNER_ARGS...]]
 
         Run the loop prompt until completion. Selector mode is the default;
         ``--no-selector`` switches to the no-selector loop-prompt mode.
         ``--prompt TEXT`` or ``--prompt-file PATH`` overrides the default
         prompt file. ``--selector-prompt TEXT`` or ``--selector-prompt-file
-        PATH`` overrides the default select.md selector prompt. Prompt files
-        are preprocessed for environment variable expansion; see
+        PATH`` overrides the default select.md selector prompt. ``--timeout
+        DURATION`` sets an idle timeout; see ``agm help loop`` for details.
+        Prompt files are preprocessed for environment variable expansion; see
         ``agm help loop`` for details.
         Bare ``agm loop CMD`` is a shorthand for this command when ``CMD``
         is not a built-in subcommand.
@@ -425,13 +438,15 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
                       [--tasks-dir DIR] [--no-log|--log-file PATH]
                       [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--timeout DURATION]
                       CMD [RUNNER_ARGS...]
 
         Perform one loop iteration using the same runner and selector
         resolution as ``agm loop run``. ``--prompt TEXT`` or
         ``--prompt-file PATH`` overrides the default prompt file.
         ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
-        the default select.md selector prompt. Prompt files are
+        the default select.md selector prompt. ``--timeout DURATION`` sets an
+        idle timeout; see ``agm help loop`` for details. Prompt files are
         preprocessed for environment variable expansion; see
         ``agm help loop`` for details.
     """),

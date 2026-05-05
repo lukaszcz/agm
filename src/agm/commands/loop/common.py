@@ -91,6 +91,14 @@ def selector_command(args: LoopCommandArgs) -> list[str] | None:
     return split_command(selector, kind="selector")
 
 
+def resolved_timeout(args: LoopCommandArgs) -> float | None:
+    """Resolve the idle timeout from CLI args and config."""
+    if args.timeout is not None:
+        return args.timeout
+    configured = configured_loop_settings(args.command_name)
+    return configured.timeout
+
+
 def use_selector_mode(args: LoopCommandArgs) -> bool:
     """Return True when selector-based mode should be used.
 
@@ -279,6 +287,7 @@ def run_command(
     env: dict[str, str],
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    idle_timeout: float | None = None,
 ) -> str:
     ordered_output: list[str] = []
 
@@ -298,6 +307,7 @@ def run_command(
         stdout_callback=handle_stdout,
         stderr_callback=handle_stderr,
         isolate_process_group=True,
+        idle_timeout=idle_timeout,
     )
     if ordered_output:
         return "".join(ordered_output)

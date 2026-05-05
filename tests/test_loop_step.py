@@ -47,6 +47,7 @@ def _make_loop_args(
     selector_prompt: str | None = None,
     selector_prompt_file: str | None = None,
     command_name: str | None = None,
+    timeout: float | None = None,
 ) -> LoopArgs:
     return LoopArgs(
         command_name=command_name,
@@ -61,6 +62,7 @@ def _make_loop_args(
         prompt_file=prompt_file,
         selector_prompt=selector_prompt,
         selector_prompt_file=selector_prompt_file,
+        timeout=timeout,
     )
 
 
@@ -76,6 +78,7 @@ def _make_loop_next_args(
     selector_prompt: str | None = None,
     selector_prompt_file: str | None = None,
     command_name: str | None = None,
+    timeout: float | None = None,
 ) -> LoopNextArgs:
     return LoopNextArgs(
         command_name=command_name,
@@ -88,6 +91,7 @@ def _make_loop_next_args(
         prompt_file=prompt_file,
         selector_prompt=selector_prompt,
         selector_prompt_file=selector_prompt_file,
+        timeout=timeout,
     )
 
 
@@ -121,6 +125,7 @@ def _make_runtime(
         resolved_prompt=resolved_prompt,
         bootstrap_prompt=bootstrap_prompt,
         log_file=log_file,
+        idle_timeout=None,
     )
 
 
@@ -380,7 +385,13 @@ class TestPrepareRuntime:
 
         run_calls: list[list[str]] = []
 
-        def fake_run_command(command: list[str], target: Path, *, env: dict[str, str]) -> str:
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> str:
             run_calls.append(command)
             return ""
 
@@ -518,6 +529,7 @@ class TestExecuteSingleStep:
             env: dict[str, str],
             stdout_callback: object = None,
             stderr_callback: object = None,
+            idle_timeout: float | None = None,
         ) -> str:
             captured_callbacks["stdout_callback"] = stdout_callback
             captured_callbacks["stderr_callback"] = stderr_callback
@@ -541,6 +553,7 @@ class TestExecuteSingleStep:
             env: dict[str, str],
             stdout_callback: object = None,
             stderr_callback: object = None,
+            idle_timeout: float | None = None,
         ) -> str:
             if callable(stdout_callback):
                 stdout_callback("stdout chunk\n")
@@ -622,6 +635,7 @@ class TestExecuteSingleStep:
             env: dict[str, str],
             stdout_callback: object = None,
             stderr_callback: object = None,
+            idle_timeout: float | None = None,
         ) -> str:
             nonlocal call_count
             call_count += 1
@@ -890,7 +904,11 @@ class TestNextRun:
         run_command_called = [False]
 
         def fake_run_command(
-            command: list[str], target: Path, *, env: dict[str, str]
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            idle_timeout: float | None = None,
         ) -> str:
             run_command_called[0] = True
             return ""
@@ -925,7 +943,7 @@ class TestNextRun:
         monkeypatch.setattr("agm.commands.loop.next.cleanup_temp_files", lambda files: None)
         monkeypatch.setattr(
             "agm.commands.loop.next.run_command",
-            lambda command, target, *, env: "task-1.md",
+            lambda command, target, *, env, idle_timeout=None: "task-1.md",
         )
 
         args = _make_loop_next_args()
@@ -954,7 +972,9 @@ class TestNextRun:
         monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
         monkeypatch.setattr(
             "agm.commands.loop.next.run_command",
-            lambda command, target, *, env: (_ for _ in ()).throw(KeyboardInterrupt),
+            lambda command, target, *, env, idle_timeout=None: (
+                _ for _ in ()
+            ).throw(KeyboardInterrupt),
         )
 
         args = _make_loop_next_args()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,6 +105,7 @@ class LoopConfig:
     prompt_file: str | None
     selector_prompt: str | None
     selector_prompt_file: str | None
+    timeout: float | None
 
 
 def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
@@ -146,6 +148,31 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
     )
 
 
+def parse_timeout(value: str) -> float:
+    """Parse a human-readable timeout string into seconds.
+
+    Supports plain numbers (treated as seconds) and durations with
+    suffixes: ``s`` (seconds), ``m`` (minutes), ``h`` (hours).
+
+    Examples::
+
+        parse_timeout("30")    -> 30.0
+        parse_timeout("30s")   -> 30.0
+        parse_timeout("10m")   -> 600.0
+        parse_timeout("2h")    -> 7200.0
+    """
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(s|m|h)?", value.strip())
+    if match is None:
+        raise ValueError(f"invalid timeout format: {value!r}")
+    amount = float(match.group(1))
+    unit: str = match.group(2) or ""
+    if unit == "m":
+        return amount * 60
+    if unit == "h":
+        return amount * 3600
+    return amount
+
+
 def load_loop_config(
     *, home: Path, proj_dir: Path | None, cwd: Path, command_name: str | None = None
 ) -> LoopConfig:
@@ -179,6 +206,12 @@ def load_loop_config(
         if isinstance(selector_prompt_file, str) and selector_prompt_file.strip()
         else None
     )
+    timeout_raw = selected_loop_table.get("timeout")
+    resolved_timeout: float | None = None
+    if isinstance(timeout_raw, (int, float)) and timeout_raw > 0:
+        resolved_timeout = float(timeout_raw)
+    elif isinstance(timeout_raw, str) and timeout_raw.strip():
+        resolved_timeout = parse_timeout(timeout_raw)
     return LoopConfig(
         runner=resolved_runner,
         selector=resolved_selector,
@@ -188,4 +221,5 @@ def load_loop_config(
         prompt_file=resolved_prompt_file,
         selector_prompt=resolved_selector_prompt,
         selector_prompt_file=resolved_selector_prompt_file,
+        timeout=resolved_timeout,
     )

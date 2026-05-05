@@ -162,6 +162,7 @@ def test_prepare_select_invocation_prefers_selector_when_configured(
         prompt_file=None,
         selector_prompt=None,
         selector_prompt_file=None,
+        timeout=None,
     )
     env = {"TASKS_DIR": str(tmp_path / "custom" / "tasks")}
 
@@ -199,6 +200,7 @@ def test_prepare_select_invocation_falls_back_to_runner_without_selector(
         prompt_file=None,
         selector_prompt=None,
         selector_prompt_file=None,
+        timeout=None,
     )
 
     invocation = prepare_select_invocation(args, temp_files=[], env={})
@@ -229,6 +231,7 @@ def test_use_selector_mode_is_default_when_no_flags_or_config(
         prompt_file=None,
         selector_prompt=None,
         selector_prompt_file=None,
+        timeout=None,
     )
     assert use_selector_mode(args) is True
 
@@ -253,6 +256,7 @@ def test_use_selector_mode_is_disabled_by_cli_no_selector(
         prompt_file=None,
         selector_prompt=None,
         selector_prompt_file=None,
+        timeout=None,
     )
     assert use_selector_mode(args) is False
 
@@ -279,6 +283,7 @@ def test_use_selector_mode_is_disabled_by_config_no_selector(
         prompt_file=None,
         selector_prompt=None,
         selector_prompt_file=None,
+        timeout=None,
     )
     assert use_selector_mode(args) is False
 
@@ -302,6 +307,7 @@ def test_use_selector_mode_cli_no_selector_overrides_config(
         prompt_file=None,
         selector_prompt=None,
         selector_prompt_file=None,
+        timeout=None,
     )
     assert use_selector_mode(args) is False
 
@@ -327,7 +333,8 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         assert resolve_prompt_source(args) is None
 
     def test_returns_prompt_text_from_cli(
@@ -350,7 +357,8 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_prompt_source(args)
         assert result == "do the thing"
 
@@ -374,7 +382,8 @@ class TestResolvePromptSource:
             prompt_file="/path/to/prompt.md",
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_prompt_source(args)
         assert result == Path("/path/to/prompt.md")
 
@@ -398,7 +407,8 @@ class TestResolvePromptSource:
             prompt_file="/path/to/prompt.md",
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_prompt_source(args)
         assert result == "inline text"
 
@@ -424,7 +434,8 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_prompt_source(args)
         assert result == "config prompt"
 
@@ -452,7 +463,8 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_prompt_source(args)
         assert result == tmp_path / "my-prompt.md"
 
@@ -478,7 +490,8 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_prompt_source(args)
         assert result == "cli text"
 
@@ -585,7 +598,8 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         assert resolve_selector_prompt_source(args) is None
 
     def test_returns_selector_prompt_text_from_cli(
@@ -608,7 +622,8 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt="custom selector prompt",
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_selector_prompt_source(args)
         assert result == "custom selector prompt"
 
@@ -632,6 +647,7 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file="/path/to/selector-prompt.md",
+            timeout=None,
         )
         result = resolve_selector_prompt_source(args)
         assert result == Path("/path/to/selector-prompt.md")
@@ -656,6 +672,7 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt="inline text",
             selector_prompt_file="/path/to/selector-prompt.md",
+            timeout=None,
         )
         result = resolve_selector_prompt_source(args)
         assert result == "inline text"
@@ -684,7 +701,8 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_selector_prompt_source(args)
         assert result == "config selector prompt"
 
@@ -712,7 +730,8 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_selector_prompt_source(args)
         assert result == tmp_path / "my-selector-prompt.md"
 
@@ -740,7 +759,8 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt="cli selector text",
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_selector_prompt_source(args)
         assert result == "cli selector text"
 
@@ -768,7 +788,8 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         result = resolve_selector_prompt_source(args)
         assert result == Path("/absolute/selector-prompt.md")
 
@@ -798,7 +819,8 @@ class TestPrepareProgressInvocationSelectorPrompt:
             prompt_file=None,
             selector_prompt="custom selector $TASKS_DIR",
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         env = {"TASKS_DIR": "/tmp/tasks"}
 
         invocation = prepare_select_invocation(args, temp_files=[], env=env)
@@ -835,6 +857,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=str(custom_prompt),
+            timeout=None,
         )
         env = {"TASKS_DIR": "/my/tasks"}
 
@@ -869,7 +892,8 @@ class TestPrepareProgressInvocationSelectorPrompt:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        )
+        timeout=None,
+    )
         env = {"TASKS_DIR": "/default/tasks"}
 
         invocation = prepare_select_invocation(args, temp_files=[], env=env)

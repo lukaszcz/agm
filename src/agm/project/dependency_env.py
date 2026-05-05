@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import agm.vcs.git as git_helpers
-from agm.core.fs import exists, is_dir, iterdir, mkdir, read_text, rglob, write_text
+from agm.core.fs import exists, is_dir, is_file, iterdir, mkdir, read_text, rglob, write_text
 from agm.project.layout import (
     current_checkout,
     default_worktrees_dir,
@@ -300,16 +300,45 @@ def update_all_project_dependency_configs(
         update_dependency_configs_for_branch(project_dir=project_dir, branch=branch)
 
 
+def _seed_from_parent_config(
+    *,
+    project_dir: Path,
+    parent_branch: str,
+    branch: str,
+) -> None:
+    """Seed the new branch config directory from the parent branch config."""
+
+    config_dir = project_config_dir(project_dir)
+    parent_config = config_dir / parent_branch
+    new_config = config_dir / branch
+
+    if not is_dir(parent_config):
+        return
+    if is_dir(new_config) and any(iterdir(new_config)):
+        return
+
+    mkdir(new_config, parents=True, exist_ok=True)
+    for item in iterdir(parent_config):
+        if is_file(item):
+            write_text(new_config / item.name, read_text(item), encoding="utf-8")
+
+
 def ensure_dependency_configs_for_branch(
     *,
     project_dir: Path,
     branch: str,
+    parent_branch: str | None = None,
 ) -> None:
     """Create missing branch config TOML values for project dependencies."""
 
     deps_dir = project_deps_dir(project_dir)
     if not is_dir(deps_dir):
         return
+
+    if parent_branch is not None:
+        _seed_from_parent_config(
+            project_dir=project_dir, parent_branch=parent_branch, branch=branch
+        )
 
     config_file = config_toml_file(project_dir, branch)
     existing_deps: TomlDict = {}

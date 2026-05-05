@@ -14,6 +14,7 @@ from agm.project.dependency_env import (
     _is_table_header,
     _line_sets_toml_key,
     _load_toml_file,
+    _seed_from_parent_config,
     _set_toml_deps_value,
     _toml_dict,
     _toml_key,
@@ -1008,6 +1009,234 @@ class TestEnsureDependencyConfigsForBranch:
         content = config_file.read_text(encoding="utf-8")
         assert 'liba = "custom-branch"' in content
         assert "libb" in content
+
+    def test_copies_config_from_parent_branch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        for dep_name in ["mylib"]:
+            dep_dir = deps_dir / dep_name
+            dep_dir.mkdir()
+            main_dir = dep_dir / "main"
+            main_dir.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        # Create parent branch config with a specific dep version
+        parent_config_dir = project_dir / "config" / "parent-branch"
+        parent_config_dir.mkdir(parents=True)
+        parent_config_file = parent_config_dir / "config.toml"
+        parent_config_file.write_text(
+            '[deps]\nmylib = "dev"\n', encoding="utf-8"
+        )
+        # New branch should inherit parent's dep config, not use filesystem fallback
+        ensure_dependency_configs_for_branch(
+            project_dir=project_dir, branch="child-branch",
+            parent_branch="parent-branch",
+        )
+        config_file = project_dir / "config" / "child-branch" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert 'mylib = "dev"' in content
+
+    def test_parent_branch_copies_env_file(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        # Create parent branch config with a .env file
+        parent_config_dir = project_dir / "config" / "parent-branch"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text(
+            '[deps]\nmylib = "dev"\n', encoding="utf-8"
+        )
+        (parent_config_dir / ".env").write_text(
+            "MY_VAR=from_parent\n", encoding="utf-8"
+        )
+        ensure_dependency_configs_for_branch(
+            project_dir=project_dir, branch="child-branch",
+            parent_branch="parent-branch",
+        )
+        child_env_file = project_dir / "config" / "child-branch" / ".env"
+        assert child_env_file.exists()
+        assert "from_parent" in child_env_file.read_text(encoding="utf-8")
+
+    def test_parent_branch_does_not_overwrite_existing_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        main_dir = dep_dir / "main"
+        main_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        # Create parent branch config
+        parent_config_dir = project_dir / "config" / "parent-branch"
+        parent_config_dir.mkdir(parents=True)
+        parent_config_file = parent_config_dir / "config.toml"
+        parent_config_file.write_text(
+            '[deps]\nmylib = "dev"\n', encoding="utf-8"
+        )
+        # Pre-create child branch config with different content
+        child_config_dir = project_dir / "config" / "child-branch"
+        child_config_dir.mkdir(parents=True)
+        child_config_file = child_config_dir / "config.toml"
+        child_config_file.write_text(
+            '[deps]\nmylib = "custom"\n', encoding="utf-8"
+        )
+        ensure_dependency_configs_for_branch(
+            project_dir=project_dir, branch="child-branch",
+            parent_branch="parent-branch",
+        )
+        # Existing config should not be overwritten by parent
+        content = child_config_file.read_text(encoding="utf-8")
+        assert 'mylib = "custom"' in content
+
+    def test_no_parent_branch_behaves_as_before(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir()
+        main_dir = dep_dir / "main"
+        main_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        # Without parent_branch, falls back to main checkout
+        ensure_dependency_configs_for_branch(
+            project_dir=project_dir, branch="feat"
+        )
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert config_file.exists()
+        content = config_file.read_text(encoding="utf-8")
+        assert "main" in content
+
+
+# ---------------------------------------------------------------------------
+# _seed_from_parent_config
+# ---------------------------------------------------------------------------
+
+
+class TestSeedFromParentConfig:
+    def _workspace_project(self, tmp_path: Path) -> Path:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        return project_dir
+
+    def test_copies_config_toml_from_parent(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        # Create parent branch config
+        parent_config_dir = project_dir / "config" / "parent"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text(
+            '[deps]\nlib1 = "dev"\nlib2 = "v2"\n', encoding="utf-8"
+        )
+        _seed_from_parent_config(
+            project_dir=project_dir, parent_branch="parent", branch="child"
+        )
+        child_config_file = project_dir / "config" / "child" / "config.toml"
+        assert child_config_file.exists()
+        content = child_config_file.read_text(encoding="utf-8")
+        assert 'lib1 = "dev"' in content
+        assert 'lib2 = "v2"' in content
+
+    def test_copies_env_files_from_parent(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        parent_config_dir = project_dir / "config" / "parent"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text("", encoding="utf-8")
+        (parent_config_dir / ".env").write_text("FOO=bar\n", encoding="utf-8")
+        (parent_config_dir / ".env.local").write_text("BAZ=qux\n", encoding="utf-8")
+        _seed_from_parent_config(
+            project_dir=project_dir, parent_branch="parent", branch="child"
+        )
+        child_config_dir = project_dir / "config" / "child"
+        assert (child_config_dir / ".env").exists()
+        assert (child_config_dir / ".env.local").exists()
+        assert (child_config_dir / ".env").read_text(encoding="utf-8") == "FOO=bar\n"
+
+    def test_does_not_copy_if_parent_config_missing(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        _seed_from_parent_config(
+            project_dir=project_dir, parent_branch="nonexistent", branch="child"
+        )
+        child_config_dir = project_dir / "config" / "child"
+        assert not child_config_dir.exists()
+
+    def test_does_not_copy_if_child_config_already_populated(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        # Parent config
+        parent_config_dir = project_dir / "config" / "parent"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text(
+            '[deps]\nlib = "dev"\n', encoding="utf-8"
+        )
+        # Child config already exists with content
+        child_config_dir = project_dir / "config" / "child"
+        child_config_dir.mkdir(parents=True)
+        (child_config_dir / "config.toml").write_text(
+            '[deps]\nlib = "existing"\n', encoding="utf-8"
+        )
+        _seed_from_parent_config(
+            project_dir=project_dir, parent_branch="parent", branch="child"
+        )
+        content = (child_config_dir / "config.toml").read_text(encoding="utf-8")
+        assert 'lib = "existing"' in content
+
+    def test_copies_to_empty_child_dir(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        parent_config_dir = project_dir / "config" / "parent"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text(
+            '[deps]\nlib = "dev"\n', encoding="utf-8"
+        )
+        # Child dir exists but is empty (e.g. created by mkdir)
+        child_config_dir = project_dir / "config" / "child"
+        child_config_dir.mkdir(parents=True)
+        _seed_from_parent_config(
+            project_dir=project_dir, parent_branch="parent", branch="child"
+        )
+        assert (child_config_dir / "config.toml").exists()
+
+    def test_does_not_copy_subdirectories(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        parent_config_dir = project_dir / "config" / "parent"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text("", encoding="utf-8")
+        # A subdirectory in parent config (should not be copied)
+        (parent_config_dir / "subdir").mkdir()
+        _seed_from_parent_config(
+            project_dir=project_dir, parent_branch="parent", branch="child"
+        )
+        child_config_dir = project_dir / "config" / "child"
+        assert not (child_config_dir / "subdir").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,18 @@ def resolve_parent_checkout_dir(proj_dir: Path, parent: str | None, *, env: dict
     return branch_path(proj_dir, resolved_parent)
 
 
+def resolve_parent_config_branch(
+    proj_dir: Path, parent: str | None
+) -> str | None:
+    """Return the parent branch name for config seeding, or None for main checkout."""
+    repo_dir = project_repo_dir(proj_dir)
+    repo_branch = git_helpers.current_branch(repo_dir)
+    resolved_parent = parent or repo_branch
+    if is_main_checkout_branch(proj_dir, resolved_parent, repo_branch=repo_branch):
+        return None
+    return resolved_parent
+
+
 def has_expected_worktree(
     proj_dir: Path, branch: str, *, env: dict[str, str] | None = None
 ) -> bool:
@@ -150,7 +162,10 @@ def new_session(
     proj_dir = require_current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
-    ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
+    ensure_dependency_configs_for_branch(
+        project_dir=proj_dir, branch=branch,
+        parent_branch=resolve_parent_config_branch(proj_dir, parent),
+    )
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
@@ -183,7 +198,10 @@ def checkout_session(
     proj_dir = require_current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
-    ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
+    ensure_dependency_configs_for_branch(
+        project_dir=proj_dir, branch=branch,
+        parent_branch=resolve_parent_config_branch(proj_dir, parent),
+    )
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(

@@ -763,6 +763,28 @@ class TestResolveSettingsPath:
         assert result == settings_file
         assert temp_files == []
 
+    def test_relative_settings_file_resolves_against_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        cwd = tmp_path / "work"
+        cwd.mkdir(parents=True)
+        (cwd / "sandbox").mkdir()
+        (cwd / "sandbox" / "custom.json").write_text("{}", encoding="utf-8")
+        monkeypatch.chdir(cwd)
+        temp_files: list[Path] = []
+        result = _resolve_settings_path(
+            cwd=cwd,
+            home=home,
+            proj_dir=None,
+            command_name="echo",
+            alias_command_name=None,
+            settings_file="sandbox/custom.json",
+            temp_files=temp_files,
+        )
+        assert result == cwd / "sandbox" / "custom.json"
+        assert temp_files == []
+
     def test_explicit_settings_file_not_found_exits(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         cwd = tmp_path / "work"

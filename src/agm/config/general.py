@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from dataclasses import dataclass
@@ -12,6 +13,15 @@ from agm.core.env import agm_installation_prefix
 from agm.project.layout import project_config_dir
 
 TomlDict = dict[str, object]
+
+# Known path-like fields per config section.  Values for these fields are
+# expanded (env vars, ~) and resolved against the config file's directory
+# before merging, so that relative paths are always interpreted relative to
+# the config file that defines them.  When the config-dir-resolved path does
+# not exist, cwd is used as a fallback.
+_CONFIG_PATH_FIELDS: dict[str, list[str]] = {
+    "loop": ["tasks_dir", "prompt_file", "selector_prompt_file"],
+}
 
 
 def _toml_dict(value: object) -> TomlDict:
@@ -108,11 +118,50 @@ class LoopConfig:
     timeout: float | None
 
 
+def _resolve_section_paths(
+    section: TomlDict, fields: list[str], config_dir: Path, cwd: Path
+) -> TomlDict:
+    resolved = dict(section)
+    for field in fields:
+        value = resolved.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        expanded = os.path.expanduser(os.path.expandvars(value))
+        path = Path(expanded)
+        if path.is_absolute():
+            resolved[field] = expanded
+            continue
+        config_resolved = (config_dir / path).resolve()
+        if config_resolved.exists():
+            resolved[field] = str(config_resolved)
+        else:
+            resolved[field] = str((cwd / path).resolve())
+    for key, value in resolved.items():
+        if isinstance(value, dict) and key not in fields:
+            resolved[key] = _resolve_section_paths(
+                _toml_dict(value), fields, config_dir, cwd
+            )
+    return resolved
+
+
+def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) -> TomlDict:
+    resolved = dict(config)
+    for section_name, fields in _CONFIG_PATH_FIELDS.items():
+        section = resolved.get(section_name)
+        if isinstance(section, dict):
+            resolved[section_name] = _resolve_section_paths(
+                _toml_dict(section), fields, config_dir, cwd
+            )
+    return resolved
+
+
 def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlDict:
     merged: TomlDict = {}
     for path in config_file_candidates(home=home, proj_dir=proj_dir, cwd=cwd):
         if path.is_file():
-            merged = _merge_config(merged, _load_config_file(path))
+            raw = _load_config_file(path)
+            resolved = _resolve_config_file_paths(raw, config_dir=path.parent, cwd=cwd)
+            merged = _merge_config(merged, resolved)
     return merged
 
 

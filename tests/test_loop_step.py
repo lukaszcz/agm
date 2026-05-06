@@ -156,6 +156,16 @@ class TestLogFile:
         assert result.name.startswith("loop-")
         assert result.suffix == ".log"
 
+    def test_relative_log_file_resolves_against_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        args = _make_loop_args(no_log=False, log_file="logs/run.log")
+        result = _log_file(args)
+        assert result == work / "logs" / "run.log"
+
     def test_no_log_overrides_explicit_log_file(self, tmp_path: Path) -> None:
         args = _make_loop_args(no_log=True, log_file=str(tmp_path / "ignored.log"))
         assert _log_file(args) is None

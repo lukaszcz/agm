@@ -65,6 +65,8 @@ def _resolve_settings_path(
 ) -> Path:
     if settings_file is not None:
         selected_settings = Path(settings_file)
+        if not selected_settings.is_absolute():
+            selected_settings = Path.cwd() / selected_settings
         if not is_file(selected_settings):
             print(f"Error: settings file not found: {settings_file}", file=sys.stderr)
             raise SystemExit(1)

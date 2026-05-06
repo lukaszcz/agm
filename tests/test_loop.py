@@ -387,6 +387,33 @@ class TestResolvePromptSource:
         result = resolve_prompt_source(args)
         assert result == Path("/path/to/prompt.md")
 
+    def test_cli_prompt_file_relative_path_resolves_against_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file="prompts/prompt.md",
+            selector_prompt=None,
+            selector_prompt_file=None,
+        timeout=None,
+    )
+        result = resolve_prompt_source(args)
+        assert result == work / "prompts" / "prompt.md"
+
     def test_cli_prompt_overrides_prompt_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -651,6 +678,33 @@ class TestResolveSelectorPromptSource:
         )
         result = resolve_selector_prompt_source(args)
         assert result == Path("/path/to/selector-prompt.md")
+
+    def test_cli_selector_prompt_file_relative_path_resolves_against_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+
+        args = LoopArgs(
+            command_name=None,
+            runner=None,
+            runner_args=[],
+            selector=None,
+            no_selector=False,
+            tasks_dir=None,
+            no_log=False,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file="prompts/selector.md",
+        timeout=None,
+    )
+        result = resolve_selector_prompt_source(args)
+        assert result == work / "prompts" / "selector.md"
 
     def test_cli_selector_prompt_overrides_selector_prompt_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

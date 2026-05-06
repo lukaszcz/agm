@@ -63,7 +63,10 @@ def _log_file(args: LoopArgs) -> Path | None:
     if args.no_log:
         return None
     if args.log_file is not None:
-        return Path(args.log_file)
+        resolved = Path(args.log_file)
+        if not resolved.is_absolute():
+            resolved = Path.cwd() / resolved
+        return resolved
     return Path.cwd() / f"loop-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
 

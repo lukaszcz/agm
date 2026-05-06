@@ -169,14 +169,14 @@ def resolve_prompt_source(args: LoopCommandArgs) -> str | Path | None:
     if args.prompt is not None:
         return args.prompt
     if args.prompt_file is not None:
-        return Path(args.prompt_file)
-    if configured.prompt is not None:
-        return configured.prompt
-    if configured.prompt_file is not None:
-        resolved = Path(configured.prompt_file)
+        resolved = Path(args.prompt_file)
         if not resolved.is_absolute():
             resolved = Path.cwd() / resolved
         return resolved
+    if configured.prompt is not None:
+        return configured.prompt
+    if configured.prompt_file is not None:
+        return Path(configured.prompt_file)
     return None
 
 
@@ -190,14 +190,14 @@ def resolve_selector_prompt_source(args: LoopCommandArgs) -> str | Path | None:
     if args.selector_prompt is not None:
         return args.selector_prompt
     if args.selector_prompt_file is not None:
-        return Path(args.selector_prompt_file)
-    if configured.selector_prompt is not None:
-        return configured.selector_prompt
-    if configured.selector_prompt_file is not None:
-        resolved = Path(configured.selector_prompt_file)
+        resolved = Path(args.selector_prompt_file)
         if not resolved.is_absolute():
             resolved = Path.cwd() / resolved
         return resolved
+    if configured.selector_prompt is not None:
+        return configured.selector_prompt
+    if configured.selector_prompt_file is not None:
+        return Path(configured.selector_prompt_file)
     return None
 
 

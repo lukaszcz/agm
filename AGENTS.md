@@ -23,9 +23,7 @@ Production code lives in `src/agm/`, organized by area:
 
 CLI arguments/options are defined in `src/agm/cli.py`, parser construction lives in `src/agm/parser.py`, and custom argument-value completions for CLI parameters live in `src/agm/completion.py`.
 
-Tests live in `tests/`. Use `test_cli_parsing.py` for parser coverage, `test_cli_completion.py` for completion behavior, `test_command_layout.py` for command-tree structure, focused `test_*_utils.py` files for utilities, and `test_e2e.py` for full CLI workflows.
-
-Project notes and command docs are in `docs/`.
+Tests live in `tests/`. Project notes and command docs are in `docs/`.
 
 Additional directories:
 - `config/` for config templates,
@@ -60,6 +58,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - **IMPORTANT**: For every bug found, add a regression test that fails because of the bug, then fix the bug and ensure the test passes.
 - Avoid brittle tests. Test user workflows, not implementation details.
 - Test only main app Python code under `src/agm/`, not build/install scripts, `justfile` commands or config file content. Do not test exact help messages.
+- Maintain 100% test coverage of `src/`.
 
 ## Commit Guidelines
 

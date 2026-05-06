@@ -10,3 +10,4 @@ build/
 .claude/
 .codex
 .agm
+.coverage

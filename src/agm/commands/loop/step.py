@@ -322,11 +322,15 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
 
     if runtime.resolved_prompt is not None:
         runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
-        runner_target = (
-            runtime.loop_prompt.effective_file
-            if runtime.loop_prompt is not None
-            else runtime.resolved_prompt.effective_file
+        # Re-prepare the prompt from the original source so that env vars
+        # like ${TASK_FILE} (which are only available after task selection) are
+        # expanded correctly.
+        re_resolved = prepare_prompt_from_source(
+            runtime.resolved_prompt.source,
+            temp_files=runtime.temp_files,
+            env=runner_env,
         )
+        runner_target = re_resolved.effective_file
     else:
         runner_env = runtime.env
         runner_target = next_task

@@ -2320,10 +2320,165 @@ class TestExecuteSingleStepWithResolvedPrompt:
         )
         result = execute_single_step(runtime, step_number=1)
         assert result is False
-        # Runner uses loop_prompt as target since resolved_prompt is set
-        assert run_targets[-1] == loop_file
+        # Prompt is re-prepared from original source with TASK_FILE in env,
+        # so the target is a new temp file (not the original loop_file)
+        assert run_targets[-1] != loop_file
         # TASK_FILE env var should be set for the runner
         assert "TASK_FILE" in run_envs[-1]
+
+
+class TestExecuteSingleStepExpandsTaskFileInPrompt:
+    def test_task_file_expanded_in_prompt_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When a prompt file contains ${TASK_FILE}, it is expanded after task selection."""
+        from agm.commands.loop.step import LoopStepRuntime, execute_single_step
+        from agm.commands.loop.step import PreparedPrompt as StepPrepPrompt
+
+        select_prompt = tmp_path / "select.md"
+        select_prompt.write_text("select\n", encoding="utf-8")
+        invocation = PreparedSelectInvocation(
+            source_prompt_file=select_prompt,
+            effective_prompt_file=select_prompt,
+            command=["fake-selector"],
+            command_kind="selector",
+            runner_command=["fake-runner"],
+            selector_command=["fake-selector"],
+        )
+
+        # Prompt file with ${TASK_FILE} placeholder
+        prompt_file_path = tmp_path / "loop.md"
+        prompt_file_path.write_text(
+            "Work on ${TASK_FILE}\n", encoding="utf-8"
+        )
+
+        # Simulate how prepare_runtime builds resolved_prompt + loop_prompt
+        resolved_prompt = ResolvedPrompt(
+            source=prompt_file_path, effective_file=prompt_file_path
+        )
+        loop_prompt = StepPrepPrompt(
+            label="loop", source_file=prompt_file_path, effective_file=prompt_file_path
+        )
+
+        tasks_dir_path = tmp_path / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        runtime = LoopStepRuntime(
+            temp_files=[],
+            resolved_tasks_dir=tasks_dir_path,
+            resolved_progress_file=tasks_dir_path / "PROGRESS.md",
+            env={},
+            resolved_runner_command=["fake-runner"],
+            select_invocation=invocation,
+            loop_prompt=loop_prompt,
+            resolved_prompt=resolved_prompt,
+            bootstrap_prompt=None,
+            log_file=None,
+            idle_timeout=None,
+        )
+
+        task_file = tmp_path / "tasks" / "task-1.md"
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text("do task\n", encoding="utf-8")
+
+        run_targets: list[Path] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            run_targets.append(target)
+            return "output"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr(
+            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
+        )
+        result = execute_single_step(runtime, step_number=1)
+        assert result is False
+        # The runner target should be a new file with TASK_FILE expanded,
+        # not the original prompt file that still has ${TASK_FILE}
+        runner_target = run_targets[-1]
+        content = runner_target.read_text(encoding="utf-8")
+        assert "${TASK_FILE}" not in content
+        assert str(task_file) in content
+
+    def test_task_file_expanded_in_inline_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When inline prompt text contains ${TASK_FILE}, it is expanded after task selection."""
+        from agm.commands.loop.step import LoopStepRuntime, execute_single_step
+        from agm.commands.loop.step import PreparedPrompt as StepPrepPrompt
+
+        select_prompt = tmp_path / "select.md"
+        select_prompt.write_text("select\n", encoding="utf-8")
+        invocation = PreparedSelectInvocation(
+            source_prompt_file=select_prompt,
+            effective_prompt_file=select_prompt,
+            command=["fake-selector"],
+            command_kind="selector",
+            runner_command=["fake-runner"],
+            selector_command=["fake-selector"],
+        )
+
+        # Inline prompt text with ${TASK_FILE} placeholder
+        inline_text = "Work on ${TASK_FILE}\n"
+        from agm.commands.loop.common import loop_env
+        env_no_task = loop_env(tmp_path / "tasks")
+        resolved_prompt = ResolvedPrompt(source=inline_text, effective_file=tmp_path / "stub")
+        loop_prompt = StepPrepPrompt(
+            label="loop", source_file=tmp_path / "stub", effective_file=tmp_path / "stub"
+        )
+
+        tasks_dir_path = tmp_path / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        runtime = LoopStepRuntime(
+            temp_files=[],
+            resolved_tasks_dir=tasks_dir_path,
+            resolved_progress_file=tasks_dir_path / "PROGRESS.md",
+            env=env_no_task,
+            resolved_runner_command=["fake-runner"],
+            select_invocation=invocation,
+            loop_prompt=loop_prompt,
+            resolved_prompt=resolved_prompt,
+            bootstrap_prompt=None,
+            log_file=None,
+            idle_timeout=None,
+        )
+
+        task_file = tmp_path / "tasks" / "task-1.md"
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text("do task\n", encoding="utf-8")
+
+        run_targets: list[Path] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            run_targets.append(target)
+            return "output"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr(
+            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
+        )
+        result = execute_single_step(runtime, step_number=1)
+        assert result is False
+        # The runner target content should have TASK_FILE expanded
+        runner_target = run_targets[-1]
+        content = runner_target.read_text(encoding="utf-8")
+        assert "${TASK_FILE}" not in content
+        assert str(task_file) in content
 
 
 # ---------------------------------------------------------------------------

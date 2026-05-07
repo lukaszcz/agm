@@ -324,6 +324,15 @@ def _wait_for_path(path: Path, *, timeout: float = 2.0) -> None:
 
 
 def _assert_pid_gone(pid: int) -> None:
+    # Process killing is asynchronous: even after the parent has exited and
+    # called _kill_process_group, the kernel may need a moment to reap the
+    # child.  Retry briefly before declaring failure.
+    for _ in range(100):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.01)
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
 
@@ -5166,8 +5175,7 @@ class TestLoop:
             assert process.returncode == 130
             assert "Interrupted" in stdout
             assert stderr == ""
-            with pytest.raises(ProcessLookupError):
-                os.kill(child_pid, 0)
+            _assert_pid_gone(child_pid)
         finally:
             if process.poll() is None:
                 process.kill()

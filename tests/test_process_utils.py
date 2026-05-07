@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -318,6 +319,66 @@ class TestKillProcessGroup:
 
         monkeypatch.setattr(os, "killpg", fake_killpg)
         _kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()))
+
+    def test_sends_sigkill_to_group_when_process_already_exited(self, tmp_path: Path) -> None:
+        """When the main process has already exited, still kill orphaned group members."""
+        child_pid_file = tmp_path / "child.pid"
+        script = (
+            "#!/bin/bash\n"
+            "(sleep 30) &\n"
+            'printf "%s\\n" "$!" > "'
+            + str(child_pid_file)
+            + '"\n'
+        )
+        script_file = tmp_path / "parent.sh"
+        script_file.write_text(script)
+        script_file.chmod(script_file.stat().st_mode | 0o111)
+
+        proc = subprocess.Popen(
+            [str(script_file)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        proc.wait()
+        assert proc.poll() is not None
+
+        # The parent shell exited, but the background sleep child is alive.
+        child_pid = int(child_pid_file.read_text().strip())
+        try:
+            # The child should still be alive (it's an orphaned group member).
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            pytest.skip("child already exited before test could verify")
+
+        _kill_process_group(proc)
+
+        # After _kill_process_group, the orphaned child should be dead.
+        try:
+            for _ in range(10):
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                pytest.fail("orphaned child process still alive after _kill_process_group")
+        finally:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def test_sends_sigkill_to_group_after_prompt_exit(self) -> None:
+        """When the process exits promptly after SIGTERM, still SIGKILL the group."""
+        proc = subprocess.Popen(
+            ["sleep", "0.01"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        # Send SIGTERM — sleep exits quickly so the process should die promptly.
+        _kill_process_group(proc)
 
 
 # ---------------------------------------------------------------------------

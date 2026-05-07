@@ -52,12 +52,20 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
 
 
 def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
+        return
+
+    if process.poll() is not None:
+        # The main process already exited, but other members of its process
+        # group may still be alive.  Give them a brief moment to tear down
+        # after the SIGTERM we just sent, then SIGKILL any stragglers.
+        _wait_for_process_group_exit(process.pid, grace=0.2)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         return
 
     try:
@@ -66,8 +74,28 @@ def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
-            return
+            pass
         process.wait()
+        return
+
+    # The main process exited promptly.  Give remaining group members a
+    # brief moment to exit as well, then SIGKILL any stragglers.
+    _wait_for_process_group_exit(process.pid, grace=0.2)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _wait_for_process_group_exit(pgid: int, *, grace: float) -> None:
+    """Poll until the process group no longer exists or *grace* seconds elapse."""
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return  # group is gone — nothing left to clean up
+        time.sleep(0.01)
 
 
 def _run_cleanup_command(

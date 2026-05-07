@@ -582,6 +582,31 @@ class TestPreparePromptFromSource:
         assert resolved.effective_file == prompt_path
         assert resolved.effective_file not in temp_files
 
+    def test_inline_text_expands_tasks_dir_from_loop_env(self, tmp_path: Path) -> None:
+        temp_files: list[Path] = []
+        env = loop_env(Path("/tmp/tasks"))
+
+        resolved = prepare_prompt_from_source(
+            "look in $TASKS_DIR for tasks", temp_files=temp_files, env=env
+        )
+
+        assert isinstance(resolved.source, str)
+        assert resolved.effective_file.read_text(encoding="utf-8") == "look in /tmp/tasks for tasks"
+        resolved.effective_file.unlink()
+
+    def test_file_path_expands_tasks_dir_from_loop_env(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "custom-prompt.md"
+        prompt_path.write_text("dir=$TASKS_DIR", encoding="utf-8")
+
+        temp_files: list[Path] = []
+        env = loop_env(Path("/tmp/tasks"))
+
+        resolved = prepare_prompt_from_source(
+            prompt_path, temp_files=temp_files, env=env
+        )
+
+        assert resolved.effective_file.read_text(encoding="utf-8") == "dir=/tmp/tasks"
+
     def test_missing_file_exits_with_error(self, tmp_path: Path) -> None:
         missing = tmp_path / "does-not-exist.md"
         temp_files: list[Path] = []

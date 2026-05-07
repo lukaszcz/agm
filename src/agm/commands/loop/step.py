@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -117,14 +116,14 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     resolved_tasks_dir = tasks_dir(args)
     resolved_progress_file = progress_file(args)
 
+    env = loop_env(resolved_tasks_dir)
+
     prompt_source = resolve_prompt_source(args)
     resolved_prompt: ResolvedPrompt | None = None
     if prompt_source is not None:
         resolved_prompt = prepare_prompt_from_source(
-            prompt_source, temp_files=temp_files, env=dict(os.environ)
+            prompt_source, temp_files=temp_files, env=env
         )
-
-    env = loop_env(resolved_tasks_dir)
     resolved_runner_command = runner_command(args)
     validate_command(resolved_runner_command, kind="runner")
     select_invocation: PreparedSelectInvocation | None = None

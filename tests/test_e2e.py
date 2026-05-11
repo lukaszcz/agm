@@ -3871,6 +3871,7 @@ class TestLoop:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_dir.joinpath("select.md").write_text("select task\n")
+        prompt_dir.joinpath("implement.md").write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -4403,6 +4404,9 @@ class TestLoop:
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
                 'echo "$*" >> "$log_file"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
                 'printf "implemented task\\n"\n'
             ),
         )
@@ -4412,6 +4416,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -4434,9 +4440,9 @@ class TestLoop:
             f"@{selector_prompt}",
             f"@{selector_prompt}",
         ]
-        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
-            f"@{tasks_dir / 'task-1.md'}"
-        ]
+        # Runner receives preprocessed implement.md with TASK_FILE expanded
+        runner_log = Path(env["FAKE_RUNNER_LOG"]).read_text()
+        assert f"@{tasks_dir / 'task-1.md'}" in runner_log
         log_file = next(work.glob("loop-*.log"))
         log_text = log_file.read_text()
         assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
@@ -4528,7 +4534,12 @@ class TestLoop:
             env,
             command_name="runner",
             script=(
-                f'log_file="{runner_log}"\necho "$*" >> "$log_file"\nprintf "implemented task\\n"\n'
+                f'log_file="{runner_log}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
+                'echo "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
+                'printf "implemented task\\n"\n'
             ),
         )
 
@@ -4537,6 +4548,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -4557,7 +4570,8 @@ class TestLoop:
             f"@{selector_prompt}",
             f"@{selector_prompt}",
         ]
-        assert runner_log.read_text().splitlines() == [f"@{tasks_dir / 'task-1.md'}"]
+        runner_log_text = runner_log.read_text()
+        assert str(tasks_dir / "task-1.md") in runner_log_text
 
     def test_loop_exposes_resolved_tasks_dir_to_selector_and_runner(
         self, tmp_path: Path, env: dict[str, str]
@@ -4596,7 +4610,10 @@ class TestLoop:
             command_name="runner",
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
                 'printf "%s|%s\\n" "$TASKS_DIR" "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
                 'printf "implemented task\\n"\n'
             ),
         )
@@ -4614,6 +4631,8 @@ class TestLoop:
 
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text(f"update $TASKS_DIR\nliteral {tasks_dir}\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         result = run_agm(
             [
@@ -4637,9 +4656,9 @@ class TestLoop:
         assert selector_log_lines[1:3] == [f"update {tasks_dir}", f"literal {tasks_dir}"]
         assert selector_log_lines[3].startswith(f"{tasks_dir}|@")
         assert selector_log_lines[4:6] == [f"update {tasks_dir}", f"literal {tasks_dir}"]
-        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
-            f"{tasks_dir}|@{tasks_dir / 'task-1.md'}"
-        ]
+        runner_log_text = Path(env["FAKE_RUNNER_LOG"]).read_text()
+        assert runner_log_text.startswith(f"{tasks_dir}|@")
+        assert str(tasks_dir / "task-1.md") in runner_log_text
 
     def test_loop_replaces_prompt_file_placeholder_in_selector(
         self, tmp_path: Path, env: dict[str, str]
@@ -4675,7 +4694,10 @@ class TestLoop:
             command_name="runner",
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
                 'echo "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
                 'printf "implemented task\\n"\n'
             ),
         )
@@ -4685,6 +4707,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -4703,9 +4727,8 @@ class TestLoop:
             str(selector_prompt),
             str(selector_prompt),
         ]
-        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
-            f"@{tasks_dir / 'task-1.md'}"
-        ]
+        runner_log_text = Path(env["FAKE_RUNNER_LOG"]).read_text()
+        assert str(tasks_dir / "task-1.md") in runner_log_text
 
     def test_selector_prefers_relative_path_from_current_directory_before_tasks_dir(
         self, tmp_path: Path, env: dict[str, str]
@@ -4739,7 +4762,10 @@ class TestLoop:
             command_name="runner",
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
                 'echo "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
                 'printf "implemented task\\n"\n'
             ),
         )
@@ -4749,6 +4775,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -4770,7 +4798,8 @@ class TestLoop:
 
         assert result.returncode == 0
         assert f"Selected task: {cwd_task}" in result.stdout
-        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [f"@{cwd_task}"]
+        runner_log_text = Path(env["FAKE_RUNNER_LOG"]).read_text()
+        assert str(cwd_task) in runner_log_text
 
     def test_retries_selector_until_it_returns_complete_or_existing_task(
         self, tmp_path: Path, env: dict[str, str]
@@ -4808,7 +4837,10 @@ class TestLoop:
             command_name="runner",
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
                 'echo "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
                 'printf "implemented task\\n"\n'
             ),
         )
@@ -4818,6 +4850,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -4841,9 +4875,8 @@ class TestLoop:
             f"@{selector_prompt}",
             f"@{selector_prompt}",
         ]
-        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
-            f"@{tasks_dir / 'task-1.md'}"
-        ]
+        runner_log_text = Path(env["FAKE_RUNNER_LOG"]).read_text()
+        assert str(tasks_dir / "task-1.md") in runner_log_text
 
     def test_uses_configured_loop_tasks_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         _install_fake_claude(tmp_path / "bin", env)
@@ -4908,6 +4941,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("pick $TASK_LABEL\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -5228,6 +5263,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -5497,7 +5534,10 @@ class TestLoop:
                 "fi\n"
                 "count=$((count + 1))\n"
                 'printf "%s" "$count" > "$state_file"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
                 'echo "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
                 'case "$count" in\n'
                 '  1) printf "task-1.md\\n" ;;\n'
                 '  2) printf " COMPLETE \\n" ;;\n'
@@ -5511,6 +5551,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -5528,10 +5570,10 @@ class TestLoop:
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
         # The runner was invoked with the select.md prompt (selector role)
-        # and also with the task file (runner role).
-        selector_log_lines = Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines()
-        assert f"@{selector_prompt}" in selector_log_lines
-        assert f"@{tasks_dir / 'task-1.md'}" in selector_log_lines
+        # and also with the preprocessed implement.md (runner role).
+        selector_log_text = Path(env["FAKE_SELECTOR_LOG"]).read_text()
+        assert f"@{selector_prompt}" in selector_log_text
+        assert str(tasks_dir / "task-1.md") in selector_log_text
 
     def test_loop_step_performs_one_loop_iteration(
         self, tmp_path: Path, env: dict[str, str]
@@ -5558,7 +5600,10 @@ class TestLoop:
             command_name="runner",
             script=(
                 'log_file="${FAKE_RUNNER_LOG:?FAKE_RUNNER_LOG must be set}"\n'
+                'prompt_arg="$1"\n'
+                'prompt_file="${prompt_arg#@}"\n'
                 'printf "%s\\n" "$*" >> "$log_file"\n'
+                'cat "$prompt_file" >> "$log_file" 2>/dev/null || true\n'
                 'printf "runner iteration\\n"\n'
             ),
         )
@@ -5572,6 +5617,8 @@ class TestLoop:
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
+        implement_prompt = prompt_dir / "implement.md"
+        implement_prompt.write_text("implement @${TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -5590,9 +5637,8 @@ class TestLoop:
             f"@{selector_prompt}",
             "update progress",
         ]
-        assert Path(env["FAKE_RUNNER_LOG"]).read_text().splitlines() == [
-            f"@{tasks_dir / 'task-1.md'}"
-        ]
+        runner_log_text = Path(env["FAKE_RUNNER_LOG"]).read_text()
+        assert str(tasks_dir / "task-1.md") in runner_log_text
 
     def test_loop_step_uses_configured_runner_when_command_is_omitted(
         self, tmp_path: Path, env: dict[str, str]

@@ -51,6 +51,7 @@ class LoopStepRuntime:
     env: dict[str, str]
     resolved_runner_command: list[str]
     select_invocation: PreparedSelectInvocation | None
+    implement_prompt_file: Path | None
     loop_prompt: PreparedPrompt | None
     resolved_prompt: ResolvedPrompt | None
     bootstrap_prompt: PreparedPrompt | None
@@ -126,9 +127,18 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         )
     resolved_runner_command = runner_command(args)
     validate_command(resolved_runner_command, kind="runner")
+    implement_prompt_file: Path | None = None
     select_invocation: PreparedSelectInvocation | None = None
     if use_selector_mode(args):
         select_invocation = prepare_select_invocation(args, temp_files=temp_files, env=env)
+        if resolved_prompt is None:
+            implement_prompt_file = prompt_file("implement.md")
+            if not is_file(implement_prompt_file):
+                print(
+                    f"Error: prompt file not found: {implement_prompt_file}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
 
     loop_prompt: PreparedPrompt | None = None
     if resolved_prompt is not None:
@@ -182,6 +192,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         env=env,
         resolved_runner_command=resolved_runner_command,
         select_invocation=select_invocation,
+        implement_prompt_file=implement_prompt_file,
         loop_prompt=loop_prompt,
         resolved_prompt=resolved_prompt,
         bootstrap_prompt=bootstrap_prompt,
@@ -266,6 +277,12 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             runtime.select_invocation.effective_prompt_file,
         ),
     )
+    if runtime.resolved_prompt is not None:
+        dry_run.print_detail("runner prompt", str(runtime.resolved_prompt.effective_file))
+    elif runtime.implement_prompt_file is not None:
+        dry_run.print_detail(
+            "runner prompt", f"{runtime.implement_prompt_file} (default)"
+        )
     dry_run.print_operation(
         "loop-runner",
         "subsequent runner invocations depend on selector output",
@@ -331,6 +348,13 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             env=runner_env,
         )
         runner_target = re_resolved.effective_file
+    elif runtime.implement_prompt_file is not None:
+        runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
+        runner_target = preprocess_prompt_file(
+            runtime.implement_prompt_file,
+            temp_files=runtime.temp_files,
+            env=runner_env,
+        )
     else:
         runner_env = runtime.env
         runner_target = next_task

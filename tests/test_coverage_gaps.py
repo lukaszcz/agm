@@ -1984,6 +1984,7 @@ class TestPrintDryRunFull:
             env={},
             resolved_runner_command=["runner"],
             select_invocation=invocation,
+            implement_prompt_file=None,
             loop_prompt=None,
             resolved_prompt=None,
             bootstrap_prompt=None,
@@ -2022,6 +2023,93 @@ class TestPrintDryRunFull:
         assert any(d[1] == "idle timeout" and d[2] == "5.0s" for d in detail_calls)
         assert any(d[1] == "selector command" and d[2] == "selector" for d in detail_calls)
 
+    def test_print_dry_run_with_selector_and_implement_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.commands.loop.step import LoopStepRuntime, print_dry_run
+
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+        progress = tasks_dir / "PROGRESS.md"
+        prompt = tmp_path / "select.md"
+        prompt.write_text("select\n", encoding="utf-8")
+        implement_file = tmp_path / "implement.md"
+        implement_file.write_text("implement\n", encoding="utf-8")
+
+        invocation = PreparedSelectInvocation(
+            source_prompt_file=prompt,
+            effective_prompt_file=prompt,
+            command=["selector"],
+            command_kind="selector",
+            runner_command=["runner"],
+            selector_command=["selector"],
+        )
+
+        runtime = LoopStepRuntime(
+            temp_files=[],
+            resolved_tasks_dir=tasks_dir,
+            resolved_progress_file=progress,
+            env={},
+            resolved_runner_command=["runner"],
+            select_invocation=invocation,
+            implement_prompt_file=implement_file,
+            loop_prompt=None,
+            resolved_prompt=None,
+            bootstrap_prompt=None,
+            log_file=None,
+            idle_timeout=None,
+        )
+
+        print_dry_run(runtime)
+
+        output = capsys.readouterr().out
+        assert "implement.md" in output
+        assert "(default)" in output
+
+    def test_print_dry_run_selector_with_explicit_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.commands.loop.step import LoopStepRuntime, print_dry_run
+
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+        progress = tasks_dir / "PROGRESS.md"
+        prompt = tmp_path / "select.md"
+        prompt.write_text("select\n", encoding="utf-8")
+
+        invocation = PreparedSelectInvocation(
+            source_prompt_file=prompt,
+            effective_prompt_file=prompt,
+            command=["selector"],
+            command_kind="selector",
+            runner_command=["runner"],
+            selector_command=["selector"],
+        )
+
+        resolved_file = tmp_path / "custom-prompt.md"
+        resolved_file.write_text("custom\n", encoding="utf-8")
+        resolved_prompt = ResolvedPrompt(source=resolved_file, effective_file=resolved_file)
+
+        runtime = LoopStepRuntime(
+            temp_files=[],
+            resolved_tasks_dir=tasks_dir,
+            resolved_progress_file=progress,
+            env={},
+            resolved_runner_command=["runner"],
+            select_invocation=invocation,
+            implement_prompt_file=None,
+            loop_prompt=None,
+            resolved_prompt=resolved_prompt,
+            bootstrap_prompt=None,
+            log_file=None,
+            idle_timeout=None,
+        )
+
+        print_dry_run(runtime)
+
+        output = capsys.readouterr().out
+        assert "custom-prompt" in output
+
     def test_print_dry_run_without_selector_invocation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2044,6 +2132,7 @@ class TestPrintDryRunFull:
             env={},
             resolved_runner_command=["runner"],
             select_invocation=None,
+            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=None,
             bootstrap_prompt=None,
@@ -2107,6 +2196,7 @@ class TestPrintDryRunFull:
             env={},
             resolved_runner_command=["runner"],
             select_invocation=None,
+            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=resolved_prompt,
             bootstrap_prompt=None,
@@ -2207,6 +2297,7 @@ class TestExecuteSingleStepSelectorStringResult:
             env={},
             resolved_runner_command=["fake-runner"],
             select_invocation=invocation,
+            implement_prompt_file=None,
             loop_prompt=None,
             resolved_prompt=None,
             bootstrap_prompt=None,
@@ -2287,6 +2378,7 @@ class TestExecuteSingleStepWithResolvedPrompt:
             env={},
             resolved_runner_command=["fake-runner"],
             select_invocation=invocation,
+            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=resolved_prompt,
             bootstrap_prompt=None,
@@ -2369,6 +2461,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             env={},
             resolved_runner_command=["fake-runner"],
             select_invocation=invocation,
+            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=resolved_prompt,
             bootstrap_prompt=None,
@@ -2443,6 +2536,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             env=env_no_task,
             resolved_runner_command=["fake-runner"],
             select_invocation=invocation,
+            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=resolved_prompt,
             bootstrap_prompt=None,
@@ -3585,6 +3679,7 @@ class TestPrintDryRunWithBootstrap:
             env={},
             resolved_runner_command=["runner"],
             select_invocation=None,
+            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=None,
             bootstrap_prompt=bootstrap_prompt,
@@ -3646,6 +3741,7 @@ class TestCleanupRuntimeViaStep:
             env={},
             resolved_runner_command=[],
             select_invocation=None,
+            implement_prompt_file=None,
             loop_prompt=None,
             resolved_prompt=None,
             bootstrap_prompt=None,

@@ -41,7 +41,7 @@ _HELP_TEXTS: dict[str, str] = {
           agm open --parent main feat/search
     """),
     "close": textwrap.dedent("""\
-        agm close [-D] BRANCH
+        agm close [-f|--force] [-D] BRANCH
 
         Close a project session for a branch worktree.
 
@@ -49,9 +49,12 @@ _HELP_TEXTS: dict[str, str] = {
         the corresponding tmux session.
 
         Options:
-          -D   Force delete the branch (git branch -D) instead of safe delete
-               (git branch -d). The worktree is only removed if the branch
-               deletion would succeed.
+          -f, --force   Force remove the worktree (even with untracked or
+                        uncommitted changes) and force delete the branch
+                        (git branch -D). Implies -D.
+          -D            Force delete the branch (git branch -D) instead of
+                        safe delete (git branch -d). The worktree is only
+                        removed if the branch deletion would succeed.
     """),
     "init": textwrap.dedent("""\
         agm init [--embedded | --workspace]

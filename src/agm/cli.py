@@ -501,6 +501,15 @@ def close(
         metavar="BRANCH",
         autocompletion=completion.complete_close_branch,
     ),
+    force: bool = typer.Option(
+        False,
+        "-f",
+        "--force",
+        help=(
+            "Force remove the worktree (even with untracked files) and force delete the"
+            " branch (git branch -D)."
+        ),
+    ),
     force_delete: bool = typer.Option(
         False,
         "-D",
@@ -518,6 +527,7 @@ def close(
                 command_path=["close"],
                 name="branch",
             ),
+            force=force,
             force_delete=force_delete,
         )
     )

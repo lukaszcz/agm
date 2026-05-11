@@ -90,7 +90,7 @@ def _remove_branch_config(*, proj_dir: Path, branch: str, env: dict[str, str]) -
 
 
 def close_session(
-    *, branch: str, force_delete: bool = False, cwd: Path | None = None
+    *, branch: str, force: bool = False, force_delete: bool = False, cwd: Path | None = None
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     proj_dir = require_current_project_dir(current)
@@ -106,9 +106,12 @@ def close_session(
         )
         raise SystemExit(1)
 
+    # --force implies force_delete as well (git branch -D semantics).
+    effective_force_delete = force or force_delete
+
     # Pre-check: verify the branch can be deleted before removing the worktree.
     # Uses default environment; project-specific env is not needed for git checks.
-    if not git_helpers.branch_can_delete(repo_dir, branch, force=force_delete):
+    if not git_helpers.branch_can_delete(repo_dir, branch, force=effective_force_delete):
         if not git_helpers.local_branch_exists(repo_dir, branch):
             print(f"error: branch '{branch}' does not exist", file=sys.stderr)
         else:
@@ -119,7 +122,7 @@ def close_session(
         raise SystemExit(1)
 
     remove_worktree(
-        repo_dir=repo_dir, force=False, branch=branch, force_delete=force_delete
+        repo_dir=repo_dir, force=force, branch=branch, force_delete=effective_force_delete
     )
     env = load_worktree_env(proj_dir, None, checkout_dir=repo_dir)
     _remove_branch_config(proj_dir=proj_dir, branch=branch, env=env)
@@ -128,4 +131,4 @@ def close_session(
 
 
 def run(args: CloseArgs) -> None:
-    close_session(branch=args.branch, force_delete=args.force_delete)
+    close_session(branch=args.branch, force=args.force, force_delete=args.force_delete)

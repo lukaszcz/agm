@@ -342,6 +342,8 @@ class TestCloseSession:
         close_session(branch="feature", cwd=tmp_path)
         assert len(remove_calls) == 1
         assert remove_calls[0]["branch"] == "feature"
+        assert remove_calls[0]["force"] is False
+        assert remove_calls[0]["force_delete"] is False
         assert len(close_calls) == 1
 
     def test_exits_when_branch_is_main_checkout(
@@ -413,6 +415,7 @@ class TestCloseSession:
             lambda **kw: remove_calls.append(kw),
         )
         close_session(branch="feature", force_delete=True, cwd=tmp_path)
+        assert remove_calls[0]["force"] is False
         assert remove_calls[0]["force_delete"] is True
 
     def test_skips_pre_check_when_force_delete(
@@ -433,6 +436,34 @@ class TestCloseSession:
         close_session(branch="feature", force_delete=True, cwd=tmp_path)
         assert len(remove_calls) == 1
 
+    def test_force_passes_force_and_force_delete_to_remove_worktree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        remove_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            close_module,
+            "remove_worktree",
+            lambda **kw: remove_calls.append(kw),
+        )
+        close_session(branch="feature", force=True, cwd=tmp_path)
+        assert remove_calls[0]["force"] is True
+        assert remove_calls[0]["force_delete"] is True
+
+    def test_force_implies_force_delete_even_when_force_delete_is_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        remove_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            close_module,
+            "remove_worktree",
+            lambda **kw: remove_calls.append(kw),
+        )
+        close_session(branch="feature", force=True, force_delete=False, cwd=tmp_path)
+        assert remove_calls[0]["force"] is True
+        assert remove_calls[0]["force_delete"] is True
+
 
 # ===========================================================================
 # run (entry point)
@@ -447,12 +478,12 @@ class TestCloseRun:
         monkeypatch.setattr(
             close_module,
             "close_session",
-            lambda *, branch, force_delete=False, cwd=None: calls.append(
-                {"branch": branch, "force_delete": force_delete}
+            lambda *, branch, force=False, force_delete=False, cwd=None: calls.append(
+                {"branch": branch, "force": force, "force_delete": force_delete}
             ),
         )
-        close_module.run(CloseArgs(branch="feature", force_delete=False))
-        assert calls == [{"branch": "feature", "force_delete": False}]
+        close_module.run(CloseArgs(branch="feature", force=False, force_delete=False))
+        assert calls == [{"branch": "feature", "force": False, "force_delete": False}]
 
     def test_run_passes_force_delete_true(
         self, monkeypatch: pytest.MonkeyPatch
@@ -461,9 +492,23 @@ class TestCloseRun:
         monkeypatch.setattr(
             close_module,
             "close_session",
-            lambda *, branch, force_delete=False, cwd=None: calls.append(
-                {"branch": branch, "force_delete": force_delete}
+            lambda *, branch, force=False, force_delete=False, cwd=None: calls.append(
+                {"branch": branch, "force": force, "force_delete": force_delete}
             ),
         )
-        close_module.run(CloseArgs(branch="feature", force_delete=True))
-        assert calls == [{"branch": "feature", "force_delete": True}]
+        close_module.run(CloseArgs(branch="feature", force=False, force_delete=True))
+        assert calls == [{"branch": "feature", "force": False, "force_delete": True}]
+
+    def test_run_passes_force_true(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            close_module,
+            "close_session",
+            lambda *, branch, force=False, force_delete=False, cwd=None: calls.append(
+                {"branch": branch, "force": force, "force_delete": force_delete}
+            ),
+        )
+        close_module.run(CloseArgs(branch="feature", force=True, force_delete=False))
+        assert calls == [{"branch": "feature", "force": True, "force_delete": False}]

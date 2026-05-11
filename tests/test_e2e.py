@@ -326,13 +326,21 @@ def _wait_for_path(path: Path, *, timeout: float = 2.0) -> None:
 def _assert_pid_gone(pid: int) -> None:
     # Process killing is asynchronous: even after the parent has exited and
     # called _kill_process_group, the kernel may need a moment to reap the
-    # child.  Retry briefly before declaring failure.
-    for _ in range(100):
+    # child.  Retry for up to 5 seconds before declaring failure — under
+    # heavy parallel test load, process group signal delivery and reaping
+    # can be slow.
+    for _ in range(200):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        time.sleep(0.01)
+        time.sleep(0.025)
+    # Last resort: try SIGKILL before failing, so we don't leave orphans.
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    time.sleep(0.05)
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
 

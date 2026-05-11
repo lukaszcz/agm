@@ -108,6 +108,10 @@ class LoopArgs:
     prompt_file: str | None
     selector_prompt: str | None
     selector_prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+    extra_selector_prompt: str | None
+    extra_selector_prompt_file: str | None
     timeout: float | None
 
 
@@ -123,6 +127,10 @@ class LoopNextArgs:
     prompt_file: str | None
     selector_prompt: str | None
     selector_prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+    extra_selector_prompt: str | None
+    extra_selector_prompt_file: str | None
     timeout: float | None
 
 

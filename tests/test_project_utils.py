@@ -473,4 +473,3 @@ def test_current_checkout_workspace_checkout_under_repo_dir_is_main(
     assert result is not None
     assert result.is_main is True
     assert result.branch is None
-

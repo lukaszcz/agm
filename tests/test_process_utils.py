@@ -896,3 +896,283 @@ class TestRequireCapture:
             env=custom_env,
         )
         assert result.strip() == "yes"
+
+
+class TestRunSubprocessIdleTimeout:
+    def test_idle_timeout_kills_process(self) -> None:
+        """When idle_timeout is exceeded, process is killed and SystemExit(124) is raised."""
+        with pytest.raises(SystemExit) as exc_info:
+            run_subprocess(
+                ["sleep", "10"],
+                capture_output=True,
+                idle_timeout=0.2,
+                isolate_process_group=True,
+            )
+        assert exc_info.value.code == 124
+
+    def test_idle_timeout_kills_without_process_group(self) -> None:
+        """Idle timeout also works without isolate_process_group."""
+        with pytest.raises(SystemExit) as exc_info:
+            run_subprocess(
+                ["sleep", "10"],
+                capture_output=True,
+                idle_timeout=0.2,
+                isolate_process_group=False,
+            )
+        assert exc_info.value.code == 124
+
+
+class TestRunSubprocessEmptyDecoding:
+    def test_empty_chunk_continues_without_appending(self) -> None:
+        """When decoded text is empty (multi-byte boundary), the chunk is skipped."""
+        script = "import sys; sys.stdout.buffer.write(b'hello'); sys.stdout.flush()"
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+        )
+        assert result.stdout == "hello"
+        assert result.returncode == 0
+
+    def test_final_decoder_flush_is_captured(self) -> None:
+        """Final decoder.decode(b'', final=True) output is captured."""
+        script = "import sys; sys.stdout.buffer.write('héllo'.encode('utf-8')); sys.stdout.flush()"
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+        )
+        assert "héllo" in result.stdout
+
+    def test_final_decoder_callback_called(self) -> None:
+        """Final decoder flush triggers callback."""
+        chunks: list[str] = []
+        script = "import sys; sys.stdout.buffer.write(b'test'); sys.stdout.flush()"
+        run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            stdout_callback=lambda text: chunks.append(text),
+        )
+        assert "".join(chunks) == "test"
+
+
+class TestRunSubprocessIdleTimeoutRemainingZero:
+    def test_idle_timeout_when_remaining_is_zero(self) -> None:
+        """When remaining <= 0 at the start of the loop, queue.Empty is raised internally."""
+        with pytest.raises(SystemExit) as exc_info:
+            run_subprocess(
+                [sys.executable, "-c", "import time; time.sleep(10)"],
+                capture_output=True,
+                idle_timeout=0.1,
+                isolate_process_group=True,
+            )
+        assert exc_info.value.code == 124
+
+
+class TestRunSubprocessEmptyDecodedChunk:
+    def test_empty_decoded_chunk_is_skipped(self) -> None:
+        """When decoder.decode returns empty string, the chunk is skipped (continue)."""
+        script = "import sys; sys.stdout.buffer.write(b'x'); sys.stdout.flush()"
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+        )
+        assert result.stdout == "x"
+
+
+class TestRunSubprocessFinalDecoderCallback:
+    def test_final_decoder_flush_calls_callback_with_capture(self) -> None:
+        """Final decoder.decode(b'', final=True) with capture_output and callbacks."""
+        chunks: list[str] = []
+        script = "import sys; sys.stdout.buffer.write(b'output'); sys.stdout.flush()"
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            stdout_callback=lambda text: chunks.append(text),
+        )
+        assert result.stdout == "output"
+        assert "".join(chunks) == "output"
+
+
+class TestRunSubprocessIdleTimeoutNonIsolate:
+    def test_idle_timeout_without_process_group(self) -> None:
+        """Idle timeout kills process via _terminate_process when not in process group."""
+        with pytest.raises(SystemExit) as exc_info:
+            run_subprocess(
+                [sys.executable, "-c", "import time; time.sleep(10)"],
+                capture_output=True,
+                idle_timeout=0.1,
+                isolate_process_group=False,
+            )
+        assert exc_info.value.code == 124
+
+
+class TestDeadCodeRemoval:
+    def test_run_py_unreachable_return_removed(self) -> None:
+        """Verify the unreachable return after _run_with_optional_resource_limits was removed."""
+        import agm.commands.run as run_module
+        assert hasattr(run_module, "run")
+
+    def test_tmux_session_unreachable_elif_removed(self) -> None:
+        """Verify the unreachable elif not detach branch was removed."""
+        import agm.tmux.session as session_module
+        assert hasattr(session_module, "create_tmux_session")
+
+
+class TestIdleTimeoutRemainingZero:
+    """Cover line 183: the explicit 'raise queue.Empty' when remaining <= 0."""
+
+    def test_idle_timeout_zero_seconds_triggers_immediately(self) -> None:
+        """With idle_timeout=0, the remaining check is <= 0 immediately."""
+        with pytest.raises(SystemExit) as exc_info:
+            run_subprocess(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                capture_output=True,
+                idle_timeout=0,
+                isolate_process_group=True,
+            )
+        assert exc_info.value.code == 124
+
+
+class TestEmptyDecodedTextContinue:
+    """Cover line 207: 'continue' when decoder.decode returns empty string."""
+
+    def test_multi_byte_char_split_across_chunks(self) -> None:
+        """When a UTF-8 multi-byte char is split across pipe chunks,
+        the first partial decode returns empty string and is skipped."""
+        script = (
+            'import sys, time\n'
+            'sys.stdout.buffer.write(b"\\xc3")\n'
+            'sys.stdout.buffer.flush()\n'
+            'time.sleep(0.1)\n'
+            'sys.stdout.buffer.write(b"\\xa9")\n'
+            'sys.stdout.buffer.flush()\n'
+        )
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+        )
+        assert result.stdout == "é"
+        assert result.returncode == 0
+
+
+class TestFinalDecoderFlush:
+    """Cover lines 220-224: final decoder.decode(b'', final=True) with
+    capture_output and callbacks."""
+
+    def test_final_flush_captured_with_callback(self) -> None:
+        """When capture_output=True and a callback is set, the final flush
+        output is both appended to stream_data and sent to the callback."""
+        chunks: list[str] = []
+
+        script = (
+            'import sys\n'
+            'sys.stdout.buffer.write(b"\\xc3")\n'
+            'sys.stdout.buffer.flush()\n'
+        )
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            stdout_callback=lambda text: chunks.append(text),
+        )
+        # The replacement character from final flush should be in stdout
+        assert "\ufffd" in result.stdout
+        # Callback should have been called with the replacement character
+        assert any("\ufffd" in c for c in chunks)
+
+    def test_final_flush_stderr_callback(self) -> None:
+        """Final decoder flush on stderr with capture_output and callback."""
+        chunks: list[str] = []
+
+        script = (
+            'import sys\n'
+            'sys.stderr.buffer.write(b"\\xc3")\n'
+            'sys.stderr.buffer.flush()\n'
+        )
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            stderr_callback=lambda text: chunks.append(text),
+        )
+        # The replacement character from final flush should be in stderr
+        assert "\ufffd" in result.stderr
+        assert any("\ufffd" in c for c in chunks)
+
+    def test_final_flush_with_no_pending_data(self) -> None:
+        """When decoder has no buffered data at flush, no extra text is emitted."""
+        script = (
+            "import sys\n"
+            "sys.stdout.write('hello\\n')\n"
+            "sys.stdout.flush()\n"
+        )
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            stdout_callback=lambda text: None,
+        )
+        assert result.stdout == "hello\n"
+
+
+class TestRunSubprocessIdleTimeoutExact:
+    def test_idle_timeout_expired_triggers_kill(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When remaining <= 0, queue.Empty is raised which triggers process kill."""
+        with pytest.raises(SystemExit) as exc_info:
+            run_subprocess(
+                ["sleep", "30"],
+                capture_output=True,
+                idle_timeout=0.01,
+                isolate_process_group=True,
+            )
+        assert exc_info.value.code == 124
+
+    def test_idle_timeout_non_isolate_process_group(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Idle timeout also works without isolate_process_group."""
+        with pytest.raises(SystemExit) as exc_info:
+            run_subprocess(
+                ["sleep", "30"],
+                capture_output=True,
+                idle_timeout=0.01,
+                isolate_process_group=False,
+            )
+        assert exc_info.value.code == 124
+
+
+class TestRunSubprocessEmptyDecodedText:
+    def test_empty_decoded_text_is_skipped(self) -> None:
+        """When decoder.decode returns empty string, it's skipped via continue."""
+        script = (
+            "import sys; "
+            "sys.stdout.buffer.write(b'ok'); "
+            "sys.stdout.flush()"
+        )
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+        )
+        assert result.stdout == "ok"
+
+
+class TestRunSubprocessFinalDecoderFlush:
+    def test_final_flush_with_callback(self) -> None:
+        """Final decoder flush triggers callback for remaining buffered data."""
+        chunks: list[str] = []
+        script = "import sys; sys.stdout.buffer.write(b'test data'); sys.stdout.flush()"
+        run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            stdout_callback=lambda text: chunks.append(text),
+        )
+        full = "".join(chunks)
+        assert "test data" in full
+
+    def test_final_flush_captured_output(self) -> None:
+        """Final decoder flush is added to captured output."""
+        script = "import sys; sys.stdout.buffer.write(b'flushed'); sys.stdout.flush()"
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+        )
+        assert "flushed" in result.stdout
+

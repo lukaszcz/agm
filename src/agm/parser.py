@@ -91,23 +91,31 @@ _HELP_TEXTS: dict[str, str] = {
                  [--tasks-dir DIR] [--no-log|--log-file PATH]
                  [--prompt TEXT|--prompt-file PATH]
                  [--selector-prompt TEXT|--selector-prompt-file PATH]
+                 [--extra-prompt TEXT|--extra-prompt-file PATH]
+                 [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                  [--timeout DURATION]
                  CMD [RUNNER_ARGS...]
         agm loop run [--runner COMMAND] [--selector COMMAND|--no-selector]
                      [--tasks-dir DIR] [--no-log|--log-file PATH]
                      [--prompt TEXT|--prompt-file PATH]
                      [--selector-prompt TEXT|--selector-prompt-file PATH]
+                     [--extra-prompt TEXT|--extra-prompt-file PATH]
+                     [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                      [--timeout DURATION]
                      [CMD [RUNNER_ARGS...]]
         agm loop step [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--no-log|--log-file PATH]
                       [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--extra-prompt TEXT|--extra-prompt-file PATH]
+                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                       [--timeout DURATION]
                       CMD [RUNNER_ARGS...]
         agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--extra-prompt TEXT|--extra-prompt-file PATH]
+                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                       [--timeout DURATION]
                       [CMD [RUNNER_ARGS...]]
 
@@ -179,6 +187,17 @@ _HELP_TEXTS: dict[str, str] = {
           selector, replacing the default ``select.md`` prompt.
           The prompt text is saved to a temporary file and processed with
           env var substitution, just like the default prompt.
+          ``--extra-prompt TEXT`` or ``--extra-prompt-file PATH`` (or the
+          corresponding config.toml ``extra_prompt`` / ``extra_prompt_file``
+          keys) append extra content to the runner prompt, after the
+          primary prompt (whether default or explicitly set). ``--extra-prompt``
+          and ``--extra-prompt-file`` are mutually exclusive.
+          ``--extra-selector-prompt TEXT`` or ``--extra-selector-prompt-file PATH``
+          (or the corresponding config.toml ``extra_selector_prompt`` /
+          ``extra_selector_prompt_file`` keys) append extra content to the
+          selector prompt, after the primary selector prompt (whether default
+          or explicitly set). ``--extra-selector-prompt`` and
+          ``--extra-selector-prompt-file`` are mutually exclusive.
 
         Prompt preprocessing:
           Before a prompt file is passed to the runner or selector, AGM
@@ -421,6 +440,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--extra-prompt TEXT|--extra-prompt-file PATH]
+                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                       [--timeout DURATION]
                       [CMD [RUNNER_ARGS...]]
 
@@ -437,6 +458,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
                      [--tasks-dir DIR] [--no-log|--log-file PATH]
                      [--prompt TEXT|--prompt-file PATH]
                      [--selector-prompt TEXT|--selector-prompt-file PATH]
+                     [--extra-prompt TEXT|--extra-prompt-file PATH]
+                     [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                      [--timeout DURATION]
                      [CMD [RUNNER_ARGS...]]
 
@@ -456,6 +479,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
                       [--tasks-dir DIR] [--no-log|--log-file PATH]
                       [--prompt TEXT|--prompt-file PATH]
                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                      [--extra-prompt TEXT|--extra-prompt-file PATH]
+                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                       [--timeout DURATION]
                       CMD [RUNNER_ARGS...]
 

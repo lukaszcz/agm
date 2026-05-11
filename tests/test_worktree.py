@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import agm.project.worktree as worktree_mod
+from agm.project.worktree import ensure_worktree
 from agm.vcs.git import WorktreeInfo
 
 
@@ -540,3 +541,67 @@ class TestRemoveWorktree:
         )
 
         assert deleted == [("feat", True)]
+
+
+class TestEnsureWorktreeRelativePath:
+    def test_relative_worktrees_path_resolved_against_cwd(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When worktrees_dir is relative, it's resolved against cwd."""
+        import agm.project.worktree as worktree_module
+
+        project = tmp_path / "proj"
+        repo = project / "repo"
+        repo.mkdir(parents=True)
+        (project / "worktrees").mkdir()
+
+        relative_dir = "custom_worktrees"
+        monkeypatch.setattr(
+            worktree_module.git_helpers,
+            "checkout_root",
+            lambda cwd=None: repo,
+        )
+        monkeypatch.setattr(
+            worktree_module.git_helpers,
+            "current_branch",
+            lambda p, env=None: "main",
+        )
+        monkeypatch.setattr(
+            worktree_module.git_helpers, "fetch", lambda p, env=None: None
+        )
+        monkeypatch.setattr(
+            worktree_module.git_helpers,
+            "worktree_list",
+            lambda p, env=None: [],
+        )
+        monkeypatch.setattr(
+            worktree_module.git_helpers,
+            "worktree_add",
+            lambda p, dirname, branch, create=False, env=None: None,
+        )
+        monkeypatch.setattr(
+            worktree_module,
+            "ensure_dependency_configs_for_branch",
+            lambda project_dir, branch: None,
+        )
+        monkeypatch.setattr(
+            worktree_module,
+            "copy_config",
+            lambda project_dir=None, target=None, branch=None, cwd=None: None,
+        )
+        monkeypatch.setattr(worktree_module, "current_project_dir", lambda cwd=None: project)
+        monkeypatch.setattr(
+            worktree_module, "exit_if_main_checkout_branch", lambda pd, b, repo_branch=None: None
+        )
+
+        # Pass a relative worktrees_dir
+        result = ensure_worktree(
+            new_branch=None,
+            worktrees_dir=relative_dir,
+            branch="feat",
+            cwd=repo,
+        )
+        # The result should be absolute (resolved against cwd=repo)
+        assert result.is_absolute()
+        assert result == repo / relative_dir / "feat"
+

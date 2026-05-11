@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Generator
 from pathlib import Path
+from typing import Any, Generator
 from unittest.mock import patch
 
 import pytest
 
 import agm.core.dry_run as dry_run
+import agm.sandbox.srt as srt
 from agm.config.sandbox.srt import (
     JsonDict,
     _first_missing_component,
@@ -990,3 +991,182 @@ class TestPrintDryRun:
         assert "systemd-run" in captured.out
         assert "myapp" in captured.out
         assert "srt" in captured.out
+
+class TestSrtDryRun:
+    def test_print_dry_run_with_explicit_settings_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agm.core import dry_run
+
+        home = tmp_path / "home"
+        home.mkdir()
+        cwd = tmp_path / "work"
+        cwd.mkdir()
+
+        dry_run_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            dry_run,
+            "print_configuration",
+            lambda label: dry_run_calls.append({"config": label}),
+        )
+        monkeypatch.setattr(
+            dry_run,
+            "print_detail",
+            lambda k, v: dry_run_calls.append({"detail": (k, v)}),
+        )
+        monkeypatch.setattr(
+            dry_run,
+            "print_labeled_command",
+            lambda label, cmd, cwd=None: dry_run_calls.append({"cmd": cmd}),
+        )
+
+        srt._print_dry_run(
+            cwd=cwd,
+            home=home,
+            proj_dir=None,
+            command=["echo", "hi"],
+            command_name="echo",
+            alias_command_name=None,
+            settings_file="explicit.json",
+            patch_proj_dir=None,
+            process_prefix=[],
+        )
+
+        config_calls = [c for c in dry_run_calls if "config" in c]
+        detail_calls = [c for c in dry_run_calls if "detail" in c]
+        assert any(c["config"] == "sandbox" for c in config_calls)
+        assert any(
+            d["detail"][0] == "settings source" and d["detail"][1] == "explicit"
+            for d in detail_calls
+        )
+
+    def test_print_dry_run_with_merged_settings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agm.core import dry_run
+
+        home = tmp_path / "home"
+        home.mkdir()
+        cwd = tmp_path / "work"
+        cwd.mkdir()
+
+        dry_run_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            dry_run,
+            "print_configuration",
+            lambda label: dry_run_calls.append({"config": label}),
+        )
+        monkeypatch.setattr(
+            dry_run,
+            "print_detail",
+            lambda k, v: dry_run_calls.append({"detail": (k, v)}),
+        )
+        monkeypatch.setattr(
+            dry_run,
+            "print_labeled_command",
+            lambda label, cmd, cwd=None: dry_run_calls.append({"cmd": cmd}),
+        )
+
+        srt._print_dry_run(
+            cwd=cwd,
+            home=home,
+            proj_dir=None,
+            command=["echo"],
+            command_name="echo",
+            alias_command_name=None,
+            settings_file=None,
+            patch_proj_dir=None,
+            process_prefix=["systemd-run"],
+        )
+
+        detail_calls = [c for c in dry_run_calls if "detail" in c]
+        assert any(
+            d["detail"][0] == "settings source" and d["detail"][1] == "merged"
+            for d in detail_calls
+        )
+
+    def test_run_sandboxed_dry_run_calls_print_dry_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agm.core import dry_run
+
+        home = tmp_path / "home"
+        home.mkdir()
+        cwd = tmp_path / "work"
+        cwd.mkdir()
+
+        monkeypatch.setattr(srt, "require_srt_installed", lambda _path=None: None)
+        monkeypatch.setattr(dry_run, "enabled", lambda: True)
+
+        print_called: list[bool] = []
+        monkeypatch.setattr(
+            srt,
+            "_print_dry_run",
+            lambda **kwargs: print_called.append(True),
+        )
+
+        srt.run_sandboxed(
+            command=["echo", "hi"],
+            cwd=cwd,
+            env={},
+            home=home,
+            proj_dir=None,
+            command_name="echo",
+            alias_command_name=None,
+            settings_file=None,
+            patch_proj_dir=None,
+        )
+
+        assert print_called == [True]
+
+
+class TestSrtKeyboardInterrupt:
+    def test_keyboard_interrupt_raises_system_exit_130(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from agm.core import dry_run
+
+        home = tmp_path / "home"
+        home.mkdir()
+        cwd = tmp_path / "work"
+        cwd.mkdir()
+
+        monkeypatch.setattr(srt, "require_srt_installed", lambda _path=None: None)
+        monkeypatch.setattr(dry_run, "enabled", lambda: False)
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text('{"filesystem": {"allowWrite": []}}', encoding="utf-8")
+
+        def fake_resolve_settings(**kwargs: Any) -> Path:
+            return settings_file
+
+        def fake_run_foreground(cmd: list[str], **kwargs: Any) -> int:
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr(srt, "_resolve_settings_path", fake_resolve_settings)
+        monkeypatch.setattr(srt, "run_foreground", fake_run_foreground)
+        monkeypatch.setattr(srt, "track_bwrap_artifacts", lambda settings, cwd: [])
+        monkeypatch.setattr(srt, "patch_for_proj_dir", lambda data, proj_dir: data)
+        monkeypatch.setattr(srt, "load_settings", lambda path: {})
+        monkeypatch.setattr(
+            srt, "_cleanup", lambda temp_files, tracked_artifacts: None
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            srt.run_sandboxed(
+                command=["echo"],
+                cwd=cwd,
+                env={},
+                home=home,
+                proj_dir=None,
+                command_name="echo",
+                alias_command_name=None,
+                settings_file=str(settings_file),
+                patch_proj_dir=None,
+            )
+        assert exc_info.value.code == 130
+
+
+# ---------------------------------------------------------------------------
+# completion.py – additional coverage gaps
+# ---------------------------------------------------------------------------

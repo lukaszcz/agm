@@ -15,6 +15,7 @@ from agm.core.prompt import preprocess_prompt_file
 from .common import (
     PreparedSelectInvocation,
     ResolvedPrompt,
+    append_extra_prompt,
     cleanup_temp_files,
     command_with_prompt_target,
     is_complete_output,
@@ -23,6 +24,8 @@ from .common import (
     prepare_select_invocation,
     progress_file,
     prompt_file,
+    resolve_extra_prompt_source,
+    resolve_extra_selector_prompt_source,
     resolve_prompt_source,
     resolved_timeout,
     run_command,
@@ -55,6 +58,7 @@ class LoopStepRuntime:
     loop_prompt: PreparedPrompt | None
     resolved_prompt: ResolvedPrompt | None
     bootstrap_prompt: PreparedPrompt | None
+    extra_prompt_source: str | Path | None
     log_file: Path | None
     idle_timeout: float | None
 
@@ -178,6 +182,32 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
                 idle_timeout=resolved_timeout(args),
             )
 
+    extra_prompt_source = resolve_extra_prompt_source(args)
+    extra_selector_prompt_source = resolve_extra_selector_prompt_source(args)
+
+    # Apply extra selector prompt to the selector invocation
+    if (
+        select_invocation is not None
+        and extra_selector_prompt_source is not None
+    ):
+        new_effective = append_extra_prompt(
+            select_invocation.effective_prompt_file,
+            extra_selector_prompt_source,
+            temp_files=temp_files,
+            env=env,
+        )
+        select_invocation.effective_prompt_file = new_effective
+
+    # Apply extra prompt to the loop prompt (no-selector mode)
+    if loop_prompt is not None and extra_prompt_source is not None:
+        new_effective = append_extra_prompt(
+            loop_prompt.effective_file,
+            extra_prompt_source,
+            temp_files=temp_files,
+            env=env,
+        )
+        loop_prompt.effective_file = new_effective
+
     log_file = _log_file(args)
     if log_file is not None:
         print(f"Logging to {log_file if args.log_file is not None else log_file.name}")
@@ -196,6 +226,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         loop_prompt=loop_prompt,
         resolved_prompt=resolved_prompt,
         bootstrap_prompt=bootstrap_prompt,
+        extra_prompt_source=extra_prompt_source,
         log_file=log_file,
         idle_timeout=timeout,
     )
@@ -348,6 +379,13 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             env=runner_env,
         )
         runner_target = re_resolved.effective_file
+        if runtime.extra_prompt_source is not None:
+            runner_target = append_extra_prompt(
+                runner_target,
+                runtime.extra_prompt_source,
+                temp_files=runtime.temp_files,
+                env=runner_env,
+            )
     elif runtime.implement_prompt_file is not None:
         runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
         runner_target = preprocess_prompt_file(
@@ -355,6 +393,13 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             temp_files=runtime.temp_files,
             env=runner_env,
         )
+        if runtime.extra_prompt_source is not None:
+            runner_target = append_extra_prompt(
+                runner_target,
+                runtime.extra_prompt_source,
+                temp_files=runtime.temp_files,
+                env=runner_env,
+            )
     else:
         runner_env = runtime.env
         runner_target = next_task

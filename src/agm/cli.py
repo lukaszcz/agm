@@ -182,6 +182,10 @@ def _parse_loop_args(
     prompt_file: str | None = None
     selector_prompt: str | None = None
     selector_prompt_file: str | None = None
+    extra_prompt: str | None = None
+    extra_prompt_file: str | None = None
+    extra_selector_prompt: str | None = None
+    extra_selector_prompt_file: str | None = None
     timeout: float | None = None
     index = 0
 
@@ -240,6 +244,26 @@ def _parse_loop_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--extra-prompt":
+            extra_prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--extra-prompt-file":
+            extra_prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--extra-selector-prompt":
+            extra_selector_prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--extra-selector-prompt-file":
+            extra_selector_prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
         if token == "--timeout":
             timeout_str, index = _loop_option_value(
                 raw_args, index, command_path=command_path, option=token
@@ -264,6 +288,17 @@ def _parse_loop_args(
             command_path,
             "error: --selector-prompt and --selector-prompt-file are mutually exclusive",
         )
+    if extra_prompt is not None and extra_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            "error: --extra-prompt and --extra-prompt-file are mutually exclusive",
+        )
+    if extra_selector_prompt is not None and extra_selector_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            "error: --extra-selector-prompt and "
+            "--extra-selector-prompt-file are mutually exclusive",
+        )
     remaining = raw_args[index:]
     if not remaining:
         if command_optional:
@@ -284,6 +319,10 @@ def _parse_loop_args(
                 prompt_file=prompt_file,
                 selector_prompt=selector_prompt,
                 selector_prompt_file=selector_prompt_file,
+                extra_prompt=extra_prompt,
+                extra_prompt_file=extra_prompt_file,
+                extra_selector_prompt=extra_selector_prompt,
+                extra_selector_prompt_file=extra_selector_prompt_file,
                 timeout=timeout,
             )
         print_help_for_command_path(command_path)
@@ -307,6 +346,10 @@ def _parse_loop_args(
         prompt_file=prompt_file,
         selector_prompt=selector_prompt,
         selector_prompt_file=selector_prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
+        extra_selector_prompt=extra_selector_prompt,
+        extra_selector_prompt_file=extra_selector_prompt_file,
         timeout=timeout,
     )
 
@@ -322,6 +365,10 @@ def _parse_loop_next_args(
     prompt_file: str | None = None
     selector_prompt: str | None = None
     selector_prompt_file: str | None = None
+    extra_prompt: str | None = None
+    extra_prompt_file: str | None = None
+    extra_selector_prompt: str | None = None
+    extra_selector_prompt_file: str | None = None
     timeout: float | None = None
     index = 0
 
@@ -368,6 +415,26 @@ def _parse_loop_next_args(
                 raw_args, index, command_path=command_path, option=token
             )
             continue
+        if token == "--extra-prompt":
+            extra_prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--extra-prompt-file":
+            extra_prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--extra-selector-prompt":
+            extra_selector_prompt, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
+        if token == "--extra-selector-prompt-file":
+            extra_selector_prompt_file, index = _loop_option_value(
+                raw_args, index, command_path=command_path, option=token
+            )
+            continue
         if token == "--timeout":
             timeout_str, index = _loop_option_value(
                 raw_args, index, command_path=command_path, option=token
@@ -392,6 +459,17 @@ def _parse_loop_next_args(
             command_path,
             "error: --selector-prompt and --selector-prompt-file are mutually exclusive",
         )
+    if extra_prompt is not None and extra_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            "error: --extra-prompt and --extra-prompt-file are mutually exclusive",
+        )
+    if extra_selector_prompt is not None and extra_selector_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            "error: --extra-selector-prompt and "
+            "--extra-selector-prompt-file are mutually exclusive",
+        )
     remaining = raw_args[index:]
     command_name: str | None = None
     runner_args: list[str] = []
@@ -409,6 +487,10 @@ def _parse_loop_next_args(
         prompt_file=prompt_file,
         selector_prompt=selector_prompt,
         selector_prompt_file=selector_prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
+        extra_selector_prompt=extra_selector_prompt,
+        extra_selector_prompt_file=extra_selector_prompt_file,
         timeout=timeout,
     )
 

@@ -201,6 +201,83 @@ def resolve_selector_prompt_source(args: LoopCommandArgs) -> str | Path | None:
     return None
 
 
+def resolve_extra_prompt_source(args: LoopCommandArgs) -> str | Path | None:
+    """Resolve the extra prompt source from CLI args and config.
+
+    Returns the prompt text (str), prompt file path (Path), or None when
+    neither --extra-prompt nor --extra-prompt-file is specified.
+    """
+    configured = configured_loop_settings(args.command_name)
+    if args.extra_prompt is not None:
+        return args.extra_prompt
+    if args.extra_prompt_file is not None:
+        resolved = Path(args.extra_prompt_file)
+        if not resolved.is_absolute():
+            resolved = Path.cwd() / resolved
+        return resolved
+    if configured.extra_prompt is not None:
+        return configured.extra_prompt
+    if configured.extra_prompt_file is not None:
+        return Path(configured.extra_prompt_file)
+    return None
+
+
+def resolve_extra_selector_prompt_source(args: LoopCommandArgs) -> str | Path | None:
+    """Resolve the extra selector prompt source from CLI args and config.
+
+    Returns the prompt text (str), prompt file path (Path), or None when
+    neither --extra-selector-prompt nor --extra-selector-prompt-file is specified.
+    """
+    configured = configured_loop_settings(args.command_name)
+    if args.extra_selector_prompt is not None:
+        return args.extra_selector_prompt
+    if args.extra_selector_prompt_file is not None:
+        resolved = Path(args.extra_selector_prompt_file)
+        if not resolved.is_absolute():
+            resolved = Path.cwd() / resolved
+        return resolved
+    if configured.extra_selector_prompt is not None:
+        return configured.extra_selector_prompt
+    if configured.extra_selector_prompt_file is not None:
+        return Path(configured.extra_selector_prompt_file)
+    return None
+
+
+def append_extra_prompt(
+    effective_file: Path,
+    extra_source: str | Path,
+    *,
+    temp_files: list[Path],
+    env: dict[str, str],
+) -> Path:
+    """Append extra prompt content to an effective prompt file.
+
+    Reads the existing effective file content, resolves the extra prompt
+    source (expanding env vars for inline text or reading and expanding the
+    file), and writes the concatenated content to a new temp file.
+    """
+    original_content = effective_file.read_text(encoding="utf-8")
+    if isinstance(extra_source, str):
+        extra_content = expand_prompt_env_vars(extra_source, env=env)
+    else:
+        extra_path = extra_source
+        if not is_file(extra_path):
+            print(
+                f"Error: extra prompt file not found: {extra_path}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        extra_content = expand_prompt_env_vars(
+            extra_path.read_text(encoding="utf-8"), env=env
+        )
+    combined = original_content + "\n" + extra_content
+    with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
+        handle.write(combined)
+        new_path = Path(handle.name)
+    temp_files.append(new_path)
+    return new_path
+
+
 def prepare_prompt_from_source(
     source: str | Path,
     *,

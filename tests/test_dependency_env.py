@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+import agm.core.fs as fs_mod
 import agm.project.dependency_env as dep_env_module
 from agm.project.dependency_env import (
+    _dependency_config_checkout_name,
     _ensure_config_toml_file,
     _is_deps_table_header,
     _is_table_header,
@@ -1436,3 +1438,206 @@ class TestUpdateAllProjectDependencyConfigs:
         update_all_project_dependency_configs(project_dir)
         branch_config = project_dir / "config" / "feat" / "config.toml"
         assert branch_config.exists()
+
+
+class TestLineSetTomlKeyWithInvalidJsonQuotedKey:
+    def test_invalid_json_quoted_key_returns_false(self) -> None:
+        # A line with an invalid JSON quoted key
+        result = _line_sets_toml_key('"invalid json\\q" = "val"', "invalid json\\q")
+        assert result is False
+
+
+class TestDependencyConfigCheckoutNameFallback:
+    def test_falls_back_to_main_when_branch_path_not_git_repo(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        dep_dir = tmp_path / "dep"
+        dep_dir.mkdir()
+        main_dir = dep_dir / "main"
+        main_dir.mkdir()
+        (main_dir / ".git").mkdir()  # .git marker so _dependency_repo_paths finds it
+        feat_dir = dep_dir / "feat"
+        feat_dir.mkdir()
+        # main is a git repo, feat is not
+        monkeypatch.setattr(
+            dep_env_module.git_helpers,
+            "is_git_repo",
+            lambda p: p == main_dir,
+        )
+        result = _dependency_config_checkout_name(dep_dir, "feat")
+        assert result == "main"
+
+    def test_returns_none_when_no_repos(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        dep_dir = tmp_path / "dep"
+        dep_dir.mkdir()
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda p: False)
+        result = _dependency_config_checkout_name(dep_dir, "feat")
+        assert result is None
+
+
+class TestEnsureConfigTomlFileCoverage:
+    def test_does_not_overwrite_existing_file(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text("[deps]\nfoo = \"bar\"\n", encoding="utf-8")
+        _ensure_config_toml_file(project_dir, None)
+        # Content unchanged
+        assert 'foo = "bar"' in config_file.read_text(encoding="utf-8")
+
+
+class TestUpdateMainDependencyConfigsWithExistingBranch:
+    def test_skips_dep_when_existing_branch_is_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When dep already has a branch in config, it is skipped."""
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        deps_dir = project_dir / "deps"
+        (deps_dir / "mylib").mkdir(parents=True)
+
+        # Write a config.toml with mylib already set
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[deps]\nmylib = "feat"\n', encoding="utf-8")
+
+        updated: list[str] = []
+        monkeypatch.setattr(
+            dep_env_module,
+            "project_deps_dir",
+            lambda pd: deps_dir,
+        )
+        monkeypatch.setattr(
+            dep_env_module,
+            "_dependency_config_checkout_name",
+            lambda dep_dir, branch: "main",
+        )
+        monkeypatch.setattr(
+            dep_env_module,
+            "update_dependency_toml_config",
+            lambda **kwargs: updated.append(kwargs["dep_name"]),
+        )
+        monkeypatch.setattr(
+            dep_env_module,
+            "config_toml_file",
+            lambda pd, branch: config_file,
+        )
+
+        dep_env_module.update_main_dependency_configs(project_dir)
+        # mylib already has "feat" branch, so it should be skipped
+        assert "mylib" not in updated
+
+
+class TestDependencyConfigCheckoutNameNotGitRepo:
+    def test_falls_back_to_main_when_branch_path_is_not_git_repo(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """_dependency_config_checkout_name falls back to _main_dependency_checkout_name
+        when branch_path doesn't have .git or isn't a git repo."""
+        dep_dir = tmp_path / "dep"
+        dep_dir.mkdir()
+        feat_dir = dep_dir / "feat"
+        feat_dir.mkdir()
+        main_subdir = dep_dir / "main"
+        main_subdir.mkdir()
+        (main_subdir / ".git").mkdir()
+
+        # branch_path/feat/.git doesn't exist => falls back to _main_dependency_checkout_name
+        real_exists = fs_mod.exists
+
+        def fake_exists(p: Path) -> bool:
+            if str(p) == str(feat_dir / ".git"):
+                return False  # Feat is not a git repo at all
+            return real_exists(p)
+
+        monkeypatch.setattr(fs_mod, "exists", fake_exists)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda p: p == main_subdir)
+
+        result = dep_env_module._dependency_config_checkout_name(dep_dir, "feat")
+        assert result == "main"
+
+
+class TestEnsureDependencyConfigsForBranchSkipsNone:
+    def test_skips_dep_when_checkout_name_is_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """ensure_dependency_configs_for_branch skips deps where checkout_name is None."""
+        from typing import Any
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        deps_dir = project_dir / "deps"
+        dep_dir = deps_dir / "mylib"
+        dep_dir.mkdir(parents=True)
+
+        # Make _dependency_config_checkout_name return None
+        monkeypatch.setattr(
+            dep_env_module,
+            "_dependency_config_checkout_name",
+            lambda dep_dir, branch: None,
+        )
+
+        # Track whether update_dependency_toml_config is called
+        update_calls: list[Any] = []
+        monkeypatch.setattr(
+            dep_env_module,
+            "update_dependency_toml_config",
+            lambda **kwargs: update_calls.append(kwargs),
+        )
+
+        dep_env_module.ensure_dependency_configs_for_branch(
+            project_dir=project_dir, branch="feat"
+        )
+        # No update calls since checkout_name was None
+        assert update_calls == []
+
+
+class TestDependencyConfigCheckoutNameHappyPath:
+    def test_returns_checkout_name_when_branch_is_git_repo(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """_dependency_config_checkout_name returns checkout name when branch is a git repo."""
+        dep_dir = tmp_path / "dep"
+        dep_dir.mkdir()
+        feat_dir = dep_dir / "feat"
+        feat_dir.mkdir()
+        # Create .git so exists check passes
+        (feat_dir / ".git").mkdir()
+
+        monkeypatch.setattr(fs_mod, "exists", lambda p: True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda p: True)
+
+        result = dep_env_module._dependency_config_checkout_name(dep_dir, "feat")
+        assert result == "feat"
+
+
+
+class TestUpdateDependencyConfigsForBranchNoCheckout:
+    def test_skips_dep_with_no_matching_checkout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "repo").mkdir()
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        dep_dir = deps_dir / "orphan"
+        dep_dir.mkdir()
+        # No checkout directories at all - _dependency_config_checkout_name returns None
+        monkeypatch.setattr(
+            dep_env_module.git_helpers, "is_git_repo", lambda _: False
+        )
+        update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+        # No config should be created
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert not config_file.exists()

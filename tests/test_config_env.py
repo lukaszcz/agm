@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from agm.commands.config.env import shell_env_delta
+from agm.core.env import source_env_files
 
 
 def test_shell_env_delta_exports_changed_values_with_shell_quoting() -> None:
@@ -59,3 +64,14 @@ def test_shell_env_delta_skips_special_shell_parameters() -> None:
         "unset REMOVED",
         "export ADDED=1",
     ]
+
+
+class TestSourceEnvFiles:
+    def test_exits_on_nonzero_returncode(self, tmp_path: Path) -> None:
+        """source_env_files calls exit_with_output when bash returns non-zero."""
+        env_file = tmp_path / "bad.sh"
+        env_file.write_text("exit 42\n", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc_info:
+            source_env_files([env_file])
+        assert exc_info.value.code == 42
+

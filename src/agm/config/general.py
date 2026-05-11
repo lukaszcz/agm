@@ -20,7 +20,13 @@ TomlDict = dict[str, object]
 # the config file that defines them.  When the config-dir-resolved path does
 # not exist, cwd is used as a fallback.
 _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
-    "loop": ["tasks_dir", "prompt_file", "selector_prompt_file"],
+    "loop": [
+        "tasks_dir",
+        "prompt_file",
+        "selector_prompt_file",
+        "extra_prompt_file",
+        "extra_selector_prompt_file",
+    ],
 }
 
 
@@ -115,6 +121,10 @@ class LoopConfig:
     prompt_file: str | None
     selector_prompt: str | None
     selector_prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+    extra_selector_prompt: str | None
+    extra_selector_prompt_file: str | None
     timeout: float | None
 
 
@@ -255,6 +265,28 @@ def load_loop_config(
         if isinstance(selector_prompt_file, str) and selector_prompt_file.strip()
         else None
     )
+    extra_prompt = selected_loop_table.get("extra_prompt")
+    extra_prompt_file = selected_loop_table.get("extra_prompt_file")
+    resolved_extra_prompt = (
+        extra_prompt if isinstance(extra_prompt, str) and extra_prompt.strip() else None
+    )
+    resolved_extra_prompt_file = (
+        extra_prompt_file
+        if isinstance(extra_prompt_file, str) and extra_prompt_file.strip()
+        else None
+    )
+    extra_selector_prompt = selected_loop_table.get("extra_selector_prompt")
+    extra_selector_prompt_file = selected_loop_table.get("extra_selector_prompt_file")
+    resolved_extra_selector_prompt = (
+        extra_selector_prompt
+        if isinstance(extra_selector_prompt, str) and extra_selector_prompt.strip()
+        else None
+    )
+    resolved_extra_selector_prompt_file = (
+        extra_selector_prompt_file
+        if isinstance(extra_selector_prompt_file, str) and extra_selector_prompt_file.strip()
+        else None
+    )
     timeout_raw = selected_loop_table.get("timeout")
     resolved_timeout: float | None = None
     if isinstance(timeout_raw, (int, float)) and timeout_raw > 0:
@@ -270,5 +302,9 @@ def load_loop_config(
         prompt_file=resolved_prompt_file,
         selector_prompt=resolved_selector_prompt,
         selector_prompt_file=resolved_selector_prompt_file,
+        extra_prompt=resolved_extra_prompt,
+        extra_prompt_file=resolved_extra_prompt_file,
+        extra_selector_prompt=resolved_extra_selector_prompt,
+        extra_selector_prompt_file=resolved_extra_selector_prompt_file,
         timeout=resolved_timeout,
     )

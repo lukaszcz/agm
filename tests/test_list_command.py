@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from click.testing import CliRunner
+from typer.main import get_command
 
+import agm.cli as cli
 import agm.commands.list as list_cmd
 from agm.vcs.git import WorktreeInfo
+
+
+def _invoke(runner: CliRunner, argv: list[str]) -> Any:
+    return runner.invoke(get_command(cli.app), argv, prog_name="agm")
 
 
 class TestListWorktrees:
@@ -490,3 +498,22 @@ class TestBranchSortKey:
     def test_returns_empty_string_for_detached(self, tmp_path: Path) -> None:
         wt = WorktreeInfo(path=tmp_path, branch=None)
         assert list_cmd._branch_sort_key(wt) == ""
+
+
+class TestListCommandViaCli:
+    """Cover lines 1032-1034: list_cmd function body."""
+
+    def test_list_cmd_via_cli(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = CliRunner()
+        calls: list[object] = []
+
+        def record(*, verbose: bool = False) -> None:
+            calls.append(True)
+
+        monkeypatch.setattr(cli.list_command, "run", record)
+        result = _invoke(runner, ["list"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+

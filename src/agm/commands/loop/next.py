@@ -9,10 +9,12 @@ from agm.commands.args import LoopNextArgs
 from agm.core import dry_run
 
 from .common import (
+    append_extra_prompt,
     cleanup_temp_files,
     command_with_prompt_target,
     loop_env,
     prepare_select_invocation,
+    resolve_extra_selector_prompt_source,
     resolved_timeout,
     run_command,
     tasks_dir,
@@ -46,6 +48,15 @@ def run(args: LoopNextArgs) -> None:
 
     try:
         invocation = prepare_select_invocation(args, temp_files=temp_files, env=env)
+
+        extra_selector_prompt_source = resolve_extra_selector_prompt_source(args)
+        if extra_selector_prompt_source is not None:
+            invocation.effective_prompt_file = append_extra_prompt(
+                invocation.effective_prompt_file,
+                extra_selector_prompt_source,
+                temp_files=temp_files,
+                env=env,
+            )
 
         if dry_run.enabled():
             dry_run.print_configuration("loop-next")

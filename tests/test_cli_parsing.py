@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import io
 from typing import Protocol
 
+import click
 import pytest
 from click.testing import CliRunner, Result
 from typer.main import get_command
 
 import agm.cli as cli
+import agm.parser as parser_helpers
 from agm.core import dry_run as dry_run_state
 
 
@@ -1234,3 +1237,448 @@ class TestHelpTextCoverage:
 
         for cmd, text in _HELP_TEXTS.items():
             assert f"agm {cmd}" in text, f"help text for '{cmd}' doesn't mention 'agm {cmd}'"
+
+
+class TestCommandPathFromContext:
+    def test_returns_empty_for_root_context(self) -> None:
+        ctx = click.Context(click.Command("agm"))
+        ctx.parent = None
+        result = cli._command_path_from_context(ctx)
+        assert result == []
+
+    def test_returns_command_path(self) -> None:
+        root = click.Context(click.Command("agm"))
+        root.parent = None
+        sub = click.Context(click.Command("worktree"), parent=root, info_name="worktree")
+        leaf = click.Context(click.Command("new"), parent=sub, info_name="new")
+        result = cli._command_path_from_context(leaf)
+        assert result == ["worktree", "new"]
+
+
+class TestPrintContextHelp:
+    def test_does_nothing_when_value_false(self) -> None:
+        ctx = click.Context(click.Command("agm"))
+        # Should not raise
+        cli._print_context_help(ctx, None, False)
+
+    def test_does_nothing_in_resilient_parsing(self) -> None:
+        ctx = click.Context(click.Command("agm"))
+        ctx.resilient_parsing = True
+        cli._print_context_help(ctx, None, True)  # Should not raise or exit
+
+    def test_prints_overview_for_root_command(self, capsys: pytest.CaptureFixture[str]) -> None:
+        root = click.Context(click.Command("agm"))
+        root.parent = None
+        with pytest.raises((SystemExit, click.exceptions.Exit)):
+            cli._print_context_help(root, None, True)
+        captured = capsys.readouterr()
+        assert "agm - Agent Management Framework" in captured.out
+
+    def test_prints_command_help_for_subcommand(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        root = click.Context(click.Command("agm"))
+        root.parent = None
+        sub = click.Context(click.Command("open"), parent=root, info_name="open")
+        with pytest.raises((SystemExit, click.exceptions.Exit)):
+            cli._print_context_help(sub, None, True)
+        captured = capsys.readouterr()
+        assert "agm open" in captured.out
+
+
+class TestParseLoopArgs:
+    def test_runner_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--runner", "my-runner", "cmd"], command_path=["loop"]
+        )
+        assert args.runner == "my-runner"
+        assert args.command_name == "cmd"
+
+    def test_selector_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--selector", "my-selector", "cmd"], command_path=["loop"]
+        )
+        assert args.selector == "my-selector"
+
+    def test_tasks_dir_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--tasks-dir", "custom/tasks", "cmd"], command_path=["loop"]
+        )
+        assert args.tasks_dir == "custom/tasks"
+
+    def test_prompt_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--prompt", "do the thing", "cmd"], command_path=["loop"]
+        )
+        assert args.prompt == "do the thing"
+        assert args.prompt_file is None
+
+    def test_prompt_file_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--prompt-file", "/tmp/task.md", "cmd"], command_path=["loop"]
+        )
+        assert args.prompt_file == "/tmp/task.md"
+        assert args.prompt is None
+
+    def test_selector_prompt_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--selector-prompt", "select task", "cmd"], command_path=["loop"]
+        )
+        assert args.selector_prompt == "select task"
+        assert args.selector_prompt_file is None
+
+    def test_selector_prompt_file_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--selector-prompt-file", "/tmp/sel.md", "cmd"], command_path=["loop"]
+        )
+        assert args.selector_prompt_file == "/tmp/sel.md"
+        assert args.selector_prompt is None
+
+    def test_selector_and_no_selector_are_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(
+                ["--selector", "cmd", "--no-selector", "cmd2"],
+                command_path=["loop"],
+            )
+
+    def test_prompt_and_prompt_file_are_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(
+                ["--prompt", "text", "--prompt-file", "file.md", "cmd"],
+                command_path=["loop"],
+            )
+
+    def test_selector_prompt_and_selector_prompt_file_are_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(
+                [
+                    "--selector-prompt",
+                    "text",
+                    "--selector-prompt-file",
+                    "file.md",
+                    "cmd",
+                ],
+                command_path=["loop"],
+            )
+
+    def test_empty_args_with_command_optional_true_returns_none_command(self) -> None:
+        args = cli._parse_loop_args([], command_path=["loop", "run"], command_optional=True)
+        assert args.command_name is None
+
+    def test_empty_args_with_command_optional_false_exits(self) -> None:
+        with pytest.raises((SystemExit, click.exceptions.Exit)):
+            cli._parse_loop_args([], command_path=["loop"], command_optional=False)
+
+    def test_no_log_and_log_file_mutually_exclusive_with_command(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(
+                ["--no-log", "--log-file", "out.log", "cmd"],
+                command_path=["loop"],
+            )
+
+    def test_no_log_and_log_file_mutually_exclusive_without_command(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(
+                ["--no-log", "--log-file", "out.log"],
+                command_path=["loop", "run"],
+                command_optional=True,
+            )
+
+    def test_double_dash_stops_parsing(self) -> None:
+        args = cli._parse_loop_args(
+            ["--", "--runner", "val", "cmd"],
+            command_path=["loop"],
+        )
+        # After --, the remaining args are treated as command + runner_args
+        assert args.runner is None
+
+    def test_runner_without_value_exits(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(["--runner"], command_path=["loop"])
+
+
+class TestCliCallbacks:
+    """Test config, worktree, dep, tmux callbacks when invoked without subcommand."""
+
+    def test_config_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["config"])
+        assert result.exit_code == 0
+        assert "agm config" in result.stdout
+
+    def test_worktree_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["worktree"])
+        assert result.exit_code == 0
+        assert "agm worktree" in result.stdout
+
+    def test_dep_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["dep"])
+        assert result.exit_code == 0
+        assert "agm dep" in result.stdout
+
+    def test_tmux_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["tmux"])
+        assert result.exit_code == 0
+        assert "agm tmux" in result.stdout
+
+    def test_wt_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["wt"])
+        assert result.exit_code == 0
+        assert "agm wt" in result.stdout or "agm worktree" in result.stdout
+
+
+class TestDepSwitchMissingArgs:
+    def test_dep_switch_missing_both_args(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["dep", "switch"])
+        assert result.exit_code != 0
+
+    def test_dep_switch_missing_branch(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["dep", "switch", "mylib"])
+        assert result.exit_code != 0
+
+
+class TestInitEmbeddedAndWorkspaceMutualExclusion:
+    def test_init_embedded_and_workspace_are_mutually_exclusive(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["init", "--embedded", "--workspace"])
+        assert result.exit_code != 0
+
+
+class TestRunWithUnrecognizedFlags:
+    def test_run_with_flag_before_command_exits(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["run", "--unknown-flag"])
+        assert result.exit_code != 0
+
+
+class TestParserHelpers:
+    def test_print_command_help_unknown_command_writes_to_stderr(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            parser_helpers.print_command_help("totally-unknown")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "unknown command" in captured.err
+
+    def test_print_help_for_command_path_with_file_param(self) -> None:
+        output = io.StringIO()
+        parser_helpers.print_help_for_command_path(["open"], file=output)
+        result = output.getvalue()
+        assert "agm open" in result
+
+    def test_print_command_help_with_file_param(self) -> None:
+        output = io.StringIO()
+        parser_helpers.print_command_help("open", file=output)
+        result = output.getvalue()
+        assert "agm open" in result
+
+
+class TestHelpTextForPathValueError:
+    def test_unknown_multi_segment_command_path_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="unknown command path"):
+            parser_helpers._help_text_for_path(["unknown", "sub"])
+
+
+class TestHelpTextForPathUnknownMultiElement:
+    def test_raises_value_error_for_unknown_multi_element_path(self) -> None:
+        """_help_text_for_path raises ValueError for unknown multi-element paths."""
+        with pytest.raises(ValueError, match="unknown command path"):
+            parser_helpers._help_text_for_path(["nonexistent", "subcommand"])
+
+
+class TestParseLoopNextArgsMissingBranches:
+    """Cover lines 330, 332-335, 346-349, 376-377 in _parse_loop_next_args."""
+
+    def test_double_dash_stops_parsing(self) -> None:
+        """Line 330: 'break' after '--' separator."""
+        args = cli._parse_loop_next_args(
+            ["--", "--runner", "val", "cmd"],
+            command_path=["loop", "next"],
+        )
+        # After --, the -- itself becomes command_name and the rest become runner_args
+        assert args.runner is None
+        assert args.command_name == "--"
+        assert args.runner_args == ["--runner", "val", "cmd"]
+
+    def test_runner_flag(self) -> None:
+        """Lines 332-335: --runner parsing in _parse_loop_next_args."""
+        args = cli._parse_loop_next_args(
+            ["--runner", "my-runner", "cmd"],
+            command_path=["loop", "next"],
+        )
+        assert args.runner == "my-runner"
+        assert args.command_name == "cmd"
+
+    def test_tasks_dir_flag(self) -> None:
+        """Lines 346-349: --tasks-dir parsing in _parse_loop_next_args."""
+        args = cli._parse_loop_next_args(
+            ["--tasks-dir", "custom/tasks", "cmd"],
+            command_path=["loop", "next"],
+        )
+        assert args.tasks_dir == "custom/tasks"
+        assert args.command_name == "cmd"
+
+    def test_timeout_invalid_format_exits(self) -> None:
+        """Lines 376-377: --timeout with invalid format in _parse_loop_next_args."""
+        with pytest.raises(SystemExit):
+            cli._parse_loop_next_args(
+                ["--timeout", "abc", "cmd"],
+                command_path=["loop", "next"],
+            )
+
+
+class TestConfigCopyCommand:
+    """Cover lines 563-565: the 'config copy' CLI command function."""
+
+    def test_config_copy_via_cli(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[object] = []
+
+        def record(args: object) -> None:
+            calls.append(args)
+
+        monkeypatch.setattr(cli.config_copy_command, "run", record)
+        result = invoke(runner, ["config", "copy", "mydir"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+
+
+class TestMainEntryPoint:
+    """Cover lines 1017, 1021: app() in main() and __name__ block."""
+
+    def test_main_calls_app_and_shows_help(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 1017: main() calls app() which shows the overview help."""
+        # Monkeypatch sys.argv so app() sees ["agm", "--help"] and exits
+        monkeypatch.setattr("sys.argv", ["agm", "--help"])
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main()
+        # --help exits with code 0
+        assert exc_info.value.code == 0
+
+    def test_main_module_entry_point(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Line 1021: the `if __name__ == '__main__': main()` block."""
+        import runpy
+        import warnings
+
+        monkeypatch.setattr("sys.argv", ["agm", "--help"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            with pytest.raises(SystemExit) as exc_info:
+                runpy.run_module("agm.cli", run_name="__main__")
+        assert exc_info.value.code == 0
+
+
+class TestParseLoopArgsExtraPromptFlags:
+    """Cover --extra-prompt, --extra-prompt-file, --extra-selector-prompt,
+    --extra-selector-prompt-file flags in _parse_loop_args."""
+
+    def test_extra_prompt_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--extra-prompt", "extra context", "cmd"], command_path=["loop"]
+        )
+        assert args.extra_prompt == "extra context"
+        assert args.extra_prompt_file is None
+
+    def test_extra_prompt_file_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--extra-prompt-file", "/tmp/extra.md", "cmd"], command_path=["loop"]
+        )
+        assert args.extra_prompt_file == "/tmp/extra.md"
+        assert args.extra_prompt is None
+
+    def test_extra_selector_prompt_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--extra-selector-prompt", "extra select", "cmd"], command_path=["loop"]
+        )
+        assert args.extra_selector_prompt == "extra select"
+        assert args.extra_selector_prompt_file is None
+
+    def test_extra_selector_prompt_file_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--extra-selector-prompt-file", "/tmp/sel.md", "cmd"], command_path=["loop"]
+        )
+        assert args.extra_selector_prompt_file == "/tmp/sel.md"
+        assert args.extra_selector_prompt is None
+
+    def test_extra_prompt_and_extra_prompt_file_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(
+                ["--extra-prompt", "text", "--extra-prompt-file", "file.md", "cmd"],
+                command_path=["loop"],
+            )
+
+    def test_extra_selector_prompt_and_file_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(
+                [
+                    "--extra-selector-prompt",
+                    "text",
+                    "--extra-selector-prompt-file",
+                    "file.md",
+                    "cmd",
+                ],
+                command_path=["loop"],
+            )
+
+
+class TestParseLoopNextArgsExtraPromptFlags:
+    """Cover --extra-prompt* flags in _parse_loop_next_args."""
+
+    def test_extra_prompt_flag(self) -> None:
+        args = cli._parse_loop_next_args(
+            ["--extra-prompt", "extra context", "cmd"], command_path=["loop", "next"]
+        )
+        assert args.extra_prompt == "extra context"
+        assert args.extra_prompt_file is None
+
+    def test_extra_prompt_file_flag(self) -> None:
+        args = cli._parse_loop_next_args(
+            ["--extra-prompt-file", "/tmp/extra.md", "cmd"], command_path=["loop", "next"]
+        )
+        assert args.extra_prompt_file == "/tmp/extra.md"
+
+    def test_extra_selector_prompt_flag(self) -> None:
+        args = cli._parse_loop_next_args(
+            ["--extra-selector-prompt", "extra sel", "cmd"], command_path=["loop", "next"]
+        )
+        assert args.extra_selector_prompt == "extra sel"
+
+    def test_extra_selector_prompt_file_flag(self) -> None:
+        args = cli._parse_loop_next_args(
+            ["--extra-selector-prompt-file", "/tmp/sel.md", "cmd"],
+            command_path=["loop", "next"],
+        )
+        assert args.extra_selector_prompt_file == "/tmp/sel.md"
+
+
+
+class TestParseLoopNextArgsExtraPromptMutualExclusion:
+    def test_extra_prompt_and_extra_prompt_file_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_next_args(
+                ["--extra-prompt", "text", "--extra-prompt-file", "file.md", "cmd"],
+                command_path=["loop", "next"],
+            )
+
+    def test_extra_selector_prompt_and_file_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_next_args(
+                [
+                    "--extra-selector-prompt",
+                    "text",
+                    "--extra-selector-prompt-file",
+                    "file.md",
+                    "cmd",
+                ],
+                command_path=["loop", "next"],
+            )

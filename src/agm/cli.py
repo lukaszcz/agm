@@ -1025,12 +1025,13 @@ def tmux_layout(
 
 @app.command(name="list")
 def list_cmd(
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show worktree directories."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
     del _dry_run
-    list_command.run()
+    list_command.run(verbose=verbose)
 
 
 app.add_typer(config_app, name="config")

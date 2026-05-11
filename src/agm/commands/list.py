@@ -23,8 +23,12 @@ def _branch_sort_key(wt: git_helpers.WorktreeInfo) -> str:
     return wt.branch if wt.branch is not None else ""
 
 
-def list_worktrees(*, cwd: Path | None = None) -> None:
-    """Print all open worktrees, with the main repo first and '*' marking the current one."""
+def list_worktrees(*, cwd: Path | None = None, verbose: bool = False) -> None:
+    """Print all open worktrees, with the main repo first and '*' marking the current one.
+
+    When *verbose* is False only branch names are printed; when True the worktree
+    directory path is appended after the branch name.
+    """
     current = Path.cwd() if cwd is None else cwd.resolve()
     proj_dir = require_current_project_dir(current)
     repo_dir = project_repo_dir(proj_dir)
@@ -49,13 +53,19 @@ def list_worktrees(*, cwd: Path | None = None) -> None:
 
     marker = "*" if _is_current(repo_dir, current_dir) else " "
     main_branch = main_worktree.branch if main_worktree is not None else repo_branch
-    print(f"{marker} {main_branch}  {repo_dir}")
+    if verbose:
+        print(f"{marker} {main_branch}  {repo_dir}")
+    else:
+        print(f"{marker} {main_branch}")
 
     for wt in branch_worktrees:
         marker = "*" if _is_current(wt.path, current_dir) else " "
         branch = wt.branch or "(detached)"
-        print(f"{marker} {branch}  {wt.path}")
+        if verbose:
+            print(f"{marker} {branch}  {wt.path}")
+        else:
+            print(f"{marker} {branch}")
 
 
-def run() -> None:
-    list_worktrees()
+def run(*, verbose: bool = False) -> None:
+    list_worktrees(verbose=verbose)

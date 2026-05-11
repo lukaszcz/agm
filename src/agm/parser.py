@@ -336,10 +336,13 @@ _HELP_TEXTS: dict[str, str] = {
               Create the session with PANES panes.
     """),
     "list": textwrap.dedent("""\
-        agm list
+        agm list [-v|--verbose]
 
         List all currently open worktrees, with the main repo at the top.
         The current worktree is indicated with a leading *.
+
+        By default only branch names are printed.  With -v/--verbose the
+        worktree directory path is shown after each branch name.
     """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]

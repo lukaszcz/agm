@@ -409,7 +409,7 @@ class TestListCommandViaCli:
     ) -> None:
         calls: list[object] = []
 
-        def record() -> None:
+        def record(*, verbose: bool = False) -> None:
             calls.append(True)
 
         monkeypatch.setattr(cli.list_command, "run", record)

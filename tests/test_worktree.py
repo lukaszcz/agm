@@ -402,11 +402,11 @@ class TestRemoveWorktree:
             lambda p, path, force=False, env=None: removed.append(path),
         )
 
-        deleted: list[str] = []
+        deleted: list[tuple[str, bool]] = []
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "branch_delete",
-            lambda p, b, env=None: deleted.append(b),
+            lambda p, b, force=False, env=None: deleted.append((b, force)),
         )
 
         worktree_mod.remove_worktree(
@@ -414,7 +414,7 @@ class TestRemoveWorktree:
         )
 
         assert removed == [worktree_path]
-        assert deleted == ["feat"]
+        assert deleted == [("feat", False)]
 
     def test_exits_when_worktree_not_found(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -489,8 +489,11 @@ class TestRemoveWorktree:
             "worktree_remove",
             lambda p, path, force=False, env=None: force_values.append(force),
         )
+        deleted: list[tuple[str, bool]] = []
         monkeypatch.setattr(
-            worktree_mod.git_helpers, "branch_delete", lambda p, b, env=None: None
+            worktree_mod.git_helpers,
+            "branch_delete",
+            lambda p, b, force=False, env=None: deleted.append((b, force)),
         )
 
         worktree_mod.remove_worktree(
@@ -498,3 +501,42 @@ class TestRemoveWorktree:
         )
 
         assert force_values == [True]
+        assert deleted == [("feat", False)]
+
+    def test_passes_force_delete_to_branch_delete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        worktree_path = project_dir / ".agm" / "worktrees" / "feat"
+        project_dir.mkdir()
+        repo_dir.mkdir()
+        worktree_path.mkdir(parents=True)
+
+        monkeypatch.setattr(worktree_mod, "current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(
+            worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main"
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_list",
+            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="feat")],
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_remove",
+            lambda p, path, force=False, env=None: None,
+        )
+
+        deleted: list[tuple[str, bool]] = []
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "branch_delete",
+            lambda p, b, force=False, env=None: deleted.append((b, force)),
+        )
+
+        worktree_mod.remove_worktree(
+            repo_dir=repo_dir, force=False, branch="feat", force_delete=True
+        )
+
+        assert deleted == [("feat", True)]

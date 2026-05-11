@@ -8,7 +8,10 @@ import pytest
 
 from agm.vcs.git import (
     WorktreeInfo,
+    _branch_upstream,
     _git_args,
+    _is_ancestor,
+    branch_can_delete,
     branch_delete,
     checkout_root,
     create_tracking_branch,
@@ -596,6 +599,186 @@ class TestBranchDelete:
         )
         branch_delete(tmp_path, "old-branch")
         assert captured[0] == ["git", "-C", str(tmp_path), "branch", "-d", "old-branch"]
+
+    def test_uses_D_flag_when_force(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            "agm.vcs.git.require_success",
+            lambda cmd, **kwargs: captured.append(cmd),
+        )
+        branch_delete(tmp_path, "old-branch", force=True)
+        assert captured[0] == ["git", "-C", str(tmp_path), "branch", "-D", "old-branch"]
+
+
+class TestBranchUpstream:
+    def test_returns_upstream_name_when_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.run_capture",
+            lambda cmd, **kwargs: (0, "origin/main\n", ""),
+        )
+        result = _branch_upstream(tmp_path, "feature")
+        assert result == "origin/main"
+
+    def test_returns_none_when_no_upstream(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.run_capture",
+            lambda cmd, **kwargs: (128, "", "fatal: no upstream"),
+        )
+        result = _branch_upstream(tmp_path, "feature")
+        assert result is None
+
+    def test_returns_none_when_empty_output(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.run_capture",
+            lambda cmd, **kwargs: (0, "\n", ""),
+        )
+        result = _branch_upstream(tmp_path, "feature")
+        assert result is None
+
+
+class TestIsAncestor:
+    def test_returns_true_when_ancestor(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.run_foreground",
+            lambda cmd, **kwargs: 0,
+        )
+        assert _is_ancestor(tmp_path, "main", "feature") is True
+
+    def test_returns_false_when_not_ancestor(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.run_foreground",
+            lambda cmd, **kwargs: 1,
+        )
+        assert _is_ancestor(tmp_path, "feature", "main") is False
+
+    def test_passes_correct_args(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: list[list[str]] = []
+
+        def fake_run_foreground(cmd: list[str], **kwargs: object) -> int:
+            captured.append(cmd)
+            return 0
+
+        monkeypatch.setattr("agm.vcs.git.run_foreground", fake_run_foreground)
+        _is_ancestor(tmp_path, "a", "b")
+        assert captured[0] == [
+            "git",
+            "-C",
+            str(tmp_path),
+            "merge-base",
+            "--is-ancestor",
+            "a",
+            "b",
+        ]
+
+
+class TestBranchCanDelete:
+    def test_returns_false_when_branch_not_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.local_branch_exists", lambda repo, b, env=None: False
+        )
+        result = branch_can_delete(tmp_path, "missing")
+        assert result is False
+
+    def test_returns_true_when_force_and_branch_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True
+        )
+        result = branch_can_delete(tmp_path, "feature", force=True)
+        assert result is True
+
+    def test_returns_true_when_merged_into_upstream(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git._branch_upstream", lambda repo, b, env=None: "origin/main"
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git._is_ancestor", lambda repo, a, d, env=None: True
+        )
+        result = branch_can_delete(tmp_path, "feature")
+        assert result is True
+
+    def test_returns_true_when_merged_into_head_no_upstream(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git._branch_upstream", lambda repo, b, env=None: None
+        )
+        is_ancestor_calls: list[tuple[str, str]] = []
+
+        def fake_is_ancestor(
+            repo: Path, ancestor: str, descendant: str, *, env: object = None
+        ) -> bool:
+            is_ancestor_calls.append((ancestor, descendant))
+            return True
+
+        monkeypatch.setattr("agm.vcs.git._is_ancestor", fake_is_ancestor)
+        result = branch_can_delete(tmp_path, "feature")
+        assert result is True
+        # Should check against HEAD when no upstream
+        assert is_ancestor_calls == [("feature", "HEAD")]
+
+    def test_returns_false_when_not_merged_into_upstream(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git._branch_upstream",
+            lambda repo, b, env=None: "origin/main",
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git._is_ancestor", lambda repo, a, d, env=None: False
+        )
+        result = branch_can_delete(tmp_path, "feature")
+        assert result is False
+
+    def test_uses_upstream_over_head_when_upstream_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.local_branch_exists", lambda repo, b, env=None: True
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git._branch_upstream",
+            lambda repo, b, env=None: "origin/develop",
+        )
+        is_ancestor_calls: list[tuple[str, str]] = []
+
+        def fake_is_ancestor(
+            repo: Path, ancestor: str, descendant: str, *, env: object = None
+        ) -> bool:
+            is_ancestor_calls.append((ancestor, descendant))
+            return True
+
+        monkeypatch.setattr("agm.vcs.git._is_ancestor", fake_is_ancestor)
+        branch_can_delete(tmp_path, "feature")
+        assert is_ancestor_calls == [("feature", "origin/develop")]
 
 
 # ---------------------------------------------------------------------------

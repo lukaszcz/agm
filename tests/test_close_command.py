@@ -308,10 +308,13 @@ class TestCloseSession:
         monkeypatch.setattr(
             close_module, "is_main_checkout_branch", lambda pd, branch, repo_branch: is_main
         )
-        monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
         monkeypatch.setattr(
             close_module, "load_worktree_env", lambda pd, branch, checkout_dir: {}
         )
+        monkeypatch.setattr(
+            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: True
+        )
+        monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
         monkeypatch.setattr(
             close_module, "_remove_branch_config", lambda *, proj_dir, branch, env: None
         )
@@ -349,6 +352,87 @@ class TestCloseSession:
             close_session(branch="main", cwd=tmp_path)
         assert exc_info.value.code == 1
 
+    def test_exits_without_removing_worktree_when_branch_not_deletable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: False
+        )
+        monkeypatch.setattr(
+            close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: False
+        )
+        remove_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            close_module, "remove_worktree", lambda **kw: remove_calls.append(kw)
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            close_session(branch="feature", cwd=tmp_path)
+        assert exc_info.value.code == 1
+        # Worktree should NOT have been removed
+        assert remove_calls == []
+
+    def test_exits_with_not_merged_message_when_branch_not_fully_merged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: False
+        )
+        monkeypatch.setattr(
+            close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: True
+        )
+        with pytest.raises(SystemExit):
+            close_session(branch="feature", cwd=tmp_path)
+        captured = capsys.readouterr()
+        assert "not fully merged" in captured.err
+        assert "-D" in captured.err
+
+    def test_exits_with_not_found_message_when_branch_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: False
+        )
+        monkeypatch.setattr(
+            close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: False
+        )
+        with pytest.raises(SystemExit):
+            close_session(branch="feature", cwd=tmp_path)
+        assert "does not exist" in capsys.readouterr().err
+
+    def test_passes_force_delete_to_remove_worktree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        remove_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            close_module,
+            "remove_worktree",
+            lambda **kw: remove_calls.append(kw),
+        )
+        close_session(branch="feature", force_delete=True, cwd=tmp_path)
+        assert remove_calls[0]["force_delete"] is True
+
+    def test_skips_pre_check_when_force_delete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        # branch_can_delete with force=True just checks existence; it returns True
+        # even for unmerged branches
+        monkeypatch.setattr(
+            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: True
+        )
+        remove_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            close_module,
+            "remove_worktree",
+            lambda **kw: remove_calls.append(kw),
+        )
+        close_session(branch="feature", force_delete=True, cwd=tmp_path)
+        assert len(remove_calls) == 1
+
 
 # ===========================================================================
 # run (entry point)
@@ -359,9 +443,27 @@ class TestCloseRun:
     def test_run_delegates_to_close_session(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        calls: list[str] = []
+        calls: list[dict[str, object]] = []
         monkeypatch.setattr(
-            close_module, "close_session", lambda branch, cwd=None: calls.append(branch)
+            close_module,
+            "close_session",
+            lambda *, branch, force_delete=False, cwd=None: calls.append(
+                {"branch": branch, "force_delete": force_delete}
+            ),
         )
-        close_module.run(CloseArgs(branch="feature"))
-        assert calls == ["feature"]
+        close_module.run(CloseArgs(branch="feature", force_delete=False))
+        assert calls == [{"branch": "feature", "force_delete": False}]
+
+    def test_run_passes_force_delete_true(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            close_module,
+            "close_session",
+            lambda *, branch, force_delete=False, cwd=None: calls.append(
+                {"branch": branch, "force_delete": force_delete}
+            ),
+        )
+        close_module.run(CloseArgs(branch="feature", force_delete=True))
+        assert calls == [{"branch": "feature", "force_delete": True}]

@@ -471,6 +471,21 @@ class TestClose:
         result = invoke(runner, ["close"])
         assert result.exit_code != 0
 
+    def test_close_D_flag(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.close_command)
+        result = invoke(runner, ["close", "-D", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "feat/x"
+        assert calls[0].force_delete is True
+
+    def test_close_default_no_D(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.close_command)
+        result = invoke(runner, ["close", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].force_delete is False
+
 
 class TestRun:
     def test_run_simple(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

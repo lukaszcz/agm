@@ -69,6 +69,7 @@ class OpenArgs:
 @dataclass(slots=True)
 class CloseArgs:
     branch: str
+    force_delete: bool
 
 
 @dataclass(slots=True)

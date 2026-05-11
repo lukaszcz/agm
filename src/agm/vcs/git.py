@@ -160,10 +160,67 @@ def worktree_list(repo_dir: Path, *, env: dict[str, str] | None = None) -> list[
     return worktrees
 
 
-def branch_delete(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> None:
+def branch_delete(
+    repo_dir: Path,
+    branch: str,
+    *,
+    force: bool = False,
+    env: dict[str, str] | None = None,
+) -> None:
     """Delete a local branch."""
 
-    require_success([*_git_args(repo_dir), "branch", "-d", branch], env=env)
+    flag = "-D" if force else "-d"
+    require_success([*_git_args(repo_dir), "branch", flag, branch], env=env)
+
+
+def _branch_upstream(
+    repo_dir: Path, branch: str, *, env: dict[str, str] | None = None
+) -> str | None:
+    """Return the upstream branch name for *branch*, or None if not set."""
+
+    returncode, stdout, _ = run_capture(
+        [*_git_args(repo_dir), "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}"],
+        env=env,
+    )
+    if returncode != 0:
+        return None
+    return stdout.strip() or None
+
+
+def _is_ancestor(
+    repo_dir: Path,
+    ancestor: str,
+    descendant: str,
+    *,
+    env: dict[str, str] | None = None,
+) -> bool:
+    """Return whether *ancestor* is an ancestor of *descendant*."""
+
+    return (
+        run_foreground(
+            [*_git_args(repo_dir), "merge-base", "--is-ancestor", ancestor, descendant],
+            env=env,
+        )
+        == 0
+    )
+
+
+def branch_can_delete(
+    repo_dir: Path,
+    branch: str,
+    *,
+    force: bool = False,
+    env: dict[str, str] | None = None,
+) -> bool:
+    """Return whether a local branch can be deleted with -d (or -D if *force*)."""
+
+    if not local_branch_exists(repo_dir, branch, env=env):
+        return False
+    if force:
+        return True
+    upstream = _branch_upstream(repo_dir, branch, env=env)
+    target = upstream if upstream is not None else "HEAD"
+    return _is_ancestor(repo_dir, branch, target, env=env)
 
 
 def local_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:

@@ -501,6 +501,11 @@ def close(
         metavar="BRANCH",
         autocompletion=completion.complete_close_branch,
     ),
+    force_delete: bool = typer.Option(
+        False,
+        "-D",
+        help="Force delete the branch (git branch -D) instead of safe delete (git branch -d).",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -512,7 +517,8 @@ def close(
                 branch,
                 command_path=["close"],
                 name="branch",
-            )
+            ),
+            force_delete=force_delete,
         )
     )
 

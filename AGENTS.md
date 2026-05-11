@@ -36,7 +36,7 @@ Use `just` for the standard workflow:
 
 - `just setup` creates `.venv` with Python 3.12 and installs the project plus dev dependencies via `uv`
 - `just lint` runs `ruff check src/ tests/`
-- `just test` runs `pytest tests/ -q`
+- `just test` runs the test suite
 - `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`
 - `just check` runs linting, tests, and type checking together
 - `just install` installs the `agm` CLI and copies default config into `~/.agm/`

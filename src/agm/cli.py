@@ -17,6 +17,7 @@ import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
+import agm.commands.list as list_command
 import agm.commands.loop.next as loop_next_command
 import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
@@ -1020,6 +1021,16 @@ def tmux_layout(
             window_id=window_id,
         )
     )
+
+
+@app.command(name="list")
+def list_cmd(
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    list_command.run()
 
 
 app.add_typer(config_app, name="config")

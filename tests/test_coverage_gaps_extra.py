@@ -390,3 +390,29 @@ class TestCurrentProjectDirGitCommonDirTry:
         # Walk: project/sub → no .agm, no repo/ → None
         # Walk: project → .agm exists → returns project
         assert result == project
+
+
+# ---------------------------------------------------------------------------
+# cli.py – list command via CLI (lines 1032-1034)
+# ---------------------------------------------------------------------------
+
+
+class TestListCommandViaCli:
+    """Cover lines 1032-1034: list_cmd function body."""
+
+    @pytest.fixture()
+    def runner(self) -> CliRunner:
+        return CliRunner()
+
+    def test_list_cmd_via_cli(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[object] = []
+
+        def record() -> None:
+            calls.append(True)
+
+        monkeypatch.setattr(cli.list_command, "run", record)
+        result = invoke(runner, ["list"])
+        assert result.exit_code == 0
+        assert len(calls) == 1

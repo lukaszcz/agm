@@ -335,6 +335,12 @@ _HELP_TEXTS: dict[str, str] = {
           agm tmux open --num-panes PANES
               Create the session with PANES panes.
     """),
+    "list": textwrap.dedent("""\
+        agm list
+
+        List all currently open worktrees, with the main repo at the top.
+        The current worktree is indicated with a leading *.
+    """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]
 
@@ -365,6 +371,7 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("loop", "Run the loop prompt until completion"),
     ("run", "Run a command in a sandbox"),
     ("config", "Manage project configuration files"),
+    ("list", "List all open worktrees"),
     ("worktree", "Git worktree management"),
     ("tmux", "Tmux session and layout management"),
     ("help", "Show help for a command"),

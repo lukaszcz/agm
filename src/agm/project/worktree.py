@@ -103,23 +103,6 @@ def ensure_worktree(
 
 def remove_worktree(
     *,
-    force: bool,
-    branch: str,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Remove a worktree from the current repo and delete its branch."""
-
-    remove_worktree_from_repo(
-        repo_dir=git_helpers.checkout_root(cwd),
-        force=force,
-        branch=branch,
-        env=env,
-    )
-
-
-def remove_worktree_from_repo(
-    *,
     repo_dir: Path,
     force: bool,
     branch: str,

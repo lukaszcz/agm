@@ -104,7 +104,7 @@ def close_session(*, branch: str, cwd: Path | None = None) -> None:
         )
         raise SystemExit(1)
 
-    remove_worktree(force=False, branch=branch, cwd=current)
+    remove_worktree(repo_dir=repo_dir, force=False, branch=branch)
     env = load_worktree_env(proj_dir, None, checkout_dir=repo_dir)
     _remove_branch_config(proj_dir=proj_dir, branch=branch, env=env)
     session_name = branch_session_name(proj_dir, branch)

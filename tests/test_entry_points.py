@@ -137,8 +137,13 @@ class TestWorktreeRemoveRun:
             "remove_worktree",
             lambda **kw: calls.append(kw),
         )
+        monkeypatch.setattr(
+            worktree_remove_cmd.git_helpers,
+            "checkout_root",
+            lambda cwd=None: Path("/tmp/repo"),
+        )
         worktree_remove_cmd.run(WorktreeRemoveArgs(force=True, branch="feature"))
-        assert calls == [{"force": True, "branch": "feature"}]
+        assert calls == [{"repo_dir": Path("/tmp/repo"), "force": True, "branch": "feature"}]
 
 
 # ---------------------------------------------------------------------------

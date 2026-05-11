@@ -373,32 +373,7 @@ class TestEnsureWorktree:
 
 
 class TestRemoveWorktree:
-    """Tests for remove_worktree (thin wrapper)."""
-
-    def test_delegates_to_remove_worktree_from_repo(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        repo_dir = tmp_path / "repo"
-        repo_dir.mkdir()
-
-        monkeypatch.setattr(worktree_mod.git_helpers, "checkout_root", lambda cwd=None: repo_dir)
-
-        from_repo_calls: list[dict[str, object]] = []
-        monkeypatch.setattr(
-            worktree_mod,
-            "remove_worktree_from_repo",
-            lambda *, repo_dir, force, branch, env=None: from_repo_calls.append(
-                {"repo_dir": repo_dir, "force": force, "branch": branch}
-            ),
-        )
-
-        worktree_mod.remove_worktree(force=True, branch="feat", cwd=tmp_path)
-
-        assert from_repo_calls == [{"repo_dir": repo_dir, "force": True, "branch": "feat"}]
-
-
-class TestRemoveWorktreeFromRepo:
-    """Tests for remove_worktree_from_repo."""
+    """Tests for remove_worktree."""
 
     def test_removes_worktree_and_deletes_branch(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -434,7 +409,7 @@ class TestRemoveWorktreeFromRepo:
             lambda p, b, env=None: deleted.append(b),
         )
 
-        worktree_mod.remove_worktree_from_repo(
+        worktree_mod.remove_worktree(
             repo_dir=repo_dir, force=False, branch="feat"
         )
 
@@ -465,7 +440,7 @@ class TestRemoveWorktreeFromRepo:
         )
 
         with pytest.raises(SystemExit):
-            worktree_mod.remove_worktree_from_repo(
+            worktree_mod.remove_worktree(
                 repo_dir=repo_dir, force=False, branch="nonexistent"
             )
 
@@ -484,7 +459,7 @@ class TestRemoveWorktreeFromRepo:
         )
 
         with pytest.raises(SystemExit):
-            worktree_mod.remove_worktree_from_repo(
+            worktree_mod.remove_worktree(
                 repo_dir=repo_dir, force=False, branch="main"
             )
 
@@ -518,7 +493,7 @@ class TestRemoveWorktreeFromRepo:
             worktree_mod.git_helpers, "branch_delete", lambda p, b, env=None: None
         )
 
-        worktree_mod.remove_worktree_from_repo(
+        worktree_mod.remove_worktree(
             repo_dir=repo_dir, force=True, branch="feat"
         )
 

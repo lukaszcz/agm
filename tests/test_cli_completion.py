@@ -757,6 +757,26 @@ class TestCompleteRunCommand:
         result = completion.complete_run_command([], "")
         assert result == []
 
+    def test_skips_non_directory_path_entries(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path / "missing-bin"))
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        result = completion.complete_run_command([], "")
+
+        assert result == []
+
+    def test_returns_empty_when_path_scan_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def broken_path(_value: str) -> Path:
+            raise OSError("path unavailable")
+
+        monkeypatch.setenv("PATH", "broken")
+        monkeypatch.setattr(completion, "Path", broken_path)
+
+        assert completion.complete_run_command([], "") == []
+
 
 class TestCompleteTmuxSession:
     def test_returns_empty_when_returncode_nonzero(
@@ -905,6 +925,25 @@ class TestCompleteReviseCommandOrReviewFile:
             completion,
             "load_merged_config",
             lambda **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
+        )
+        ctx = click.Context(click.Command("test"))
+
+        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
+
+        assert result == []
+
+    def test_returns_empty_when_review_file_completion_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            completion,
+            "current_config_context",
+            lambda: (_ for _ in ()).throw(RuntimeError("bad config")),
+        )
+        monkeypatch.setattr(
+            completion,
+            "_path_candidates",
+            lambda incomplete: (_ for _ in ()).throw(OSError("bad path")),
         )
         ctx = click.Context(click.Command("test"))
 

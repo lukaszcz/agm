@@ -102,7 +102,6 @@ def prepare_revise(
     return prepare_prompt_run(
         runner=runner,
         prompt_source=prompt_source,
-        default_prompt_file=default_prompt_file,
         extra_prompt_source=extra_prompt_source,
         env=env,
         temp_files=owned_temp_files,

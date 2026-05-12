@@ -132,7 +132,6 @@ def prepare_prompt_run(
     *,
     runner: str,
     prompt_source: str | Path,
-    default_prompt_file: Path,
     extra_prompt_source: str | Path | None,
     env: dict[str, str],
     temp_files: list[Path],

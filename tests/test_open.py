@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-import agm.commands.open as open_module
 import agm.project.layout as layout_module
 
 
@@ -31,14 +30,6 @@ class TestResolveParentConfigBranch:
         )
         result = layout_module.parent_config_branch(project_dir, "feature-a")
         assert result == "feature-a"
-
-    def test_command_wrapper_delegates_to_layout(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        monkeypatch.setattr(open_module, "parent_config_branch", lambda _project, parent: parent)
-
-        assert open_module.resolve_parent_config_branch(project_dir, "feature-a") == "feature-a"
 
     def test_none_parent_returns_repo_branch_if_branch_checkout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]

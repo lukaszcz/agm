@@ -9,93 +9,7 @@ import pytest
 
 import agm.commands.close as close_module
 from agm.commands.args import CloseArgs
-from agm.commands.close import (
-    _containing_git_root,
-    _has_staged_changes,
-    _remove_branch_config,
-    close_session,
-)
-
-# ===========================================================================
-# _containing_git_root
-# ===========================================================================
-
-
-class TestContainingGitRoot:
-    def test_returns_none_for_nonexistent_path(self, tmp_path: Path) -> None:
-        result = _containing_git_root(tmp_path / "nonexistent", env={})
-        assert result is None
-
-    def test_returns_none_when_git_fails(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            close_module, "run_capture", lambda cmd, **kw: (1, "", "not a git repo")
-        )
-        result = _containing_git_root(tmp_path, env={})
-        assert result is None
-
-    def test_returns_path_when_git_succeeds(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        repo_root = tmp_path / "repo"
-        monkeypatch.setattr(
-            close_module,
-            "run_capture",
-            lambda cmd, **kw: (0, str(repo_root) + "\n", ""),
-        )
-        result = _containing_git_root(tmp_path, env={})
-        assert result == repo_root
-
-    def test_strips_whitespace_from_stdout(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        repo_root = tmp_path / "repo"
-        monkeypatch.setattr(
-            close_module,
-            "run_capture",
-            lambda cmd, **kw: (0, f"  {repo_root}  \n", ""),
-        )
-        result = _containing_git_root(tmp_path, env={})
-        assert result == repo_root
-
-
-# ===========================================================================
-# _has_staged_changes
-# ===========================================================================
-
-
-class TestHasStagedChanges:
-    def test_returns_false_when_returncode_zero(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            close_module, "run_capture", lambda cmd, **kw: (0, "", "")
-        )
-        assert _has_staged_changes(tmp_path, tmp_path / "file", env={}) is False
-
-    def test_returns_true_when_returncode_one(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            close_module, "run_capture", lambda cmd, **kw: (1, "", "")
-        )
-        assert _has_staged_changes(tmp_path, tmp_path / "file", env={}) is True
-
-    def test_exits_on_unexpected_returncode(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            close_module, "run_capture", lambda cmd, **kw: (2, "stdout", "stderr")
-        )
-
-        def _raise_exit(rc: int, stdout: str = "", stderr: str = "") -> None:
-            raise SystemExit(rc)
-
-        monkeypatch.setattr(close_module, "exit_with_output", _raise_exit)
-        with pytest.raises(SystemExit):
-            _has_staged_changes(tmp_path, tmp_path / "file", env={})
-
+from agm.commands.close import _remove_branch_config, close_session
 
 # ===========================================================================
 # _remove_branch_config
@@ -130,7 +44,7 @@ class TestRemoveBranchConfig:
 
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
         monkeypatch.setattr(
-            close_module, "_containing_git_root", lambda path, env: git_root
+            close_module.git_helpers, "containing_root", lambda path, env: git_root
         )
 
         rmtree_calls: list[Path] = []
@@ -144,7 +58,7 @@ class TestRemoveBranchConfig:
 
         monkeypatch.setattr(close_module, "run_capture", fake_run_capture)
         monkeypatch.setattr(
-            close_module, "_has_staged_changes", lambda repo_dir, path, env: True
+            close_module.git_helpers, "has_staged_changes", lambda repo_dir, paths, env: True
         )
         require_success_calls: list[list[str]] = []
         monkeypatch.setattr(
@@ -169,14 +83,14 @@ class TestRemoveBranchConfig:
 
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
         monkeypatch.setattr(
-            close_module, "_containing_git_root", lambda path, env: tmp_path / "proj"
+            close_module.git_helpers, "containing_root", lambda path, env: tmp_path / "proj"
         )
         monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
         monkeypatch.setattr(
             close_module, "run_capture", lambda cmd, **kw: (0, "", "")
         )
         monkeypatch.setattr(
-            close_module, "_has_staged_changes", lambda repo_dir, path, env: False
+            close_module.git_helpers, "has_staged_changes", lambda repo_dir, paths, env: False
         )
         require_success_calls: list[list[str]] = []
         monkeypatch.setattr(
@@ -197,7 +111,7 @@ class TestRemoveBranchConfig:
 
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
         monkeypatch.setattr(
-            close_module, "_containing_git_root", lambda path, env: tmp_path / "proj"
+            close_module.git_helpers, "containing_root", lambda path, env: tmp_path / "proj"
         )
         monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
 
@@ -226,7 +140,7 @@ class TestRemoveBranchConfig:
 
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
         monkeypatch.setattr(
-            close_module, "_containing_git_root", lambda path, env: tmp_path / "proj"
+            close_module.git_helpers, "containing_root", lambda path, env: tmp_path / "proj"
         )
         monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
 
@@ -254,7 +168,7 @@ class TestRemoveBranchConfig:
         branch_config_file.write_text("data")
 
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(close_module, "_containing_git_root", lambda path, env: None)
+        monkeypatch.setattr(close_module.git_helpers, "containing_root", lambda path, env: None)
 
         unlink_calls: list[Path] = []
         monkeypatch.setattr(close_module.fs, "unlink", lambda p: unlink_calls.append(p))
@@ -272,7 +186,7 @@ class TestRemoveBranchConfig:
         branch_config.mkdir(parents=True)
 
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(close_module, "_containing_git_root", lambda path, env: None)
+        monkeypatch.setattr(close_module.git_helpers, "containing_root", lambda path, env: None)
         monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
 
         require_success_calls: list[list[str]] = []

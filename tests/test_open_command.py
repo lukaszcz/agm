@@ -10,19 +10,14 @@ import pytest
 import agm.commands.open as open_module
 from agm.commands.args import OpenArgs
 from agm.commands.open import (
-    branch_exists,
     branch_path,
     checkout_session,
-    expected_branch_path,
-    has_expected_worktree,
     new_session,
     open_session,
     queue_setup_and_focus_session,
-    resolve_parent_checkout_dir,
     smart_open_session,
     validate_pane_count,
 )
-from agm.vcs.git import WorktreeInfo
 
 # ===========================================================================
 # validate_pane_count
@@ -86,182 +81,6 @@ class TestBranchPath:
         proj_dir = self._make_project(tmp_path, monkeypatch)
         result = branch_path(proj_dir, "feature")
         assert result == proj_dir / ".agm" / "worktrees" / "feature"
-
-
-# ===========================================================================
-# expected_branch_path
-# ===========================================================================
-
-
-class TestExpectedBranchPath:
-    def test_returns_resolved_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        proj_dir.mkdir()
-        worktree_path = tmp_path / "worktrees" / "feature"
-        monkeypatch.setattr(
-            open_module, "branch_path", lambda pd, branch: worktree_path
-        )
-        result = expected_branch_path(proj_dir, "feature")
-        assert result == worktree_path.resolve(strict=False)
-
-
-# ===========================================================================
-# resolve_parent_checkout_dir
-# ===========================================================================
-
-
-class TestResolveParentCheckoutDir:
-    def test_none_parent_returns_repo_dir(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            open_module.git_helpers, "current_branch", lambda rd, **kw: "main"
-        )
-        result = resolve_parent_checkout_dir(proj_dir, None, env={})
-        assert result == repo_dir
-
-    def test_parent_same_as_repo_branch_returns_repo_dir(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            open_module.git_helpers, "current_branch", lambda rd, **kw: "main"
-        )
-        result = resolve_parent_checkout_dir(proj_dir, "main", env={})
-        assert result == repo_dir
-
-    def test_different_parent_returns_branch_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        feat_path = tmp_path / "worktrees" / "develop"
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            open_module.git_helpers, "current_branch", lambda rd, **kw: "main"
-        )
-        monkeypatch.setattr(
-            open_module, "branch_path", lambda pd, branch: feat_path
-        )
-        result = resolve_parent_checkout_dir(proj_dir, "develop", env={})
-        assert result == feat_path
-
-
-# ===========================================================================
-# has_expected_worktree
-# ===========================================================================
-
-
-class TestHasExpectedWorktree:
-    def _setup(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        *,
-        expected: Path,
-        worktrees: list[WorktreeInfo],
-    ) -> Path:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            open_module, "expected_branch_path", lambda pd, branch: expected
-        )
-        monkeypatch.setattr(
-            open_module.git_helpers, "worktree_list", lambda rd, env=None: worktrees
-        )
-        return proj_dir
-
-    def test_returns_true_when_worktree_matches(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        expected = tmp_path / "worktrees" / "feature"
-        expected.mkdir(parents=True)
-        proj_dir = self._setup(
-            tmp_path,
-            monkeypatch,
-            expected=expected,
-            worktrees=[WorktreeInfo(path=expected, branch="feature")],
-        )
-        assert has_expected_worktree(proj_dir, "feature") is True
-
-    def test_returns_false_when_no_match(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        expected = tmp_path / "worktrees" / "feature"
-        other = tmp_path / "worktrees" / "other"
-        other.mkdir(parents=True)
-        proj_dir = self._setup(
-            tmp_path,
-            monkeypatch,
-            expected=expected,
-            worktrees=[WorktreeInfo(path=other, branch="other")],
-        )
-        assert has_expected_worktree(proj_dir, "feature") is False
-
-    def test_returns_false_when_branch_differs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        expected = tmp_path / "worktrees" / "feature"
-        expected.mkdir(parents=True)
-        proj_dir = self._setup(
-            tmp_path,
-            monkeypatch,
-            expected=expected,
-            worktrees=[WorktreeInfo(path=expected, branch="other-branch")],
-        )
-        assert has_expected_worktree(proj_dir, "feature") is False
-
-
-# ===========================================================================
-# branch_exists
-# ===========================================================================
-
-
-class TestBranchExists:
-    def test_returns_true_when_local_branch_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            open_module.git_helpers, "local_branch_exists", lambda rd, branch, env=None: True
-        )
-        monkeypatch.setattr(
-            open_module.git_helpers, "remote_branch_exists", lambda rd, branch, env=None: False
-        )
-        assert branch_exists(tmp_path, "feature") is True
-
-    def test_returns_true_when_remote_branch_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            open_module.git_helpers, "local_branch_exists", lambda rd, branch, env=None: False
-        )
-        monkeypatch.setattr(
-            open_module.git_helpers, "remote_branch_exists", lambda rd, branch, env=None: True
-        )
-        assert branch_exists(tmp_path, "feature") is True
-
-    def test_returns_false_when_neither_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            open_module.git_helpers, "local_branch_exists", lambda rd, branch, env=None: False
-        )
-        monkeypatch.setattr(
-            open_module.git_helpers, "remote_branch_exists", lambda rd, branch, env=None: False
-        )
-        assert branch_exists(tmp_path, "feature") is False
 
 
 # ===========================================================================
@@ -461,9 +280,7 @@ class TestNewSession:
         monkeypatch.setattr(
             open_module, "queue_setup_and_focus_session", lambda **kw: None
         )
-        monkeypatch.setattr(
-            open_module, "resolve_parent_config_branch", lambda pd, parent: parent
-        )
+        monkeypatch.setattr(open_module, "parent_config_branch", lambda pd, parent: parent)
         return proj_dir
 
     def test_calls_ensure_worktree_with_new_branch(
@@ -537,9 +354,7 @@ class TestCheckoutSession:
         monkeypatch.setattr(
             open_module, "queue_setup_and_focus_session", lambda **kw: None
         )
-        monkeypatch.setattr(
-            open_module, "resolve_parent_config_branch", lambda pd, parent: parent
-        )
+        monkeypatch.setattr(open_module, "parent_config_branch", lambda pd, parent: parent)
         return proj_dir
 
     def test_calls_ensure_worktree_with_existing_branch(

@@ -19,7 +19,12 @@ from agm.project.layout import (
     require_current_project_dir,
 )
 from agm.project.setup import load_worktree_env
-from agm.project.worktree import ensure_worktree
+from agm.project.worktree import (
+    branch_exists,
+    ensure_worktree,
+    has_expected_worktree,
+    resolve_parent_checkout_dir,
+)
 from agm.tmux.session import (
     create_tmux_session,
     focus_tmux_session,
@@ -43,42 +48,6 @@ def branch_path(proj_dir: Path, branch: str) -> Path:
         branch,
         repo_branch=git_helpers.current_branch(project_repo_dir(proj_dir)),
     )
-
-
-def expected_branch_path(proj_dir: Path, branch: str) -> Path:
-    return branch_path(proj_dir, branch).resolve(strict=False)
-
-
-def resolve_parent_config_branch(proj_dir: Path, parent: str | None) -> str | None:
-    return parent_config_branch(proj_dir, parent)
-
-
-def resolve_parent_checkout_dir(
-    proj_dir: Path, parent: str | None, *, env: dict[str, str]
-) -> Path:
-    repo_dir = project_repo_dir(proj_dir)
-    repo_branch = git_helpers.current_branch(repo_dir, env=env)
-    resolved_parent = parent or repo_branch
-    if resolved_parent == repo_branch:
-        return repo_dir
-    return branch_path(proj_dir, resolved_parent)
-
-
-def has_expected_worktree(
-    proj_dir: Path, branch: str, *, env: dict[str, str] | None = None
-) -> bool:
-    repo_dir = project_repo_dir(proj_dir)
-    expected_path = expected_branch_path(proj_dir, branch)
-    for worktree in git_helpers.worktree_list(repo_dir, env=env):
-        if worktree.branch == branch and worktree.path.resolve(strict=False) == expected_path:
-            return True
-    return False
-
-
-def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
-    return git_helpers.local_branch_exists(
-        repo_dir, branch, env=env
-    ) or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
 
 
 def queue_setup_and_focus_session(
@@ -158,8 +127,9 @@ def new_session(
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
     ensure_dependency_configs_for_branch(
-        project_dir=proj_dir, branch=branch,
-        parent_branch=resolve_parent_config_branch(proj_dir, parent),
+        project_dir=proj_dir,
+        branch=branch,
+        parent_branch=parent_config_branch(proj_dir, parent),
     )
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
@@ -195,7 +165,7 @@ def checkout_session(
     mkdir(repo_path, parents=True, exist_ok=True)
     ensure_dependency_configs_for_branch(
         project_dir=proj_dir, branch=branch,
-        parent_branch=resolve_parent_config_branch(proj_dir, parent),
+        parent_branch=parent_config_branch(proj_dir, parent),
     )
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)

@@ -358,6 +358,23 @@ def test_prepare_revise_uses_named_config_inline_prompt(
     )
 
 
+def test_prepare_revise_rejects_lone_config_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text('[revise.frontend]\nprompt = "frontend"\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        prepare_revise(_revise_args("frontend"), temp_files=[])
+
+    assert exc_info.value.code == 1
+    assert "revise command 'frontend' was provided without REVIEW_FILE" in capsys.readouterr().err
+
+
 def test_prepare_revise_exits_when_named_config_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

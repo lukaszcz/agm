@@ -32,6 +32,7 @@ from agm.core.agent import (
     validate_command,
 )
 from agm.core.response import last_response_line
+from agm.parser import exit_with_usage_error
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"
 DEFAULT_REVIEW_ASPECTS = "correctness, completeness, maintainability, adherence to AGENTS.md"
@@ -207,6 +208,26 @@ def _revise_config(command_name: str | None, *, require_command: bool) -> Revise
         _exit_config_command_not_found(error)
 
 
+def _exit_if_lone_revise_command_name(args: ReviseArgs) -> None:
+    if args.command_name is not None:
+        return
+    if _path_from_cli(args.review_file).exists():
+        return
+    try:
+        load_revise_config(
+            home=_config_home(),
+            proj_dir=_project_dir(),
+            cwd=Path.cwd(),
+            command_name=args.review_file,
+        )
+    except ConfigCommandNotFound:
+        return
+    exit_with_usage_error(
+        ["revise"],
+        f"error: revise command {args.review_file!r} was provided without REVIEW_FILE",
+    )
+
+
 def _refine_config(command_name: str | None) -> RefineConfig:
     try:
         return load_refine_config(
@@ -261,6 +282,7 @@ def prepare_review(args: ReviewArgs, *, temp_files: list[Path] | None = None) ->
 
 def prepare_revise(args: ReviseArgs, *, temp_files: list[Path] | None = None) -> AgentPromptRun:
     owned_temp_files: list[Path] = [] if temp_files is None else temp_files
+    _exit_if_lone_revise_command_name(args)
     config = _revise_config(args.command_name, require_command=args.require_command_config)
     runner = args.runner or config.runner or _default_runner()
     env = dict(os.environ)

@@ -791,6 +791,57 @@ class TestCompletePathArgument:
         assert result == []
 
 
+class TestCompleteReviseCommandOrReviewFile:
+    def test_prefers_config_command_names(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr(
+            completion,
+            "load_merged_config",
+            lambda **kwargs: {
+                "revise": {
+                    "runner": "codex exec",
+                    "frontend": {"prompt": "fix ui"},
+                    "backend": {"prompt": "fix api"},
+                }
+            },
+        )
+        ctx = click.Context(click.Command("test"))
+
+        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
+
+        assert result == ["frontend"]
+
+    def test_falls_back_to_paths_when_no_command_matches(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "review.md").write_text("review\n", encoding="utf-8")
+        monkeypatch.chdir(work)
+        monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr(
+            completion,
+            "load_merged_config",
+            lambda **kwargs: {"revise": {"frontend": {"prompt": "fix ui"}}},
+        )
+        ctx = click.Context(click.Command("test"))
+
+        result = completion.complete_revise_command_or_review_file(ctx, [], "rev")
+
+        assert result == ["review.md"]
+
+
 class TestBranchCandidatesExceptionHandling:
     def test_skips_current_branch_on_runtime_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1036,4 +1087,3 @@ class TestPathCandidatesValueError:
         # Should use absolute path for display
         assert len(result) == 1
         assert result[0] == str(outside / "target.txt")
-

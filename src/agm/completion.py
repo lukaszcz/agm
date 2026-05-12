@@ -10,7 +10,7 @@ import click
 
 import agm.vcs.git as git_helpers
 from agm.commands.dep.common import main_dep_repo
-from agm.config.general import load_run_config
+from agm.config.general import load_merged_config, load_run_config
 from agm.project.layout import (
     current_project_dir,
     default_worktrees_dir,
@@ -329,6 +329,42 @@ def complete_path_argument(
 ) -> list[str]:
     del ctx, args
     try:
+        return _path_candidates(incomplete)
+    except (Exception, SystemExit):
+        return []
+
+
+def _configured_command_names(
+    section: str, *, home: Path, proj_dir: Path | None, cwd: Path
+) -> set[str]:
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    table = merged.get(section)
+    if not isinstance(table, dict):
+        return set()
+    return {
+        key
+        for key, value in table.items()
+        if isinstance(key, str) and isinstance(value, dict)
+    }
+
+
+def complete_revise_command_or_review_file(
+    ctx: click.Context, args: list[str], incomplete: str
+) -> list[str]:
+    del ctx, args
+    try:
+        home = Path(os.environ.get("HOME", "~")).expanduser()
+        cwd = Path.cwd()
+        try:
+            proj_dir = current_project_dir(cwd)
+        except (OSError, SystemExit):
+            proj_dir = None
+        command_matches = _match(
+            _configured_command_names("revise", home=home, proj_dir=proj_dir, cwd=cwd),
+            incomplete,
+        )
+        if command_matches:
+            return command_matches
         return _path_candidates(incomplete)
     except (Exception, SystemExit):
         return []

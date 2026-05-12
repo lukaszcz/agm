@@ -995,7 +995,7 @@ def revise(
     command_name_or_review_file: str | None = typer.Argument(
         None,
         metavar="COMMAND_OR_REVIEW_FILE",
-        autocompletion=completion.complete_path_argument,
+        autocompletion=completion.complete_revise_command_or_review_file,
     ),
     review_file: str | None = typer.Argument(
         None,

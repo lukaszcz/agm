@@ -116,6 +116,57 @@ def test_run_delegates_sandbox_execution_to_srt(
     assert 'export SANDBOX_CGROUP="$CG"' in bootstrap_script
 
 
+def test_run_does_not_patch_sandbox_when_project_is_only_discovered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
+    project = tmp_path / "project"
+    cwd = project / "repo"
+    (tmp_path / "home").mkdir()
+    cwd.mkdir(parents=True)
+
+    monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: cwd))
+    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(
+        "agm.config.context.current_project_dir",
+        lambda current: project,
+    )
+    monkeypatch.setattr(
+        run_command,
+        "load_run_config",
+        lambda **_: RunConfig(
+            aliases={},
+            default_memory_limit=None,
+            command_memory_limits={},
+            default_swap_limit=None,
+            command_swap_limits={},
+        ),
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        run_command.srt,
+        "run_sandboxed",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    run_command.run(
+        RunArgs(
+            run_command=["echo", "hi"],
+            no_sandbox=False,
+            no_patch=False,
+            memory=None,
+            swap=None,
+            no_memory_limit=True,
+            no_swap_limit=True,
+            settings_file=None,
+        )
+    )
+
+    assert captured["proj_dir"] == project
+    assert captured["patch_proj_dir"] is None
+
+
 def test_run_no_memory_limit_omits_memory_max_but_keeps_default_swap_limit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -119,6 +119,9 @@ def run(args: RunArgs) -> None:
     if not run_command:
         print("Error: command is required.", file=sys.stderr)
         raise SystemExit(1)
+    patch_proj_dir = (
+        context.proj_dir if resolved_env.get("PROJ_DIR") and not run_args.no_patch else None
+    )
 
     run_config = load_run_config(
         home=context.home,
@@ -172,9 +175,7 @@ def run(args: RunArgs) -> None:
                 command_name=run_command[0],
                 alias_command_name=effective_run_command[0] if command_alias is not None else None,
                 settings_file=run_args.settings_file,
-                patch_proj_dir=(
-                    context.proj_dir if not run_args.no_patch else None
-                ),
+                patch_proj_dir=patch_proj_dir,
                 process_prefix=process_prefix,
             )
             return
@@ -201,9 +202,7 @@ def run(args: RunArgs) -> None:
         command_name=run_command[0],
         alias_command_name=effective_run_command[0] if command_alias is not None else None,
         settings_file=run_args.settings_file,
-        patch_proj_dir=(
-            context.proj_dir if not run_args.no_patch else None
-        ),
+        patch_proj_dir=patch_proj_dir,
         process_prefix=process_prefix,
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
     )

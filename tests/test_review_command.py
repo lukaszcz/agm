@@ -322,12 +322,16 @@ def test_prepare_revise_exits_when_default_prompt_is_missing(
         prepare_revise(_revise_args("review.md"), temp_files=[])
 
 
-def test_write_review_file_expands_env_vars(tmp_path: Path) -> None:
+def test_write_review_file_preserves_env_vars(tmp_path: Path) -> None:
     temp_files: list[Path] = []
-    path = _write_review_file("issue=$VALUE\n", temp_files=temp_files, env={"VALUE": "ok"})
+    path = _write_review_file(
+        "issue=$VALUE and ${TOKEN}\n",
+        temp_files=temp_files,
+        env={"VALUE": "ok", "TOKEN": "secret"},
+    )
 
     assert path in temp_files
-    assert path.read_text(encoding="utf-8") == "issue=ok\n"
+    assert path.read_text(encoding="utf-8") == "issue=$VALUE and ${TOKEN}\n"
 
 
 def test_review_once_runs_prompt_and_cleans_temp_files(

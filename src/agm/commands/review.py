@@ -30,7 +30,6 @@ from agm.core.agent import (
     validate_command,
 )
 from agm.core.fs import is_file
-from agm.core.prompt import expand_prompt_env_vars
 from agm.core.response import last_response_line
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"
@@ -287,9 +286,8 @@ def revise_once(args: ReviseArgs) -> str:
 
 
 def _write_review_file(output: str, *, temp_files: list[Path], env: dict[str, str]) -> Path:
-    expanded = expand_prompt_env_vars(output, env=env)
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
-        handle.write(expanded)
+        handle.write(output)
         path = Path(handle.name)
     temp_files.append(path)
     return path

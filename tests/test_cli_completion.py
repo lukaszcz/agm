@@ -792,6 +792,20 @@ class TestCompletePathArgument:
 
 
 class TestCompleteReviseCommandOrReviewFile:
+    def test_configured_command_names_ignores_missing_section(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(completion, "load_merged_config", lambda **kwargs: {})
+
+        result = completion._configured_command_names(
+            "revise",
+            home=tmp_path / "home",
+            proj_dir=None,
+            cwd=tmp_path,
+        )
+
+        assert result == set()
+
     def test_prefers_config_command_names(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -840,6 +854,44 @@ class TestCompleteReviseCommandOrReviewFile:
         result = completion.complete_revise_command_or_review_file(ctx, [], "rev")
 
         assert result == ["review.md"]
+
+    def test_handles_project_lookup_errors(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            completion,
+            "current_project_dir",
+            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+        )
+        monkeypatch.setattr(
+            completion,
+            "load_merged_config",
+            lambda **kwargs: {"revise": {"frontend": {"prompt": "fix ui"}}},
+        )
+        ctx = click.Context(click.Command("test"))
+
+        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
+
+        assert result == ["frontend"]
+
+    def test_returns_empty_on_config_errors(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            completion,
+            "load_merged_config",
+            lambda **kwargs: (_ for _ in ()).throw(ValueError("bad config")),
+        )
+        ctx = click.Context(click.Command("test"))
+
+        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
+
+        assert result == []
 
 
 class TestBranchCandidatesExceptionHandling:

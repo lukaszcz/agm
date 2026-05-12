@@ -670,6 +670,61 @@ def test_refine_runs_fresh_review_after_continue(
     assert reviews[0].aspects == "aspects"
 
 
+def test_refine_leaves_missing_scope_and_aspects_for_review_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text("[refine.frontend]\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    reviews: list[ReviewArgs] = []
+
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
+        reviews.append(args)
+        return "review result\n"
+
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        return "COMPLETE\n"
+
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=None,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+            command_name="frontend",
+        )
+    )
+
+    assert reviews[0].scope is None
+    assert reviews[0].aspects is None
+
+
 def test_refine_uses_named_config_and_forwards_command_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

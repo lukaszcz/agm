@@ -10,8 +10,6 @@ from agm.agent.response import last_response_line
 from agm.agent.runner import cleanup_temp_files
 from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.commands.review import (
-    DEFAULT_REVIEW_ASPECTS,
-    DEFAULT_REVIEW_SCOPE,
     _write_stderr,
     _write_stdout,
     review_once,
@@ -65,8 +63,8 @@ def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewAr
     runner = args.reviewer or args.runner or config.reviewer or config.runner
     return ReviewArgs(
         runner=runner,
-        scope=args.scope or config.scope or DEFAULT_REVIEW_SCOPE,
-        aspects=args.aspects or config.aspects or DEFAULT_REVIEW_ASPECTS,
+        scope=args.scope or config.scope,
+        aspects=args.aspects or config.aspects,
         extra_aspects=None,
         prompt=args.review_prompt or config.review_prompt,
         prompt_file=args.review_prompt_file or config.review_prompt_file,

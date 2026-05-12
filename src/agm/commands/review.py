@@ -178,8 +178,7 @@ def _run_prepared(prepared: AgentPromptRun) -> str:
 
 
 def _exit_config_command_not_found(error: ConfigCommandNotFound) -> NoReturn:
-    print(f"error: {error}", file=sys.stderr)
-    raise SystemExit(1)
+    exit_with_usage_error([error.section_name], f"error: {error}")
 
 
 def _review_config(command_name: str | None, *, require_command: bool) -> ReviewConfig:

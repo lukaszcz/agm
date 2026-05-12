@@ -221,7 +221,9 @@ def test_prepare_review_exits_when_named_config_is_missing(
     with pytest.raises(SystemExit):
         prepare_review(_review_args(command_name="fronend"), temp_files=[])
 
-    assert "review subcommand 'fronend' is not defined" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "review subcommand 'fronend' is not defined" in err
+    assert "usage: agm review [COMMAND]" in err
 
 
 def test_prepare_review_uses_config_prompt_files(
@@ -389,7 +391,10 @@ def test_prepare_revise_exits_when_named_config_is_missing(
     with pytest.raises(SystemExit):
         prepare_revise(_revise_args(str(review_file), command_name="fronend"), temp_files=[])
 
-    assert "revise subcommand 'fronend' is not defined" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "revise subcommand 'fronend' is not defined" in err
+    assert "usage: agm revise [COMMAND]" in err
+    assert "REVIEW_FILE" in err
 
 
 def test_prepare_review_exits_when_default_prompt_is_missing(
@@ -690,7 +695,9 @@ def test_refine_exits_when_named_config_is_missing(
             )
         )
 
-    assert "refine subcommand 'fronend' is not defined" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "refine subcommand 'fronend' is not defined" in err
+    assert "usage: agm refine [COMMAND]" in err
 
 
 def test_run_wrappers_translate_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:

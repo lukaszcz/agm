@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.config.general import (
+    ConfigCommandNotFound,
     _unique_paths,
     load_loop_config,
     load_refine_config,
@@ -394,6 +395,87 @@ def test_load_review_revise_and_refine_config_read_new_sections(tmp_path: Path) 
     assert refine.reviser == "revise-only"
     assert refine.review_prompt_file == str(home / ".agm" / "review.md")
     assert refine.revise_prompt_file == str(home / ".agm" / "revise.md")
+
+
+def test_load_review_revise_and_refine_config_read_named_sections(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "frontend-review.md").write_text("review", encoding="utf-8")
+    (home / ".agm" / "frontend-revise.md").write_text("revise", encoding="utf-8")
+    (home / ".agm" / "config.toml").write_text(
+        "\n".join(
+            [
+                "[review]",
+                'runner = "reviewer"',
+                'extra_prompt = "base review"',
+                "[review.frontend]",
+                'runner = "frontend-reviewer"',
+                'prompt_file = "frontend-review.md"',
+                "",
+                "[revise]",
+                'runner = "reviser"',
+                'extra_prompt = "base revise"',
+                "[revise.frontend]",
+                'runner = "frontend-reviser"',
+                'prompt_file = "frontend-revise.md"',
+                "",
+                "[refine]",
+                "max_steps = 7",
+                'runner = "both"',
+                "[refine.frontend]",
+                "max_steps = 3",
+                'reviewer = "frontend-review-only"',
+            ]
+        )
+    )
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    review = load_review_config(home=home, proj_dir=None, cwd=cwd, command_name="frontend")
+    revise = load_revise_config(home=home, proj_dir=None, cwd=cwd, command_name="frontend")
+    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd, command_name="frontend")
+
+    assert review.runner == "frontend-reviewer"
+    assert review.extra_prompt == "base review"
+    assert review.prompt_file == str(home / ".agm" / "frontend-review.md")
+    assert revise.runner == "frontend-reviser"
+    assert revise.extra_prompt == "base revise"
+    assert revise.prompt_file == str(home / ".agm" / "frontend-revise.md")
+    assert refine.max_steps == 3
+    assert refine.runner == "both"
+    assert refine.reviewer == "frontend-review-only"
+
+
+def test_load_review_config_rejects_missing_named_section(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[review]\nrunner = "reviewer"\n')
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    with pytest.raises(ConfigCommandNotFound) as exc_info:
+        load_review_config(home=home, proj_dir=None, cwd=cwd, command_name="fronend")
+
+    assert exc_info.value.section_name == "review"
+    assert exc_info.value.command_name == "fronend"
+
+
+def test_load_review_config_allows_optional_missing_named_section(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[review]\nrunner = "reviewer"\n')
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    config = load_review_config(
+        home=home,
+        proj_dir=None,
+        cwd=cwd,
+        command_name="fronend",
+        require_command=False,
+    )
+
+    assert config.runner == "reviewer"
 
 
 def test_load_loop_config_expands_braced_env_vars(

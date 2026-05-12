@@ -936,6 +936,7 @@ def fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> N
 
 @app.command()
 def review(
+    command_name: str | None = typer.Argument(None, metavar="COMMAND"),
     runner: str | None = typer.Option(None, "--runner", help="Review runner command."),
     scope: str | None = typer.Option(None, "--scope", help="Review scope."),
     aspects: str | None = typer.Option(None, "--aspects", help="Review aspects."),
@@ -984,15 +985,20 @@ def review(
             prompt_file=prompt_file,
             extra_prompt=extra_prompt,
             extra_prompt_file=extra_prompt_file,
+            command_name=command_name,
         )
     )
 
 
 @app.command()
 def revise(
-    review_file: Path | None = typer.Argument(
+    command_name_or_review_file: str | None = typer.Argument(
         None,
-        metavar="REVIEW_FILE",
+        metavar="[COMMAND] REVIEW_FILE",
+        autocompletion=completion.complete_path_argument,
+    ),
+    review_file: str | None = typer.Argument(
+        None,
         autocompletion=completion.complete_path_argument,
     ),
     runner: str | None = typer.Option(None, "--runner", help="Revision runner command."),
@@ -1019,6 +1025,8 @@ def revise(
 ) -> None:
     del _help
     del _dry_run
+    command_name = command_name_or_review_file if review_file is not None else None
+    resolved_review_file = review_file or command_name_or_review_file
     _validate_prompt_options(
         command_path=["revise"],
         prompt=prompt,
@@ -1028,18 +1036,24 @@ def revise(
     )
     review_command.run_revise(
         ReviseArgs(
-            review_file=_require_value(review_file, command_path=["revise"], name="review_file"),
+            review_file=_require_value(
+                resolved_review_file,
+                command_path=["revise"],
+                name="review_file",
+            ),
             runner=runner,
             prompt=prompt,
             prompt_file=prompt_file,
             extra_prompt=extra_prompt,
             extra_prompt_file=extra_prompt_file,
+            command_name=command_name,
         )
     )
 
 
 @app.command()
 def refine(
+    command_name: str | None = typer.Argument(None, metavar="COMMAND"),
     max_steps: int | None = typer.Option(
         None,
         "--max-steps",
@@ -1135,6 +1149,7 @@ def refine(
             revise_prompt_file=revise_prompt_file,
             extra_revise_prompt=extra_revise_prompt,
             extra_revise_prompt_file=extra_revise_prompt_file,
+            command_name=command_name,
         )
     )
 

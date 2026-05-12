@@ -33,6 +33,7 @@ def _setup_home(tmp_path: Path) -> Path:
 
 def _review_args(
     *,
+    command_name: str | None = None,
     runner: str | None = "fake-reviewer",
     scope: str | None = None,
     aspects: str | None = None,
@@ -43,6 +44,7 @@ def _review_args(
     extra_prompt_file: str | None = None,
 ) -> ReviewArgs:
     return ReviewArgs(
+        command_name=command_name,
         runner=runner,
         scope=scope,
         aspects=aspects,
@@ -57,6 +59,7 @@ def _review_args(
 def _revise_args(
     review_file: str,
     *,
+    command_name: str | None = None,
     runner: str | None = "fake-reviser",
     prompt: str | None = None,
     prompt_file: str | None = None,
@@ -64,6 +67,7 @@ def _revise_args(
     extra_prompt_file: str | None = None,
 ) -> ReviseArgs:
     return ReviseArgs(
+        command_name=command_name,
         review_file=review_file,
         runner=runner,
         prompt=prompt,
@@ -185,6 +189,41 @@ def test_prepare_review_uses_config_prompt_and_extra(
     )
 
 
+def test_prepare_review_uses_named_config_prompt_and_extra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[review]\nextra_prompt = "base extra"\n'
+        '[review.frontend]\nprompt = "frontend $REVIEW_SCOPE"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(_review_args(command_name="frontend"), temp_files=[])
+
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        f"frontend {review_mod.DEFAULT_REVIEW_SCOPE}\nbase extra"
+    )
+
+
+def test_prepare_review_exits_when_named_config_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text('[review]\nextra_prompt = "base extra"\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit):
+        prepare_review(_review_args(command_name="fronend"), temp_files=[])
+
+    assert "review subcommand 'fronend' is not defined" in capsys.readouterr().err
+
+
 def test_prepare_review_uses_config_prompt_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -296,6 +335,46 @@ def test_prepare_revise_uses_config_inline_prompt(
     )
 
 
+def test_prepare_revise_uses_named_config_inline_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[revise]\nextra_prompt = "base extra"\n'
+        '[revise.frontend]\nprompt = "frontend $REVIEW_FILE"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    review_file = tmp_path / "review.md"
+
+    prepared = prepare_revise(
+        _revise_args(str(review_file), command_name="frontend"),
+        temp_files=[],
+    )
+
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        f"frontend {review_file}\nbase extra"
+    )
+
+
+def test_prepare_revise_exits_when_named_config_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text('[revise]\nextra_prompt = "base extra"\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    review_file = tmp_path / "review.md"
+
+    with pytest.raises(SystemExit):
+        prepare_revise(_revise_args(str(review_file), command_name="fronend"), temp_files=[])
+
+    assert "revise subcommand 'fronend' is not defined" in capsys.readouterr().err
+
+
 def test_prepare_review_exits_when_default_prompt_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -331,6 +410,10 @@ def test_write_review_file_preserves_env_vars(tmp_path: Path) -> None:
 
     assert path in temp_files
     assert path.read_text(encoding="utf-8") == "issue=$VALUE and ${TOKEN}\n"
+
+
+def test_unlink_temp_file_ignores_missing_untracked_file(tmp_path: Path) -> None:
+    review_mod._unlink_temp_file(tmp_path / "missing.md", temp_files=[])
 
 
 def test_review_once_runs_prompt_and_cleans_temp_files(
@@ -507,6 +590,90 @@ def test_refine_runs_fresh_review_after_continue(
     assert reviews[0].runner == "reviewer"
     assert reviews[0].scope == "scope"
     assert reviews[0].aspects == "aspects"
+
+
+def test_refine_uses_named_config_and_forwards_command_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[refine.frontend]\nrunner = "frontend-runner"\nscope = "frontend scope"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    reviews: list[ReviewArgs] = []
+    revisions: list[ReviseArgs] = []
+
+    def fake_review_once(args: ReviewArgs) -> str:
+        reviews.append(args)
+        return "review result\n"
+
+    def fake_revise_once(args: ReviseArgs) -> str:
+        revisions.append(args)
+        return "COMPLETE\n"
+
+    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=None,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+            command_name="frontend",
+        )
+    )
+
+    assert reviews[0].runner == "frontend-runner"
+    assert reviews[0].scope == "frontend scope"
+    assert reviews[0].command_name == "frontend"
+    assert revisions[0].runner == "frontend-runner"
+    assert revisions[0].command_name == "frontend"
+
+
+def test_refine_exits_when_named_config_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text('[refine]\nrunner = "base-runner"\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit):
+        refine(
+            RefineArgs(
+                max_steps=None,
+                runner=None,
+                reviewer=None,
+                reviser=None,
+                scope=None,
+                aspects=None,
+                review_prompt=None,
+                review_prompt_file=None,
+                extra_review_prompt=None,
+                extra_review_prompt_file=None,
+                revise_prompt=None,
+                revise_prompt_file=None,
+                extra_revise_prompt=None,
+                extra_revise_prompt_file=None,
+                command_name="fronend",
+            )
+        )
+
+    assert "refine subcommand 'fronend' is not defined" in capsys.readouterr().err
 
 
 def test_run_wrappers_translate_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:

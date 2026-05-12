@@ -7,9 +7,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import NoReturn
 
 from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.config.general import (
+    ConfigCommandNotFound,
     RefineConfig,
     ReviewConfig,
     ReviseConfig,
@@ -174,16 +176,47 @@ def _run_prepared(prepared: AgentPromptRun) -> str:
     )
 
 
-def _review_config() -> ReviewConfig:
-    return load_review_config(home=_config_home(), proj_dir=_project_dir(), cwd=Path.cwd())
+def _exit_config_command_not_found(error: ConfigCommandNotFound) -> NoReturn:
+    print(f"error: {error}", file=sys.stderr)
+    raise SystemExit(1)
 
 
-def _revise_config() -> ReviseConfig:
-    return load_revise_config(home=_config_home(), proj_dir=_project_dir(), cwd=Path.cwd())
+def _review_config(command_name: str | None, *, require_command: bool) -> ReviewConfig:
+    try:
+        return load_review_config(
+            home=_config_home(),
+            proj_dir=_project_dir(),
+            cwd=Path.cwd(),
+            command_name=command_name,
+            require_command=require_command,
+        )
+    except ConfigCommandNotFound as error:
+        _exit_config_command_not_found(error)
 
 
-def _refine_config() -> RefineConfig:
-    return load_refine_config(home=_config_home(), proj_dir=_project_dir(), cwd=Path.cwd())
+def _revise_config(command_name: str | None, *, require_command: bool) -> ReviseConfig:
+    try:
+        return load_revise_config(
+            home=_config_home(),
+            proj_dir=_project_dir(),
+            cwd=Path.cwd(),
+            command_name=command_name,
+            require_command=require_command,
+        )
+    except ConfigCommandNotFound as error:
+        _exit_config_command_not_found(error)
+
+
+def _refine_config(command_name: str | None) -> RefineConfig:
+    try:
+        return load_refine_config(
+            home=_config_home(),
+            proj_dir=_project_dir(),
+            cwd=Path.cwd(),
+            command_name=command_name,
+        )
+    except ConfigCommandNotFound as error:
+        _exit_config_command_not_found(error)
 
 
 def _resolved_review_aspects(args: ReviewArgs, config: ReviewConfig) -> str:
@@ -196,7 +229,7 @@ def _resolved_review_aspects(args: ReviewArgs, config: ReviewConfig) -> str:
 
 def prepare_review(args: ReviewArgs, *, temp_files: list[Path] | None = None) -> AgentPromptRun:
     owned_temp_files: list[Path] = [] if temp_files is None else temp_files
-    config = _review_config()
+    config = _review_config(args.command_name, require_command=args.require_command_config)
     runner = args.runner or config.runner or _default_runner()
     scope = args.scope or config.scope or DEFAULT_REVIEW_SCOPE
     aspects = _resolved_review_aspects(args, config)
@@ -228,7 +261,7 @@ def prepare_review(args: ReviewArgs, *, temp_files: list[Path] | None = None) ->
 
 def prepare_revise(args: ReviseArgs, *, temp_files: list[Path] | None = None) -> AgentPromptRun:
     owned_temp_files: list[Path] = [] if temp_files is None else temp_files
-    config = _revise_config()
+    config = _revise_config(args.command_name, require_command=args.require_command_config)
     runner = args.runner or config.runner or _default_runner()
     env = dict(os.environ)
     review_file = _path_from_cli(args.review_file)
@@ -308,6 +341,8 @@ def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewAr
         prompt_file=args.review_prompt_file or config.review_prompt_file,
         extra_prompt=args.extra_review_prompt or config.extra_review_prompt,
         extra_prompt_file=args.extra_review_prompt_file or config.extra_review_prompt_file,
+        command_name=args.command_name,
+        require_command_config=False,
     )
 
 
@@ -324,11 +359,13 @@ def _revise_args_from_refine(
         prompt_file=args.revise_prompt_file or config.revise_prompt_file,
         extra_prompt=args.extra_revise_prompt or config.extra_revise_prompt,
         extra_prompt_file=args.extra_revise_prompt_file or config.extra_revise_prompt_file,
+        command_name=args.command_name,
+        require_command_config=False,
     )
 
 
 def refine(args: RefineArgs) -> None:
-    config = _refine_config()
+    config = _refine_config(args.command_name)
     max_steps = args.max_steps or config.max_steps or DEFAULT_MAX_STEPS
     temp_files: list[Path] = []
     try:

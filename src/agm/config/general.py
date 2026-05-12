@@ -14,6 +14,18 @@ from agm.project.layout import project_config_dir
 
 TomlDict = dict[str, object]
 
+
+class ConfigCommandNotFound(ValueError):
+    """Raised when a named command config table is required but missing."""
+
+    def __init__(self, *, section_name: str, command_name: str) -> None:
+        self.section_name = section_name
+        self.command_name = command_name
+        super().__init__(
+            f"{section_name} subcommand {command_name!r} is not defined in config"
+        )
+
+
 # Known path-like fields per config section.  Values for these fields are
 # expanded (env vars, ~) and resolved against the config file's directory
 # before merging, so that relative paths are always interpreted relative to
@@ -381,9 +393,38 @@ def _optional_positive_int(table: TomlDict, key: str) -> int | None:
     return None
 
 
-def load_review_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReviewConfig:
+def _select_command_table(
+    table: TomlDict,
+    *,
+    section_name: str,
+    command_name: str | None,
+    require_command: bool,
+) -> TomlDict:
+    if command_name is None:
+        return table
+    command_table = table.get(command_name)
+    if isinstance(command_table, dict):
+        return _merge_config(table, _toml_dict(command_table))
+    if require_command:
+        raise ConfigCommandNotFound(section_name=section_name, command_name=command_name)
+    return table
+
+
+def load_review_config(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    command_name: str | None = None,
+    require_command: bool = True,
+) -> ReviewConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    table = _toml_dict(merged.get("review"))
+    table = _select_command_table(
+        _toml_dict(merged.get("review")),
+        section_name="review",
+        command_name=command_name,
+        require_command=require_command,
+    )
     return ReviewConfig(
         runner=_optional_str(table, "runner"),
         scope=_optional_str(table, "scope"),
@@ -396,9 +437,21 @@ def load_review_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> Revie
     )
 
 
-def load_revise_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReviseConfig:
+def load_revise_config(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    command_name: str | None = None,
+    require_command: bool = True,
+) -> ReviseConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    table = _toml_dict(merged.get("revise"))
+    table = _select_command_table(
+        _toml_dict(merged.get("revise")),
+        section_name="revise",
+        command_name=command_name,
+        require_command=require_command,
+    )
     return ReviseConfig(
         runner=_optional_str(table, "runner"),
         prompt=_optional_str(table, "prompt"),
@@ -408,9 +461,21 @@ def load_revise_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> Revis
     )
 
 
-def load_refine_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RefineConfig:
+def load_refine_config(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    command_name: str | None = None,
+    require_command: bool = True,
+) -> RefineConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    table = _toml_dict(merged.get("refine"))
+    table = _select_command_table(
+        _toml_dict(merged.get("refine")),
+        section_name="refine",
+        command_name=command_name,
+        require_command=require_command,
+    )
     return RefineConfig(
         max_steps=_optional_positive_int(table, "max_steps"),
         runner=_optional_str(table, "runner"),

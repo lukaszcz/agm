@@ -310,6 +310,17 @@ class TestReviewReviseRefine:
         assert calls[0].prompt == "review this"
         assert calls[0].extra_prompt == "extra"
 
+    def test_review_accepts_config_command(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.review_command, "run_review")
+        result = invoke(runner, ["review", "frontend", "--scope", "branch"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "frontend"
+        assert calls[0].scope == "branch"
+
     def test_review_rejects_prompt_with_prompt_file(self, runner: CliRunner) -> None:
         result = invoke(runner, ["review", "--prompt", "text", "--prompt-file", "file.md"])
         assert result.exit_code != 0
@@ -349,6 +360,28 @@ class TestReviewReviseRefine:
         assert calls[0].runner == "codex exec"
         assert calls[0].prompt_file == "revise.md"
         assert calls[0].extra_prompt_file == "extra.md"
+
+    def test_revise_accepts_config_command(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.review_command, "run_revise")
+        result = invoke(runner, ["revise", "frontend", "review.md"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "frontend"
+        assert calls[0].review_file == "review.md"
+
+    def test_revise_single_argument_remains_review_file(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.review_command, "run_revise")
+        result = invoke(runner, ["revise", "review.md"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name is None
+        assert calls[0].review_file == "review.md"
 
     def test_refine_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.review_command, "run_refine")
@@ -391,6 +424,17 @@ class TestReviewReviseRefine:
         assert calls[0].extra_review_prompt == "extra review"
         assert calls[0].revise_prompt == "revise"
         assert calls[0].extra_revise_prompt_file == "extra-revise.md"
+
+    def test_refine_accepts_config_command(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.review_command, "run_refine")
+        result = invoke(runner, ["refine", "frontend", "--max-steps", "2"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].command_name == "frontend"
+        assert calls[0].max_steps == 2
 
     def test_refine_rejects_non_positive_max_steps(self, runner: CliRunner) -> None:
         result = invoke(runner, ["refine", "--max-steps", "0"])

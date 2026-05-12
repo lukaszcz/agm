@@ -144,6 +144,8 @@ class ReviewArgs:
     prompt_file: str | None
     extra_prompt: str | None
     extra_prompt_file: str | None
+    command_name: str | None = None
+    require_command_config: bool = True
 
 
 @dataclass(slots=True)
@@ -154,6 +156,8 @@ class ReviseArgs:
     prompt_file: str | None
     extra_prompt: str | None
     extra_prompt_file: str | None
+    command_name: str | None = None
+    require_command_config: bool = True
 
 
 @dataclass(slots=True)
@@ -172,6 +176,7 @@ class RefineArgs:
     revise_prompt_file: str | None
     extra_revise_prompt: str | None
     extra_revise_prompt_file: str | None
+    command_name: str | None = None
 
 
 @dataclass(slots=True)

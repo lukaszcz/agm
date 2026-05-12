@@ -229,13 +229,15 @@ _HELP_TEXTS: dict[str, str] = {
           error for ``loop next``.
     """),
     "review": textwrap.dedent("""\
-        agm review [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
+        agm review [COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
                    [--extra-aspects REVIEW_ASPECTS] [--runner COMMAND]
                    [--prompt TEXT|--prompt-file PATH]
                    [--extra-prompt TEXT|--extra-prompt-file PATH]
 
         Run the review prompt with REVIEW_SCOPE and REVIEW_ASPECTS available
         during prompt preprocessing. The default prompt is review.md.
+        When COMMAND is provided, config from [review.COMMAND] is merged over
+        [review].
 
         Command config:
           [review] runner = "claude -p" sets the review runner. When unset,
@@ -244,12 +246,14 @@ _HELP_TEXTS: dict[str, str] = {
           extra_prompt, and extra_prompt_file correspond to the CLI options.
     """),
     "revise": textwrap.dedent("""\
-        agm revise [--runner COMMAND] [--prompt TEXT|--prompt-file PATH]
+        agm revise [COMMAND] [--runner COMMAND] [--prompt TEXT|--prompt-file PATH]
                    [--extra-prompt TEXT|--extra-prompt-file PATH]
                    REVIEW_FILE
 
         Run the revision prompt with REVIEW_FILE available during prompt
         preprocessing. The default prompt is revise.md.
+        When COMMAND is provided before REVIEW_FILE, config from
+        [revise.COMMAND] is merged over [revise].
 
         Command config:
           [revise] runner = "claude -p" sets the revision runner. When unset,
@@ -258,7 +262,7 @@ _HELP_TEXTS: dict[str, str] = {
           correspond to the CLI options.
     """),
     "refine": textwrap.dedent("""\
-        agm refine [--max-steps N] [--runner COMMAND]
+        agm refine [COMMAND] [--max-steps N] [--runner COMMAND]
                    [--reviewer COMMAND] [--reviser COMMAND]
                    [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
                    [--review-prompt TEXT|--review-prompt-file PATH]
@@ -270,6 +274,9 @@ _HELP_TEXTS: dict[str, str] = {
         maximum number of revision attempts is reached. A CONTINUE response
         starts a fresh review; any other response retries revise with the same
         review file. The default maximum is 20.
+        When COMMAND is provided, config from [refine.COMMAND] is merged over
+        [refine] and the same command name is forwarded to review/revise
+        config lookup.
 
         Command config:
           [refine] max_steps, runner, reviewer, reviser, scope, aspects,

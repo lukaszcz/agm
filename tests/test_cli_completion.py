@@ -205,6 +205,22 @@ def test_complete_run_command_lists_executables_and_paths(
     assert completion.complete_run_command(["npm"], "pack") == ["package.json"]
 
 
+def test_complete_run_command_lists_executables_without_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tool = bin_dir / "npm"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert completion.complete_run_command([], "np") == ["npm"]
+
+
 def test_complete_run_command_includes_config_aliases(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -234,6 +250,7 @@ def test_complete_run_command_swallows_config_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(
         completion,
         "load_run_config",

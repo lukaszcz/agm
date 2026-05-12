@@ -267,14 +267,14 @@ def complete_run_command(args: list[str], incomplete: str) -> list[str]:
                 ):
                     candidates.add(candidate.name)
 
-        context = current_config_context()
         try:
+            context = current_config_context()
             run_config = load_run_config(
                 home=context.home,
                 proj_dir=context.proj_dir,
                 cwd=context.cwd,
             )
-        except OSError:
+        except (Exception, SystemExit):
             run_config = None
         if run_config is not None:
             candidates.update(
@@ -353,16 +353,19 @@ def complete_revise_command_or_review_file(
 ) -> list[str]:
     del ctx, args
     try:
-        context = current_config_context()
-        command_matches = _match(
-            _configured_command_names(
-                "revise",
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-            ),
-            incomplete,
-        )
+        try:
+            context = current_config_context()
+            command_matches = _match(
+                _configured_command_names(
+                    "revise",
+                    home=context.home,
+                    proj_dir=context.proj_dir,
+                    cwd=context.cwd,
+                ),
+                incomplete,
+            )
+        except (Exception, SystemExit):
+            command_matches = []
         if command_matches:
             return command_matches
         return _path_candidates(incomplete)

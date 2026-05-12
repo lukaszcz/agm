@@ -28,7 +28,7 @@ def current_config_context(
 
     resolved_env = os.environ if env is None else env
     resolved_cwd = Path.cwd().resolve() if cwd is None else cwd.resolve()
-    home = Path(resolved_env["HOME"])
+    home = Path(resolved_env.get("HOME", "~"))
 
     raw_proj_dir = resolved_env.get("PROJ_DIR")
     if raw_proj_dir:

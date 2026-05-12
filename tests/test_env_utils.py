@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,6 @@ from agm.core.env import (
     is_safe_shell_env_assignment_name,
     is_shell_identifier,
 )
-from agm.core.prompt import expand_prompt_env_vars
 
 
 def test_agm_installation_prefix_uses_agm_binary_location(
@@ -66,18 +64,3 @@ def test_is_safe_shell_env_assignment_name_rejects_shell_managed_names() -> None
     assert not is_safe_shell_env_assignment_name("SHELLOPTS")
     assert not is_safe_shell_env_assignment_name("BAD-NAME")
     assert is_safe_shell_env_assignment_name("PROJECT_ENV")
-
-
-def test_expand_prompt_env_vars_replaces_known_vars_and_leaves_unknowns(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("KNOWN", "value")
-    monkeypatch.setenv("OTHER_2", "two")
-    monkeypatch.delenv("UNKNOWN", raising=False)
-
-    expanded = expand_prompt_env_vars(
-        "A=$KNOWN B=${OTHER_2} C=$UNKNOWN D=${UNKNOWN} E=$9 F=${NOT-VALID}",
-        env=os.environ,
-    )
-
-    assert expanded == "A=value B=two C=$UNKNOWN D=${UNKNOWN} E=$9 F=${NOT-VALID}"

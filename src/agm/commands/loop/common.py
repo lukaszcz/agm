@@ -8,16 +8,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from agm.commands.args import LoopArgs, LoopNextArgs
-from agm.config.general import LoopConfig, load_loop_config, resolve_agm_path
-from agm.core.agent import (
+from agm.agent.prompt import preprocess_prompt_file
+from agm.agent.response import last_response_line
+from agm.agent.runner import (
     prepare_prompt_from_source,
     split_command,
     validate_command,
 )
+from agm.commands.args import LoopArgs, LoopNextArgs
+from agm.config.general import LoopConfig, load_loop_config, resolve_agm_path
 from agm.core.fs import is_file
-from agm.core.prompt import preprocess_prompt_file
-from agm.core.response import last_response_line
 
 LoopCommandArgs = LoopArgs | LoopNextArgs
 

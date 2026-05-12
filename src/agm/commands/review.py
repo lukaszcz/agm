@@ -9,6 +9,16 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Callable, NoReturn
 
+from agm.agent.response import last_response_line
+from agm.agent.runner import (
+    append_extra_prompt,
+    cleanup_temp_files,
+    command_with_prompt_target,
+    prepare_prompt_from_source,
+    run_prompt_command,
+    split_command,
+    validate_command,
+)
 from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.config.general import (
     ConfigCommandNotFound,
@@ -22,17 +32,7 @@ from agm.config.general import (
     resolve_agm_path,
 )
 from agm.core import dry_run
-from agm.core.agent import (
-    append_extra_prompt,
-    cleanup_temp_files,
-    command_with_prompt_target,
-    prepare_prompt_from_source,
-    run_prompt_command,
-    split_command,
-    validate_command,
-)
 from agm.core.log import append_log, prepare_log_file, resolve_log_file
-from agm.core.response import last_response_line
 from agm.parser import exit_with_usage_error
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"

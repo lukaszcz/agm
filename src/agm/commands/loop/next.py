@@ -5,14 +5,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from agm.commands.args import LoopNextArgs
-from agm.core import dry_run
-from agm.core.agent import (
+from agm.agent.runner import (
     append_extra_prompt,
     cleanup_temp_files,
     command_with_prompt_target,
     run_prompt_command,
 )
+from agm.commands.args import LoopNextArgs
+from agm.core import dry_run
 
 from .common import (
     loop_env,

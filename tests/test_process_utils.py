@@ -21,6 +21,7 @@ from agm.core.process import (
     _read_pipe_chunks,
     _run_cleanup_command,
     _terminate_process,
+    _wait_for_process_group_exit,
     _write_stream,
     exit_with_output,
     require_capture,
@@ -220,6 +221,38 @@ class TestTerminateProcess:
                 raise ProcessLookupError
 
         _terminate_process(cast(subprocess.Popen[bytes], FakeProcess()))
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_process_group_exit
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForProcessGroupExit:
+    def test_polls_until_grace_expires(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import agm.core.process as process_module
+
+        monotonic_values = iter([0.0, 0.01, 0.02])
+        sleep_calls: list[float] = []
+        killpg_calls: list[tuple[int, int]] = []
+
+        def fake_monotonic() -> float:
+            return next(monotonic_values)
+
+        def fake_killpg(pgid: int, sig: int) -> None:
+            killpg_calls.append((pgid, sig))
+
+        def fake_sleep(seconds: float) -> None:
+            sleep_calls.append(seconds)
+
+        monkeypatch.setattr(process_module.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(process_module.os, "killpg", fake_killpg)
+        monkeypatch.setattr(process_module.time, "sleep", fake_sleep)
+
+        _wait_for_process_group_exit(123, grace=0.015)
+
+        assert killpg_calls == [(123, 0)]
+        assert sleep_calls == [0.01]
 
 
 # ---------------------------------------------------------------------------
@@ -1175,4 +1208,3 @@ class TestRunSubprocessFinalDecoderFlush:
             capture_output=True,
         )
         assert "flushed" in result.stdout
-

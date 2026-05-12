@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from agm.agent.runner import ResolvedPrompt
 from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.commands.loop.common import PreparedSelectInvocation
 from agm.commands.loop.next import _dry_run_prompt_text as next_dry_run_prompt_text
@@ -26,7 +27,6 @@ from agm.commands.loop.step import (
     prepare_runtime,
     run,
 )
-from agm.core.agent import ResolvedPrompt
 from agm.core.log import append_log, resolve_log_file
 
 # ---------------------------------------------------------------------------

@@ -6,9 +6,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.commands.args import LoopArgs
-from agm.core import dry_run
-from agm.core.agent import (
+from agm.agent.prompt import preprocess_prompt_file
+from agm.agent.runner import (
     ResolvedPrompt,
     append_extra_prompt,
     cleanup_temp_files,
@@ -17,9 +16,10 @@ from agm.core.agent import (
     run_prompt_command,
     validate_command,
 )
+from agm.commands.args import LoopArgs
+from agm.core import dry_run
 from agm.core.fs import is_file
 from agm.core.log import append_log, prepare_log_file, resolve_log_file
-from agm.core.prompt import preprocess_prompt_file
 
 from .common import (
     PreparedSelectInvocation,

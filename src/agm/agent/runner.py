@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from agm.agent.prompt import expand_prompt_env_vars, preprocess_prompt_file
 from agm.core.fs import is_file
 from agm.core.process import run_capture
-from agm.core.prompt import expand_prompt_env_vars, preprocess_prompt_file
 
 
 @dataclass(slots=True)

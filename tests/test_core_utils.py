@@ -32,7 +32,6 @@ from agm.core.fs import (
 from agm.core.fs import (
     stat as fs_stat,
 )
-from agm.core.response import last_response_line
 
 # ---------------------------------------------------------------------------
 # Fixture: always reset dry-run state after each test
@@ -64,14 +63,6 @@ class TestDryRunState:
         dry_run.set_enabled(True)
         dry_run.set_enabled(False)
         assert dry_run.enabled() is False
-
-
-class TestLastResponseLine:
-    def test_returns_stripped_last_line(self) -> None:
-        assert last_response_line("progress\n COMPLETE \n") == "COMPLETE"
-
-    def test_returns_stripped_output_when_no_lines(self) -> None:
-        assert last_response_line("   ") == ""
 
 
 class TestFormatCommand:

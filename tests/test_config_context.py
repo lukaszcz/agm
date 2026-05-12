@@ -49,3 +49,19 @@ def test_current_config_context_uses_none_when_discovery_exits(
     context = current_config_context(cwd=tmp_path, env={"HOME": str(home)})
 
     assert context.proj_dir is None
+
+
+def test_current_config_context_resolves_implicit_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+    monkeypatch.chdir(link)
+    monkeypatch.setattr(context_module, "current_project_dir", lambda cwd: cwd)
+
+    context = current_config_context(env={"HOME": str(home)})
+
+    assert context.cwd == target

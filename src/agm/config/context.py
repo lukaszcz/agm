@@ -27,7 +27,7 @@ def current_config_context(
     """Return config-loading paths for the current command invocation."""
 
     resolved_env = os.environ if env is None else env
-    resolved_cwd = Path.cwd() if cwd is None else cwd.resolve()
+    resolved_cwd = Path.cwd().resolve() if cwd is None else cwd.resolve()
     home = Path(resolved_env["HOME"])
 
     raw_proj_dir = resolved_env.get("PROJ_DIR")

@@ -267,17 +267,21 @@ def complete_run_command(args: list[str], incomplete: str) -> list[str]:
                 ):
                     candidates.add(candidate.name)
 
-        context = current_config_context()
-        run_config = load_run_config(
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
-        )
-        candidates.update(
-            command_name
-            for command_name in run_config.aliases
-            if command_name.startswith(incomplete)
-        )
+        try:
+            context = current_config_context()
+            run_config = load_run_config(
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+            )
+        except (OSError, SystemExit):
+            run_config = None
+        if run_config is not None:
+            candidates.update(
+                command_name
+                for command_name in run_config.aliases
+                if command_name.startswith(incomplete)
+            )
         return sorted(candidates)
     except (Exception, SystemExit):
         return []
@@ -349,16 +353,19 @@ def complete_revise_command_or_review_file(
 ) -> list[str]:
     del ctx, args
     try:
-        context = current_config_context()
-        command_matches = _match(
-            _configured_command_names(
-                "revise",
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-            ),
-            incomplete,
-        )
+        try:
+            context = current_config_context()
+            command_matches = _match(
+                _configured_command_names(
+                    "revise",
+                    home=context.home,
+                    proj_dir=context.proj_dir,
+                    cwd=context.cwd,
+                ),
+                incomplete,
+            )
+        except (OSError, SystemExit):
+            command_matches = []
         if command_matches:
             return command_matches
         return _path_candidates(incomplete)

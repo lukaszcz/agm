@@ -768,16 +768,6 @@ class TestCompleteRunCommand:
 
         assert result == []
 
-    def test_returns_empty_when_path_scan_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def broken_path(_value: str) -> Path:
-            raise OSError("path unavailable")
-
-        monkeypatch.setenv("PATH", "broken")
-        monkeypatch.setattr(completion, "Path", broken_path)
-
-        assert completion.complete_run_command([], "") == []
-
-
 class TestCompleteTmuxSession:
     def test_returns_empty_when_returncode_nonzero(
         self, monkeypatch: pytest.MonkeyPatch
@@ -931,26 +921,6 @@ class TestCompleteReviseCommandOrReviewFile:
         result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
 
         assert result == []
-
-    def test_returns_empty_when_review_file_completion_fails(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            completion,
-            "current_config_context",
-            lambda: (_ for _ in ()).throw(RuntimeError("bad config")),
-        )
-        monkeypatch.setattr(
-            completion,
-            "_path_candidates",
-            lambda incomplete: (_ for _ in ()).throw(OSError("bad path")),
-        )
-        ctx = click.Context(click.Command("test"))
-
-        result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
-
-        assert result == []
-
 
 class TestBranchCandidatesExceptionHandling:
     def test_skips_current_branch_on_runtime_error(

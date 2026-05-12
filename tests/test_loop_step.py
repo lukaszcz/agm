@@ -17,7 +17,6 @@ from agm.commands.loop.run import run as loop_run
 from agm.commands.loop.step import (
     LoopStepRuntime,
     PreparedPrompt,
-    _dry_run_prompt_text,
     _prepare_prompt,
     _print_dry_run_command,
     _print_dry_run_prompt,
@@ -272,27 +271,6 @@ class TestWriteStream:
         _write_stream("", stderr=True)
         _, err = capsys.readouterr()
         assert err == ""
-
-
-# ===========================================================================
-# _dry_run_prompt_text (step)
-# ===========================================================================
-
-
-class TestDryRunPromptText:
-    def test_source_equals_effective_returns_just_source(self, tmp_path: Path) -> None:
-        f = tmp_path / "loop.md"
-        prompt = PreparedPrompt(label="loop", source_file=f, effective_file=f)
-        assert _dry_run_prompt_text(prompt) == str(f)
-
-    def test_different_files_shows_arrow_and_preprocessed_label(
-        self, tmp_path: Path
-    ) -> None:
-        src = tmp_path / "loop.md"
-        eff = tmp_path / "loop.md.tmp"
-        prompt = PreparedPrompt(label="loop", source_file=src, effective_file=eff)
-        text = _dry_run_prompt_text(prompt)
-        assert text == f"{src} -> {eff} (preprocessed)"
 
 
 # ===========================================================================

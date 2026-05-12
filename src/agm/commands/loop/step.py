@@ -88,10 +88,6 @@ def _prepare_prompt(
     )
 
 
-def _dry_run_prompt_text(prompt: PreparedPrompt) -> str:
-    return dry_run_prompt_text(prompt.source_file, prompt.effective_file)
-
-
 def _print_dry_run_command(label: str, command: list[str]) -> None:
     dry_run.print_labeled_command(label, command)
 
@@ -248,16 +244,16 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
     for prompt in prompts:
         if prompt is None:
             continue
-        _print_dry_run_prompt(prompt.label, _dry_run_prompt_text(prompt))
+        _print_dry_run_prompt(
+            prompt.label,
+            dry_run_prompt_text(prompt.source_file, prompt.effective_file),
+        )
     if runtime.select_invocation is not None:
         _print_dry_run_prompt(
             "selector",
-            _dry_run_prompt_text(
-                PreparedPrompt(
-                    label="selector",
-                    source_file=runtime.select_invocation.source_prompt_file,
-                    effective_file=runtime.select_invocation.effective_prompt_file,
-                )
+            dry_run_prompt_text(
+                runtime.select_invocation.source_prompt_file,
+                runtime.select_invocation.effective_prompt_file,
             ),
         )
 

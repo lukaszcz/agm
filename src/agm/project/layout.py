@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -77,8 +78,22 @@ def _project_dir_from_checkout(checkout_dir: Path) -> Path | None:
     return None
 
 
-def current_checkout_or_project_root(cwd: Path | None = None) -> Path:
-    """Return a best-effort project root candidate for the current location."""
+def _project_dir_from_env(env: Mapping[str, str] | None = None) -> Path | None:
+    resolved_env = os.environ if env is None else env
+    raw_project_dir = resolved_env.get("PROJ_DIR")
+    if not raw_project_dir:
+        return None
+    return Path(raw_project_dir)
+
+
+def current_checkout_or_project_root(
+    cwd: Path | None = None, *, env: Mapping[str, str] | None = None
+) -> Path:
+    """Return the current AGM project, git checkout root, or current directory."""
+
+    env_project_dir = _project_dir_from_env(env)
+    if env_project_dir is not None:
+        return env_project_dir
 
     current = _resolved_cwd(cwd)
 
@@ -89,32 +104,21 @@ def current_checkout_or_project_root(cwd: Path | None = None) -> Path:
     if not git_helpers.is_git_repo(current):
         return current
     try:
-        checkout_dir = git_helpers.checkout_root(current)
+        return git_helpers.checkout_root(current)
     except SystemExit:
         return current
-    for candidate in (checkout_dir, *checkout_dir.parents):
-        project_dir = _project_dir_from_checkout(candidate)
-        if project_dir is not None:
-            return project_dir
-    try:
-        common_dir = git_helpers.git_common_dir(current)
-    except SystemExit:
-        common_dir = None
-    if common_dir is not None:
-        common_checkout = common_dir.parent
-        for candidate in (common_checkout, *common_checkout.parents):
-            project_dir = _project_dir_from_checkout(candidate)
-            if project_dir is not None:
-                return project_dir
-    if checkout_dir == current or checkout_dir in current.parents:
-        return checkout_dir
-    return current
 
 
-def discover_current_project_dir(cwd: Path | None = None) -> Path | None:
+def discover_current_project_dir(
+    cwd: Path | None = None, *, env: Mapping[str, str] | None = None
+) -> Path | None:
     """Return the current valid AGM project directory, if one can be discovered."""
 
-    candidate = current_checkout_or_project_root(cwd)
+    env_project_dir = _project_dir_from_env(env)
+    if env_project_dir is not None:
+        return env_project_dir
+
+    candidate = current_checkout_or_project_root(cwd, env=env)
     return candidate if is_project_dir(candidate) else None
 
 
@@ -152,13 +156,15 @@ def require_project_dir(project_dir: Path) -> Path:
     raise SystemExit(1)
 
 
-def require_current_project_dir(cwd: Path | None = None) -> Path:
+def require_current_project_dir(
+    cwd: Path | None = None, *, env: Mapping[str, str] | None = None
+) -> Path:
     """Resolve and validate the current AGM project directory."""
 
-    project_dir = discover_current_project_dir(cwd)
+    project_dir = discover_current_project_dir(cwd, env=env)
     if project_dir is not None:
         return project_dir.resolve()
-    return require_project_dir(current_checkout_or_project_root(cwd))
+    return require_project_dir(current_checkout_or_project_root(cwd, env=env))
 
 
 def current_checkout(
@@ -192,7 +198,7 @@ def current_checkout(
     # --- Fall back to cwd-based detection ---
     if checkout_dir is None:
         current = Path.cwd() if cwd is None else cwd.resolve()
-        current_project = discover_current_project_dir(current)
+        current_project = discover_current_project_dir(current, env=resolved_env)
         if (
             current_project is None
             or current_project.resolve(strict=False) != resolved_project_dir

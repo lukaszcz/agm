@@ -129,7 +129,7 @@ def test_run_patches_sandbox_when_project_is_discovered(
     monkeypatch.setattr(run_command.os, "environ", env)
     monkeypatch.setattr(
         "agm.config.context.discover_current_project_dir",
-        lambda current: project,
+        lambda current, env=None: project,
     )
     monkeypatch.setattr(
         run_command,

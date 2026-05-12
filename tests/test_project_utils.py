@@ -131,11 +131,14 @@ def test_branch_helpers_for_worktree_branch(
     monkeypatch.setattr(project_helpers.git_helpers, "current_branch", fake_current_branch)
 
     assert is_main_checkout_branch(project, "feat/x", repo_branch="main") is False
-    assert branch_worktree_path(
-        project,
-        "feat/x",
-        repo_branch="main",
-    ) == project / "worktrees" / "feat/x"
+    assert (
+        branch_worktree_path(
+            project,
+            "feat/x",
+            repo_branch="main",
+        )
+        == project / "worktrees" / "feat/x"
+    )
     assert branch_session_name(project, "feat/x") == "proj/feat/x"
 
 
@@ -185,7 +188,11 @@ def test_current_config_branch_ignores_cwd_from_other_project(
     current = other_project / "repo"
     current.mkdir(parents=True)
 
-    monkeypatch.setattr(project_helpers, "discover_current_project_dir", lambda _cwd: other_project)
+    monkeypatch.setattr(
+        project_helpers,
+        "discover_current_project_dir",
+        lambda _cwd, env=None: other_project,
+    )
 
     def fail_checkout_root(_cwd: Path | None = None) -> Never:
         raise AssertionError("checkout_root should not be called for another project")
@@ -274,7 +281,11 @@ def test_current_checkout_returns_none_for_cwd_outside_project(
     current = other_project / "repo"
     current.mkdir(parents=True)
 
-    monkeypatch.setattr(project_helpers, "discover_current_project_dir", lambda _cwd: other_project)
+    monkeypatch.setattr(
+        project_helpers,
+        "discover_current_project_dir",
+        lambda _cwd, env=None: other_project,
+    )
 
     def fail_checkout_root(_cwd: Path | None = None) -> Never:
         raise AssertionError("checkout_root should not be called for another project")
@@ -301,9 +312,7 @@ def test_current_checkout_returns_main_for_workspace_project_root(
     assert result.checkout_dir == repo_dir
 
 
-def test_current_checkout_returns_main_for_repo_dir(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_current_checkout_returns_main_for_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)
@@ -318,9 +327,7 @@ def test_current_checkout_returns_main_for_repo_dir(
     assert result.checkout_dir == repo_dir
 
 
-def test_current_checkout_returns_branch_for_worktree(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_current_checkout_returns_branch_for_worktree(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)
@@ -424,9 +431,7 @@ def test_current_checkout_ignores_repo_dir_outside_project(
     assert result.checkout_dir == repo_dir
 
 
-def test_current_checkout_ignores_nonexistent_repo_dir(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_current_checkout_ignores_nonexistent_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)
@@ -442,9 +447,7 @@ def test_current_checkout_ignores_nonexistent_repo_dir(
     assert result.checkout_dir == repo_dir
 
 
-def test_current_checkout_ignores_non_git_repo_dir(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_current_checkout_ignores_non_git_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)

@@ -911,11 +911,21 @@ def test_current_project_root_candidate_falls_back_when_no_markers_and_not_git(
     assert current_checkout_or_project_root(plain) == plain
 
 
-def test_current_project_dir_checkout_root_finds_project_in_parents(
+def test_current_checkout_or_project_root_uses_proj_dir_env(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+
+    assert current_checkout_or_project_root(tmp_path, env={"PROJ_DIR": str(project)}) == project
+
+
+def test_discover_current_project_dir_uses_proj_dir_env(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+
+    assert discover_current_project_dir(tmp_path, env={"PROJ_DIR": str(project)}) == project
+
+
+def test_current_checkout_or_project_root_falls_back_to_git_checkout_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When checkout_root returns a dir whose parent has project markers,
-    the second for loop returns the project via return on line 98."""
     project = tmp_path / "proj"
     project.mkdir()
     (project / ".agm").mkdir()
@@ -931,15 +941,14 @@ def test_current_project_dir_checkout_root_finds_project_in_parents(
         lambda _cwd=None: checkout,
     )
 
-    result = discover_current_project_dir(cwd)
-    assert result == project
+    assert current_checkout_or_project_root(cwd) == checkout
 
 
 class TestCurrentProjectDirFallbackPaths:
     def test_uses_git_common_dir_fallback(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_root doesn't match project markers, git_common_dir is tried."""
+        """git_common_dir is not used by simplified fallback discovery."""
         project = tmp_path / "myproject"
         repo = project / "repo"
         repo.mkdir(parents=True)
@@ -952,21 +961,21 @@ class TestCurrentProjectDirFallbackPaths:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: worktree,
+            lambda cwd=None, env=None: worktree,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: repo / ".git",
+            lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = discover_current_project_dir(worktree)
-        assert result == project
+        result = current_checkout_or_project_root(worktree)
+        assert result == worktree
 
     def test_falls_back_to_checkout_dir_when_no_project_markers(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When git_common_dir doesn't help, falls back to checkout_dir."""
+        """When no project markers exist, falls back to checkout_dir."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
@@ -974,21 +983,21 @@ class TestCurrentProjectDirFallbackPaths:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: plain_dir,
+            lambda cwd=None, env=None: plain_dir,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = discover_current_project_dir(plain_dir)
+        result = current_checkout_or_project_root(plain_dir)
         assert result == plain_dir
 
     def test_checkout_root_raises_system_exit(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_root raises SystemExit, discover_current_project_dir returns cwd."""
+        """When checkout_root raises SystemExit, fallback returns cwd."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
@@ -996,10 +1005,10 @@ class TestCurrentProjectDirFallbackPaths:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = discover_current_project_dir(plain_dir)
+        result = current_checkout_or_project_root(plain_dir)
         assert result == plain_dir
 
 
@@ -1027,7 +1036,10 @@ class TestCurrentCheckout:
         def fake_is_git_repo(p: Path) -> bool:
             return p == repo
 
-        def fake_project_dir(cwd: Path | None = None) -> Path:
+        def fake_project_dir(
+            cwd: Path | None = None, *, env: dict[str, str] | None = None
+        ) -> Path:
+            del env
             return project
 
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
@@ -1053,7 +1065,10 @@ class TestCurrentCheckout:
         def fake_is_git_repo(p: Path) -> bool:
             return True
 
-        def fake_project_dir(cwd: Path | None = None) -> Path:
+        def fake_project_dir(
+            cwd: Path | None = None, *, env: dict[str, str] | None = None
+        ) -> Path:
+            del env
             return project
 
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
@@ -1061,7 +1076,7 @@ class TestCurrentCheckout:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
@@ -1083,7 +1098,10 @@ class TestCurrentCheckout:
         def fake_is_git_repo(p: Path) -> bool:
             return True
 
-        def fake_project_dir(cwd: Path | None = None) -> Path:
+        def fake_project_dir(
+            cwd: Path | None = None, *, env: dict[str, str] | None = None
+        ) -> Path:
+            del env
             return project
 
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
@@ -1091,7 +1109,7 @@ class TestCurrentCheckout:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
@@ -1117,22 +1135,21 @@ class TestCurrentProjectDirCommonDirFallback:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: parent_dir,
+            lambda cwd=None, env=None: parent_dir,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = discover_current_project_dir(plain_dir)
+        result = current_checkout_or_project_root(plain_dir)
         assert result == parent_dir
 
     def test_checkout_root_succeeds_but_no_project_markers_uses_common_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_root succeeds but no project markers found,
-        git_common_dir is tried."""
+        """When checkout_root succeeds, git_common_dir is not consulted."""
         project = tmp_path / "myproject"
         repo = project / "repo"
         repo.mkdir(parents=True)
@@ -1145,16 +1162,16 @@ class TestCurrentProjectDirCommonDirFallback:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: worktree,
+            lambda cwd=None, env=None: worktree,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: repo / ".git",
+            lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = discover_current_project_dir(worktree)
-        assert result == project
+        result = current_checkout_or_project_root(worktree)
+        assert result == worktree
 
 
 class TestCurrentCheckoutSystemExitPaths:
@@ -1173,12 +1190,12 @@ class TestCurrentCheckoutSystemExitPaths:
         monkeypatch.setattr(
             layout_module,
             "discover_current_project_dir",
-            lambda cwd=None: project,
+            lambda cwd=None, env=None: project,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
@@ -1205,12 +1222,12 @@ class TestCurrentCheckoutSystemExitPaths:
         monkeypatch.setattr(
             layout_module,
             "discover_current_project_dir",
-            lambda cwd=None: project,
+            lambda cwd=None, env=None: project,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
@@ -1227,7 +1244,7 @@ class TestCurrentProjectDirCheckoutRootRaisesThenCommonDirRaises:
     def test_checkout_root_raises_and_common_dir_raises_returns_current(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When both checkout_root and git_common_dir raise, falls back to current."""
+        """When checkout_root raises, falls back to current."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
@@ -1235,15 +1252,15 @@ class TestCurrentProjectDirCheckoutRootRaisesThenCommonDirRaises:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = discover_current_project_dir(plain_dir)
+        result = current_checkout_or_project_root(plain_dir)
         assert result == plain_dir
 
 
@@ -1260,12 +1277,12 @@ class TestCurrentCheckoutEdgeCases:
         monkeypatch.setattr(
             layout_module,
             "discover_current_project_dir",
-            lambda cwd=None: project.resolve(strict=False),
+            lambda cwd=None, env=None: project.resolve(strict=False),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: repo.resolve(strict=False),
+            lambda cwd=None, env=None: repo.resolve(strict=False),
         )
 
         result = current_checkout(project, cwd=repo)
@@ -1287,12 +1304,12 @@ class TestCurrentCheckoutEdgeCases:
         monkeypatch.setattr(
             layout_module,
             "discover_current_project_dir",
-            lambda cwd=None: project.resolve(strict=False),
+            lambda cwd=None, env=None: project.resolve(strict=False),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: repo.resolve(strict=False),
+            lambda cwd=None, env=None: repo.resolve(strict=False),
         )
 
         result = current_checkout(project, cwd=repo)
@@ -1353,8 +1370,7 @@ class TestCurrentProjectDirGitCommonDirFindsProject:
     def test_git_common_dir_parent_has_project_markers(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_root succeeds but no project markers found,
-        git_common_dir -> .git parent finds project via repo marker."""
+        """When checkout_root succeeds, that root is the fallback."""
         project = tmp_path / "myproject"
         repo = project / "repo"
         repo.mkdir(parents=True)
@@ -1367,22 +1383,21 @@ class TestCurrentProjectDirGitCommonDirFindsProject:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: worktree,
+            lambda cwd=None, env=None: worktree,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: repo / ".git",
+            lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = discover_current_project_dir(worktree)
-        assert result == project
+        result = current_checkout_or_project_root(worktree)
+        assert result == worktree
 
     def test_falls_back_to_current_when_nothing_matches(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_root succeeds but common_dir finds nothing,
-        and checkout_dir is not current or parent, returns current."""
+        """When checkout_root succeeds, returns that checkout root."""
         isolated = tmp_path / "isolated"
         isolated.mkdir()
         other = tmp_path / "other"
@@ -1392,16 +1407,16 @@ class TestCurrentProjectDirGitCommonDirFindsProject:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: other,
+            lambda cwd=None, env=None: other,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = discover_current_project_dir(isolated)
-        assert result == isolated
+        result = current_checkout_or_project_root(isolated)
+        assert result == other
 
 
 class TestCurrentCheckoutCwdNotInProject:
@@ -1417,7 +1432,7 @@ class TestCurrentCheckoutCwdNotInProject:
         monkeypatch.setattr(
             layout_module,
             "discover_current_project_dir",
-            lambda cwd=None: other.resolve(strict=False),
+            lambda cwd=None, env=None: other.resolve(strict=False),
         )
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: False)
 
@@ -1440,12 +1455,12 @@ class TestCurrentCheckoutCwdNotInProject:
         monkeypatch.setattr(
             layout_module,
             "discover_current_project_dir",
-            lambda cwd=None: project.resolve(strict=False),
+            lambda cwd=None, env=None: project.resolve(strict=False),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
@@ -1475,7 +1490,7 @@ class TestCurrentCheckoutReturnsNoneWhenCwdNotInProject:
         monkeypatch.setattr(
             layout_module,
             "discover_current_project_dir",
-            lambda cwd=None: project.resolve(strict=False),
+            lambda cwd=None, env=None: project.resolve(strict=False),
         )
 
         result = current_checkout(project, cwd=sub_dir)
@@ -1488,8 +1503,7 @@ class TestCurrentProjectDirGitCommonDirTry:
     def test_git_common_dir_search_after_checkout_root_finds_no_project(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_root returns a dir without project markers,
-        git_common_dir is used to search further."""
+        """When checkout_root returns a dir without project markers, it is the fallback."""
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
@@ -1507,20 +1521,20 @@ class TestCurrentProjectDirGitCommonDirTry:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: checkout,
+            lambda cwd=None, env=None: checkout,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: git_dir,
+            lambda cwd=None, env=None: git_dir,
         )
 
-        assert discover_current_project_dir(cwd) == project
+        assert current_checkout_or_project_root(cwd) == checkout
 
     def test_git_common_dir_finds_workspace_project(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_root finds nothing, git_common_dir locates a workspace project."""
+        """When checkout_root succeeds, git_common_dir is not searched."""
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
@@ -1538,22 +1552,21 @@ class TestCurrentProjectDirGitCommonDirTry:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: checkout,
+            lambda cwd=None, env=None: checkout,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: git_dir,
+            lambda cwd=None, env=None: git_dir,
         )
 
-        result = discover_current_project_dir(cwd)
-        assert result == project
+        result = current_checkout_or_project_root(cwd)
+        assert result == checkout
 
     def test_git_common_dir_finds_embedded_project_via_parent_walk(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When common_dir.parent doesn't have markers directly but
-        a grandparent has .agm, the parent walk finds it."""
+        """When checkout_root succeeds, fallback stays at checkout root."""
         project = tmp_path / "proj"
         project.mkdir()
         (project / ".agm").mkdir()  # embedded project marker
@@ -1571,24 +1584,23 @@ class TestCurrentProjectDirGitCommonDirTry:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: checkout,
+            lambda cwd=None, env=None: checkout,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: git_subdir,
+            lambda cwd=None, env=None: git_subdir,
         )
 
-        result = discover_current_project_dir(cwd)
-        assert result == project
+        result = current_checkout_or_project_root(cwd)
+        assert result == checkout
 
 
 class TestCurrentProjectDirGitCommonDirPath:
     def test_git_common_dir_parent_finds_project_via_worktrees_marker(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """discover_current_project_dir finds project via git_common_dir path
-        when checkout_root succeeds but no markers found on checkout_dir."""
+        """Fallback does not use git_common_dir to search for project markers."""
         project = tmp_path / "myproject"
         repo = project / "repo"
         repo.mkdir(parents=True)
@@ -1602,13 +1614,13 @@ class TestCurrentProjectDirGitCommonDirPath:
         monkeypatch.setattr(
             layout_module.git_helpers,
             "checkout_root",
-            lambda cwd=None: worktree,
+            lambda cwd=None, env=None: worktree,
         )
         monkeypatch.setattr(
             layout_module.git_helpers,
             "git_common_dir",
-            lambda cwd=None: repo / ".git",
+            lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = discover_current_project_dir(worktree)
-        assert result == project
+        result = current_checkout_or_project_root(worktree)
+        assert result == worktree

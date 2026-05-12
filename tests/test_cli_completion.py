@@ -241,7 +241,9 @@ def test_complete_run_command_includes_config_aliases(
         '[run.ai-review]\nalias = "python"\n[run.publish]\nalias = "uv"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr("agm.config.context.discover_current_project_dir", lambda cwd=None: project)
+    monkeypatch.setattr(
+        "agm.config.context.discover_current_project_dir", lambda cwd=None, env=None: project
+    )
 
     assert completion.complete_run_command([], "ai") == ["ai-review"]
 
@@ -319,21 +321,25 @@ class TestResolveProjectRepoDir:
         monkeypatch.setattr(
             completion,
             "discover_current_project_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         assert completion._resolve_project_repo_dir() is None
 
     def test_returns_none_when_project_is_not_discovered(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr(
+            completion, "discover_current_project_dir", lambda cwd=None, env=None: None
+        )
         assert completion._resolve_project_repo_dir() is None
 
     def test_returns_path_on_success(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
-        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: project)
+        monkeypatch.setattr(
+            completion, "discover_current_project_dir", lambda cwd=None, env=None: project
+        )
         result = completion._resolve_project_repo_dir()
         assert result == repo
 
@@ -343,20 +349,24 @@ class TestResolveProjectDepsDir:
         monkeypatch.setattr(
             completion,
             "discover_current_project_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         assert completion._resolve_project_deps_dir() is None
 
     def test_returns_none_when_project_is_not_discovered(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr(
+            completion, "discover_current_project_dir", lambda cwd=None, env=None: None
+        )
         assert completion._resolve_project_deps_dir() is None
 
     def test_returns_path_on_success(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
-        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: project)
+        monkeypatch.setattr(
+            completion, "discover_current_project_dir", lambda cwd=None, env=None: project
+        )
         result = completion._resolve_project_deps_dir()
         assert result == project / "deps"
 
@@ -731,7 +741,7 @@ class TestCompleteRunCommand:
         monkeypatch.setattr(
             completion,
             "discover_current_project_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         # Should still return [] without crashing
         result = completion.complete_run_command([], "")
@@ -745,7 +755,7 @@ class TestCompleteRunCommand:
         monkeypatch.setenv("PATH", "")
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setattr(
-            "agm.config.context.discover_current_project_dir", lambda cwd=None: tmp_path
+            "agm.config.context.discover_current_project_dir", lambda cwd=None, env=None: tmp_path
         )
         monkeypatch.setattr(
             completion,
@@ -754,6 +764,18 @@ class TestCompleteRunCommand:
         )
         result = completion.complete_run_command([], "")
         assert result == []
+
+    def test_returns_empty_on_path_iteration_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PATH", "/broken")
+        monkeypatch.setattr(
+            completion,
+            "Path",
+            lambda _path: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        assert completion.complete_run_command([], "") == []
 
     def test_skips_non_directory_path_entries(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -838,7 +860,7 @@ class TestCompleteReviseCommandOrReviewFile:
         work.mkdir()
         monkeypatch.chdir(work)
         monkeypatch.setattr(
-            "agm.config.context.discover_current_project_dir", lambda cwd=None: None
+            "agm.config.context.discover_current_project_dir", lambda cwd=None, env=None: None
         )
         monkeypatch.setattr(
             completion,
@@ -868,7 +890,7 @@ class TestCompleteReviseCommandOrReviewFile:
         (work / "review.md").write_text("review\n", encoding="utf-8")
         monkeypatch.chdir(work)
         monkeypatch.setattr(
-            "agm.config.context.discover_current_project_dir", lambda cwd=None: None
+            "agm.config.context.discover_current_project_dir", lambda cwd=None, env=None: None
         )
         monkeypatch.setattr(
             completion,
@@ -891,7 +913,7 @@ class TestCompleteReviseCommandOrReviewFile:
         monkeypatch.setattr(
             completion,
             "discover_current_project_dir",
-            lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
+            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
             completion,

@@ -97,7 +97,7 @@ def ensure_worktree(
     if branch_name is None:
         raise SystemExit(1)
 
-    project_dir = current_checkout_or_project_root(current)
+    project_dir = current_checkout_or_project_root(current, env=env)
     repo_dir = git_helpers.checkout_root(current)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     exit_if_main_checkout_branch(project_dir, branch_name, repo_branch=repo_branch)
@@ -148,7 +148,7 @@ def remove_worktree(
 ) -> None:
     """Remove a worktree from *repo_dir* and delete its branch."""
 
-    project_dir = current_checkout_or_project_root(repo_dir)
+    project_dir = current_checkout_or_project_root(repo_dir, env=env)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     exit_if_main_checkout_branch(project_dir, branch, repo_branch=repo_branch)
 

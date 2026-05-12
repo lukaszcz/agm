@@ -30,14 +30,9 @@ def current_config_context(
     resolved_cwd = Path.cwd().resolve() if cwd is None else cwd.resolve()
     home = Path(resolved_env.get("HOME", "~"))
 
-    raw_proj_dir = resolved_env.get("PROJ_DIR")
-    proj_dir: Path | None
-    if raw_proj_dir:
-        proj_dir = Path(raw_proj_dir)
-    else:
-        try:
-            proj_dir = discover_current_project_dir(resolved_cwd)
-        except SystemExit:
-            proj_dir = None
+    try:
+        proj_dir = discover_current_project_dir(resolved_cwd, env=resolved_env)
+    except SystemExit:
+        proj_dir = None
 
     return ConfigContext(home=home, proj_dir=proj_dir, cwd=resolved_cwd)

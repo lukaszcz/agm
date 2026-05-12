@@ -509,7 +509,7 @@ class TestCpConfig:
 
         assert (dest / ".env").read_text() == "FROM_WT=1"
 
-    def test_auto_detects_project_from_custom_git_worktree_path(
+    def test_uses_proj_dir_from_custom_git_worktree_path(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -527,6 +527,8 @@ class TestCpConfig:
         wt = custom_worktrees / "feat/custom-copy"
         dest = tmp_path / "dest"
         dest.mkdir()
+
+        env["PROJ_DIR"] = str(project)
 
         run_agm(["config", "cp", str(dest)], env=env, cwd=str(wt))
 

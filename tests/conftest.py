@@ -18,6 +18,12 @@ def reset_dry_run_state() -> Generator[None, None, None]:
     dry_run.set_enabled(False)
 
 
+@pytest.fixture(autouse=True)
+def clear_project_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.delenv("REPO_DIR", raising=False)
+
+
 @pytest.fixture()
 def env(tmp_path: Path) -> dict[str, str]:
     """Environment dict with git identity and isolated HOME."""

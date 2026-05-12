@@ -304,14 +304,19 @@ def parse_timeout(value: str) -> float:
 
 
 def load_loop_config(
-    *, home: Path, proj_dir: Path | None, cwd: Path, command_name: str | None = None
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    command_name: str | None = None,
+    require_command: bool = False,
 ) -> LoopConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     selected_loop_table = _select_command_table(
         _toml_dict(merged.get("loop")),
         section_name="loop",
         command_name=command_name,
-        require_command=True,
+        require_command=require_command,
     )
     runner = selected_loop_table.get("runner")
     selector = selected_loop_table.get("selector")

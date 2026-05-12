@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
@@ -10,17 +11,15 @@ from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
     branch_worktree_path,
     copy_config,
-    current_checkout_or_project_root,
     default_worktrees_dir,
+    discover_current_project_dir,
     exit_if_main_checkout_branch,
     expected_branch_worktree_path,
     project_repo_dir,
 )
 
 
-def sync_remote_tracking_branches(
-    repo_dir: Path, *, env: dict[str, str] | None = None
-) -> None:
+def sync_remote_tracking_branches(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
     """Create local tracking branches not merged into origin's default branch."""
 
     default_branch_ref = git_helpers.default_remote_branch_ref(repo_dir, env=env)
@@ -56,9 +55,7 @@ def has_expected_worktree(
     return False
 
 
-def branch_exists(
-    repo_dir: Path, branch: str, *, env: dict[str, str] | None = None
-) -> bool:
+def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
     """Return whether *branch* exists locally or on origin."""
 
     return git_helpers.local_branch_exists(
@@ -97,13 +94,21 @@ def ensure_worktree(
     if branch_name is None:
         raise SystemExit(1)
 
-    project_dir = current_checkout_or_project_root(current, env=env)
     repo_dir = git_helpers.checkout_root(current)
+    project_dir = discover_current_project_dir(current, env=env)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
-    exit_if_main_checkout_branch(project_dir, branch_name, repo_branch=repo_branch)
+    if project_dir is None:
+        print(
+            "warning: no AGM project found; running git worktree operation only",
+            file=sys.stderr,
+        )
+    else:
+        exit_if_main_checkout_branch(project_dir, branch_name, repo_branch=repo_branch)
     worktrees_path = (
-        default_worktrees_dir(project_dir) if worktrees_dir is None else Path(worktrees_dir)
+        default_worktrees_dir(project_dir) if project_dir is not None else repo_dir / "worktrees"
     )
+    if worktrees_dir is not None:
+        worktrees_path = Path(worktrees_dir)
     if not worktrees_path.is_absolute():
         worktrees_path = current / worktrees_path
     dirname = worktrees_path / branch_name
@@ -133,8 +138,9 @@ def ensure_worktree(
         create=create_branch,
         env=env,
     )
-    ensure_dependency_configs_for_branch(project_dir=project_dir, branch=branch_name)
-    copy_config(project_dir=project_dir, target=dirname, branch=branch_name, cwd=current)
+    if project_dir is not None:
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch=branch_name)
+        copy_config(project_dir=project_dir, target=dirname, branch=branch_name, cwd=current)
     return dirname
 
 
@@ -148,9 +154,15 @@ def remove_worktree(
 ) -> None:
     """Remove a worktree from *repo_dir* and delete its branch."""
 
-    project_dir = current_checkout_or_project_root(repo_dir, env=env)
+    project_dir = discover_current_project_dir(repo_dir, env=env)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
-    exit_if_main_checkout_branch(project_dir, branch, repo_branch=repo_branch)
+    if project_dir is None:
+        print(
+            "warning: no AGM project found; running git worktree operation only",
+            file=sys.stderr,
+        )
+    else:
+        exit_if_main_checkout_branch(project_dir, branch, repo_branch=repo_branch)
 
     worktree_path: Path | None = None
     worktrees = git_helpers.worktree_list(repo_dir, env=env)

@@ -277,7 +277,7 @@ class TestEnsureWorktree:
             worktree_mod.git_helpers, "current_branch", lambda p, env=None: repo_branch
         )
         monkeypatch.setattr(
-            worktree_mod, "current_checkout_or_project_root", lambda cwd=None, env=None: project_dir
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
         )
         monkeypatch.setattr(worktree_mod.git_helpers, "fetch", lambda p, env=None: None)
         monkeypatch.setattr(
@@ -455,6 +455,57 @@ class TestEnsureWorktree:
         # create should be False because branch already exists
         assert add_calls[0]["create"] is False
 
+    def test_plain_git_repo_skips_agm_project_steps(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        monkeypatch.setattr(
+            worktree_mod.git_helpers, "checkout_root", lambda cwd=None, env=None: repo_dir
+        )
+        monkeypatch.setattr(
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: None
+        )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(worktree_mod.git_helpers, "fetch", lambda p, env=None: None)
+        monkeypatch.setattr(worktree_mod.git_helpers, "worktree_list", lambda p, env=None: [])
+        monkeypatch.setattr(
+            worktree_mod,
+            "exit_if_main_checkout_branch",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected check")),
+        )
+        monkeypatch.setattr(
+            worktree_mod,
+            "ensure_dependency_configs_for_branch",
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected deps")),
+        )
+        monkeypatch.setattr(
+            worktree_mod,
+            "copy_config",
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected config")),
+        )
+
+        add_calls: list[Path] = []
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_add",
+            lambda repo, path, branch, create=False, env=None: add_calls.append(path),
+        )
+
+        result = worktree_mod.ensure_worktree(
+            new_branch="feat",
+            worktrees_dir=None,
+            branch=None,
+            cwd=repo_dir,
+        )
+
+        assert result == repo_dir / "worktrees" / "feat"
+        assert add_calls == [repo_dir / "worktrees" / "feat"]
+        assert "warning: no AGM project found" in capsys.readouterr().err
+
 
 class TestRemoveWorktree:
     """Tests for remove_worktree."""
@@ -470,7 +521,7 @@ class TestRemoveWorktree:
         worktree_path.mkdir(parents=True)
 
         monkeypatch.setattr(
-            worktree_mod, "current_checkout_or_project_root", lambda cwd=None, env=None: project_dir
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
         )
         monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
@@ -507,7 +558,7 @@ class TestRemoveWorktree:
         repo_dir.mkdir()
 
         monkeypatch.setattr(
-            worktree_mod, "current_checkout_or_project_root", lambda cwd=None, env=None: project_dir
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
         )
         monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(worktree_mod.git_helpers, "worktree_list", lambda p, env=None: [])
@@ -531,7 +582,7 @@ class TestRemoveWorktree:
         repo_dir.mkdir()
 
         monkeypatch.setattr(
-            worktree_mod, "current_checkout_or_project_root", lambda cwd=None, env=None: project_dir
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
         )
         # current branch is "main" — trying to remove "main" should exit
         monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
@@ -550,7 +601,7 @@ class TestRemoveWorktree:
         worktree_path.mkdir(parents=True)
 
         monkeypatch.setattr(
-            worktree_mod, "current_checkout_or_project_root", lambda cwd=None, env=None: project_dir
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
         )
         monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
@@ -588,7 +639,7 @@ class TestRemoveWorktree:
         worktree_path.mkdir(parents=True)
 
         monkeypatch.setattr(
-            worktree_mod, "current_checkout_or_project_root", lambda cwd=None, env=None: project_dir
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
         )
         monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
@@ -614,6 +665,50 @@ class TestRemoveWorktree:
         )
 
         assert deleted == [("feat", True)]
+
+    def test_plain_git_repo_skips_agm_main_branch_check(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_dir = tmp_path / "repo"
+        worktree_path = tmp_path / "worktrees" / "main"
+        repo_dir.mkdir()
+        worktree_path.mkdir(parents=True)
+        monkeypatch.setattr(
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: None
+        )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(
+            worktree_mod,
+            "exit_if_main_checkout_branch",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected check")),
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_list",
+            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="main")],
+        )
+
+        removed: list[Path] = []
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_remove",
+            lambda p, path, force=False, env=None: removed.append(path),
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "branch_delete",
+            lambda p, b, force=False, env=None: deleted.append(b),
+        )
+
+        worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="main")
+
+        assert removed == [worktree_path]
+        assert deleted == ["main"]
+        assert "warning: no AGM project found" in capsys.readouterr().err
 
 
 class TestEnsureWorktreeRelativePath:
@@ -661,7 +756,7 @@ class TestEnsureWorktreeRelativePath:
             lambda project_dir=None, target=None, branch=None, cwd=None: None,
         )
         monkeypatch.setattr(
-            worktree_module, "current_checkout_or_project_root", lambda cwd=None, env=None: project
+            worktree_module, "discover_current_project_dir", lambda cwd=None, env=None: project
         )
         monkeypatch.setattr(
             worktree_module, "exit_if_main_checkout_branch", lambda pd, b, repo_branch=None: None

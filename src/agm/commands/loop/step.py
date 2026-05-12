@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 from agm.commands.args import LoopArgs
@@ -18,7 +17,8 @@ from agm.core.agent import (
     run_prompt_command,
     validate_command,
 )
-from agm.core.fs import append_text, is_file, mkdir
+from agm.core.fs import is_file
+from agm.core.log import append_log, prepare_log_file, resolve_log_file
 from agm.core.prompt import preprocess_prompt_file
 
 from .common import (
@@ -63,23 +63,6 @@ class LoopStepRuntime:
     extra_prompt_source: str | Path | None
     log_file: Path | None
     idle_timeout: float | None
-
-
-def _log_file(args: LoopArgs) -> Path | None:
-    if args.no_log:
-        return None
-    if args.log_file is not None:
-        resolved = Path(args.log_file)
-        if not resolved.is_absolute():
-            resolved = Path.cwd() / resolved
-        return resolved
-    return Path.cwd() / f"loop-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-
-
-def _append_log(log_file: Path | None, content: str) -> None:
-    if log_file is None or not content:
-        return
-    append_text(log_file, content, encoding="utf-8")
 
 
 def _write_stream(chunk: str, *, stderr: bool = False) -> None:
@@ -210,10 +193,12 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         )
         loop_prompt.effective_file = new_effective
 
-    log_file = _log_file(args)
-    if log_file is not None:
-        print(f"Logging to {log_file if args.log_file is not None else log_file.name}")
-        mkdir(log_file.parent, parents=True, exist_ok=True)
+    log_file = resolve_log_file(
+        command_name="loop",
+        no_log=args.no_log,
+        log_file=args.log_file,
+    )
+    prepare_log_file(log_file, explicit=args.log_file is not None)
 
     timeout = resolved_timeout(args)
 
@@ -325,14 +310,14 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
 def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
     header = step_header_text(step_number)
     print(header, end="")
-    _append_log(runtime.log_file, header)
+    append_log(runtime.log_file, header)
 
     def stdout_callback(chunk: str) -> None:
-        _append_log(runtime.log_file, chunk)
+        append_log(runtime.log_file, chunk)
         _write_stream(chunk)
 
     def stderr_callback(chunk: str) -> None:
-        _append_log(runtime.log_file, chunk)
+        append_log(runtime.log_file, chunk)
         _write_stream(chunk, stderr=True)
 
     if runtime.select_invocation is None:
@@ -367,7 +352,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             break
 
     selected_task_output = selected_task_text(next_task)
-    _append_log(runtime.log_file, "\n" + selected_task_output)
+    append_log(runtime.log_file, "\n" + selected_task_output)
     _write_stream("\n" + selected_task_output)
 
     if runtime.resolved_prompt is not None:

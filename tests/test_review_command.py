@@ -538,11 +538,23 @@ def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
     reviews: list[ReviewArgs] = []
     revisions: list[ReviseArgs] = []
 
-    def fake_review_once(args: ReviewArgs) -> str:
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
         reviews.append(args)
         return "review result\n"
 
-    def fake_revise_once(args: ReviseArgs) -> str:
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
         revisions.append(args)
         return "try again\n"
 
@@ -581,11 +593,23 @@ def test_refine_runs_fresh_review_after_continue(
     reviews: list[ReviewArgs] = []
     outputs = iter(["CONTINUE\n", "COMPLETE\n"])
 
-    def fake_review_once(args: ReviewArgs) -> str:
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
         reviews.append(args)
         return "review result\n"
 
-    def fake_revise_once(args: ReviseArgs) -> str:
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del args, stdout_callback, stderr_callback
         return next(outputs)
 
     monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
@@ -628,11 +652,23 @@ def test_refine_uses_named_config_and_forwards_command_name(
     reviews: list[ReviewArgs] = []
     revisions: list[ReviseArgs] = []
 
-    def fake_review_once(args: ReviewArgs) -> str:
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
         reviews.append(args)
         return "review result\n"
 
-    def fake_revise_once(args: ReviseArgs) -> str:
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
         revisions.append(args)
         return "COMPLETE\n"
 
@@ -664,6 +700,64 @@ def test_refine_uses_named_config_and_forwards_command_name(
     assert reviews[0].command_name == "frontend"
     assert revisions[0].runner == "frontend-runner"
     assert revisions[0].command_name == "frontend"
+
+
+def test_refine_writes_review_and_revise_output_to_log_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    log_file = tmp_path / "refine.log"
+
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del args
+        stdout_callback("review stdout\n")
+        stderr_callback("review stderr\n")
+        return "review result\n"
+
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod._write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod._write_stderr,
+    ) -> str:
+        del args
+        stdout_callback("revise stdout\n")
+        stderr_callback("revise stderr\n")
+        return "COMPLETE\n"
+
+    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=1,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+            log_file=str(log_file),
+        )
+    )
+
+    assert log_file.read_text(encoding="utf-8") == (
+        "review stdout\nreview stderr\nrevise stdout\nrevise stderr\n"
+    )
 
 
 def test_refine_exits_when_named_config_is_missing(

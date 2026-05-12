@@ -16,9 +16,7 @@ from agm.commands.loop.run import run as loop_run
 from agm.commands.loop.step import (
     LoopStepRuntime,
     PreparedPrompt,
-    _append_log,
     _dry_run_prompt_text,
-    _log_file,
     _prepare_prompt,
     _print_dry_run_command,
     _print_dry_run_prompt,
@@ -29,6 +27,7 @@ from agm.commands.loop.step import (
     run,
 )
 from agm.core.agent import ResolvedPrompt
+from agm.core.log import append_log, resolve_log_file
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -151,19 +150,30 @@ def _make_runtime(
 
 
 # ===========================================================================
-# _log_file
+# resolve_log_file
 # ===========================================================================
 
 
 class TestLogFile:
     def test_returns_none_when_no_log(self, tmp_path: Path) -> None:
         args = _make_loop_args(no_log=True, log_file=None)
-        assert _log_file(args) is None
+        assert (
+            resolve_log_file(
+                command_name="loop",
+                no_log=args.no_log,
+                log_file=args.log_file,
+            )
+            is None
+        )
 
     def test_returns_explicit_log_file_when_given(self, tmp_path: Path) -> None:
         explicit = str(tmp_path / "my.log")
         args = _make_loop_args(no_log=False, log_file=explicit)
-        result = _log_file(args)
+        result = resolve_log_file(
+            command_name="loop",
+            no_log=args.no_log,
+            log_file=args.log_file,
+        )
         assert result == Path(explicit)
 
     def test_generates_timestamped_log_file_in_cwd_when_no_log_file_set(
@@ -171,7 +181,11 @@ class TestLogFile:
     ) -> None:
         monkeypatch.chdir(tmp_path)
         args = _make_loop_args(no_log=False, log_file=None)
-        result = _log_file(args)
+        result = resolve_log_file(
+            command_name="loop",
+            no_log=args.no_log,
+            log_file=args.log_file,
+        )
         assert result is not None
         assert result.parent == tmp_path
         assert result.name.startswith("loop-")
@@ -184,38 +198,49 @@ class TestLogFile:
         work.mkdir()
         monkeypatch.chdir(work)
         args = _make_loop_args(no_log=False, log_file="logs/run.log")
-        result = _log_file(args)
+        result = resolve_log_file(
+            command_name="loop",
+            no_log=args.no_log,
+            log_file=args.log_file,
+        )
         assert result == work / "logs" / "run.log"
 
     def test_no_log_overrides_explicit_log_file(self, tmp_path: Path) -> None:
         args = _make_loop_args(no_log=True, log_file=str(tmp_path / "ignored.log"))
-        assert _log_file(args) is None
+        assert (
+            resolve_log_file(
+                command_name="loop",
+                no_log=args.no_log,
+                log_file=args.log_file,
+            )
+            is None
+        )
 
 
 # ===========================================================================
-# _append_log
+# append_log
 # ===========================================================================
 
 
 class TestAppendLog:
     def test_no_op_when_log_file_is_none(self, tmp_path: Path) -> None:
         # Should not raise; no file should be written
-        _append_log(None, "some content")
+        append_log(None, "some content")
 
     def test_no_op_when_content_is_empty(self, tmp_path: Path) -> None:
         log = tmp_path / "out.log"
-        _append_log(log, "")
+        append_log(log, "")
         assert not log.exists()
 
     def test_appends_content_to_file(self, tmp_path: Path) -> None:
         log = tmp_path / "out.log"
-        _append_log(log, "first line\n")
-        _append_log(log, "second line\n")
+        append_log(log, "first line\n")
+        append_log(log, "second line\n")
         assert log.read_text(encoding="utf-8") == "first line\nsecond line\n"
 
     def test_creates_file_if_missing(self, tmp_path: Path) -> None:
         log = tmp_path / "new.log"
-        _append_log(log, "hello")
+        append_log(log, "hello")
         assert log.read_text(encoding="utf-8") == "hello"
 
 

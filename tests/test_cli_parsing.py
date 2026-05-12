@@ -418,6 +418,8 @@ class TestReviewReviseRefine:
                 "revise",
                 "--extra-revise-prompt-file",
                 "extra-revise.md",
+                "--log-file",
+                "refine.log",
             ],
         )
 
@@ -433,6 +435,8 @@ class TestReviewReviseRefine:
         assert calls[0].extra_review_prompt == "extra review"
         assert calls[0].revise_prompt == "revise"
         assert calls[0].extra_revise_prompt_file == "extra-revise.md"
+        assert calls[0].log_file == "refine.log"
+        assert calls[0].no_log is False
 
     def test_refine_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -447,6 +451,10 @@ class TestReviewReviseRefine:
 
     def test_refine_rejects_non_positive_max_steps(self, runner: CliRunner) -> None:
         result = invoke(runner, ["refine", "--max-steps", "0"])
+        assert result.exit_code != 0
+
+    def test_refine_rejects_no_log_with_log_file(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["refine", "--no-log", "--log-file", "out.log"])
         assert result.exit_code != 0
 
     def test_refine_rejects_review_prompt_with_review_prompt_file(

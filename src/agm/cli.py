@@ -1113,6 +1113,13 @@ def refine(
         help="Extra revision prompt file.",
         autocompletion=completion.complete_path_argument,
     ),
+    log_file: str | None = typer.Option(
+        None,
+        "--log-file",
+        help="Write command output to this log file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    no_log: bool = typer.Option(False, "--no-log", help="Disable command output logging."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1134,6 +1141,11 @@ def refine(
         extra_prompt=extra_revise_prompt,
         extra_prompt_file=extra_revise_prompt_file,
     )
+    if no_log and log_file is not None:
+        exit_with_usage_error(
+            ["refine"],
+            "error: --no-log and --log-file are mutually exclusive",
+        )
     review_command.run_refine(
         RefineArgs(
             max_steps=_positive_int(max_steps, command_path=["refine"], name="--max-steps"),
@@ -1151,6 +1163,8 @@ def refine(
             extra_revise_prompt=extra_revise_prompt,
             extra_revise_prompt_file=extra_revise_prompt_file,
             command_name=command_name,
+            no_log=no_log,
+            log_file=log_file,
         )
     )
 

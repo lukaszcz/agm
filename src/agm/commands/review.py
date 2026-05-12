@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import NoReturn
+from typing import Callable, NoReturn
 
 from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.config.general import (
@@ -31,6 +31,7 @@ from agm.core.agent import (
     split_command,
     validate_command,
 )
+from agm.core.log import append_log, prepare_log_file, resolve_log_file
 from agm.core.response import last_response_line
 from agm.parser import exit_with_usage_error
 
@@ -161,7 +162,15 @@ def _prepare_agent_prompt_run(
     )
 
 
-def _run_prepared(prepared: AgentPromptRun) -> str:
+StreamCallback = Callable[[str], None]
+
+
+def _run_prepared(
+    prepared: AgentPromptRun,
+    *,
+    stdout_callback: StreamCallback = _write_stdout,
+    stderr_callback: StreamCallback = _write_stderr,
+) -> str:
     if dry_run.enabled():
         dry_run.print_labeled_command(
             "agent",
@@ -172,8 +181,8 @@ def _run_prepared(prepared: AgentPromptRun) -> str:
         prepared.command,
         prepared.effective_file,
         env=prepared.env,
-        stdout_callback=_write_stdout,
-        stderr_callback=_write_stderr,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
     )
 
 
@@ -310,24 +319,42 @@ def prepare_revise(args: ReviseArgs, *, temp_files: list[Path] | None = None) ->
     )
 
 
-def review_once(args: ReviewArgs) -> str:
+def review_once(
+    args: ReviewArgs,
+    *,
+    stdout_callback: StreamCallback = _write_stdout,
+    stderr_callback: StreamCallback = _write_stderr,
+) -> str:
     temp_files: list[Path] = []
     try:
         prepared = prepare_review(args, temp_files=temp_files)
         if dry_run.enabled():
             dry_run.print_configuration("review")
-        return _run_prepared(prepared)
+        return _run_prepared(
+            prepared,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
+        )
     finally:
         cleanup_temp_files(temp_files)
 
 
-def revise_once(args: ReviseArgs) -> str:
+def revise_once(
+    args: ReviseArgs,
+    *,
+    stdout_callback: StreamCallback = _write_stdout,
+    stderr_callback: StreamCallback = _write_stderr,
+) -> str:
     temp_files: list[Path] = []
     try:
         prepared = prepare_revise(args, temp_files=temp_files)
         if dry_run.enabled():
             dry_run.print_configuration("revise")
-        return _run_prepared(prepared)
+        return _run_prepared(
+            prepared,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
+        )
     finally:
         cleanup_temp_files(temp_files)
 
@@ -388,6 +415,21 @@ def _revise_args_from_refine(
 def refine(args: RefineArgs) -> None:
     config = _refine_config(args.command_name)
     max_steps = args.max_steps or config.max_steps or DEFAULT_MAX_STEPS
+    log_file = resolve_log_file(
+        command_name="refine",
+        no_log=args.no_log,
+        log_file=args.log_file,
+    )
+    prepare_log_file(log_file, explicit=args.log_file is not None)
+
+    def stdout_callback(chunk: str) -> None:
+        append_log(log_file, chunk)
+        _write_stdout(chunk)
+
+    def stderr_callback(chunk: str) -> None:
+        append_log(log_file, chunk)
+        _write_stderr(chunk)
+
     temp_files: list[Path] = []
     try:
         step = 0
@@ -395,10 +437,18 @@ def refine(args: RefineArgs) -> None:
         while step < max_steps:
             if review_file is None:
                 review_args = _review_args_from_refine(args, config)
-                review_output = review_once(review_args)
+                review_output = review_once(
+                    review_args,
+                    stdout_callback=stdout_callback,
+                    stderr_callback=stderr_callback,
+                )
                 review_file = _write_review_file(review_output, temp_files=temp_files)
             step += 1
-            revise_output = revise_once(_revise_args_from_refine(args, config, review_file))
+            revise_output = revise_once(
+                _revise_args_from_refine(args, config, review_file),
+                stdout_callback=stdout_callback,
+                stderr_callback=stderr_callback,
+            )
             status = last_response_line(revise_output)
             if status == "COMPLETE":
                 return

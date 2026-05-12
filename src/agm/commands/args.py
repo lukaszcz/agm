@@ -177,6 +177,8 @@ class RefineArgs:
     extra_revise_prompt: str | None
     extra_revise_prompt_file: str | None
     command_name: str | None = None
+    no_log: bool = False
+    log_file: str | None = None
 
 
 @dataclass(slots=True)

@@ -111,10 +111,8 @@ def ensure_worktree(
 
     git_helpers.fetch(repo_dir, env=env)
     if create_branch and reuse_existing_branch:
-        branch_exists = git_helpers.local_branch_exists(
-            repo_dir, branch_name, env=env
-        ) or git_helpers.remote_branch_exists(repo_dir, branch_name, env=env)
-        if branch_exists:
+        existing_branch = branch_exists(repo_dir, branch_name, env=env)
+        if existing_branch:
             create_branch = False
             existing_ok = True
     existing_worktrees = git_helpers.worktree_list(repo_dir, env=env)

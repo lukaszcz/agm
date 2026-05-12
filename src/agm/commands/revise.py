@@ -89,7 +89,7 @@ def prepare_revise(
         ),
         cwd=context.cwd,
     )
-    prompt_source = default_prompt_file if prompt_source is None else prompt_source
+    assert prompt_source is not None
     extra_prompt_source = resolve_prompt_source(
         PromptSourceOptions(
             prompt=args.extra_prompt,

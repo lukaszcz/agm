@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import textwrap
 from collections.abc import Sequence
-from typing import Protocol
+from typing import NoReturn, Protocol
 
 
 class _Writeable(Protocol):
@@ -685,7 +685,9 @@ def print_help_for_command_path(
     print(_help_text_for_path(command_path), end="", file=output)
 
 
-def exit_with_usage_error(command_path: Sequence[str], message: str, *, exit_code: int = 1) -> None:
+def exit_with_usage_error(
+    command_path: Sequence[str], message: str, *, exit_code: int = 1
+) -> NoReturn:
     help_text = _help_text_for_path(command_path)
     usage_line, _, _ = help_text.partition("\n")
     print(message, file=sys.stderr)

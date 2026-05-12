@@ -39,6 +39,7 @@ def current_config_context(
         except SystemExit:
             proj_dir = None
         else:
+            # current_project_dir returns cwd when no project marker is found.
             proj_dir = (
                 discovered
                 if discovered.resolve(strict=False) != resolved_cwd.resolve(strict=False)

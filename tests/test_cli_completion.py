@@ -212,18 +212,20 @@ def test_complete_run_command_includes_config_aliases(
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "")
+    monkeypatch.delenv("PROJ_DIR", raising=False)
 
     cwd = tmp_path / "work"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
 
     project = tmp_path / "project"
+    (project / "repo").mkdir(parents=True)
     (project / "config").mkdir(parents=True)
     (project / "config" / "config.toml").write_text(
         '[run.ai-review]\nalias = "python"\n[run.publish]\nalias = "uv"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: project)
+    monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: project)
 
     assert completion.complete_run_command([], "ai") == ["ai-review"]
 
@@ -729,7 +731,7 @@ class TestCompleteRunCommand:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "")
         monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: tmp_path)
+        monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: tmp_path)
         monkeypatch.setattr(
             completion,
             "load_run_config",
@@ -815,7 +817,7 @@ class TestCompleteReviseCommandOrReviewFile:
         work = tmp_path / "work"
         work.mkdir()
         monkeypatch.chdir(work)
-        monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: None)
         monkeypatch.setattr(
             completion,
             "load_merged_config",
@@ -843,7 +845,7 @@ class TestCompleteReviseCommandOrReviewFile:
         work.mkdir()
         (work / "review.md").write_text("review\n", encoding="utf-8")
         monkeypatch.chdir(work)
-        monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: None)
         monkeypatch.setattr(
             completion,
             "load_merged_config",

@@ -21,6 +21,7 @@ from agm.project.layout import (
     current_project_dir,
     default_worktrees_dir,
     exit_if_main_checkout_branch,
+    expected_branch_worktree_path,
     is_embedded_project,
     is_main_checkout_branch,
     is_project_dir,
@@ -60,6 +61,19 @@ def test_resolved_cwd_resolves_given_path(tmp_path: Path) -> None:
 def test_resolved_cwd_returns_resolved_absolute_path(tmp_path: Path) -> None:
     result = _resolved_cwd(tmp_path)
     assert result == tmp_path.resolve()
+
+
+def test_expected_branch_worktree_path_resolves_branch_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "project"
+    repo_dir = project_dir / "repo"
+    repo_dir.mkdir(parents=True)
+    monkeypatch.setattr(layout_module.git_helpers, "current_branch", lambda _repo: "main")
+
+    result = expected_branch_worktree_path(project_dir, "feature")
+
+    assert result == (project_dir / "worktrees" / "feature").resolve(strict=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1595,4 +1609,3 @@ class TestCurrentProjectDirGitCommonDirPath:
 
         result = current_project_dir(worktree)
         assert result == project
-

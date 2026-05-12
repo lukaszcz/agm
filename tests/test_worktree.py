@@ -7,8 +7,93 @@ from pathlib import Path
 import pytest
 
 import agm.project.worktree as worktree_mod
-from agm.project.worktree import ensure_worktree
+from agm.project.worktree import (
+    branch_exists,
+    ensure_worktree,
+    has_expected_worktree,
+    resolve_parent_checkout_dir,
+)
 from agm.vcs.git import WorktreeInfo
+
+
+class TestProjectWorktreeHelpers:
+    def test_has_expected_worktree_returns_true_for_matching_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        expected = tmp_path / "project" / "worktrees" / "feature"
+        expected.mkdir(parents=True)
+        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda project: project / "repo")
+        monkeypatch.setattr(
+            worktree_mod,
+            "expected_branch_worktree_path",
+            lambda project, branch: expected,
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_list",
+            lambda repo, env=None: [WorktreeInfo(path=expected, branch="feature")],
+        )
+
+        assert has_expected_worktree(tmp_path / "project", "feature")
+
+    def test_has_expected_worktree_returns_false_without_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        expected = tmp_path / "project" / "worktrees" / "feature"
+        expected.mkdir(parents=True)
+        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda project: project / "repo")
+        monkeypatch.setattr(
+            worktree_mod,
+            "expected_branch_worktree_path",
+            lambda project, branch: expected,
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_list",
+            lambda repo, env=None: [WorktreeInfo(path=expected, branch="other")],
+        )
+
+        assert not has_expected_worktree(tmp_path / "project", "feature")
+
+    def test_branch_exists_checks_local_and_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            worktree_mod.git_helpers, "local_branch_exists", lambda repo, branch, env=None: False
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers, "remote_branch_exists", lambda repo, branch, env=None: True
+        )
+
+        assert branch_exists(tmp_path, "feature")
+
+    def test_resolve_parent_checkout_dir_returns_repo_for_main_parent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "project"
+        repo = project / "repo"
+        repo.mkdir(parents=True)
+        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda _project: repo)
+        monkeypatch.setattr(
+            worktree_mod.git_helpers, "current_branch", lambda _repo, env=None: "main"
+        )
+
+        assert resolve_parent_checkout_dir(project, None, env={}) == repo
+
+    def test_resolve_parent_checkout_dir_returns_worktree_for_other_parent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "project"
+        repo = project / "repo"
+        repo.mkdir(parents=True)
+        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda _project: repo)
+        monkeypatch.setattr(
+            worktree_mod.git_helpers, "current_branch", lambda _repo, env=None: "main"
+        )
+
+        result = resolve_parent_checkout_dir(project, "feature", env={})
+
+        assert result == project / "worktrees" / "feature"
 
 
 class TestSyncRemoteTrackingBranches:
@@ -604,4 +689,3 @@ class TestEnsureWorktreeRelativePath:
         # The result should be absolute (resolved against cwd=repo)
         assert result.is_absolute()
         assert result == repo / relative_dir / "feat"
-

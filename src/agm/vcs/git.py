@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.core.process import require_capture, require_success, run_capture, run_foreground
+from agm.core.process import (
+    exit_with_output,
+    require_capture,
+    require_success,
+    run_capture,
+    run_foreground,
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,49 @@ def checkout_root(cwd: Path | None = None) -> Path:
         file=sys.stderr,
     )
     raise SystemExit(1)
+
+
+def containing_root(path: Path, *, env: dict[str, str] | None = None) -> Path | None:
+    """Return the containing git root for *path*, or None when absent."""
+
+    if not path.exists():
+        return None
+    returncode, stdout, _stderr = run_capture(
+        ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+        env=env,
+    )
+    if returncode != 0:
+        return None
+    return Path(stdout.strip())
+
+
+def exact_repo_root(path: Path, *, env: dict[str, str] | None = None) -> Path | None:
+    """Return *path* when it is exactly a git repo root, otherwise None."""
+
+    root = containing_root(path, env=env)
+    if root is None:
+        return None
+    resolved_root = root.resolve()
+    if resolved_root != path.resolve():
+        return None
+    return resolved_root
+
+
+def has_staged_changes(
+    repo_dir: Path,
+    paths: Sequence[Path],
+    *,
+    env: dict[str, str] | None = None,
+) -> bool:
+    """Return whether any *paths* have staged changes in *repo_dir*."""
+
+    returncode, stdout, stderr = run_capture(
+        ["git", "-C", str(repo_dir), "diff", "--cached", "--quiet", "--", *map(str, paths)],
+        env=env,
+    )
+    if returncode not in {0, 1}:
+        exit_with_output(returncode, stdout, stderr)
+    return returncode == 1
 
 
 def git_common_dir(cwd: Path | None = None) -> Path:
@@ -316,6 +366,64 @@ def ls_remote_head(repo_url: str, *, env: dict[str, str] | None = None) -> str:
     """Return git ls-remote --symref output for HEAD."""
 
     return require_capture(["git", "ls-remote", "--symref", repo_url, "HEAD"], env=env)
+
+
+def default_branch_from_remote(
+    repo_url: str, *, env: dict[str, str] | None = None
+) -> str:
+    """Return the default branch for a remote repository URL."""
+
+    returncode, output, _ = run_capture(
+        ["git", "ls-remote", "--symref", repo_url, "HEAD"],
+        env=env,
+    )
+    if returncode != 0:
+        print(f"error: could not determine default branch for {repo_url}", file=sys.stderr)
+        raise SystemExit(1)
+    for line in output.splitlines():
+        if line.startswith("ref:"):
+            parts = line.split()
+            if len(parts) >= 2:
+                return parts[1].removeprefix("refs/heads/")
+    print(f"error: could not determine default branch for {repo_url}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def default_branch_from_repo(
+    repo_path: Path, *, env: dict[str, str] | None = None
+) -> str:
+    """Return the default branch for a local repository."""
+
+    returncode, stdout, _ = run_capture(
+        [
+            "git",
+            "-C",
+            str(repo_path),
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+        env=env,
+    )
+    branch = stdout.strip().removeprefix("origin/") if returncode == 0 else ""
+    if branch:
+        return branch
+    print(
+        f"error: could not determine default branch for dependency repo at {repo_path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+def repo_name_from_url(repo_url: str) -> str:
+    """Derive a repository name from *repo_url*."""
+
+    trimmed = repo_url.rstrip("/")
+    name = Path(trimmed).name.removesuffix(".git")
+    if name in {"", ".", "/"}:
+        raise ValueError(f"could not derive repository name from repo url: {repo_url}")
+    return name
 
 
 def find_first_git_repo(parent_dir: Path) -> Path:

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sys
 
+import agm.vcs.git as git_helpers
 from agm.commands.args import DepNewArgs
-from agm.commands.dep.common import default_branch_from_remote, derive_dep_name
+from agm.commands.dep.common import derive_dep_name
 from agm.core import dry_run
 from agm.core.fs import exists, mkdir, rmdir
 from agm.core.process import require_success
@@ -21,7 +22,7 @@ def run(args: DepNewArgs) -> None:
         print(f"error: deps/{dep} already exists", file=sys.stderr)
         raise SystemExit(1)
 
-    resolved_branch = args.branch or default_branch_from_remote(args.repo_url)
+    resolved_branch = args.branch or git_helpers.default_branch_from_remote(args.repo_url)
     target_dir = dep_dir / resolved_branch
     mkdir(target_dir.parent, parents=True, exist_ok=True)
     try:

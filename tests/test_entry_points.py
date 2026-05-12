@@ -244,7 +244,9 @@ class TestDepNewDryRun:
         monkeypatch.setattr(dep_new_cmd, "derive_dep_name", lambda url: "mylib")
         monkeypatch.setattr(dep_new_cmd, "exists", lambda p: False)
         monkeypatch.setattr(dep_new_cmd, "mkdir", lambda p, **kw: None)
-        monkeypatch.setattr(dep_new_cmd, "default_branch_from_remote", lambda url: "main")
+        monkeypatch.setattr(
+            dep_new_cmd.git_helpers, "default_branch_from_remote", lambda url: "main"
+        )
 
         def fail_require_success(cmd: list[str]) -> None:
             raise SystemExit(1)
@@ -295,7 +297,9 @@ class TestDepNewDryRun:
         monkeypatch.setattr(dep_new_cmd, "derive_dep_name", lambda url: "mylib")
         monkeypatch.setattr(dep_new_cmd, "exists", lambda p: False)
         monkeypatch.setattr(dep_new_cmd, "mkdir", lambda p, **kw: None)
-        monkeypatch.setattr(dep_new_cmd, "default_branch_from_remote", lambda url: "main")
+        monkeypatch.setattr(
+            dep_new_cmd.git_helpers, "default_branch_from_remote", lambda url: "main"
+        )
 
         def fail_require_success(cmd: list[str]) -> None:
             raise SystemExit(1)

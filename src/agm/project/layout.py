@@ -270,6 +270,28 @@ def branch_worktree_path(project_dir: Path, branch: str, *, repo_branch: str) ->
     return default_worktrees_dir(project_dir) / branch
 
 
+def expected_branch_worktree_path(project_dir: Path, branch: str) -> Path:
+    """Return the resolved expected worktree path for *branch*."""
+
+    repo_branch = git_helpers.current_branch(project_repo_dir(project_dir))
+    return branch_worktree_path(
+        project_dir,
+        branch,
+        repo_branch=repo_branch,
+    ).resolve(strict=False)
+
+
+def parent_config_branch(project_dir: Path, parent: str | None) -> str | None:
+    """Return the parent branch name for config seeding, or None for main checkout."""
+
+    repo_dir = project_repo_dir(project_dir)
+    repo_branch = git_helpers.current_branch(repo_dir)
+    resolved_parent = parent or repo_branch
+    if is_main_checkout_branch(project_dir, resolved_parent, repo_branch=repo_branch):
+        return None
+    return resolved_parent
+
+
 def branch_session_name(project_dir: Path, branch: str) -> str:
     """Return the tmux session name corresponding to *branch*."""
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from agm.agent.prompt import expand_prompt_env_vars, preprocess_prompt_file
+from agm.core import dry_run
 from agm.core.fs import is_file
 from agm.core.process import run_capture
 
@@ -21,6 +22,17 @@ class ResolvedPrompt:
 
     source: str | Path
     effective_file: Path
+
+
+@dataclass(slots=True)
+class PreparedPromptRun:
+    """Prepared agent prompt command and prompt files."""
+
+    command: list[str]
+    source_file: Path
+    effective_file: Path
+    env: dict[str, str]
+    temp_files: list[Path]
 
 
 def split_command(command: str, *, kind: str) -> list[str]:
@@ -117,6 +129,39 @@ def append_extra_prompt(
     return new_path
 
 
+def prepare_prompt_run(
+    *,
+    runner: str,
+    prompt_source: str | Path,
+    default_prompt_file: Path,
+    extra_prompt_source: str | Path | None,
+    env: dict[str, str],
+    temp_files: list[Path],
+    kind: str,
+) -> PreparedPromptRun:
+    """Prepare command and prompt files for a prompt-driven agent invocation."""
+
+    command = split_command(runner, kind=kind)
+    validate_command(command, kind=kind)
+    source_file = prompt_source if isinstance(prompt_source, Path) else default_prompt_file
+    resolved = prepare_prompt_from_source(prompt_source, temp_files=temp_files, env=env)
+    effective_file = resolved.effective_file
+    if extra_prompt_source is not None:
+        effective_file = append_extra_prompt(
+            effective_file,
+            extra_prompt_source,
+            temp_files=temp_files,
+            env=env,
+        )
+    return PreparedPromptRun(
+        command=command,
+        source_file=source_file,
+        effective_file=effective_file,
+        env=env,
+        temp_files=temp_files,
+    )
+
+
 def run_prompt_command(
     command: list[str],
     target: Path,
@@ -152,6 +197,29 @@ def run_prompt_command(
     if stderr:
         output += stderr
     return output
+
+
+def run_prepared_prompt(
+    prepared: PreparedPromptRun,
+    *,
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
+) -> str:
+    """Run a prepared prompt invocation."""
+
+    if dry_run.enabled():
+        dry_run.print_labeled_command(
+            "agent",
+            command_with_prompt_target(prepared.command, prepared.effective_file),
+        )
+        return ""
+    return run_prompt_command(
+        prepared.command,
+        prepared.effective_file,
+        env=prepared.env,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
+    )
 
 
 def cleanup_temp_files(temp_files: list[Path]) -> None:

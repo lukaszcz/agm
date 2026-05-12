@@ -23,14 +23,15 @@ from agm.core.log import append_log, prepare_log_file, resolve_log_file
 
 from .common import (
     PreparedSelectInvocation,
+    dry_run_prompt_text,
+    extra_prompt_source,
+    extra_selector_prompt_source,
     is_complete_output,
     loop_env,
+    loop_prompt_source,
     prepare_select_invocation,
     progress_file,
     prompt_file,
-    resolve_extra_prompt_source,
-    resolve_extra_selector_prompt_source,
-    resolve_prompt_source,
     resolved_timeout,
     runner_command,
     selected_task_text,
@@ -88,9 +89,7 @@ def _prepare_prompt(
 
 
 def _dry_run_prompt_text(prompt: PreparedPrompt) -> str:
-    if prompt.source_file == prompt.effective_file:
-        return str(prompt.source_file)
-    return f"{prompt.source_file} -> {prompt.effective_file} (preprocessed)"
+    return dry_run_prompt_text(prompt.source_file, prompt.effective_file)
 
 
 def _print_dry_run_command(label: str, command: list[str]) -> None:
@@ -108,7 +107,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
 
     env = loop_env(resolved_tasks_dir)
 
-    prompt_source = resolve_prompt_source(args)
+    prompt_source = loop_prompt_source(args)
     resolved_prompt: ResolvedPrompt | None = None
     if prompt_source is not None:
         resolved_prompt = prepare_prompt_from_source(
@@ -167,27 +166,27 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
                 idle_timeout=resolved_timeout(args),
             )
 
-    extra_prompt_source = resolve_extra_prompt_source(args)
-    extra_selector_prompt_source = resolve_extra_selector_prompt_source(args)
+    resolved_extra_prompt_source = extra_prompt_source(args)
+    resolved_extra_selector_prompt_source = extra_selector_prompt_source(args)
 
     # Apply extra selector prompt to the selector invocation
     if (
         select_invocation is not None
-        and extra_selector_prompt_source is not None
+        and resolved_extra_selector_prompt_source is not None
     ):
         new_effective = append_extra_prompt(
             select_invocation.effective_prompt_file,
-            extra_selector_prompt_source,
+            resolved_extra_selector_prompt_source,
             temp_files=temp_files,
             env=env,
         )
         select_invocation.effective_prompt_file = new_effective
 
     # Apply extra prompt to the loop prompt (no-selector mode)
-    if loop_prompt is not None and extra_prompt_source is not None:
+    if loop_prompt is not None and resolved_extra_prompt_source is not None:
         new_effective = append_extra_prompt(
             loop_prompt.effective_file,
-            extra_prompt_source,
+            resolved_extra_prompt_source,
             temp_files=temp_files,
             env=env,
         )
@@ -213,7 +212,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         loop_prompt=loop_prompt,
         resolved_prompt=resolved_prompt,
         bootstrap_prompt=bootstrap_prompt,
-        extra_prompt_source=extra_prompt_source,
+        extra_prompt_source=resolved_extra_prompt_source,
         log_file=log_file,
         idle_timeout=timeout,
     )

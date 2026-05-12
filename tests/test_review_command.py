@@ -7,15 +7,16 @@ from pathlib import Path
 
 import pytest
 
+import agm.commands.refine as refine_mod
 import agm.commands.review as review_mod
+import agm.commands.revise as revise_mod
 from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
+from agm.commands.refine import _write_review_file, refine
 from agm.commands.review import (
     DEFAULT_REVIEW_ASPECTS,
-    _write_review_file,
     prepare_review,
-    prepare_revise,
-    refine,
 )
+from agm.commands.revise import prepare_revise
 from agm.core import dry_run
 
 
@@ -437,7 +438,7 @@ def test_write_review_file_preserves_env_vars(tmp_path: Path) -> None:
 
 
 def test_unlink_temp_file_ignores_missing_untracked_file(tmp_path: Path) -> None:
-    review_mod._unlink_temp_file(tmp_path / "missing.md", temp_files=[])
+    refine_mod._unlink_temp_file(tmp_path / "missing.md", temp_files=[])
 
 
 def test_review_once_runs_prompt_and_cleans_temp_files(
@@ -469,7 +470,7 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
     def fake_cleanup(temp_files: list[Path]) -> None:
         cleaned.append(list(temp_files))
 
-    monkeypatch.setattr("agm.commands.review.run_prompt_command", fake_run_prompt_command)
+    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
     monkeypatch.setattr("agm.commands.review.cleanup_temp_files", fake_cleanup)
 
     output = review_mod.review_once(_review_args())
@@ -490,7 +491,7 @@ def test_revise_once_dry_run_prints_configuration_and_command(
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
     dry_run.set_enabled(True)
     try:
-        output = review_mod.revise_once(_revise_args("review.md"))
+        output = revise_mod.revise_once(_revise_args("review.md"))
     finally:
         dry_run.set_enabled(False)
 
@@ -498,6 +499,35 @@ def test_revise_once_dry_run_prints_configuration_and_command(
     assert output == ""
     assert "dry-run: revise configuration" in captured.out
     assert "dry-run: command [agent]:" in captured.out
+
+
+def test_revise_stream_callbacks_write_non_empty_chunks(capsys: pytest.CaptureFixture[str]) -> None:
+    revise_mod._write_stdout("out")
+    revise_mod._write_stderr("err")
+    revise_mod._write_stdout("")
+    revise_mod._write_stderr("")
+
+    captured = capsys.readouterr()
+    assert captured.out == "out"
+    assert captured.err == "err"
+
+
+def test_prepare_revise_uses_default_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "loop-runner -p"\n')
+    review_file = tmp_path / "review.md"
+    review_file.write_text("review\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+
+    prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
+
+    assert prepared.command == ["loop-runner", "-p"]
 
 
 def test_review_once_dry_run_prints_configuration(
@@ -558,8 +588,8 @@ def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
         revisions.append(args)
         return "try again\n"
 
-    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
 
     refine(
         RefineArgs(
@@ -612,8 +642,8 @@ def test_refine_runs_fresh_review_after_continue(
         del args, stdout_callback, stderr_callback
         return next(outputs)
 
-    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
 
     refine(
         RefineArgs(
@@ -672,8 +702,8 @@ def test_refine_uses_named_config_and_forwards_command_name(
         revisions.append(args)
         return "COMPLETE\n"
 
-    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
 
     refine(
         RefineArgs(
@@ -732,8 +762,8 @@ def test_refine_writes_review_and_revise_output_to_log_file(
         stderr_callback("revise stderr\n")
         return "COMPLETE\n"
 
-    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
-    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
 
     refine(
         RefineArgs(
@@ -802,17 +832,17 @@ def test_run_wrappers_translate_keyboard_interrupt(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("agm.commands.review.review_once", raise_interrupt)
     with pytest.raises(SystemExit) as review_exit:
-        review_mod.run_review(_review_args())
+        review_mod.run(_review_args())
     assert review_exit.value.code == 130
 
-    monkeypatch.setattr("agm.commands.review.revise_once", raise_interrupt)
+    monkeypatch.setattr("agm.commands.revise.revise_once", raise_interrupt)
     with pytest.raises(SystemExit) as revise_exit:
-        review_mod.run_revise(_revise_args("review.md"))
+        revise_mod.run(_revise_args("review.md"))
     assert revise_exit.value.code == 130
 
-    monkeypatch.setattr("agm.commands.review.refine", raise_interrupt)
+    monkeypatch.setattr("agm.commands.refine.refine", raise_interrupt)
     with pytest.raises(SystemExit) as refine_exit:
-        review_mod.run_refine(
+        refine_mod.run(
             RefineArgs(
                 max_steps=1,
                 runner=None,

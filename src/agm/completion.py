@@ -10,6 +10,7 @@ import click
 
 import agm.vcs.git as git_helpers
 from agm.commands.dep.common import main_dep_repo
+from agm.config.context import current_config_context
 from agm.config.general import load_merged_config, load_run_config
 from agm.project.layout import (
     current_project_dir,
@@ -266,14 +267,13 @@ def complete_run_command(args: list[str], incomplete: str) -> list[str]:
                 ):
                     candidates.add(candidate.name)
 
-        home = Path(os.environ.get("HOME", "~")).expanduser()
-        cwd = Path.cwd()
+        context = current_config_context()
         try:
-            proj_dir = current_project_dir(cwd)
-        except (OSError, SystemExit):
-            proj_dir = None
-        try:
-            run_config = load_run_config(home=home, proj_dir=proj_dir, cwd=cwd)
+            run_config = load_run_config(
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+            )
         except OSError:
             run_config = None
         if run_config is not None:
@@ -353,14 +353,14 @@ def complete_revise_command_or_review_file(
 ) -> list[str]:
     del ctx, args
     try:
-        home = Path(os.environ.get("HOME", "~")).expanduser()
-        cwd = Path.cwd()
-        try:
-            proj_dir = current_project_dir(cwd)
-        except (OSError, SystemExit):
-            proj_dir = None
+        context = current_config_context()
         command_matches = _match(
-            _configured_command_names("revise", home=home, proj_dir=proj_dir, cwd=cwd),
+            _configured_command_names(
+                "revise",
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+            ),
             incomplete,
         )
         if command_matches:

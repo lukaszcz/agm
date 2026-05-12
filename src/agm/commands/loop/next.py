@@ -15,19 +15,14 @@ from agm.commands.args import LoopNextArgs
 from agm.core import dry_run
 
 from .common import (
+    dry_run_prompt_text,
+    extra_selector_prompt_source,
     loop_env,
     prepare_select_invocation,
-    resolve_extra_selector_prompt_source,
     resolved_timeout,
     tasks_dir,
     use_selector_mode,
 )
-
-
-def _dry_run_prompt_text(source_file: Path, effective_file: Path) -> str:
-    if source_file == effective_file:
-        return str(source_file)
-    return f"{source_file} -> {effective_file} (preprocessed)"
 
 
 def _print_dry_run_prompt(label: str, prompt_text: str) -> None:
@@ -51,11 +46,11 @@ def run(args: LoopNextArgs) -> None:
     try:
         invocation = prepare_select_invocation(args, temp_files=temp_files, env=env)
 
-        extra_selector_prompt_source = resolve_extra_selector_prompt_source(args)
-        if extra_selector_prompt_source is not None:
+        resolved_extra_selector_prompt_source = extra_selector_prompt_source(args)
+        if resolved_extra_selector_prompt_source is not None:
             invocation.effective_prompt_file = append_extra_prompt(
                 invocation.effective_prompt_file,
-                extra_selector_prompt_source,
+                resolved_extra_selector_prompt_source,
                 temp_files=temp_files,
                 env=env,
             )
@@ -76,7 +71,7 @@ def run(args: LoopNextArgs) -> None:
             dry_run.print_detail("execution command", dry_run.format_command(invocation.command))
             _print_dry_run_prompt(
                 "selector",
-                _dry_run_prompt_text(
+                dry_run_prompt_text(
                     invocation.source_prompt_file,
                     invocation.effective_prompt_file,
                 ),

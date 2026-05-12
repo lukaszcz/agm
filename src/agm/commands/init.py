@@ -31,15 +31,14 @@ def looks_like_repo_url(value: str) -> bool:
 
 
 def derive_project_name(repo_url: str) -> str:
-    trimmed = repo_url.rstrip("/")
-    name = Path(trimmed).name.removesuffix(".git")
-    if name in {"", ".", "/"}:
+    try:
+        return git_helpers.repo_name_from_url(repo_url)
+    except ValueError:
         print(
             f"error: could not derive project name from repo url: {repo_url}",
             file=sys.stderr,
         )
         raise SystemExit(1)
-    return name
 
 
 def write_file_if_missing(path: Path, content: str) -> None:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.commands.args import DepSwitchArgs
-from agm.commands.dep.common import default_branch_from_repo, main_dep_repo
+from agm.commands.dep.common import main_dep_repo
 from agm.core.fs import exists, is_dir, mkdir
 from agm.project.dependency_env import current_config_branch, update_dependency_config
 from agm.project.layout import project_deps_dir, require_current_project_dir
@@ -70,7 +70,7 @@ def run(args: DepSwitchArgs) -> None:
     mkdir(target_dir.parent, parents=True, exist_ok=True)
     git_helpers.fetch(repo_path)
     if args.create_branch:
-        default_branch = default_branch_from_repo(repo_path)
+        default_branch = git_helpers.default_branch_from_repo(repo_path)
         git_helpers.worktree_add(
             repo_path,
             target_dir,

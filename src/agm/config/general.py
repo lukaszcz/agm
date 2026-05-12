@@ -107,6 +107,12 @@ def resolve_agm_path(*, home: Path, relative_path: Path) -> Path:
     return candidates[-1]
 
 
+def resolve_default_prompt_file(filename: str, *, home: Path) -> Path:
+    """Resolve a default prompt file from the AGM prompt directory."""
+
+    return resolve_agm_path(home=home, relative_path=Path("prompts") / filename)
+
+
 def config_file_candidates(*, home: Path, proj_dir: Path | None, cwd: Path) -> list[Path]:
     candidates = agm_path_candidates(home=home, relative_path=Path("config.toml"))
     if proj_dir is not None:

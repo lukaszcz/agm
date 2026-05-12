@@ -1,4 +1,4 @@
-"""Review agent command."""
+"""Revise agent command."""
 
 from __future__ import annotations
 
@@ -8,27 +8,24 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 
-from agm.agent.prompt_source import PromptSourceOptions, resolve_prompt_source
+from agm.agent.prompt_source import PromptSourceOptions, path_from_cli, resolve_prompt_source
 from agm.agent.runner import (
     PreparedPromptRun,
     cleanup_temp_files,
     prepare_prompt_run,
     run_prepared_prompt,
 )
-from agm.commands.args import ReviewArgs
+from agm.commands.args import ReviseArgs
 from agm.config.context import current_config_context
 from agm.config.general import (
     ConfigCommandNotFound,
-    ReviewConfig,
+    ReviseConfig,
     load_loop_config,
-    load_review_config,
+    load_revise_config,
     resolve_default_prompt_file,
 )
 from agm.core import dry_run
 from agm.parser import exit_with_usage_error
-
-DEFAULT_REVIEW_SCOPE = "changes on current branch"
-DEFAULT_REVIEW_ASPECTS = "correctness, completeness, maintainability, adherence to AGENTS.md"
 
 StreamCallback = Callable[[str], None]
 
@@ -61,10 +58,10 @@ def _default_runner() -> str:
     return loop_config.runner if loop_config.runner is not None else "claude -p"
 
 
-def _review_config(command_name: str | None, *, require_command: bool) -> ReviewConfig:
+def _revise_config(command_name: str | None, *, require_command: bool) -> ReviseConfig:
     context = current_config_context()
     try:
-        return load_review_config(
+        return load_revise_config(
             home=context.home,
             proj_dir=context.proj_dir,
             cwd=context.cwd,
@@ -75,27 +72,39 @@ def _review_config(command_name: str | None, *, require_command: bool) -> Review
         _exit_config_command_not_found(error)
 
 
-def _resolved_review_aspects(args: ReviewArgs, config: ReviewConfig) -> str:
-    aspects = args.aspects or config.aspects or DEFAULT_REVIEW_ASPECTS
-    extra_aspects = args.extra_aspects or config.extra_aspects
-    if extra_aspects is None:
-        return aspects
-    return f"{aspects}, {extra_aspects}"
+def _exit_if_lone_revise_command_name(args: ReviseArgs) -> None:
+    if args.command_name is not None:
+        return
+    context = current_config_context()
+    if path_from_cli(args.review_file, cwd=context.cwd).exists():
+        return
+    try:
+        load_revise_config(
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
+            command_name=args.review_file,
+        )
+    except ConfigCommandNotFound:
+        return
+    exit_with_usage_error(
+        ["revise"],
+        f"error: revise command {args.review_file!r} was provided without REVIEW_FILE",
+    )
 
 
-def prepare_review(
-    args: ReviewArgs, *, temp_files: list[Path] | None = None
+def prepare_revise(
+    args: ReviseArgs, *, temp_files: list[Path] | None = None
 ) -> PreparedPromptRun:
     owned_temp_files: list[Path] = [] if temp_files is None else temp_files
+    _exit_if_lone_revise_command_name(args)
     context = current_config_context()
-    config = _review_config(args.command_name, require_command=args.require_command_config)
+    config = _revise_config(args.command_name, require_command=args.require_command_config)
     runner = args.runner or config.runner or _default_runner()
-    scope = args.scope or config.scope or DEFAULT_REVIEW_SCOPE
-    aspects = _resolved_review_aspects(args, config)
     env = dict(os.environ)
-    env["REVIEW_SCOPE"] = scope
-    env["REVIEW_ASPECTS"] = aspects
-    default_prompt_file = resolve_default_prompt_file("review.md", home=context.home)
+    review_file = path_from_cli(args.review_file, cwd=context.cwd)
+    env["REVIEW_FILE"] = str(review_file)
+    default_prompt_file = resolve_default_prompt_file("revise.md", home=context.home)
     prompt_source = resolve_prompt_source(
         PromptSourceOptions(
             prompt=args.prompt,
@@ -123,21 +132,21 @@ def prepare_review(
         extra_prompt_source=extra_prompt_source,
         env=env,
         temp_files=owned_temp_files,
-        kind="review runner",
+        kind="revise runner",
     )
 
 
-def review_once(
-    args: ReviewArgs,
+def revise_once(
+    args: ReviseArgs,
     *,
     stdout_callback: StreamCallback = _write_stdout,
     stderr_callback: StreamCallback = _write_stderr,
 ) -> str:
     temp_files: list[Path] = []
     try:
-        prepared = prepare_review(args, temp_files=temp_files)
+        prepared = prepare_revise(args, temp_files=temp_files)
         if dry_run.enabled():
-            dry_run.print_configuration("review")
+            dry_run.print_configuration("revise")
         return run_prepared_prompt(
             prepared,
             stdout_callback=stdout_callback,
@@ -147,9 +156,9 @@ def review_once(
         cleanup_temp_files(temp_files)
 
 
-def run(args: ReviewArgs) -> None:
+def run(args: ReviseArgs) -> None:
     try:
-        review_once(args)
+        revise_once(args)
     except KeyboardInterrupt:
         print("\nInterrupted")
         raise SystemExit(130)

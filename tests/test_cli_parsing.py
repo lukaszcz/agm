@@ -281,7 +281,7 @@ class TestFetch:
 
 class TestReviewReviseRefine:
     def test_review_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.review_command, "run_review")
+        calls = make_recorder(monkeypatch, cli.review_command, "run")
         result = invoke(
             runner,
             [
@@ -313,7 +313,7 @@ class TestReviewReviseRefine:
     def test_review_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.review_command, "run_review")
+        calls = make_recorder(monkeypatch, cli.review_command, "run")
         result = invoke(runner, ["review", "frontend", "--scope", "branch"])
 
         assert result.exit_code == 0
@@ -339,7 +339,7 @@ class TestReviewReviseRefine:
         assert result.exit_code != 0
 
     def test_revise_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.review_command, "run_revise")
+        calls = make_recorder(monkeypatch, cli.revise_command, "run")
         result = invoke(
             runner,
             [
@@ -364,7 +364,7 @@ class TestReviewReviseRefine:
     def test_revise_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.review_command, "run_revise")
+        calls = make_recorder(monkeypatch, cli.revise_command, "run")
         result = invoke(runner, ["revise", "frontend", "review.md"])
 
         assert result.exit_code == 0
@@ -375,7 +375,7 @@ class TestReviewReviseRefine:
     def test_revise_single_argument_remains_review_file(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.review_command, "run_revise")
+        calls = make_recorder(monkeypatch, cli.revise_command, "run")
         result = invoke(runner, ["revise", "review.md"])
 
         assert result.exit_code == 0
@@ -393,7 +393,7 @@ class TestReviewReviseRefine:
         assert "COMMAND_OR_REVIEW_FILE" in result.output
 
     def test_refine_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.review_command, "run_refine")
+        calls = make_recorder(monkeypatch, cli.refine_command, "run")
         result = invoke(
             runner,
             [
@@ -441,7 +441,7 @@ class TestReviewReviseRefine:
     def test_refine_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.review_command, "run_refine")
+        calls = make_recorder(monkeypatch, cli.refine_command, "run")
         result = invoke(runner, ["refine", "frontend", "--max-steps", "2"])
 
         assert result.exit_code == 0

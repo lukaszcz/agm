@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from agm.commands.args import RunArgs
+from agm.config.context import current_config_context
 from agm.config.general import load_run_config
 from agm.core import dry_run
 from agm.core.process import run_foreground
@@ -112,6 +113,7 @@ def _run_with_optional_resource_limits(
 def run(args: RunArgs) -> None:
     current = Path.cwd()
     resolved_env = dict(os.environ)
+    context = current_config_context(cwd=current, env=resolved_env)
     run_args = args
     run_command = normalize_run_command(list(run_args.run_command))
     if not run_command:
@@ -119,9 +121,9 @@ def run(args: RunArgs) -> None:
         raise SystemExit(1)
 
     run_config = load_run_config(
-        home=Path(resolved_env["HOME"]),
-        proj_dir=Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None,
-        cwd=current,
+        home=context.home,
+        proj_dir=context.proj_dir,
+        cwd=context.cwd,
     )
     command_name = Path(run_command[0]).name or run_command[0]
     command_alias = run_config.alias_for(command_name)
@@ -165,15 +167,13 @@ def run(args: RunArgs) -> None:
                 command=effective_run_command,
                 cwd=current,
                 env=resolved_env,
-                home=Path(resolved_env["HOME"]),
-                proj_dir=Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None,
+                home=context.home,
+                proj_dir=context.proj_dir,
                 command_name=run_command[0],
                 alias_command_name=effective_run_command[0] if command_alias is not None else None,
                 settings_file=run_args.settings_file,
                 patch_proj_dir=(
-                    Path(resolved_env["PROJ_DIR"])
-                    if not run_args.no_patch and resolved_env.get("PROJ_DIR")
-                    else None
+                    context.proj_dir if not run_args.no_patch else None
                 ),
                 process_prefix=process_prefix,
             )
@@ -196,15 +196,13 @@ def run(args: RunArgs) -> None:
         command=effective_run_command,
         cwd=current,
         env=resolved_env,
-        home=Path(resolved_env["HOME"]),
-        proj_dir=Path(resolved_env["PROJ_DIR"]) if resolved_env.get("PROJ_DIR") else None,
+        home=context.home,
+        proj_dir=context.proj_dir,
         command_name=run_command[0],
         alias_command_name=effective_run_command[0] if command_alias is not None else None,
         settings_file=run_args.settings_file,
         patch_proj_dir=(
-            Path(resolved_env["PROJ_DIR"])
-            if not run_args.no_patch and resolved_env.get("PROJ_DIR")
-            else None
+            context.proj_dir if not run_args.no_patch else None
         ),
         process_prefix=process_prefix,
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,

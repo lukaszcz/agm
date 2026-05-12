@@ -12,8 +12,6 @@ import agm.commands.dep.remove as dep_remove
 import agm.commands.dep.switch as dep_switch
 from agm.commands.args import DepRemoveArgs, DepSwitchArgs
 from agm.commands.dep.common import (
-    default_branch_from_remote,
-    default_branch_from_repo,
     derive_dep_name,
     main_dep_repo,
 )
@@ -25,7 +23,7 @@ from agm.commands.dep.remove import (
     _worktree_for_branch,
 )
 from agm.commands.dep.switch import _checkout_name, _existing_checkout_name
-from agm.vcs.git import WorktreeInfo
+from agm.vcs.git import WorktreeInfo, default_branch_from_remote, default_branch_from_repo
 
 # ---------------------------------------------------------------------------
 # agm.commands.dep.common – derive_dep_name
@@ -95,7 +93,7 @@ class TestDefaultBranchFromRemote:
             output = "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"
             return 0, output, ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         assert default_branch_from_remote("https://github.com/org/repo") == "main"
 
     def test_parses_non_main_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,14 +101,14 @@ class TestDefaultBranchFromRemote:
             output = "ref: refs/heads/develop\tHEAD\n"
             return 0, output, ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         assert default_branch_from_remote("https://github.com/org/repo") == "develop"
 
     def test_exits_on_nonzero_returncode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
             return 1, "", "fatal: repository not found"
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         with pytest.raises(SystemExit):
             default_branch_from_remote("https://github.com/org/repo")
 
@@ -119,7 +117,7 @@ class TestDefaultBranchFromRemote:
             output = "abc123\tHEAD\n"
             return 0, output, ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         with pytest.raises(SystemExit):
             default_branch_from_remote("https://github.com/org/repo")
 
@@ -129,7 +127,7 @@ class TestDefaultBranchFromRemote:
             output = "ref:\n"
             return 0, output, ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         with pytest.raises(SystemExit):
             default_branch_from_remote("https://github.com/org/repo")
 
@@ -144,7 +142,7 @@ class TestDefaultBranchFromRepo:
         def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
             return 0, "origin/main\n", ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         assert default_branch_from_repo(Path("/some/repo")) == "main"
 
     def test_returns_branch_without_prefix_already_stripped(
@@ -153,14 +151,14 @@ class TestDefaultBranchFromRepo:
         def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
             return 0, "main\n", ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         assert default_branch_from_repo(Path("/some/repo")) == "main"
 
     def test_exits_on_nonzero_returncode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
             return 1, "", ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         with pytest.raises(SystemExit):
             default_branch_from_repo(Path("/some/repo"))
 
@@ -168,7 +166,7 @@ class TestDefaultBranchFromRepo:
         def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
             return 0, "   \n", ""
 
-        monkeypatch.setattr(dep_common, "run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         with pytest.raises(SystemExit):
             default_branch_from_repo(Path("/some/repo"))
 
@@ -967,7 +965,7 @@ class TestDepSwitchRun:
         monkeypatch.setattr(dep_switch, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(dep_switch.git_helpers, "worktree_list", lambda p: worktrees)
         monkeypatch.setattr(dep_switch, "current_config_branch", lambda pd: "main")
-        monkeypatch.setattr(dep_switch, "default_branch_from_repo", lambda p: "main")
+        monkeypatch.setattr(dep_switch.git_helpers, "default_branch_from_repo", lambda p: "main")
 
         fetched: list[Path] = []
         monkeypatch.setattr(dep_switch.git_helpers, "fetch", lambda p: fetched.append(p))

@@ -14,21 +14,25 @@ from agm.vcs.git import (
     branch_can_delete,
     branch_delete,
     checkout_root,
+    containing_root,
     create_tracking_branch,
     current_branch,
     default_remote_branch_ref,
+    exact_repo_root,
     fetch,
     fetch_output,
     fetch_prune_all,
     fetch_prune_origin,
     find_first_git_repo,
     git_common_dir,
+    has_staged_changes,
     is_git_repo,
     local_branch_exists,
     local_branches,
     ls_remote_head,
     remote_branch_exists,
     remote_unmerged_branches,
+    repo_name_from_url,
     symbolic_ref,
     worktree_add,
     worktree_list,
@@ -55,6 +59,64 @@ class TestGitArgs:
         repo = tmp_path / "my-repo"
         result = _git_args(repo)
         assert result[2] == str(repo)
+
+
+class TestGenericGitProbeHelpers:
+    def test_containing_root_returns_none_for_missing_path(self, tmp_path: Path) -> None:
+        assert containing_root(tmp_path / "missing") is None
+
+    def test_containing_root_returns_none_when_git_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("agm.vcs.git.run_capture", lambda *_a, **_kw: (1, "", ""))
+
+        assert containing_root(tmp_path) is None
+
+    def test_containing_root_returns_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.vcs.git.run_capture", lambda *_a, **_kw: (0, f"{tmp_path}\n", "")
+        )
+
+        assert containing_root(tmp_path) == tmp_path
+
+    def test_exact_repo_root_requires_exact_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        parent = tmp_path / "repo"
+        child = parent / "sub"
+        child.mkdir(parents=True)
+        monkeypatch.setattr("agm.vcs.git.containing_root", lambda *_a, **_kw: parent)
+
+        assert exact_repo_root(child) is None
+        assert exact_repo_root(parent) == parent
+
+    def test_exact_repo_root_returns_none_without_containing_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("agm.vcs.git.containing_root", lambda *_a, **_kw: None)
+
+        assert exact_repo_root(tmp_path) is None
+
+    def test_has_staged_changes_handles_git_status_codes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("agm.vcs.git.run_capture", lambda *_a, **_kw: (1, "", ""))
+
+        assert has_staged_changes(tmp_path, [Path("config.toml")])
+
+    def test_has_staged_changes_exits_on_unexpected_status(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("agm.vcs.git.run_capture", lambda *_a, **_kw: (128, "", "fatal"))
+
+        with pytest.raises(SystemExit):
+            has_staged_changes(tmp_path, [Path("config.toml")])
+
+    def test_repo_name_from_url_rejects_empty_name(self) -> None:
+        with pytest.raises(ValueError):
+            repo_name_from_url("/")
 
 
 # ---------------------------------------------------------------------------

@@ -18,10 +18,10 @@ from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.commands.loop.common import (
     is_complete_output,
     loop_env,
+    loop_prompt_source,
     prepare_select_invocation,
     prompt_file,
-    resolve_prompt_source,
-    resolve_selector_prompt_source,
+    selector_prompt_source,
     selector_result,
     use_selector_mode,
 )
@@ -342,7 +342,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        assert resolve_prompt_source(args) is None
+        assert loop_prompt_source(args) is None
 
     def test_returns_prompt_text_from_cli(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -370,7 +370,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_prompt_source(args)
+        result = loop_prompt_source(args)
         assert result == "do the thing"
 
     def test_returns_path_from_cli_prompt_file(
@@ -399,7 +399,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_prompt_source(args)
+        result = loop_prompt_source(args)
         assert result == Path("/path/to/prompt.md")
 
     def test_cli_prompt_file_relative_path_resolves_against_cwd(
@@ -430,7 +430,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_prompt_source(args)
+        result = loop_prompt_source(args)
         assert result == work / "prompts" / "prompt.md"
 
     def test_cli_prompt_overrides_prompt_file(
@@ -459,7 +459,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_prompt_source(args)
+        result = loop_prompt_source(args)
         assert result == "inline text"
 
     def test_returns_prompt_from_config(
@@ -490,7 +490,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_prompt_source(args)
+        result = loop_prompt_source(args)
         assert result == "config prompt"
 
     def test_returns_prompt_file_from_config(
@@ -523,7 +523,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_prompt_source(args)
+        result = loop_prompt_source(args)
         assert result == tmp_path / "my-prompt.md"
 
     def test_cli_overrides_config_prompt(
@@ -554,7 +554,7 @@ class TestResolvePromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_prompt_source(args)
+        result = loop_prompt_source(args)
         assert result == "cli text"
 
 
@@ -691,7 +691,7 @@ class TestResolveSelectorPromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        assert resolve_selector_prompt_source(args) is None
+        assert selector_prompt_source(args) is None
 
     def test_returns_selector_prompt_text_from_cli(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -719,7 +719,7 @@ class TestResolveSelectorPromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == "custom selector prompt"
 
     def test_returns_path_from_cli_selector_prompt_file(
@@ -748,7 +748,7 @@ class TestResolveSelectorPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == Path("/path/to/selector-prompt.md")
 
     def test_cli_selector_prompt_file_relative_path_resolves_against_cwd(
@@ -779,7 +779,7 @@ class TestResolveSelectorPromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == work / "prompts" / "selector.md"
 
     def test_cli_selector_prompt_overrides_selector_prompt_file(
@@ -808,7 +808,7 @@ class TestResolveSelectorPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == "inline text"
 
     def test_returns_selector_prompt_from_config(
@@ -841,7 +841,7 @@ class TestResolveSelectorPromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == "config selector prompt"
 
     def test_returns_selector_prompt_file_from_config(
@@ -874,7 +874,7 @@ class TestResolveSelectorPromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == tmp_path / "my-selector-prompt.md"
 
     def test_cli_overrides_config_selector_prompt(
@@ -907,7 +907,7 @@ class TestResolveSelectorPromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == "cli selector text"
 
     def test_absolute_config_path_is_not_prefixed(
@@ -940,7 +940,7 @@ class TestResolveSelectorPromptSource:
         extra_selector_prompt_file=None,
         timeout=None,
     )
-        result = resolve_selector_prompt_source(args)
+        result = selector_prompt_source(args)
         assert result == Path("/absolute/selector-prompt.md")
 
 
@@ -1626,9 +1626,9 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
-        assert resolve_extra_prompt_source(args) is None
+        assert extra_prompt_source(args) is None
 
     def test_returns_extra_prompt_text_from_cli(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1656,9 +1656,9 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
-        assert resolve_extra_prompt_source(args) == "extra instructions"
+        assert extra_prompt_source(args) == "extra instructions"
 
     def test_returns_extra_prompt_file_from_cli(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1686,9 +1686,9 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
-        result = resolve_extra_prompt_source(args)
+        result = extra_prompt_source(args)
         assert result == Path("/path/to/extra.md")
 
     def test_cli_extra_prompt_overrides_extra_prompt_file(
@@ -1717,9 +1717,9 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
-        result = resolve_extra_prompt_source(args)
+        result = extra_prompt_source(args)
         assert result == "inline extra"
 
 
@@ -1751,9 +1751,9 @@ class TestResolveExtraSelectorPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import resolve_extra_selector_prompt_source
+        from agm.commands.loop.common import extra_selector_prompt_source
 
-        assert resolve_extra_selector_prompt_source(args) is None
+        assert extra_selector_prompt_source(args) is None
 
     def test_returns_extra_selector_prompt_from_cli(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1781,9 +1781,9 @@ class TestResolveExtraSelectorPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import resolve_extra_selector_prompt_source
+        from agm.commands.loop.common import extra_selector_prompt_source
 
-        result = resolve_extra_selector_prompt_source(args)
+        result = extra_selector_prompt_source(args)
         assert result == "extra selector text"
 
 
@@ -1884,7 +1884,7 @@ class TestResolveExtraPromptSourceConfig:
     def test_returns_extra_prompt_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -1913,13 +1913,13 @@ class TestResolveExtraPromptSourceConfig:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_extra_prompt_source(args)
+        result = extra_prompt_source(args)
         assert result == "config extra prompt"
 
     def test_returns_extra_prompt_file_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -1948,13 +1948,13 @@ class TestResolveExtraPromptSourceConfig:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_extra_prompt_source(args)
+        result = extra_prompt_source(args)
         assert result == tmp_path / "my-extra.md"
 
     def test_cli_overrides_config_extra_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -1983,7 +1983,7 @@ class TestResolveExtraPromptSourceConfig:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_extra_prompt_source(args)
+        result = extra_prompt_source(args)
         assert result == "cli extra"
 
 
@@ -1991,7 +1991,7 @@ class TestResolveExtraSelectorPromptSourceConfig:
     def test_returns_extra_selector_prompt_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import resolve_extra_selector_prompt_source
+        from agm.commands.loop.common import extra_selector_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -2020,13 +2020,13 @@ class TestResolveExtraSelectorPromptSourceConfig:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_extra_selector_prompt_source(args)
+        result = extra_selector_prompt_source(args)
         assert result == "config extra selector"
 
     def test_returns_extra_selector_prompt_file_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import resolve_extra_selector_prompt_source
+        from agm.commands.loop.common import extra_selector_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -2055,7 +2055,7 @@ class TestResolveExtraSelectorPromptSourceConfig:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_extra_selector_prompt_source(args)
+        result = extra_selector_prompt_source(args)
         assert result == tmp_path / "my-extra-sel.md"
 
 
@@ -2063,7 +2063,7 @@ class TestResolveExtraPromptSourceRelativePath:
     def test_resolves_relative_extra_prompt_file_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import resolve_extra_prompt_source
+        from agm.commands.loop.common import extra_prompt_source
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
@@ -2088,7 +2088,7 @@ class TestResolveExtraPromptSourceRelativePath:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        result = resolve_extra_prompt_source(args)
+        result = extra_prompt_source(args)
         assert result == tmp_path / "relative" / "extra.md"
 
 
@@ -2096,7 +2096,7 @@ class TestResolveExtraSelectorPromptSourceRelativePath:
     def test_resolves_relative_extra_selector_prompt_file_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import resolve_extra_selector_prompt_source
+        from agm.commands.loop.common import extra_selector_prompt_source
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
@@ -2121,5 +2121,5 @@ class TestResolveExtraSelectorPromptSourceRelativePath:
             extra_selector_prompt_file="relative/sel-extra.md",
             timeout=None,
         )
-        result = resolve_extra_selector_prompt_source(args)
+        result = extra_selector_prompt_source(args)
         assert result == tmp_path / "relative" / "sel-extra.md"

@@ -8,10 +8,13 @@ import agm.vcs.git as git_helpers
 from agm.core.process import require_success
 from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
+    branch_worktree_path,
     copy_config,
     current_project_dir,
     default_worktrees_dir,
     exit_if_main_checkout_branch,
+    expected_branch_worktree_path,
+    project_repo_dir,
 )
 
 
@@ -38,6 +41,42 @@ def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -
     repo_dir = git_helpers.checkout_root(cwd)
     git_helpers.fetch_prune_origin(repo_dir, env=env)
     sync_remote_tracking_branches(repo_dir, env=env)
+
+
+def has_expected_worktree(
+    project_dir: Path, branch: str, *, env: dict[str, str] | None = None
+) -> bool:
+    """Return whether *branch* is checked out at the expected project path."""
+
+    repo_dir = project_repo_dir(project_dir)
+    expected_path = expected_branch_worktree_path(project_dir, branch)
+    for worktree in git_helpers.worktree_list(repo_dir, env=env):
+        if worktree.branch == branch and worktree.path.resolve(strict=False) == expected_path:
+            return True
+    return False
+
+
+def branch_exists(
+    repo_dir: Path, branch: str, *, env: dict[str, str] | None = None
+) -> bool:
+    """Return whether *branch* exists locally or on origin."""
+
+    return git_helpers.local_branch_exists(
+        repo_dir, branch, env=env
+    ) or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
+
+
+def resolve_parent_checkout_dir(
+    project_dir: Path, parent: str | None, *, env: dict[str, str]
+) -> Path:
+    """Return the checkout directory to use as the parent for a new worktree."""
+
+    repo_dir = project_repo_dir(project_dir)
+    repo_branch = git_helpers.current_branch(repo_dir, env=env)
+    resolved_parent = parent or repo_branch
+    if resolved_parent == repo_branch:
+        return repo_dir
+    return branch_worktree_path(project_dir, resolved_parent, repo_branch=repo_branch)
 
 
 def ensure_worktree(

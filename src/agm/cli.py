@@ -23,7 +23,9 @@ import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
 import agm.commands.loop.step as loop_step_command
 import agm.commands.open as open_command
+import agm.commands.refine as refine_command
 import agm.commands.review as review_command
+import agm.commands.revise as revise_command
 import agm.commands.run as run_command
 import agm.commands.setup as setup_command
 import agm.commands.tmux.close as tmux_close_command
@@ -975,7 +977,7 @@ def review(
         extra_prompt=extra_prompt,
         extra_prompt_file=extra_prompt_file,
     )
-    review_command.run_review(
+    review_command.run(
         ReviewArgs(
             runner=runner,
             scope=scope,
@@ -1035,7 +1037,7 @@ def revise(
         extra_prompt=extra_prompt,
         extra_prompt_file=extra_prompt_file,
     )
-    review_command.run_revise(
+    revise_command.run(
         ReviseArgs(
             review_file=_require_value(
                 resolved_review_file,
@@ -1146,7 +1148,7 @@ def refine(
             ["refine"],
             "error: --no-log and --log-file are mutually exclusive",
         )
-    review_command.run_refine(
+    refine_command.run(
         RefineArgs(
             max_steps=_positive_int(max_steps, command_path=["refine"], name="--max-steps"),
             runner=runner,

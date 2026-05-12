@@ -14,6 +14,7 @@ from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
     is_main_checkout_branch,
+    parent_config_branch,
     project_repo_dir,
     require_current_project_dir,
 )
@@ -48,25 +49,19 @@ def expected_branch_path(proj_dir: Path, branch: str) -> Path:
     return branch_path(proj_dir, branch).resolve(strict=False)
 
 
-def resolve_parent_checkout_dir(proj_dir: Path, parent: str | None, *, env: dict[str, str]) -> Path:
+def resolve_parent_config_branch(proj_dir: Path, parent: str | None) -> str | None:
+    return parent_config_branch(proj_dir, parent)
+
+
+def resolve_parent_checkout_dir(
+    proj_dir: Path, parent: str | None, *, env: dict[str, str]
+) -> Path:
     repo_dir = project_repo_dir(proj_dir)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     resolved_parent = parent or repo_branch
     if resolved_parent == repo_branch:
         return repo_dir
     return branch_path(proj_dir, resolved_parent)
-
-
-def resolve_parent_config_branch(
-    proj_dir: Path, parent: str | None
-) -> str | None:
-    """Return the parent branch name for config seeding, or None for main checkout."""
-    repo_dir = project_repo_dir(proj_dir)
-    repo_branch = git_helpers.current_branch(repo_dir)
-    resolved_parent = parent or repo_branch
-    if is_main_checkout_branch(proj_dir, resolved_parent, repo_branch=repo_branch):
-        return None
-    return resolved_parent
 
 
 def has_expected_worktree(

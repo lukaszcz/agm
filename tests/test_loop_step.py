@@ -10,7 +10,7 @@ import pytest
 from agm.agent.runner import ResolvedPrompt
 from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.commands.loop.common import PreparedSelectInvocation
-from agm.commands.loop.next import _dry_run_prompt_text as next_dry_run_prompt_text
+from agm.commands.loop.common import dry_run_prompt_text as next_dry_run_prompt_text
 from agm.commands.loop.next import _print_dry_run_prompt as next_print_dry_run_prompt
 from agm.commands.loop.next import run as next_run
 from agm.commands.loop.run import run as loop_run

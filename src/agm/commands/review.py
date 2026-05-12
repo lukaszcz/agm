@@ -29,7 +29,6 @@ from agm.core.agent import (
     split_command,
     validate_command,
 )
-from agm.core.fs import is_file
 from agm.core.response import last_response_line
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"
@@ -205,9 +204,6 @@ def prepare_review(args: ReviewArgs, *, temp_files: list[Path] | None = None) ->
     env["REVIEW_SCOPE"] = scope
     env["REVIEW_ASPECTS"] = aspects
     default_prompt_file = _prompt_file("review.md")
-    if not is_file(default_prompt_file) and args.prompt is None and args.prompt_file is None:
-        print(f"Error: prompt file not found: {default_prompt_file}", file=sys.stderr)
-        raise SystemExit(1)
     return _prepare_agent_prompt_run(
         runner=runner,
         prompt_source=_prompt_source(
@@ -238,9 +234,6 @@ def prepare_revise(args: ReviseArgs, *, temp_files: list[Path] | None = None) ->
     review_file = _path_from_cli(args.review_file)
     env["REVIEW_FILE"] = str(review_file)
     default_prompt_file = _prompt_file("revise.md")
-    if not is_file(default_prompt_file) and args.prompt is None and args.prompt_file is None:
-        print(f"Error: prompt file not found: {default_prompt_file}", file=sys.stderr)
-        raise SystemExit(1)
     return _prepare_agent_prompt_run(
         runner=runner,
         prompt_source=_prompt_source(
@@ -285,12 +278,23 @@ def revise_once(args: ReviseArgs) -> str:
         cleanup_temp_files(temp_files)
 
 
-def _write_review_file(output: str, *, temp_files: list[Path], env: dict[str, str]) -> Path:
+def _write_review_file(output: str, *, temp_files: list[Path]) -> Path:
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(output)
         path = Path(handle.name)
     temp_files.append(path)
     return path
+
+
+def _unlink_temp_file(path: Path, *, temp_files: list[Path]) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        temp_files.remove(path)
+    except ValueError:
+        pass
 
 
 def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewArgs:
@@ -334,17 +338,14 @@ def refine(args: RefineArgs) -> None:
             if review_file is None:
                 review_args = _review_args_from_refine(args, config)
                 review_output = review_once(review_args)
-                review_file = _write_review_file(
-                    review_output,
-                    temp_files=temp_files,
-                    env=dict(os.environ),
-                )
+                review_file = _write_review_file(review_output, temp_files=temp_files)
             step += 1
             revise_output = revise_once(_revise_args_from_refine(args, config, review_file))
             status = last_response_line(revise_output)
             if status == "COMPLETE":
                 return
             if status == "CONTINUE":
+                _unlink_temp_file(review_file, temp_files=temp_files)
                 review_file = None
     finally:
         cleanup_temp_files(temp_files)

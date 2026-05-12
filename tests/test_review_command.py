@@ -327,7 +327,6 @@ def test_write_review_file_preserves_env_vars(tmp_path: Path) -> None:
     path = _write_review_file(
         "issue=$VALUE and ${TOKEN}\n",
         temp_files=temp_files,
-        env={"VALUE": "ok", "TOKEN": "secret"},
     )
 
     assert path in temp_files

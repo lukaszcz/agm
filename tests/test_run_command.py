@@ -116,7 +116,7 @@ def test_run_delegates_sandbox_execution_to_srt(
     assert 'export SANDBOX_CGROUP="$CG"' in bootstrap_script
 
 
-def test_run_does_not_patch_sandbox_when_project_is_only_discovered(
+def test_run_patches_sandbox_when_project_is_discovered(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
@@ -164,7 +164,7 @@ def test_run_does_not_patch_sandbox_when_project_is_only_discovered(
     )
 
     assert captured["proj_dir"] == project
-    assert captured["patch_proj_dir"] is None
+    assert captured["patch_proj_dir"] == project
 
 
 def test_run_no_memory_limit_omits_memory_max_but_keeps_default_swap_limit(

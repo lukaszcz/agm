@@ -119,9 +119,7 @@ def run(args: RunArgs) -> None:
     if not run_command:
         print("Error: command is required.", file=sys.stderr)
         raise SystemExit(1)
-    patch_proj_dir = (
-        context.proj_dir if resolved_env.get("PROJ_DIR") and not run_args.no_patch else None
-    )
+    patch_proj_dir = context.proj_dir if not run_args.no_patch else None
 
     run_config = load_run_config(
         home=context.home,

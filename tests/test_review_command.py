@@ -144,7 +144,6 @@ def test_prepare_review_uses_inline_prompt_and_extra_prompt(
         temp_files=[],
     )
 
-    assert prepared.source_file == home / ".agm" / "prompts" / "review.md"
     assert prepared.effective_file.read_text(encoding="utf-8") == (
         f"inline {review_mod.DEFAULT_REVIEW_SCOPE}\n"
         f"extra {DEFAULT_REVIEW_ASPECTS}"
@@ -168,7 +167,6 @@ def test_prepare_review_uses_cli_prompt_files(
         temp_files=[],
     )
 
-    assert prepared.source_file == prompt
     assert prepared.effective_file.read_text(encoding="utf-8") == (
         f"custom {review_mod.DEFAULT_REVIEW_SCOPE}\nextra"
     )
@@ -247,7 +245,6 @@ def test_prepare_review_uses_config_prompt_files(
 
     prepared = prepare_review(_review_args(), temp_files=[])
 
-    assert prepared.source_file == prompt
     assert prepared.effective_file.read_text(encoding="utf-8") == "configured\nextra"
 
 
@@ -315,7 +312,6 @@ def test_prepare_revise_uses_config_prompt_files(
 
     prepared = prepare_revise(_revise_args(str(review_file)), temp_files=[])
 
-    assert prepared.source_file == prompt
     assert prepared.effective_file.read_text(encoding="utf-8") == (
         f"configured {review_file}\nextra"
     )

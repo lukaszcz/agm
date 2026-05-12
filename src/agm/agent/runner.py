@@ -29,7 +29,6 @@ class PreparedPromptRun:
     """Prepared agent prompt command and prompt files."""
 
     command: list[str]
-    source_file: Path
     effective_file: Path
     env: dict[str, str]
     temp_files: list[Path]
@@ -143,7 +142,6 @@ def prepare_prompt_run(
 
     command = split_command(runner, kind=kind)
     validate_command(command, kind=kind)
-    source_file = prompt_source if isinstance(prompt_source, Path) else default_prompt_file
     resolved = prepare_prompt_from_source(prompt_source, temp_files=temp_files, env=env)
     effective_file = resolved.effective_file
     if extra_prompt_source is not None:
@@ -155,7 +153,6 @@ def prepare_prompt_run(
         )
     return PreparedPromptRun(
         command=command,
-        source_file=source_file,
         effective_file=effective_file,
         env=env,
         temp_files=temp_files,

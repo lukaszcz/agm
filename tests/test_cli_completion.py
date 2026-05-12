@@ -922,6 +922,25 @@ class TestCompleteReviseCommandOrReviewFile:
 
         assert result == []
 
+
+    def test_falls_back_to_review_files_when_config_context_exits(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        review_file = tmp_path / "frontend-review.md"
+        review_file.write_text("review\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            completion,
+            "current_config_context",
+            lambda: (_ for _ in ()).throw(SystemExit(1)),
+        )
+        ctx = click.Context(click.Command("test"))
+
+        result = completion.complete_revise_command_or_review_file(ctx, [], "front")
+
+        assert result == ["frontend-review.md"]
+
+
 class TestBranchCandidatesExceptionHandling:
     def test_skips_current_branch_on_runtime_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

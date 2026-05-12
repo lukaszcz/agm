@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from agm.agent.prompt_source import PromptSourceOptions, path_from_cli, resolve_prompt_source
+from agm.agent.prompt_source import PromptSourceOptions, resolve_prompt_source
 from agm.agent.runner import (
     PreparedPromptRun,
     cleanup_temp_files,
@@ -28,6 +28,7 @@ from agm.config.general import (
     resolve_default_prompt_file,
 )
 from agm.core import dry_run
+from agm.core.path import path_from_cli
 from agm.parser import exit_with_usage_error
 
 

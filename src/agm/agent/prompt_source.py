@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from agm.core.path import path_from_cli
+
 
 @dataclass(frozen=True)
 class PromptSourceOptions:
@@ -15,15 +17,6 @@ class PromptSourceOptions:
     config_prompt: str | None
     config_prompt_file: str | None
     default_prompt_file: Path | None = None
-
-
-def path_from_cli(value: str, *, cwd: Path) -> Path:
-    """Resolve a CLI path value relative to *cwd*."""
-
-    path = Path(value)
-    if path.is_absolute():
-        return path
-    return cwd / path
 
 
 def resolve_prompt_source(

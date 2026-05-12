@@ -13,8 +13,9 @@ from agm.commands.dep.common import main_dep_repo
 from agm.config.context import current_config_context
 from agm.config.general import load_merged_config, load_run_config
 from agm.project.layout import (
-    current_project_dir,
+    current_checkout_or_project_root,
     default_worktrees_dir,
+    discover_current_project_dir,
     project_deps_dir,
     project_repo_dir,
 )
@@ -52,16 +53,22 @@ def _match(candidates: set[str] | list[str], incomplete: str) -> list[str]:
 
 def _resolve_project_repo_dir() -> Path | None:
     try:
-        return project_repo_dir(current_project_dir())
+        project_dir = discover_current_project_dir()
     except SystemExit:
         return None
+    if project_dir is None:
+        return None
+    return project_repo_dir(project_dir)
 
 
 def _resolve_project_deps_dir() -> Path | None:
     try:
-        return project_deps_dir(current_project_dir())
+        project_dir = discover_current_project_dir()
     except SystemExit:
         return None
+    if project_dir is None:
+        return None
+    return project_deps_dir(project_dir)
 
 
 def _branch_candidates(repo_dir: Path) -> set[str]:
@@ -102,7 +109,7 @@ def _worktree_branch_candidates(repo_dir: Path) -> set[str]:
     except SystemExit:
         return set()
 
-    project_dir = current_project_dir(repo_dir)
+    project_dir = current_checkout_or_project_root(repo_dir)
     worktrees_dir = default_worktrees_dir(project_dir)
     branches: set[str] = set()
     try:

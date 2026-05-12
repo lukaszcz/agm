@@ -29,7 +29,7 @@ def test_current_config_context_uses_discovered_project(
     cwd = tmp_path / "cwd"
     project = tmp_path / "project"
     cwd.mkdir()
-    monkeypatch.setattr(context_module, "current_project_dir", lambda cwd: project)
+    monkeypatch.setattr(context_module, "discover_current_project_dir", lambda cwd: project)
 
     context = current_config_context(cwd=cwd, env={"HOME": str(home)})
 
@@ -44,7 +44,7 @@ def test_current_config_context_uses_none_when_discovery_exits(
     def fail(_cwd: Path) -> Path:
         raise SystemExit(1)
 
-    monkeypatch.setattr(context_module, "current_project_dir", fail)
+    monkeypatch.setattr(context_module, "discover_current_project_dir", fail)
 
     context = current_config_context(cwd=tmp_path, env={"HOME": str(home)})
 
@@ -60,7 +60,7 @@ def test_current_config_context_resolves_implicit_cwd(
     link = tmp_path / "link"
     link.symlink_to(target, target_is_directory=True)
     monkeypatch.chdir(link)
-    monkeypatch.setattr(context_module, "current_project_dir", lambda cwd: cwd)
+    monkeypatch.setattr(context_module, "discover_current_project_dir", lambda cwd: cwd)
 
     context = current_config_context(env={"HOME": str(home)})
 

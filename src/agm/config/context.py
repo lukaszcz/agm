@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.project.layout import current_project_dir, is_project_dir
+from agm.project.layout import discover_current_project_dir
 
 
 @dataclass(frozen=True)
@@ -31,20 +31,13 @@ def current_config_context(
     home = Path(resolved_env.get("HOME", "~"))
 
     raw_proj_dir = resolved_env.get("PROJ_DIR")
+    proj_dir: Path | None
     if raw_proj_dir:
         proj_dir = Path(raw_proj_dir)
     else:
         try:
-            discovered = current_project_dir(resolved_cwd)
+            proj_dir = discover_current_project_dir(resolved_cwd)
         except SystemExit:
             proj_dir = None
-        else:
-            # current_project_dir returns cwd when no project marker is found.
-            proj_dir = (
-                discovered
-                if discovered.resolve(strict=False) != resolved_cwd.resolve(strict=False)
-                or is_project_dir(discovered)
-                else None
-            )
 
     return ConfigContext(home=home, proj_dir=proj_dir, cwd=resolved_cwd)

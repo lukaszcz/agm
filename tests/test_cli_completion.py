@@ -241,7 +241,7 @@ def test_complete_run_command_includes_config_aliases(
         '[run.ai-review]\nalias = "python"\n[run.publish]\nalias = "uv"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: project)
+    monkeypatch.setattr("agm.config.context.discover_current_project_dir", lambda cwd=None: project)
 
     assert completion.complete_run_command([], "ai") == ["ai-review"]
 
@@ -318,18 +318,22 @@ class TestResolveProjectRepoDir:
     def test_returns_none_on_system_exit(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
-            "current_project_dir",
+            "discover_current_project_dir",
             lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         assert completion._resolve_project_repo_dir() is None
 
-    def test_returns_path_on_success(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_returns_none_when_project_is_not_discovered(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: None)
+        assert completion._resolve_project_repo_dir() is None
+
+    def test_returns_path_on_success(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
-        monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: project)
+        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: project)
         result = completion._resolve_project_repo_dir()
         assert result == repo
 
@@ -338,17 +342,21 @@ class TestResolveProjectDepsDir:
     def test_returns_none_on_system_exit(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
-            "current_project_dir",
+            "discover_current_project_dir",
             lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         assert completion._resolve_project_deps_dir() is None
 
-    def test_returns_path_on_success(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_returns_none_when_project_is_not_discovered(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: None)
+        assert completion._resolve_project_deps_dir() is None
+
+    def test_returns_path_on_success(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
-        monkeypatch.setattr(completion, "current_project_dir", lambda cwd=None: project)
+        monkeypatch.setattr(completion, "discover_current_project_dir", lambda cwd=None: project)
         result = completion._resolve_project_deps_dir()
         assert result == project / "deps"
 
@@ -563,9 +571,7 @@ class TestPathCandidates:
         assert "mydir/" in result
         assert "myfile.txt" in result
 
-    def test_filters_by_prefix(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_filters_by_prefix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         work = tmp_path / "work"
         work.mkdir()
         (work / "alpha").mkdir()
@@ -603,9 +609,7 @@ class TestCompleteOpenTarget:
 
 
 class TestCompleteCloseBranch:
-    def test_returns_empty_when_resolve_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_when_resolve_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(completion, "_resolve_project_repo_dir", lambda: None)
         assert completion.complete_close_branch("") == []
 
@@ -619,9 +623,7 @@ class TestCompleteCloseBranch:
 
 
 class TestCompleteWorktreeBranch:
-    def test_returns_empty_when_resolve_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_when_resolve_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(completion, "_resolve_project_repo_dir", lambda: None)
         assert completion.complete_worktree_branch("") == []
 
@@ -668,15 +670,11 @@ class TestCompleteDepBranch:
         # All args start with '-', so no dep_name is found
         assert completion.complete_dep_branch(["-b"], "") == []
 
-    def test_returns_empty_when_dep_repo_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_when_dep_repo_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(completion, "_resolve_dep_repo", lambda name: None)
         assert completion.complete_dep_branch(["mylib"], "") == []
 
-    def test_returns_empty_on_exception(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
             "_resolve_dep_repo",
@@ -705,9 +703,7 @@ class TestCompleteDepTarget:
         (deps_dir / "mylib").mkdir(parents=True)
         monkeypatch.setattr(completion, "_resolve_project_deps_dir", lambda: deps_dir)
         monkeypatch.setattr(completion, "_resolve_dep_repo", lambda name: None)
-        monkeypatch.setattr(
-            git_helpers, "worktree_list", lambda p, env=None: []
-        )
+        monkeypatch.setattr(git_helpers, "worktree_list", lambda p, env=None: [])
         monkeypatch.setattr(git_helpers, "current_branch", lambda p, env=None: "main")
         result = completion.complete_dep_target("")
         # dep itself is still a candidate
@@ -728,13 +724,13 @@ class TestCompleteRunCommand:
     def test_handles_system_exit_in_proj_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """complete_run_command gracefully handles OSError/SystemExit from current_project_dir."""
+        """complete_run_command handles project discovery errors."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "")
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setattr(
             completion,
-            "current_project_dir",
+            "discover_current_project_dir",
             lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         # Should still return [] without crashing
@@ -748,7 +744,9 @@ class TestCompleteRunCommand:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PATH", "")
         monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: tmp_path)
+        monkeypatch.setattr(
+            "agm.config.context.discover_current_project_dir", lambda cwd=None: tmp_path
+        )
         monkeypatch.setattr(
             completion,
             "load_run_config",
@@ -768,10 +766,9 @@ class TestCompleteRunCommand:
 
         assert result == []
 
+
 class TestCompleteTmuxSession:
-    def test_returns_empty_when_returncode_nonzero(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_when_returncode_nonzero(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
                 args=["tmux"], returncode=1, stdout="", stderr="error"
@@ -782,9 +779,7 @@ class TestCompleteTmuxSession:
 
 
 class TestCompleteTmuxWindow:
-    def test_returns_empty_when_returncode_nonzero(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_when_returncode_nonzero(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
                 args=["tmux"], returncode=1, stdout="", stderr="error"
@@ -795,9 +790,7 @@ class TestCompleteTmuxWindow:
 
 
 class TestCompletePathArgument:
-    def test_calls_path_candidates(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_calls_path_candidates(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         work = tmp_path / "work"
         work.mkdir()
         (work / "mydir").mkdir()
@@ -844,7 +837,9 @@ class TestCompleteReviseCommandOrReviewFile:
         work = tmp_path / "work"
         work.mkdir()
         monkeypatch.chdir(work)
-        monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr(
+            "agm.config.context.discover_current_project_dir", lambda cwd=None: None
+        )
         monkeypatch.setattr(
             completion,
             "load_merged_config",
@@ -872,7 +867,9 @@ class TestCompleteReviseCommandOrReviewFile:
         work.mkdir()
         (work / "review.md").write_text("review\n", encoding="utf-8")
         monkeypatch.chdir(work)
-        monkeypatch.setattr("agm.config.context.current_project_dir", lambda cwd=None: None)
+        monkeypatch.setattr(
+            "agm.config.context.discover_current_project_dir", lambda cwd=None: None
+        )
         monkeypatch.setattr(
             completion,
             "load_merged_config",
@@ -893,7 +890,7 @@ class TestCompleteReviseCommandOrReviewFile:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
             completion,
-            "current_project_dir",
+            "discover_current_project_dir",
             lambda cwd=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         monkeypatch.setattr(
@@ -921,7 +918,6 @@ class TestCompleteReviseCommandOrReviewFile:
         result = completion.complete_revise_command_or_review_file(ctx, [], "fr")
 
         assert result == []
-
 
     def test_falls_back_to_review_files_when_config_context_exits(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1047,9 +1043,8 @@ class TestCompleteDepTargetRepoSuffix:
 class TestCompletePaneCountException:
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """complete_pane_count returns [] when _match raises."""
-        def bad_match(
-            candidates: set[str] | list[str], incomplete: str
-        ) -> list[str]:
+
+        def bad_match(candidates: set[str] | list[str], incomplete: str) -> list[str]:
             raise RuntimeError("boom")
 
         monkeypatch.setattr(completion, "_match", bad_match)
@@ -1109,9 +1104,7 @@ class TestPathCandidatesWithParentComponent:
 
 
 class TestCompleteHelpPathExceptionHandler:
-    def test_returns_empty_on_runtime_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_on_runtime_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """complete_help_path returns [] when _match raises RuntimeError."""
         monkeypatch.setattr(
             completion,

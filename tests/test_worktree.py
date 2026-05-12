@@ -161,9 +161,7 @@ class TestSyncRemoteTrackingBranches:
 
         assert created == []
 
-    def test_skips_origin_head(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_skips_origin_head(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_dir = tmp_path / "repo"
         repo_dir.mkdir()
 
@@ -229,9 +227,7 @@ class TestSyncRemoteTrackingBranches:
 class TestBranchSync:
     """Tests for branch_sync."""
 
-    def test_fetches_prune_and_syncs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fetches_prune_and_syncs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_dir = tmp_path / "repo"
         repo_dir.mkdir()
 
@@ -272,14 +268,12 @@ class TestEnsureWorktree:
         """Patch common dependencies; return list to accumulate worktree_add calls."""
         if existing_worktrees is None:
             existing_worktrees = []
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "checkout_root", lambda cwd=None: repo_dir
-        )
+        monkeypatch.setattr(worktree_mod.git_helpers, "checkout_root", lambda cwd=None: repo_dir)
         monkeypatch.setattr(
             worktree_mod.git_helpers, "current_branch", lambda p, env=None: repo_branch
         )
         monkeypatch.setattr(
-            worktree_mod, "current_project_dir", lambda cwd=None: project_dir
+            worktree_mod, "current_checkout_or_project_root", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(worktree_mod.git_helpers, "fetch", lambda p, env=None: None)
         monkeypatch.setattr(
@@ -471,10 +465,10 @@ class TestRemoveWorktree:
         repo_dir.mkdir()
         worktree_path.mkdir(parents=True)
 
-        monkeypatch.setattr(worktree_mod, "current_project_dir", lambda cwd=None: project_dir)
         monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main"
+            worktree_mod, "current_checkout_or_project_root", lambda cwd=None: project_dir
         )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "worktree_list",
@@ -495,9 +489,7 @@ class TestRemoveWorktree:
             lambda p, b, force=False, env=None: deleted.append((b, force)),
         )
 
-        worktree_mod.remove_worktree(
-            repo_dir=repo_dir, force=False, branch="feat"
-        )
+        worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="feat")
 
         assert removed == [worktree_path]
         assert deleted == [("feat", False)]
@@ -510,13 +502,11 @@ class TestRemoveWorktree:
         project_dir.mkdir()
         repo_dir.mkdir()
 
-        monkeypatch.setattr(worktree_mod, "current_project_dir", lambda cwd=None: project_dir)
         monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main"
+            worktree_mod, "current_checkout_or_project_root", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "worktree_list", lambda p, env=None: []
-        )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(worktree_mod.git_helpers, "worktree_list", lambda p, env=None: [])
 
         require_calls: list[list[str]] = []
         monkeypatch.setattr(
@@ -526,9 +516,7 @@ class TestRemoveWorktree:
         )
 
         with pytest.raises(SystemExit):
-            worktree_mod.remove_worktree(
-                repo_dir=repo_dir, force=False, branch="nonexistent"
-            )
+            worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="nonexistent")
 
     def test_exits_when_branch_is_main_checkout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -538,16 +526,14 @@ class TestRemoveWorktree:
         project_dir.mkdir()
         repo_dir.mkdir()
 
-        monkeypatch.setattr(worktree_mod, "current_project_dir", lambda cwd=None: project_dir)
-        # current branch is "main" — trying to remove "main" should exit
         monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main"
+            worktree_mod, "current_checkout_or_project_root", lambda cwd=None: project_dir
         )
+        # current branch is "main" — trying to remove "main" should exit
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
 
         with pytest.raises(SystemExit):
-            worktree_mod.remove_worktree(
-                repo_dir=repo_dir, force=False, branch="main"
-            )
+            worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="main")
 
     def test_passes_force_flag_to_worktree_remove(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -559,10 +545,10 @@ class TestRemoveWorktree:
         repo_dir.mkdir()
         worktree_path.mkdir(parents=True)
 
-        monkeypatch.setattr(worktree_mod, "current_project_dir", lambda cwd=None: project_dir)
         monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main"
+            worktree_mod, "current_checkout_or_project_root", lambda cwd=None: project_dir
         )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "worktree_list",
@@ -582,9 +568,7 @@ class TestRemoveWorktree:
             lambda p, b, force=False, env=None: deleted.append((b, force)),
         )
 
-        worktree_mod.remove_worktree(
-            repo_dir=repo_dir, force=True, branch="feat"
-        )
+        worktree_mod.remove_worktree(repo_dir=repo_dir, force=True, branch="feat")
 
         assert force_values == [True]
         assert deleted == [("feat", False)]
@@ -599,10 +583,10 @@ class TestRemoveWorktree:
         repo_dir.mkdir()
         worktree_path.mkdir(parents=True)
 
-        monkeypatch.setattr(worktree_mod, "current_project_dir", lambda cwd=None: project_dir)
         monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main"
+            worktree_mod, "current_checkout_or_project_root", lambda cwd=None: project_dir
         )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "worktree_list",
@@ -651,9 +635,7 @@ class TestEnsureWorktreeRelativePath:
             "current_branch",
             lambda p, env=None: "main",
         )
-        monkeypatch.setattr(
-            worktree_module.git_helpers, "fetch", lambda p, env=None: None
-        )
+        monkeypatch.setattr(worktree_module.git_helpers, "fetch", lambda p, env=None: None)
         monkeypatch.setattr(
             worktree_module.git_helpers,
             "worktree_list",
@@ -674,7 +656,9 @@ class TestEnsureWorktreeRelativePath:
             "copy_config",
             lambda project_dir=None, target=None, branch=None, cwd=None: None,
         )
-        monkeypatch.setattr(worktree_module, "current_project_dir", lambda cwd=None: project)
+        monkeypatch.setattr(
+            worktree_module, "current_checkout_or_project_root", lambda cwd=None: project
+        )
         monkeypatch.setattr(
             worktree_module, "exit_if_main_checkout_branch", lambda pd, b, repo_branch=None: None
         )

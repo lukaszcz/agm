@@ -15,60 +15,67 @@ from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
     current_checkout,
-    current_project_dir,
+    discover_current_project_dir,
     is_main_checkout_branch,
     main_repo_dir,
 )
 from agm.project.setup import load_current_config_env, load_worktree_env
 
 
-def test_current_project_dir_from_project_root(tmp_path: Path) -> None:
+def test_current_project_dir_from_project_root(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
     (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project / "repo", env=env, check=True)
 
-    assert current_project_dir(project) == project
+    assert discover_current_project_dir(project) == project
 
 
-def test_current_project_dir_from_repo_dir(tmp_path: Path) -> None:
+def test_current_project_dir_from_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     repo_dir = project / "repo"
     repo_dir.mkdir()
     (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
 
-    assert current_project_dir(repo_dir) == project
+    assert discover_current_project_dir(repo_dir) == project
 
 
-def test_current_project_dir_from_repo_subdir(tmp_path: Path) -> None:
+def test_current_project_dir_from_repo_subdir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     repo_subdir = project / "repo" / "src"
     repo_subdir.mkdir(parents=True)
     (project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project / "repo", env=env, check=True)
 
-    assert current_project_dir(repo_subdir) == project
+    assert discover_current_project_dir(repo_subdir) == project
 
 
-def test_current_project_dir_from_worktree_dir(tmp_path: Path) -> None:
+def test_current_project_dir_from_worktree_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
     branch_dir = project / ".agm" / "worktrees" / "feat" / "branch"
     branch_dir.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=project / "repo", env=env, check=True)
 
-    assert current_project_dir(branch_dir) == project
+    assert discover_current_project_dir(branch_dir) == project
 
 
-def test_current_project_dir_from_embedded_project_subdir(tmp_path: Path) -> None:
+def test_current_project_dir_from_embedded_project_subdir(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / ".agm").mkdir()
     subdir = project / "src"
     subdir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-    assert current_project_dir(subdir) == project
+    assert discover_current_project_dir(subdir) == project
 
 
 def test_main_repo_dir_for_embedded_project(tmp_path: Path) -> None:
@@ -178,7 +185,7 @@ def test_current_config_branch_ignores_cwd_from_other_project(
     current = other_project / "repo"
     current.mkdir(parents=True)
 
-    monkeypatch.setattr(project_helpers, "current_project_dir", lambda _cwd: other_project)
+    monkeypatch.setattr(project_helpers, "discover_current_project_dir", lambda _cwd: other_project)
 
     def fail_checkout_root(_cwd: Path | None = None) -> Never:
         raise AssertionError("checkout_root should not be called for another project")
@@ -267,7 +274,7 @@ def test_current_checkout_returns_none_for_cwd_outside_project(
     current = other_project / "repo"
     current.mkdir(parents=True)
 
-    monkeypatch.setattr(project_helpers, "current_project_dir", lambda _cwd: other_project)
+    monkeypatch.setattr(project_helpers, "discover_current_project_dir", lambda _cwd: other_project)
 
     def fail_checkout_root(_cwd: Path | None = None) -> Never:
         raise AssertionError("checkout_root should not be called for another project")

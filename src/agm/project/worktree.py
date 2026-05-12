@@ -10,7 +10,7 @@ from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
     branch_worktree_path,
     copy_config,
-    current_project_dir,
+    current_checkout_or_project_root,
     default_worktrees_dir,
     exit_if_main_checkout_branch,
     expected_branch_worktree_path,
@@ -97,7 +97,7 @@ def ensure_worktree(
     if branch_name is None:
         raise SystemExit(1)
 
-    project_dir = current_project_dir(current)
+    project_dir = current_checkout_or_project_root(current)
     repo_dir = git_helpers.checkout_root(current)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     exit_if_main_checkout_branch(project_dir, branch_name, repo_branch=repo_branch)
@@ -148,7 +148,7 @@ def remove_worktree(
 ) -> None:
     """Remove a worktree from *repo_dir* and delete its branch."""
 
-    project_dir = current_project_dir(repo_dir)
+    project_dir = current_checkout_or_project_root(repo_dir)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
     exit_if_main_checkout_branch(project_dir, branch, repo_branch=repo_branch)
 

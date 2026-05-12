@@ -77,8 +77,8 @@ def _project_dir_from_checkout(checkout_dir: Path) -> Path | None:
     return None
 
 
-def current_project_dir(cwd: Path | None = None) -> Path:
-    """Return the current project directory (``PROJ_DIR``)."""
+def current_checkout_or_project_root(cwd: Path | None = None) -> Path:
+    """Return a best-effort project root candidate for the current location."""
 
     current = _resolved_cwd(cwd)
 
@@ -109,6 +109,13 @@ def current_project_dir(cwd: Path | None = None) -> Path:
     if checkout_dir == current or checkout_dir in current.parents:
         return checkout_dir
     return current
+
+
+def discover_current_project_dir(cwd: Path | None = None) -> Path | None:
+    """Return the current valid AGM project directory, if one can be discovered."""
+
+    candidate = current_checkout_or_project_root(cwd)
+    return candidate if is_project_dir(candidate) else None
 
 
 def is_workspace_project(project_dir: Path) -> bool:
@@ -148,7 +155,10 @@ def require_project_dir(project_dir: Path) -> Path:
 def require_current_project_dir(cwd: Path | None = None) -> Path:
     """Resolve and validate the current AGM project directory."""
 
-    return require_project_dir(current_project_dir(cwd))
+    project_dir = discover_current_project_dir(cwd)
+    if project_dir is not None:
+        return project_dir.resolve()
+    return require_project_dir(current_checkout_or_project_root(cwd))
 
 
 def current_checkout(
@@ -182,7 +192,11 @@ def current_checkout(
     # --- Fall back to cwd-based detection ---
     if checkout_dir is None:
         current = Path.cwd() if cwd is None else cwd.resolve()
-        if current_project_dir(current).resolve(strict=False) != resolved_project_dir:
+        current_project = discover_current_project_dir(current)
+        if (
+            current_project is None
+            or current_project.resolve(strict=False) != resolved_project_dir
+        ):
             return None
 
         if not git_helpers.is_git_repo(current):

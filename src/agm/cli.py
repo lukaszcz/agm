@@ -994,11 +994,12 @@ def review(
 def revise(
     command_name_or_review_file: str | None = typer.Argument(
         None,
-        metavar="[COMMAND] REVIEW_FILE",
+        metavar="COMMAND_OR_REVIEW_FILE",
         autocompletion=completion.complete_path_argument,
     ),
     review_file: str | None = typer.Argument(
         None,
+        metavar="REVIEW_FILE",
         autocompletion=completion.complete_path_argument,
     ),
     runner: str | None = typer.Option(None, "--runner", help="Revision runner command."),

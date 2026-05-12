@@ -383,6 +383,15 @@ class TestReviewReviseRefine:
         assert calls[0].command_name is None
         assert calls[0].review_file == "review.md"
 
+    def test_revise_unknown_option_usage_has_distinct_positionals(
+        self, runner: CliRunner
+    ) -> None:
+        result = invoke(runner, ["revise", "--unknown"])
+
+        assert result.exit_code != 0
+        assert "[COMMAND] REVIEW_FILE [REVIEW_FILE]" not in result.output
+        assert "COMMAND_OR_REVIEW_FILE" in result.output
+
     def test_refine_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.review_command, "run_refine")
         result = invoke(

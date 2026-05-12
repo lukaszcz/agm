@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import os
-import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
 
 from agm.agent.prompt_source import PromptSourceOptions, resolve_prompt_source
 from agm.agent.runner import (
@@ -15,51 +12,25 @@ from agm.agent.runner import (
     prepare_prompt_run,
     run_prepared_prompt,
 )
+from agm.commands.agent_io import (
+    StreamCallback,
+    default_agent_runner,
+    exit_config_command_not_found,
+    write_stderr,
+    write_stdout,
+)
 from agm.commands.args import ReviewArgs
 from agm.config.context import current_config_context
 from agm.config.general import (
     ConfigCommandNotFound,
     ReviewConfig,
-    load_loop_config,
     load_review_config,
     resolve_default_prompt_file,
 )
 from agm.core import dry_run
-from agm.parser import exit_with_usage_error
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"
 DEFAULT_REVIEW_ASPECTS = "correctness, completeness, maintainability, adherence to AGENTS.md"
-
-StreamCallback = Callable[[str], None]
-
-
-def _write_stdout(chunk: str) -> None:
-    if not chunk:
-        return
-    sys.stdout.write(chunk)
-    sys.stdout.flush()
-
-
-def _write_stderr(chunk: str) -> None:
-    if not chunk:
-        return
-    sys.stderr.write(chunk)
-    sys.stderr.flush()
-
-
-def _exit_config_command_not_found(error: ConfigCommandNotFound) -> NoReturn:
-    exit_with_usage_error([error.section_name], f"error: {error}")
-
-
-def _default_runner() -> str:
-    context = current_config_context()
-    loop_config = load_loop_config(
-        home=context.home,
-        proj_dir=context.proj_dir,
-        cwd=context.cwd,
-    )
-    return loop_config.runner if loop_config.runner is not None else "claude -p"
-
 
 def _review_config(command_name: str | None, *, require_command: bool) -> ReviewConfig:
     context = current_config_context()
@@ -72,7 +43,7 @@ def _review_config(command_name: str | None, *, require_command: bool) -> Review
             require_command=require_command,
         )
     except ConfigCommandNotFound as error:
-        _exit_config_command_not_found(error)
+        exit_config_command_not_found(error)
 
 
 def _resolved_review_aspects(args: ReviewArgs, config: ReviewConfig) -> str:
@@ -89,7 +60,7 @@ def prepare_review(
     owned_temp_files: list[Path] = [] if temp_files is None else temp_files
     context = current_config_context()
     config = _review_config(args.command_name, require_command=args.require_command_config)
-    runner = args.runner or config.runner or _default_runner()
+    runner = args.runner or config.runner or default_agent_runner()
     scope = args.scope or config.scope or DEFAULT_REVIEW_SCOPE
     aspects = _resolved_review_aspects(args, config)
     env = dict(os.environ)
@@ -130,8 +101,8 @@ def prepare_review(
 def review_once(
     args: ReviewArgs,
     *,
-    stdout_callback: StreamCallback = _write_stdout,
-    stderr_callback: StreamCallback = _write_stderr,
+    stdout_callback: StreamCallback = write_stdout,
+    stderr_callback: StreamCallback = write_stderr,
 ) -> str:
     temp_files: list[Path] = []
     try:

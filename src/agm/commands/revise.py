@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import os
-import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
 
 from agm.agent.prompt_source import PromptSourceOptions, path_from_cli, resolve_prompt_source
 from agm.agent.runner import (
@@ -15,47 +12,23 @@ from agm.agent.runner import (
     prepare_prompt_run,
     run_prepared_prompt,
 )
+from agm.commands.agent_io import (
+    StreamCallback,
+    default_agent_runner,
+    exit_config_command_not_found,
+    write_stderr,
+    write_stdout,
+)
 from agm.commands.args import ReviseArgs
 from agm.config.context import current_config_context
 from agm.config.general import (
     ConfigCommandNotFound,
     ReviseConfig,
-    load_loop_config,
     load_revise_config,
     resolve_default_prompt_file,
 )
 from agm.core import dry_run
 from agm.parser import exit_with_usage_error
-
-StreamCallback = Callable[[str], None]
-
-
-def _write_stdout(chunk: str) -> None:
-    if not chunk:
-        return
-    sys.stdout.write(chunk)
-    sys.stdout.flush()
-
-
-def _write_stderr(chunk: str) -> None:
-    if not chunk:
-        return
-    sys.stderr.write(chunk)
-    sys.stderr.flush()
-
-
-def _exit_config_command_not_found(error: ConfigCommandNotFound) -> NoReturn:
-    exit_with_usage_error([error.section_name], f"error: {error}")
-
-
-def _default_runner() -> str:
-    context = current_config_context()
-    loop_config = load_loop_config(
-        home=context.home,
-        proj_dir=context.proj_dir,
-        cwd=context.cwd,
-    )
-    return loop_config.runner if loop_config.runner is not None else "claude -p"
 
 
 def _revise_config(command_name: str | None, *, require_command: bool) -> ReviseConfig:
@@ -69,7 +42,7 @@ def _revise_config(command_name: str | None, *, require_command: bool) -> Revise
             require_command=require_command,
         )
     except ConfigCommandNotFound as error:
-        _exit_config_command_not_found(error)
+        exit_config_command_not_found(error)
 
 
 def _exit_if_lone_revise_command_name(args: ReviseArgs) -> None:
@@ -100,7 +73,7 @@ def prepare_revise(
     _exit_if_lone_revise_command_name(args)
     context = current_config_context()
     config = _revise_config(args.command_name, require_command=args.require_command_config)
-    runner = args.runner or config.runner or _default_runner()
+    runner = args.runner or config.runner or default_agent_runner()
     env = dict(os.environ)
     review_file = path_from_cli(args.review_file, cwd=context.cwd)
     env["REVIEW_FILE"] = str(review_file)
@@ -139,8 +112,8 @@ def prepare_revise(
 def revise_once(
     args: ReviseArgs,
     *,
-    stdout_callback: StreamCallback = _write_stdout,
-    stderr_callback: StreamCallback = _write_stderr,
+    stdout_callback: StreamCallback = write_stdout,
+    stderr_callback: StreamCallback = write_stderr,
 ) -> str:
     temp_files: list[Path] = []
     try:

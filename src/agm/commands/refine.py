@@ -4,27 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import NoReturn
 
 from agm.agent.response import last_response_line
 from agm.agent.runner import cleanup_temp_files
+from agm.commands.agent_io import exit_config_command_not_found, write_stderr, write_stdout
 from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
-from agm.commands.review import (
-    _write_stderr,
-    _write_stdout,
-    review_once,
-)
+from agm.commands.review import review_once
 from agm.commands.revise import revise_once
 from agm.config.context import current_config_context
 from agm.config.general import ConfigCommandNotFound, RefineConfig, load_refine_config
 from agm.core.log import append_log, prepare_log_file, resolve_log_file
-from agm.parser import exit_with_usage_error
 
 DEFAULT_MAX_STEPS = 20
-
-
-def _exit_config_command_not_found(error: ConfigCommandNotFound) -> NoReturn:
-    exit_with_usage_error([error.section_name], f"error: {error}")
 
 
 def _refine_config(command_name: str | None) -> RefineConfig:
@@ -37,7 +28,7 @@ def _refine_config(command_name: str | None) -> RefineConfig:
             command_name=command_name,
         )
     except ConfigCommandNotFound as error:
-        _exit_config_command_not_found(error)
+        exit_config_command_not_found(error)
 
 
 def _write_review_file(output: str, *, temp_files: list[Path]) -> Path:
@@ -105,11 +96,11 @@ def refine(args: RefineArgs) -> None:
 
     def stdout_callback(chunk: str) -> None:
         append_log(log_file, chunk)
-        _write_stdout(chunk)
+        write_stdout(chunk)
 
     def stderr_callback(chunk: str) -> None:
         append_log(log_file, chunk)
-        _write_stderr(chunk)
+        write_stderr(chunk)
 
     temp_files: list[Path] = []
     try:

@@ -143,6 +143,17 @@ _HELP_TEXTS: dict[str, str] = {
           select.md prompt. ``--selector-prompt`` and
           ``--selector-prompt-file`` are mutually exclusive and override the
           config values.
+          [loop] extra_prompt = "text" or [loop] extra_prompt_file = "path"
+          append extra content to the runner prompt, after the primary
+          prompt (whether default or explicitly set).
+          ``--extra-prompt`` and ``--extra-prompt-file`` are mutually
+          exclusive and override the config values.
+          [loop] extra_selector_prompt = "text" or
+          [loop] extra_selector_prompt_file = "path" append extra content
+          to the selector prompt, after the primary selector prompt
+          (whether default or explicitly set).
+          ``--extra-selector-prompt`` and ``--extra-selector-prompt-file``
+          are mutually exclusive and override the config values.
           ``agm loop CMD`` is shorthand for ``agm loop run CMD`` when ``CMD``
           is not a built-in subcommand, and still selects ``[loop.CMD]``
           overrides; those values override ``[loop]``. ``agm loop --runner "..."``,

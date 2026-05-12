@@ -373,13 +373,7 @@ def default_branch_from_remote(
 ) -> str:
     """Return the default branch for a remote repository URL."""
 
-    returncode, output, _ = run_capture(
-        ["git", "ls-remote", "--symref", repo_url, "HEAD"],
-        env=env,
-    )
-    if returncode != 0:
-        print(f"error: could not determine default branch for {repo_url}", file=sys.stderr)
-        raise SystemExit(1)
+    output = ls_remote_head(repo_url, env=env)
     for line in output.splitlines():
         if line.startswith("ref:"):
             parts = line.split()

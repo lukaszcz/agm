@@ -103,13 +103,14 @@ def use_selector_mode(args: LoopCommandArgs) -> bool:
 def tasks_dir(args: LoopCommandArgs) -> Path:
     configured_tasks_dir = configured_loop_settings(args.command_name).tasks_dir
     selected = args.tasks_dir if args.tasks_dir is not None else configured_tasks_dir
+    cwd = current_config_context().cwd
     if selected is None:
-        return Path.cwd() / ".agent-files" / "tasks"
+        return cwd / ".agent-files" / "tasks"
 
     resolved_tasks_dir = Path(selected)
     if resolved_tasks_dir.is_absolute():
         return resolved_tasks_dir
-    return Path.cwd() / resolved_tasks_dir
+    return cwd / resolved_tasks_dir
 
 
 def progress_file(args: LoopCommandArgs) -> Path:
@@ -243,7 +244,7 @@ def selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
             return task_path
         return selected
 
-    resolved_task_path = Path.cwd() / task_path
+    resolved_task_path = current_config_context().cwd / task_path
     if is_file(resolved_task_path):
         return resolved_task_path
     tasks_dir_task_path = tasks_dir / task_path

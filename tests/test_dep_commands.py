@@ -89,45 +89,41 @@ class TestDeriveDependencyName:
 
 class TestDefaultBranchFromRemote:
     def test_parses_ref_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            output = "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"
-            return 0, output, ""
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
+        monkeypatch.setattr(
+            "agm.vcs.git.ls_remote_head",
+            lambda repo_url, env=None: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n",
+        )
         assert default_branch_from_remote("https://github.com/org/repo") == "main"
 
     def test_parses_non_main_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            output = "ref: refs/heads/develop\tHEAD\n"
-            return 0, output, ""
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
+        monkeypatch.setattr(
+            "agm.vcs.git.ls_remote_head",
+            lambda repo_url, env=None: "ref: refs/heads/develop\tHEAD\n",
+        )
         assert default_branch_from_remote("https://github.com/org/repo") == "develop"
 
     def test_exits_on_nonzero_returncode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            return 1, "", "fatal: repository not found"
+        def fake_ls_remote_head(repo_url: str, env: dict[str, str] | None = None) -> str:
+            del repo_url, env
+            raise SystemExit(1)
 
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.vcs.git.ls_remote_head", fake_ls_remote_head)
         with pytest.raises(SystemExit):
             default_branch_from_remote("https://github.com/org/repo")
 
     def test_exits_when_no_ref_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            output = "abc123\tHEAD\n"
-            return 0, output, ""
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
+        monkeypatch.setattr(
+            "agm.vcs.git.ls_remote_head",
+            lambda repo_url, env=None: "abc123\tHEAD\n",
+        )
         with pytest.raises(SystemExit):
             default_branch_from_remote("https://github.com/org/repo")
 
     def test_exits_when_ref_line_has_no_parts(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_run_capture(cmd: list[str], **_kwargs: Any) -> tuple[int, str, str]:
-            # "ref:" with no following token
-            output = "ref:\n"
-            return 0, output, ""
-
-        monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
+        monkeypatch.setattr(
+            "agm.vcs.git.ls_remote_head",
+            lambda repo_url, env=None: "ref:\n",
+        )
         with pytest.raises(SystemExit):
             default_branch_from_remote("https://github.com/org/repo")
 

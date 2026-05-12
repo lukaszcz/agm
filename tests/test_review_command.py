@@ -104,8 +104,10 @@ def test_prepare_review_uses_default_loop_runner(
     home = _setup_home(tmp_path)
     (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "loop-runner -p"\n')
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
 
     prepared = prepare_review(_review_args(runner=None), temp_files=[])
 

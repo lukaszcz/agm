@@ -1,0 +1,543 @@
+"""Tests for review, revise, and refine commands."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+import agm.commands.review as review_mod
+from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
+from agm.commands.review import (
+    DEFAULT_REVIEW_ASPECTS,
+    _write_review_file,
+    prepare_review,
+    prepare_revise,
+    refine,
+)
+from agm.core import dry_run
+
+
+def _setup_home(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    prompt_dir = home / ".agm" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "review.md").write_text(
+        "review $REVIEW_SCOPE for $REVIEW_ASPECTS\n",
+        encoding="utf-8",
+    )
+    (prompt_dir / "revise.md").write_text("revise @${REVIEW_FILE}\n", encoding="utf-8")
+    return home
+
+
+def _review_args(
+    *,
+    runner: str | None = "fake-reviewer",
+    scope: str | None = None,
+    aspects: str | None = None,
+    extra_aspects: str | None = None,
+    prompt: str | None = None,
+    prompt_file: str | None = None,
+    extra_prompt: str | None = None,
+    extra_prompt_file: str | None = None,
+) -> ReviewArgs:
+    return ReviewArgs(
+        runner=runner,
+        scope=scope,
+        aspects=aspects,
+        extra_aspects=extra_aspects,
+        prompt=prompt,
+        prompt_file=prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
+    )
+
+
+def _revise_args(
+    review_file: str,
+    *,
+    runner: str | None = "fake-reviser",
+    prompt: str | None = None,
+    prompt_file: str | None = None,
+    extra_prompt: str | None = None,
+    extra_prompt_file: str | None = None,
+) -> ReviseArgs:
+    return ReviseArgs(
+        review_file=review_file,
+        runner=runner,
+        prompt=prompt,
+        prompt_file=prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
+    )
+
+
+def test_prepare_review_expands_scope_and_aspects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    temp_files: list[Path] = []
+    prepared = prepare_review(
+        _review_args(scope="feature branch", extra_aspects="performance"),
+        temp_files=temp_files,
+    )
+
+    assert prepared.command == ["fake-reviewer"]
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        "review feature branch for "
+        f"{DEFAULT_REVIEW_ASPECTS}, performance\n"
+    )
+
+
+def test_prepare_review_uses_default_loop_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "loop-runner -p"\n')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(_review_args(runner=None), temp_files=[])
+
+    assert prepared.command == ["loop-runner", "-p"]
+
+
+def test_prepare_review_uses_builtin_runner_when_loop_runner_is_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(_review_args(runner=None), temp_files=[])
+
+    assert prepared.command == ["claude", "-p"]
+
+
+def test_prepare_review_uses_inline_prompt_and_extra_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(
+        _review_args(
+            prompt="inline $REVIEW_SCOPE",
+            extra_prompt="extra $REVIEW_ASPECTS",
+        ),
+        temp_files=[],
+    )
+
+    assert prepared.source_file == home / ".agm" / "prompts" / "review.md"
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        f"inline {review_mod.DEFAULT_REVIEW_SCOPE}\n"
+        f"extra {DEFAULT_REVIEW_ASPECTS}"
+    )
+
+
+def test_prepare_review_uses_cli_prompt_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    prompt = tmp_path / "review-custom.md"
+    prompt.write_text("custom $REVIEW_SCOPE", encoding="utf-8")
+    extra = tmp_path / "extra.md"
+    extra.write_text("extra", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(
+        _review_args(prompt_file=str(prompt), extra_prompt_file=str(extra)),
+        temp_files=[],
+    )
+
+    assert prepared.source_file == prompt
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        f"custom {review_mod.DEFAULT_REVIEW_SCOPE}\nextra"
+    )
+
+
+def test_prepare_review_uses_config_prompt_and_extra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[review]\nprompt = "from config $REVIEW_SCOPE"\nextra_prompt = "extra"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(_review_args(prompt=None, extra_prompt=None), temp_files=[])
+
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        f"from config {review_mod.DEFAULT_REVIEW_SCOPE}\nextra"
+    )
+
+
+def test_prepare_review_uses_config_prompt_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    prompt = home / ".agm" / "configured-review.md"
+    prompt.write_text("configured", encoding="utf-8")
+    extra = home / ".agm" / "configured-extra.md"
+    extra.write_text("extra", encoding="utf-8")
+    (home / ".agm" / "config.toml").write_text(
+        '[review]\nprompt_file = "configured-review.md"\n'
+        'extra_prompt_file = "configured-extra.md"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(_review_args(), temp_files=[])
+
+    assert prepared.source_file == prompt
+    assert prepared.effective_file.read_text(encoding="utf-8") == "configured\nextra"
+
+
+def test_prepare_review_uses_aspects_without_extra_aspects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    prepared = prepare_review(_review_args(aspects="security"), temp_files=[])
+
+    assert "for security\n" in prepared.effective_file.read_text(encoding="utf-8")
+
+
+def test_prepare_revise_sets_review_file_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    review_file = tmp_path / "review.md"
+    review_file.write_text("issue\n", encoding="utf-8")
+
+    temp_files: list[Path] = []
+    prepared = prepare_revise(_revise_args("review.md"), temp_files=temp_files)
+
+    assert prepared.command == ["fake-reviser"]
+    assert prepared.env["REVIEW_FILE"] == str(review_file)
+    assert prepared.effective_file.read_text(encoding="utf-8") == f"revise @{review_file}\n"
+
+
+def test_prepare_revise_accepts_absolute_review_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    review_file = tmp_path / "absolute-review.md"
+
+    prepared = prepare_revise(_revise_args(str(review_file)), temp_files=[])
+
+    assert prepared.env["REVIEW_FILE"] == str(review_file)
+
+
+def test_prepare_revise_uses_config_prompt_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    prompt = home / ".agm" / "configured-revise.md"
+    prompt.write_text("configured $REVIEW_FILE", encoding="utf-8")
+    extra = home / ".agm" / "configured-revise-extra.md"
+    extra.write_text("extra", encoding="utf-8")
+    (home / ".agm" / "config.toml").write_text(
+        '[revise]\nprompt_file = "configured-revise.md"\n'
+        'extra_prompt_file = "configured-revise-extra.md"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    review_file = tmp_path / "review.md"
+
+    prepared = prepare_revise(_revise_args(str(review_file)), temp_files=[])
+
+    assert prepared.source_file == prompt
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        f"configured {review_file}\nextra"
+    )
+
+
+def test_prepare_revise_uses_config_inline_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[revise]\nprompt = "configured $REVIEW_FILE"\nextra_prompt = "extra"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    review_file = tmp_path / "review.md"
+
+    prepared = prepare_revise(_revise_args(str(review_file)), temp_files=[])
+
+    assert prepared.effective_file.read_text(encoding="utf-8") == (
+        f"configured {review_file}\nextra"
+    )
+
+
+def test_prepare_review_exits_when_default_prompt_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".agm" / "prompts").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    with pytest.raises(SystemExit):
+        prepare_review(_review_args(), temp_files=[])
+
+
+def test_prepare_revise_exits_when_default_prompt_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".agm" / "prompts").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    with pytest.raises(SystemExit):
+        prepare_revise(_revise_args("review.md"), temp_files=[])
+
+
+def test_write_review_file_expands_env_vars(tmp_path: Path) -> None:
+    temp_files: list[Path] = []
+    path = _write_review_file("issue=$VALUE\n", temp_files=temp_files, env={"VALUE": "ok"})
+
+    assert path in temp_files
+    assert path.read_text(encoding="utf-8") == "issue=ok\n"
+
+
+def test_review_once_runs_prompt_and_cleans_temp_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    cleaned: list[list[Path]] = []
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        assert command == ["fake-reviewer"]
+        assert target.is_file()
+        assert env["REVIEW_SCOPE"] == review_mod.DEFAULT_REVIEW_SCOPE
+        if callable(stdout_callback):
+            stdout_callback("out")
+        if callable(stderr_callback):
+            stderr_callback("err")
+        return "outerr"
+
+    def fake_cleanup(temp_files: list[Path]) -> None:
+        cleaned.append(list(temp_files))
+
+    monkeypatch.setattr("agm.commands.review.run_prompt_command", fake_run_prompt_command)
+    monkeypatch.setattr("agm.commands.review.cleanup_temp_files", fake_cleanup)
+
+    output = review_mod.review_once(_review_args())
+
+    captured = capsys.readouterr()
+    assert captured.out == "out"
+    assert captured.err == "err"
+    assert output == "outerr"
+    assert len(cleaned) == 1
+
+
+def test_revise_once_dry_run_prints_configuration_and_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    dry_run.set_enabled(True)
+    try:
+        output = review_mod.revise_once(_revise_args("review.md"))
+    finally:
+        dry_run.set_enabled(False)
+
+    captured = capsys.readouterr()
+    assert output == ""
+    assert "dry-run: revise configuration" in captured.out
+    assert "dry-run: command [agent]:" in captured.out
+
+
+def test_review_once_dry_run_prints_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    dry_run.set_enabled(True)
+    try:
+        output = review_mod.review_once(_review_args())
+    finally:
+        dry_run.set_enabled(False)
+
+    captured = capsys.readouterr()
+    assert output == ""
+    assert "dry-run: review configuration" in captured.out
+
+
+def test_write_stream_helpers_ignore_empty_chunks(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    review_mod._write_stdout("")
+    review_mod._write_stderr("")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    reviews: list[ReviewArgs] = []
+    revisions: list[ReviseArgs] = []
+
+    def fake_review_once(args: ReviewArgs) -> str:
+        reviews.append(args)
+        return "review result\n"
+
+    def fake_revise_once(args: ReviseArgs) -> str:
+        revisions.append(args)
+        return "try again\n"
+
+    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=3,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+        )
+    )
+
+    assert len(reviews) == 1
+    assert len(revisions) == 3
+
+
+def test_refine_runs_fresh_review_after_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    reviews: list[ReviewArgs] = []
+    outputs = iter(["CONTINUE\n", "COMPLETE\n"])
+
+    def fake_review_once(args: ReviewArgs) -> str:
+        reviews.append(args)
+        return "review result\n"
+
+    def fake_revise_once(args: ReviseArgs) -> str:
+        return next(outputs)
+
+    monkeypatch.setattr("agm.commands.review.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.review.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=5,
+            runner="both",
+            reviewer="reviewer",
+            reviser="reviser",
+            scope="scope",
+            aspects="aspects",
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+        )
+    )
+
+    assert len(reviews) == 2
+    assert reviews[0].runner == "reviewer"
+    assert reviews[0].scope == "scope"
+    assert reviews[0].aspects == "aspects"
+
+
+def test_run_wrappers_translate_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_interrupt(_args: object) -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("agm.commands.review.review_once", raise_interrupt)
+    with pytest.raises(SystemExit) as review_exit:
+        review_mod.run_review(_review_args())
+    assert review_exit.value.code == 130
+
+    monkeypatch.setattr("agm.commands.review.revise_once", raise_interrupt)
+    with pytest.raises(SystemExit) as revise_exit:
+        review_mod.run_revise(_revise_args("review.md"))
+    assert revise_exit.value.code == 130
+
+    monkeypatch.setattr("agm.commands.review.refine", raise_interrupt)
+    with pytest.raises(SystemExit) as refine_exit:
+        review_mod.run_refine(
+            RefineArgs(
+                max_steps=1,
+                runner=None,
+                reviewer=None,
+                reviser=None,
+                scope=None,
+                aspects=None,
+                review_prompt=None,
+                review_prompt_file=None,
+                extra_review_prompt=None,
+                extra_review_prompt_file=None,
+                revise_prompt=None,
+                revise_prompt_file=None,
+                extra_revise_prompt=None,
+                extra_revise_prompt_file=None,
+            )
+        )
+    assert refine_exit.value.code == 130

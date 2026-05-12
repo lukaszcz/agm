@@ -9,18 +9,20 @@ import pytest
 
 from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.commands.loop.common import (
-    command_with_prompt_target,
     is_complete_output,
     loop_env,
-    prepare_prompt_from_source,
     prepare_select_invocation,
     prompt_file,
     resolve_prompt_source,
     resolve_selector_prompt_source,
-    run_command,
     selector_result,
-    split_command,
     use_selector_mode,
+)
+from agm.core.agent import (
+    command_with_prompt_target,
+    prepare_prompt_from_source,
+    run_prompt_command,
+    split_command,
     validate_command,
 )
 from agm.core.prompt import preprocess_prompt_file
@@ -1263,11 +1265,11 @@ class TestRunCommandOutputAssembly:
                 stderr_callback("stderr chunk\n")
             return (0, "", "")
 
-        monkeypatch.setattr("agm.commands.loop.common.run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.core.agent.run_capture", fake_run_capture)
 
         target = tmp_path / "prompt.md"
         target.write_text("test", encoding="utf-8")
-        result = run_command(["cmd"], target, env={})
+        result = run_prompt_command(["cmd"], target, env={})
         assert "stdout chunk" in result
         assert "stderr chunk" in result
 
@@ -1280,11 +1282,11 @@ class TestRunCommandOutputAssembly:
             # Don't invoke callbacks - they'll be None anyway without real IO
             return (0, "stdout text", "stderr text")
 
-        monkeypatch.setattr("agm.commands.loop.common.run_capture", fake_run_capture)
+        monkeypatch.setattr("agm.core.agent.run_capture", fake_run_capture)
 
         target = tmp_path / "prompt.md"
         target.write_text("test", encoding="utf-8")
-        result = run_command(["cmd"], target, env={})
+        result = run_prompt_command(["cmd"], target, env={})
         assert result == "stdout textstderr text"
 
 
@@ -1333,10 +1335,10 @@ class TestRunCommandOutputAssemblyFull:
             return (0, "", "")
 
         monkeypatch.setattr(
-            "agm.commands.loop.common.run_capture", fake_run_capture
+            "agm.core.agent.run_capture", fake_run_capture
         )
 
-        output = run_command(
+        output = run_prompt_command(
             ["runner"], target, env={}, stdout_callback=lambda c: captured_stdout.append(c)
         )
         assert output == "hello"
@@ -1361,10 +1363,10 @@ class TestRunCommandOutputAssemblyFull:
             return (0, "just-stdout", "")
 
         monkeypatch.setattr(
-            "agm.commands.loop.common.run_capture", fake_run_capture
+            "agm.core.agent.run_capture", fake_run_capture
         )
 
-        output = run_command(["runner"], target, env={})
+        output = run_prompt_command(["runner"], target, env={})
         assert output == "just-stdout"
 
     def test_run_command_no_ordered_output_with_stderr(
@@ -1386,10 +1388,10 @@ class TestRunCommandOutputAssemblyFull:
             return (0, "the-stdout", "the-stderr")
 
         monkeypatch.setattr(
-            "agm.commands.loop.common.run_capture", fake_run_capture
+            "agm.core.agent.run_capture", fake_run_capture
         )
 
-        output = run_command(["runner"], target, env={})
+        output = run_prompt_command(["runner"], target, env={})
         assert output == "the-stdoutthe-stderr"
 
 
@@ -1450,10 +1452,10 @@ class TestRunCommandStderrCallback:
             return (0, "", "")
 
         monkeypatch.setattr(
-            "agm.commands.loop.common.run_capture", fake_run_capture
+            "agm.core.agent.run_capture", fake_run_capture
         )
 
-        output = run_command(
+        output = run_prompt_command(
             ["runner"], target, env={},
             stderr_callback=lambda c: captured_stderr.append(c),
         )
@@ -1817,7 +1819,7 @@ class TestAppendExtraPrompt:
     def test_appends_inline_text_to_prompt_file(
         self, tmp_path: Path
     ) -> None:
-        from agm.commands.loop.common import append_extra_prompt
+        from agm.core.agent import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Original content", encoding="utf-8")
@@ -1837,7 +1839,7 @@ class TestAppendExtraPrompt:
     def test_appends_file_content_to_prompt_file(
         self, tmp_path: Path
     ) -> None:
-        from agm.commands.loop.common import append_extra_prompt
+        from agm.core.agent import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Original content", encoding="utf-8")
@@ -1860,7 +1862,7 @@ class TestAppendExtraPrompt:
     def test_expands_env_vars_in_inline_text(
         self, tmp_path: Path
     ) -> None:
-        from agm.commands.loop.common import append_extra_prompt
+        from agm.core.agent import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Original", encoding="utf-8")
@@ -1876,7 +1878,7 @@ class TestAppendExtraPrompt:
     def test_expands_env_vars_in_extra_file_content(
         self, tmp_path: Path
     ) -> None:
-        from agm.commands.loop.common import append_extra_prompt
+        from agm.core.agent import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Original", encoding="utf-8")
@@ -1895,7 +1897,7 @@ class TestAppendExtraPrompt:
     def test_missing_extra_prompt_file_exits(
         self, tmp_path: Path
     ) -> None:
-        from agm.commands.loop.common import append_extra_prompt
+        from agm.core.agent import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Original", encoding="utf-8")

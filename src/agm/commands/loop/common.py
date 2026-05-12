@@ -3,30 +3,23 @@
 from __future__ import annotations
 
 import os
-import shlex
-import shutil
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.config.general import LoopConfig, load_loop_config, resolve_agm_path
+from agm.core.agent import (
+    prepare_prompt_from_source,
+    split_command,
+    validate_command,
+)
 from agm.core.fs import is_file
-from agm.core.process import run_capture
-from agm.core.prompt import expand_prompt_env_vars, preprocess_prompt_file
+from agm.core.prompt import preprocess_prompt_file
+from agm.core.response import last_response_line
 
 LoopCommandArgs = LoopArgs | LoopNextArgs
-
-
-@dataclass(slots=True)
-class ResolvedPrompt:
-    """Resolved prompt source: either inline text or a file path."""
-
-    source: str | Path
-    effective_file: Path
 
 
 @dataclass(slots=True)
@@ -70,14 +63,6 @@ def step_header_text(step: int) -> str:
 
 def selected_task_text(task_file: Path) -> str:
     return f"Selected task: {task_file}\n\n"
-
-
-def split_command(command: str, *, kind: str) -> list[str]:
-    split = shlex.split(command)
-    if split:
-        return split
-    print(f"Error: loop {kind} command is empty.", file=sys.stderr)
-    raise SystemExit(1)
 
 
 def runner_command(args: LoopCommandArgs) -> list[str]:
@@ -129,34 +114,6 @@ def tasks_dir(args: LoopCommandArgs) -> Path:
 
 def progress_file(args: LoopCommandArgs) -> Path:
     return tasks_dir(args) / "PROGRESS.md"
-
-
-def validate_command(command: list[str], *, kind: str) -> None:
-    if shutil.which(command[0]) is None:
-        print(
-            f"Error: {kind} command {command[0]} is not installed or not in PATH.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
-
-def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
-    prompt_path = str(target)
-    placeholders = ("%%", "%{PROMPT_FILE}")
-    replaced_command: list[str] = []
-    replaced = False
-
-    for arg in command:
-        updated = arg
-        for placeholder in placeholders:
-            if placeholder in updated:
-                updated = updated.replace(placeholder, prompt_path)
-                replaced = True
-        replaced_command.append(updated)
-
-    if replaced:
-        return replaced_command
-    return [*command, f"@{target}"]
 
 
 def resolve_prompt_source(args: LoopCommandArgs) -> str | Path | None:
@@ -243,72 +200,6 @@ def resolve_extra_selector_prompt_source(args: LoopCommandArgs) -> str | Path | 
     return None
 
 
-def append_extra_prompt(
-    effective_file: Path,
-    extra_source: str | Path,
-    *,
-    temp_files: list[Path],
-    env: dict[str, str],
-) -> Path:
-    """Append extra prompt content to an effective prompt file.
-
-    Reads the existing effective file content, resolves the extra prompt
-    source (expanding env vars for inline text or reading and expanding the
-    file), and writes the concatenated content to a new temp file.
-    """
-    original_content = effective_file.read_text(encoding="utf-8")
-    if isinstance(extra_source, str):
-        extra_content = expand_prompt_env_vars(extra_source, env=env)
-    else:
-        extra_path = extra_source
-        if not is_file(extra_path):
-            print(
-                f"Error: extra prompt file not found: {extra_path}",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        extra_content = expand_prompt_env_vars(
-            extra_path.read_text(encoding="utf-8"), env=env
-        )
-    combined = original_content + "\n" + extra_content
-    with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
-        handle.write(combined)
-        new_path = Path(handle.name)
-    temp_files.append(new_path)
-    return new_path
-
-
-def prepare_prompt_from_source(
-    source: str | Path,
-    *,
-    temp_files: list[Path],
-    env: dict[str, str],
-) -> ResolvedPrompt:
-    """Create a preprocessed prompt file from inline text or a file path.
-
-    When ``source`` is a string it is written to a temporary file and then
-    preprocessed.  When ``source`` is a ``Path`` the file is preprocessed
-    in place (same as ``loop.md`` handling).
-    """
-    if isinstance(source, str):
-        expanded = expand_prompt_env_vars(source, env=env)
-        with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
-            handle.write(expanded)
-            temp_path = Path(handle.name)
-        temp_files.append(temp_path)
-        return ResolvedPrompt(source=source, effective_file=temp_path)
-
-    source_path = source
-    if not is_file(source_path):
-        print(
-            f"Error: prompt file not found: {source_path}",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-    effective = preprocess_prompt_file(source_path, temp_files=temp_files, env=env)
-    return ResolvedPrompt(source=source_path, effective_file=effective)
-
-
 def loop_env(tasks_dir: Path, *, task_file: Path | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env["TASKS_DIR"] = str(tasks_dir)
@@ -361,56 +252,12 @@ def prepare_select_invocation(
     )
 
 
-def run_command(
-    command: list[str],
-    target: Path,
-    *,
-    env: dict[str, str],
-    stdout_callback: Callable[[str], None] | None = None,
-    stderr_callback: Callable[[str], None] | None = None,
-    idle_timeout: float | None = None,
-) -> str:
-    ordered_output: list[str] = []
-
-    def handle_stdout(chunk: str) -> None:
-        ordered_output.append(chunk)
-        if stdout_callback is not None:
-            stdout_callback(chunk)
-
-    def handle_stderr(chunk: str) -> None:
-        ordered_output.append(chunk)
-        if stderr_callback is not None:
-            stderr_callback(chunk)
-
-    _, stdout, stderr = run_capture(
-        command_with_prompt_target(command, target),
-        env=env,
-        stdout_callback=handle_stdout,
-        stderr_callback=handle_stderr,
-        isolate_process_group=True,
-        idle_timeout=idle_timeout,
-    )
-    if ordered_output:
-        return "".join(ordered_output)
-    output = stdout
-    if stderr:
-        output += stderr
-    return output
-
-
-def last_output_line(output: str) -> str:
-    lines = output.splitlines()
-    if not lines:
-        return output.strip()
-    return lines[-1].strip()
-
-
 def is_complete_output(output: str) -> bool:
-    return "".join(last_output_line(output).split()) == "COMPLETE"
+    return "".join(last_response_line(output).split()) == "COMPLETE"
 
 
 def selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
-    selected = last_output_line(output)
+    selected = last_response_line(output)
     if not selected:
         return ""
     if is_complete_output(output):
@@ -429,11 +276,3 @@ def selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
     if is_file(tasks_dir_task_path):
         return tasks_dir_task_path
     return selected
-
-
-def cleanup_temp_files(temp_files: list[Path]) -> None:
-    for temp_file in temp_files:
-        try:
-            temp_file.unlink()
-        except FileNotFoundError:
-            pass

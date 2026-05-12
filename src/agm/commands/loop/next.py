@@ -7,16 +7,18 @@ from pathlib import Path
 
 from agm.commands.args import LoopNextArgs
 from agm.core import dry_run
-
-from .common import (
+from agm.core.agent import (
     append_extra_prompt,
     cleanup_temp_files,
     command_with_prompt_target,
+    run_prompt_command,
+)
+
+from .common import (
     loop_env,
     prepare_select_invocation,
     resolve_extra_selector_prompt_source,
     resolved_timeout,
-    run_command,
     tasks_dir,
     use_selector_mode,
 )
@@ -86,7 +88,7 @@ def run(args: LoopNextArgs) -> None:
             return
 
         print(
-            run_command(
+            run_prompt_command(
                 invocation.command,
                 invocation.effective_prompt_file,
                 env=env,

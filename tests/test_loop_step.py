@@ -8,10 +8,7 @@ from typing import Any
 import pytest
 
 from agm.commands.args import LoopArgs, LoopNextArgs
-from agm.commands.loop.common import (
-    PreparedSelectInvocation,
-    ResolvedPrompt,
-)
+from agm.commands.loop.common import PreparedSelectInvocation
 from agm.commands.loop.next import _dry_run_prompt_text as next_dry_run_prompt_text
 from agm.commands.loop.next import _print_dry_run_prompt as next_print_dry_run_prompt
 from agm.commands.loop.next import run as next_run
@@ -31,6 +28,7 @@ from agm.commands.loop.step import (
     prepare_runtime,
     run,
 )
+from agm.core.agent import ResolvedPrompt
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -433,7 +431,7 @@ class TestPrepareRuntime:
             return ""
 
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
 
         args = _make_loop_args(no_log=True, no_selector=True, runner="fake-runner")
         runtime = prepare_runtime(args)
@@ -601,7 +599,7 @@ class TestExecuteSingleStep:
     ) -> None:
         runtime = _make_runtime(tmp_path)
         monkeypatch.setattr(
-            "agm.commands.loop.step.run_command",
+            "agm.commands.loop.step.run_prompt_command",
             lambda *a, **kw: "COMPLETE",
         )
         result = execute_single_step(runtime, step_number=1)
@@ -612,7 +610,7 @@ class TestExecuteSingleStep:
     ) -> None:
         runtime = _make_runtime(tmp_path)
         monkeypatch.setattr(
-            "agm.commands.loop.step.run_command",
+            "agm.commands.loop.step.run_prompt_command",
             lambda *a, **kw: "still working",
         )
         result = execute_single_step(runtime, step_number=1)
@@ -637,7 +635,7 @@ class TestExecuteSingleStep:
             captured_callbacks["stderr_callback"] = stderr_callback
             return "COMPLETE"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         execute_single_step(runtime, step_number=1)
         assert callable(captured_callbacks["stdout_callback"])
         assert callable(captured_callbacks["stderr_callback"])
@@ -663,7 +661,7 @@ class TestExecuteSingleStep:
                 stderr_callback("stderr chunk\n")
             return "COMPLETE"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         execute_single_step(runtime, step_number=1)
         log_content = log_file.read_text(encoding="utf-8")
         assert "stdout chunk" in log_content
@@ -675,7 +673,7 @@ class TestExecuteSingleStep:
         log_file = tmp_path / "out.log"
         runtime = _make_runtime(tmp_path, log_file=log_file)
         monkeypatch.setattr(
-            "agm.commands.loop.step.run_command",
+            "agm.commands.loop.step.run_prompt_command",
             lambda *a, **kw: "COMPLETE",
         )
         execute_single_step(runtime, step_number=3)
@@ -702,7 +700,7 @@ class TestExecuteSingleStep:
         )
 
         monkeypatch.setattr(
-            "agm.commands.loop.step.run_command",
+            "agm.commands.loop.step.run_prompt_command",
             lambda *a, **kw: "COMPLETE",
         )
         monkeypatch.setattr(
@@ -756,7 +754,7 @@ class TestExecuteSingleStep:
             all_targets.append(target)
             return "task output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result",
             lambda output, tasks_dir: task_file,
@@ -815,7 +813,7 @@ class TestExecuteSingleStep:
             all_envs.append(env)
             return "task output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result",
             lambda output, tasks_dir: task_file,
@@ -876,7 +874,7 @@ class TestExecuteSingleStep:
             all_envs.append(env)
             return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result",
             lambda output, tasks_dir: task_file,
@@ -931,7 +929,7 @@ class TestExecuteSingleStep:
             all_envs.append(env)
             return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result",
             lambda output, tasks_dir: task_file,
@@ -979,7 +977,7 @@ class TestExecuteSingleStep:
             selector_call_count += 1
             return val
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", lambda *a, **kw: "output")
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", lambda *a, **kw: "output")
         monkeypatch.setattr("agm.commands.loop.step.selector_result", fake_selector_result)
         execute_single_step(runtime, step_number=1)
         assert selector_call_count == 2
@@ -1213,7 +1211,7 @@ class TestNextRun:
             run_command_called[0] = True
             return ""
 
-        monkeypatch.setattr("agm.commands.loop.next.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.next.run_prompt_command", fake_run_command)
 
         args = _make_loop_next_args()
         next_run(args)
@@ -1242,7 +1240,7 @@ class TestNextRun:
         monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
         monkeypatch.setattr("agm.commands.loop.next.cleanup_temp_files", lambda files: None)
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_command",
+            "agm.commands.loop.next.run_prompt_command",
             lambda command, target, *, env, idle_timeout=None: "task-1.md",
         )
 
@@ -1271,7 +1269,7 @@ class TestNextRun:
         monkeypatch.setattr("agm.commands.loop.next.tasks_dir", lambda args: tmp_path / "tasks")
         monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_command",
+            "agm.commands.loop.next.run_prompt_command",
             lambda command, target, *, env, idle_timeout=None: (
                 _ for _ in ()
             ).throw(KeyboardInterrupt),
@@ -1301,7 +1299,7 @@ class TestNextRun:
         monkeypatch.setattr("agm.commands.loop.next.tasks_dir", lambda args: tmp_path / "tasks")
         monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_command",
+            "agm.commands.loop.next.run_prompt_command",
             lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
         )
 
@@ -1851,7 +1849,7 @@ class TestExecuteSingleStepSelectorStringResult:
                 return val
             return None  # COMPLETE on third call
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr("agm.commands.loop.step.selector_result", fake_selector_result)
         result = execute_single_step(runtime, step_number=1)
         # After string result, selector retries; eventually COMPLETE returns True
@@ -1925,7 +1923,7 @@ class TestExecuteSingleStepWithResolvedPrompt:
             run_envs.append(env)
             return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
         )
@@ -2007,7 +2005,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             run_targets.append(target)
             return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
         )
@@ -2083,7 +2081,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             run_targets.append(target)
             return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
         )
@@ -2332,7 +2330,7 @@ class TestExecuteSingleStepWithExtraPrompt:
             all_targets.append(target)
             return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result",
             lambda output, tasks_dir: task_file,
@@ -2404,7 +2402,7 @@ class TestExecuteSingleStepWithExtraPrompt:
             all_targets.append(target)
             return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
         monkeypatch.setattr(
             "agm.commands.loop.step.selector_result",
             lambda output, tasks_dir: task_file,
@@ -2450,7 +2448,7 @@ class TestNextRunWithExtraSelectorPrompt:
         monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
         monkeypatch.setattr("agm.commands.loop.next.cleanup_temp_files", lambda files: None)
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_command",
+            "agm.commands.loop.next.run_prompt_command",
             lambda command, target, *, env, idle_timeout=None: "task-1.md",
         )
 

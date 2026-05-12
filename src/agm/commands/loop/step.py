@@ -9,18 +9,22 @@ from pathlib import Path
 
 from agm.commands.args import LoopArgs
 from agm.core import dry_run
+from agm.core.agent import (
+    ResolvedPrompt,
+    append_extra_prompt,
+    cleanup_temp_files,
+    command_with_prompt_target,
+    prepare_prompt_from_source,
+    run_prompt_command,
+    validate_command,
+)
 from agm.core.fs import append_text, is_file, mkdir
 from agm.core.prompt import preprocess_prompt_file
 
 from .common import (
     PreparedSelectInvocation,
-    ResolvedPrompt,
-    append_extra_prompt,
-    cleanup_temp_files,
-    command_with_prompt_target,
     is_complete_output,
     loop_env,
-    prepare_prompt_from_source,
     prepare_select_invocation,
     progress_file,
     prompt_file,
@@ -28,14 +32,12 @@ from .common import (
     resolve_extra_selector_prompt_source,
     resolve_prompt_source,
     resolved_timeout,
-    run_command,
     runner_command,
     selected_task_text,
     selector_result,
     step_header_text,
     tasks_dir,
     use_selector_mode,
-    validate_command,
 )
 
 
@@ -175,7 +177,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
             env=env,
         )
         if not dry_run.enabled():
-            run_command(
+            run_prompt_command(
                 resolved_runner_command,
                 bootstrap_prompt.effective_file,
                 env=env,
@@ -335,7 +337,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
 
     if runtime.select_invocation is None:
         assert runtime.loop_prompt is not None
-        output = run_command(
+        output = run_prompt_command(
             runtime.resolved_runner_command,
             runtime.loop_prompt.effective_file,
             env=runtime.env,
@@ -349,7 +351,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
         return False
 
     while True:
-        selector_output = run_command(
+        selector_output = run_prompt_command(
             runtime.select_invocation.command,
             runtime.select_invocation.effective_prompt_file,
             env=runtime.env,
@@ -404,7 +406,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
         runner_env = runtime.env
         runner_target = next_task
 
-    run_command(
+    run_prompt_command(
         runtime.resolved_runner_command,
         runner_target,
         env=runner_env,

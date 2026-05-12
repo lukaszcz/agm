@@ -279,6 +279,163 @@ class TestFetch:
         assert result.exit_code != 0
 
 
+class TestReviewReviseRefine:
+    def test_review_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.review_command, "run_review")
+        result = invoke(
+            runner,
+            [
+                "review",
+                "--runner",
+                "codex exec",
+                "--scope",
+                "branch",
+                "--aspects",
+                "correctness",
+                "--extra-aspects",
+                "tests",
+                "--prompt",
+                "review this",
+                "--extra-prompt",
+                "extra",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].runner == "codex exec"
+        assert calls[0].scope == "branch"
+        assert calls[0].aspects == "correctness"
+        assert calls[0].extra_aspects == "tests"
+        assert calls[0].prompt == "review this"
+        assert calls[0].extra_prompt == "extra"
+
+    def test_review_rejects_prompt_with_prompt_file(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["review", "--prompt", "text", "--prompt-file", "file.md"])
+        assert result.exit_code != 0
+
+    def test_review_rejects_extra_prompt_with_extra_prompt_file(
+        self, runner: CliRunner
+    ) -> None:
+        result = invoke(
+            runner,
+            ["review", "--extra-prompt", "text", "--extra-prompt-file", "file.md"],
+        )
+        assert result.exit_code != 0
+
+    def test_revise_requires_review_file(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["revise"])
+        assert result.exit_code != 0
+
+    def test_revise_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.review_command, "run_revise")
+        result = invoke(
+            runner,
+            [
+                "revise",
+                "review.md",
+                "--runner",
+                "codex exec",
+                "--prompt-file",
+                "revise.md",
+                "--extra-prompt-file",
+                "extra.md",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].review_file == "review.md"
+        assert calls[0].runner == "codex exec"
+        assert calls[0].prompt_file == "revise.md"
+        assert calls[0].extra_prompt_file == "extra.md"
+
+    def test_refine_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.review_command, "run_refine")
+        result = invoke(
+            runner,
+            [
+                "refine",
+                "--max-steps",
+                "4",
+                "--runner",
+                "both",
+                "--reviewer",
+                "reviewer",
+                "--reviser",
+                "reviser",
+                "--scope",
+                "branch",
+                "--aspects",
+                "correctness",
+                "--review-prompt-file",
+                "review.md",
+                "--extra-review-prompt",
+                "extra review",
+                "--revise-prompt",
+                "revise",
+                "--extra-revise-prompt-file",
+                "extra-revise.md",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].max_steps == 4
+        assert calls[0].runner == "both"
+        assert calls[0].reviewer == "reviewer"
+        assert calls[0].reviser == "reviser"
+        assert calls[0].scope == "branch"
+        assert calls[0].aspects == "correctness"
+        assert calls[0].review_prompt_file == "review.md"
+        assert calls[0].extra_review_prompt == "extra review"
+        assert calls[0].revise_prompt == "revise"
+        assert calls[0].extra_revise_prompt_file == "extra-revise.md"
+
+    def test_refine_rejects_non_positive_max_steps(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["refine", "--max-steps", "0"])
+        assert result.exit_code != 0
+
+    def test_refine_rejects_review_prompt_with_review_prompt_file(
+        self, runner: CliRunner
+    ) -> None:
+        result = invoke(
+            runner,
+            ["refine", "--review-prompt", "text", "--review-prompt-file", "file.md"],
+        )
+        assert result.exit_code != 0
+
+    def test_refine_rejects_extra_revise_prompt_with_extra_revise_prompt_file(
+        self, runner: CliRunner
+    ) -> None:
+        result = invoke(
+            runner,
+            [
+                "refine",
+                "--extra-revise-prompt",
+                "text",
+                "--extra-revise-prompt-file",
+                "file.md",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_refine_rejects_extra_review_prompt_with_extra_review_prompt_file(
+        self, runner: CliRunner
+    ) -> None:
+        result = invoke(
+            runner,
+            [
+                "refine",
+                "--extra-review-prompt",
+                "text",
+                "--extra-review-prompt-file",
+                "file.md",
+            ],
+        )
+        assert result.exit_code != 0
+
+
 class TestDryRun:
     def test_open_accepts_command_level_dry_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -293,6 +450,32 @@ class TestDryRun:
         result = invoke(runner, ["open", "--dry-run", "repo"])
         assert result.exit_code == 0
         assert observed == [True]
+
+
+class TestList:
+    def test_list(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[bool] = []
+
+        def record(*, verbose: bool = False) -> None:
+            calls.append(verbose)
+
+        monkeypatch.setattr(cli.list_command, "run", record)
+        result = invoke(runner, ["list"])
+
+        assert result.exit_code == 0
+        assert calls == [False]
+
+    def test_list_verbose(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[bool] = []
+
+        def record(*, verbose: bool = False) -> None:
+            calls.append(verbose)
+
+        monkeypatch.setattr(cli.list_command, "run", record)
+        result = invoke(runner, ["list", "--verbose"])
+
+        assert result.exit_code == 0
+        assert calls == [True]
 
 
 class TestInit:
@@ -1306,6 +1489,16 @@ class TestParseLoopArgs:
         )
         assert args.tasks_dir == "custom/tasks"
 
+    def test_timeout_flag(self) -> None:
+        args = cli._parse_loop_args(
+            ["--timeout", "2m", "cmd"], command_path=["loop"]
+        )
+        assert args.timeout == 120
+
+    def test_invalid_timeout_exits(self) -> None:
+        with pytest.raises(SystemExit):
+            cli._parse_loop_args(["--timeout", "bad", "cmd"], command_path=["loop"])
+
     def test_prompt_flag(self) -> None:
         args = cli._parse_loop_args(
             ["--prompt", "do the thing", "cmd"], command_path=["loop"]
@@ -1532,6 +1725,14 @@ class TestParseLoopNextArgsMissingBranches:
                 ["--timeout", "abc", "cmd"],
                 command_path=["loop", "next"],
             )
+
+    def test_timeout_flag(self) -> None:
+        args = cli._parse_loop_next_args(
+            ["--timeout", "1h", "cmd"],
+            command_path=["loop", "next"],
+        )
+        assert args.timeout == 3600
+        assert args.command_name == "cmd"
 
 
 class TestConfigCopyCommand:

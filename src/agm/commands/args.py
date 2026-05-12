@@ -135,6 +135,46 @@ class LoopNextArgs:
 
 
 @dataclass(slots=True)
+class ReviewArgs:
+    runner: str | None
+    scope: str | None
+    aspects: str | None
+    extra_aspects: str | None
+    prompt: str | None
+    prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+
+
+@dataclass(slots=True)
+class ReviseArgs:
+    review_file: str
+    runner: str | None
+    prompt: str | None
+    prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+
+
+@dataclass(slots=True)
+class RefineArgs:
+    max_steps: int | None
+    runner: str | None
+    reviewer: str | None
+    reviser: str | None
+    scope: str | None
+    aspects: str | None
+    review_prompt: str | None
+    review_prompt_file: str | None
+    extra_review_prompt: str | None
+    extra_review_prompt_file: str | None
+    revise_prompt: str | None
+    revise_prompt_file: str | None
+    extra_revise_prompt: str | None
+    extra_revise_prompt_file: str | None
+
+
+@dataclass(slots=True)
 class TmuxOpenArgs:
     detach: bool
     pane_count: str | None

@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+
+from agm.core import dry_run
+
+
+@pytest.fixture(autouse=True)
+def reset_dry_run_state() -> Generator[None, None, None]:
+    dry_run.set_enabled(False)
+    yield
+    dry_run.set_enabled(False)
 
 
 @pytest.fixture()

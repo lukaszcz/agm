@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from agm.config.general import _unique_paths, load_loop_config, load_run_config
+from agm.config.general import (
+    _unique_paths,
+    load_loop_config,
+    load_refine_config,
+    load_review_config,
+    load_revise_config,
+    load_run_config,
+)
 from agm.config.sandbox import sandbox_settings_candidates
 
 
@@ -340,6 +347,55 @@ def test_load_loop_config_keeps_absolute_paths_unchanged(tmp_path: Path) -> None
     assert config.prompt_file == "/absolute/path/prompt.md"
 
 
+def test_load_review_revise_and_refine_config_read_new_sections(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "review.md").write_text("review", encoding="utf-8")
+    (home / ".agm" / "revise.md").write_text("revise", encoding="utf-8")
+    (home / ".agm" / "config.toml").write_text(
+        "\n".join(
+            [
+                "[review]",
+                'runner = "reviewer"',
+                'scope = "branch"',
+                'aspects = "correctness"',
+                'extra_aspects = "tests"',
+                'prompt_file = "review.md"',
+                "",
+                "[revise]",
+                'runner = "reviser"',
+                'prompt_file = "revise.md"',
+                "",
+                "[refine]",
+                "max_steps = 7",
+                'runner = "both"',
+                'reviewer = "review-only"',
+                'reviser = "revise-only"',
+                'review_prompt_file = "review.md"',
+                'revise_prompt_file = "revise.md"',
+            ]
+        )
+    )
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    review = load_review_config(home=home, proj_dir=None, cwd=cwd)
+    revise = load_revise_config(home=home, proj_dir=None, cwd=cwd)
+    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert review.runner == "reviewer"
+    assert review.extra_aspects == "tests"
+    assert review.prompt_file == str(home / ".agm" / "review.md")
+    assert revise.runner == "reviser"
+    assert revise.prompt_file == str(home / ".agm" / "revise.md")
+    assert refine.max_steps == 7
+    assert refine.runner == "both"
+    assert refine.reviewer == "review-only"
+    assert refine.reviser == "revise-only"
+    assert refine.review_prompt_file == str(home / ".agm" / "review.md")
+    assert refine.revise_prompt_file == str(home / ".agm" / "revise.md")
+
+
 def test_load_loop_config_expands_braced_env_vars(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -437,4 +493,3 @@ class TestUniquePaths:
         paths = [tmp_path / name for name in ["c", "a", "b", "a"]]
         result = _unique_paths(paths)
         assert result == [tmp_path / "c", tmp_path / "a", tmp_path / "b"]
-

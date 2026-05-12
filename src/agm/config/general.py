@@ -27,6 +27,20 @@ _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
         "extra_prompt_file",
         "extra_selector_prompt_file",
     ],
+    "review": [
+        "prompt_file",
+        "extra_prompt_file",
+    ],
+    "revise": [
+        "prompt_file",
+        "extra_prompt_file",
+    ],
+    "refine": [
+        "review_prompt_file",
+        "extra_review_prompt_file",
+        "revise_prompt_file",
+        "extra_revise_prompt_file",
+    ],
 }
 
 
@@ -126,6 +140,51 @@ class LoopConfig:
     extra_selector_prompt: str | None
     extra_selector_prompt_file: str | None
     timeout: float | None
+
+
+@dataclass(frozen=True)
+class ReviewConfig:
+    """Resolved review-command configuration."""
+
+    runner: str | None
+    scope: str | None
+    aspects: str | None
+    extra_aspects: str | None
+    prompt: str | None
+    prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+
+
+@dataclass(frozen=True)
+class ReviseConfig:
+    """Resolved revise-command configuration."""
+
+    runner: str | None
+    prompt: str | None
+    prompt_file: str | None
+    extra_prompt: str | None
+    extra_prompt_file: str | None
+
+
+@dataclass(frozen=True)
+class RefineConfig:
+    """Resolved refine-command configuration."""
+
+    max_steps: int | None
+    runner: str | None
+    reviewer: str | None
+    reviser: str | None
+    scope: str | None
+    aspects: str | None
+    review_prompt: str | None
+    review_prompt_file: str | None
+    extra_review_prompt: str | None
+    extra_review_prompt_file: str | None
+    revise_prompt: str | None
+    revise_prompt_file: str | None
+    extra_revise_prompt: str | None
+    extra_revise_prompt_file: str | None
 
 
 def _resolve_section_paths(
@@ -307,4 +366,64 @@ def load_loop_config(
         extra_selector_prompt=resolved_extra_selector_prompt,
         extra_selector_prompt_file=resolved_extra_selector_prompt_file,
         timeout=resolved_timeout,
+    )
+
+
+def _optional_str(table: TomlDict, key: str) -> str | None:
+    value = table.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _optional_positive_int(table: TomlDict, key: str) -> int | None:
+    value = table.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def load_review_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReviewConfig:
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    table = _toml_dict(merged.get("review"))
+    return ReviewConfig(
+        runner=_optional_str(table, "runner"),
+        scope=_optional_str(table, "scope"),
+        aspects=_optional_str(table, "aspects"),
+        extra_aspects=_optional_str(table, "extra_aspects"),
+        prompt=_optional_str(table, "prompt"),
+        prompt_file=_optional_str(table, "prompt_file"),
+        extra_prompt=_optional_str(table, "extra_prompt"),
+        extra_prompt_file=_optional_str(table, "extra_prompt_file"),
+    )
+
+
+def load_revise_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReviseConfig:
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    table = _toml_dict(merged.get("revise"))
+    return ReviseConfig(
+        runner=_optional_str(table, "runner"),
+        prompt=_optional_str(table, "prompt"),
+        prompt_file=_optional_str(table, "prompt_file"),
+        extra_prompt=_optional_str(table, "extra_prompt"),
+        extra_prompt_file=_optional_str(table, "extra_prompt_file"),
+    )
+
+
+def load_refine_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RefineConfig:
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    table = _toml_dict(merged.get("refine"))
+    return RefineConfig(
+        max_steps=_optional_positive_int(table, "max_steps"),
+        runner=_optional_str(table, "runner"),
+        reviewer=_optional_str(table, "reviewer"),
+        reviser=_optional_str(table, "reviser"),
+        scope=_optional_str(table, "scope"),
+        aspects=_optional_str(table, "aspects"),
+        review_prompt=_optional_str(table, "review_prompt"),
+        review_prompt_file=_optional_str(table, "review_prompt_file"),
+        extra_review_prompt=_optional_str(table, "extra_review_prompt"),
+        extra_review_prompt_file=_optional_str(table, "extra_review_prompt_file"),
+        revise_prompt=_optional_str(table, "revise_prompt"),
+        revise_prompt_file=_optional_str(table, "revise_prompt_file"),
+        extra_revise_prompt=_optional_str(table, "extra_revise_prompt"),
+        extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
     )

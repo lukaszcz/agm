@@ -228,6 +228,56 @@ _HELP_TEXTS: dict[str, str] = {
           configured. It requires selector mode; ``--no-selector`` is an
           error for ``loop next``.
     """),
+    "review": textwrap.dedent("""\
+        agm review [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
+                   [--extra-aspects REVIEW_ASPECTS] [--runner COMMAND]
+                   [--prompt TEXT|--prompt-file PATH]
+                   [--extra-prompt TEXT|--extra-prompt-file PATH]
+
+        Run the review prompt with REVIEW_SCOPE and REVIEW_ASPECTS available
+        during prompt preprocessing. The default prompt is review.md.
+
+        Command config:
+          [review] runner = "claude -p" sets the review runner. When unset,
+          AGM uses the same default runner as agm loop.
+          [review] scope, aspects, extra_aspects, prompt, prompt_file,
+          extra_prompt, and extra_prompt_file correspond to the CLI options.
+    """),
+    "revise": textwrap.dedent("""\
+        agm revise [--runner COMMAND] [--prompt TEXT|--prompt-file PATH]
+                   [--extra-prompt TEXT|--extra-prompt-file PATH]
+                   REVIEW_FILE
+
+        Run the revision prompt with REVIEW_FILE available during prompt
+        preprocessing. The default prompt is revise.md.
+
+        Command config:
+          [revise] runner = "claude -p" sets the revision runner. When unset,
+          AGM uses the same default runner as agm loop.
+          [revise] prompt, prompt_file, extra_prompt, and extra_prompt_file
+          correspond to the CLI options.
+    """),
+    "refine": textwrap.dedent("""\
+        agm refine [--max-steps N] [--runner COMMAND]
+                   [--reviewer COMMAND] [--reviser COMMAND]
+                   [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
+                   [--review-prompt TEXT|--review-prompt-file PATH]
+                   [--extra-review-prompt TEXT|--extra-review-prompt-file PATH]
+                   [--revise-prompt TEXT|--revise-prompt-file PATH]
+                   [--extra-revise-prompt TEXT|--extra-revise-prompt-file PATH]
+
+        Run review/revise cycles until revise returns COMPLETE, or until the
+        maximum number of revision attempts is reached. A CONTINUE response
+        starts a fresh review; any other response retries revise with the same
+        review file. The default maximum is 20.
+
+        Command config:
+          [refine] max_steps, runner, reviewer, reviser, scope, aspects,
+          review_prompt, review_prompt_file, extra_review_prompt,
+          extra_review_prompt_file, revise_prompt, revise_prompt_file,
+          extra_revise_prompt, and extra_revise_prompt_file correspond to the
+          CLI options.
+    """),
     "config": textwrap.dedent("""\
         agm config copy DIRNAME
         agm config cp   DIRNAME
@@ -402,6 +452,9 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
         "Fetch upstream changes for the repo and all dependencies",
     ),
     ("loop", "Run the loop prompt until completion"),
+    ("review", "Run the review prompt"),
+    ("revise", "Run the revision prompt"),
+    ("refine", "Run review/revise refinement"),
     ("run", "Run a command in a sandbox"),
     ("config", "Manage project configuration files"),
     ("list", "List all open worktrees"),

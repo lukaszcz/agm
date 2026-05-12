@@ -23,6 +23,7 @@ import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
 import agm.commands.loop.step as loop_step_command
 import agm.commands.open as open_command
+import agm.commands.review as review_command
 import agm.commands.run as run_command
 import agm.commands.setup as setup_command
 import agm.commands.tmux.close as tmux_close_command
@@ -44,6 +45,9 @@ from agm.commands.args import (
     LoopArgs,
     LoopNextArgs,
     OpenArgs,
+    RefineArgs,
+    ReviewArgs,
+    ReviseArgs,
     RunArgs,
     TmuxCloseArgs,
     TmuxLayoutArgs,
@@ -495,6 +499,54 @@ def _parse_loop_next_args(
     )
 
 
+def _validate_prompt_options(
+    *,
+    command_path: Sequence[str],
+    prompt: str | None,
+    prompt_file: str | None,
+    extra_prompt: str | None,
+    extra_prompt_file: str | None,
+) -> None:
+    if prompt is not None and prompt_file is not None:
+        exit_with_usage_error(
+            command_path, "error: --prompt and --prompt-file are mutually exclusive"
+        )
+    if extra_prompt is not None and extra_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            "error: --extra-prompt and --extra-prompt-file are mutually exclusive",
+        )
+
+
+def _validate_refine_prompt_options(
+    *,
+    command_path: Sequence[str],
+    prompt_name: str,
+    prompt: str | None,
+    prompt_file: str | None,
+    extra_prompt: str | None,
+    extra_prompt_file: str | None,
+) -> None:
+    if prompt is not None and prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            f"error: --{prompt_name}-prompt and --{prompt_name}-prompt-file "
+            "are mutually exclusive",
+        )
+    if extra_prompt is not None and extra_prompt_file is not None:
+        exit_with_usage_error(
+            command_path,
+            f"error: --extra-{prompt_name}-prompt and "
+            f"--extra-{prompt_name}-prompt-file are mutually exclusive",
+        )
+
+
+def _positive_int(value: int | None, *, command_path: Sequence[str], name: str) -> int | None:
+    if value is not None and value < 1:
+        exit_with_usage_error(command_path, f"error: {name} must be positive")
+    return value
+
+
 app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 
 config_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
@@ -880,6 +932,211 @@ def fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> N
     del _help
     del _dry_run
     fetch_command.run(object())
+
+
+@app.command()
+def review(
+    runner: str | None = typer.Option(None, "--runner", help="Review runner command."),
+    scope: str | None = typer.Option(None, "--scope", help="Review scope."),
+    aspects: str | None = typer.Option(None, "--aspects", help="Review aspects."),
+    extra_aspects: str | None = typer.Option(
+        None,
+        "--extra-aspects",
+        help="Additional review aspects appended to the defaults.",
+    ),
+    prompt: str | None = typer.Option(None, "--prompt", help="Inline review prompt."),
+    prompt_file: str | None = typer.Option(
+        None,
+        "--prompt-file",
+        help="Review prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    extra_prompt: str | None = typer.Option(
+        None,
+        "--extra-prompt",
+        help="Extra inline review prompt content.",
+    ),
+    extra_prompt_file: str | None = typer.Option(
+        None,
+        "--extra-prompt-file",
+        help="Extra review prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _validate_prompt_options(
+        command_path=["review"],
+        prompt=prompt,
+        prompt_file=prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
+    )
+    review_command.run_review(
+        ReviewArgs(
+            runner=runner,
+            scope=scope,
+            aspects=aspects,
+            extra_aspects=extra_aspects,
+            prompt=prompt,
+            prompt_file=prompt_file,
+            extra_prompt=extra_prompt,
+            extra_prompt_file=extra_prompt_file,
+        )
+    )
+
+
+@app.command()
+def revise(
+    review_file: Path | None = typer.Argument(
+        None,
+        metavar="REVIEW_FILE",
+        autocompletion=completion.complete_path_argument,
+    ),
+    runner: str | None = typer.Option(None, "--runner", help="Revision runner command."),
+    prompt: str | None = typer.Option(None, "--prompt", help="Inline revision prompt."),
+    prompt_file: str | None = typer.Option(
+        None,
+        "--prompt-file",
+        help="Revision prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    extra_prompt: str | None = typer.Option(
+        None,
+        "--extra-prompt",
+        help="Extra inline revision prompt content.",
+    ),
+    extra_prompt_file: str | None = typer.Option(
+        None,
+        "--extra-prompt-file",
+        help="Extra revision prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _validate_prompt_options(
+        command_path=["revise"],
+        prompt=prompt,
+        prompt_file=prompt_file,
+        extra_prompt=extra_prompt,
+        extra_prompt_file=extra_prompt_file,
+    )
+    review_command.run_revise(
+        ReviseArgs(
+            review_file=_require_value(review_file, command_path=["revise"], name="review_file"),
+            runner=runner,
+            prompt=prompt,
+            prompt_file=prompt_file,
+            extra_prompt=extra_prompt,
+            extra_prompt_file=extra_prompt_file,
+        )
+    )
+
+
+@app.command()
+def refine(
+    max_steps: int | None = typer.Option(
+        None,
+        "--max-steps",
+        help="Maximum revision attempts.",
+    ),
+    runner: str | None = typer.Option(
+        None,
+        "--runner",
+        help="Runner command for both review and revise.",
+    ),
+    reviewer: str | None = typer.Option(None, "--reviewer", help="Review runner command."),
+    reviser: str | None = typer.Option(None, "--reviser", help="Revision runner command."),
+    scope: str | None = typer.Option(None, "--scope", help="Review scope."),
+    aspects: str | None = typer.Option(None, "--aspects", help="Review aspects."),
+    review_prompt: str | None = typer.Option(
+        None,
+        "--review-prompt",
+        help="Inline review prompt.",
+    ),
+    review_prompt_file: str | None = typer.Option(
+        None,
+        "--review-prompt-file",
+        help="Review prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    extra_review_prompt: str | None = typer.Option(
+        None,
+        "--extra-review-prompt",
+        help="Extra inline review prompt content.",
+    ),
+    extra_review_prompt_file: str | None = typer.Option(
+        None,
+        "--extra-review-prompt-file",
+        help="Extra review prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    revise_prompt: str | None = typer.Option(
+        None,
+        "--revise-prompt",
+        help="Inline revision prompt.",
+    ),
+    revise_prompt_file: str | None = typer.Option(
+        None,
+        "--revise-prompt-file",
+        help="Revision prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    extra_revise_prompt: str | None = typer.Option(
+        None,
+        "--extra-revise-prompt",
+        help="Extra inline revision prompt content.",
+    ),
+    extra_revise_prompt_file: str | None = typer.Option(
+        None,
+        "--extra-revise-prompt-file",
+        help="Extra revision prompt file.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _validate_refine_prompt_options(
+        command_path=["refine"],
+        prompt_name="review",
+        prompt=review_prompt,
+        prompt_file=review_prompt_file,
+        extra_prompt=extra_review_prompt,
+        extra_prompt_file=extra_review_prompt_file,
+    )
+    _validate_refine_prompt_options(
+        command_path=["refine"],
+        prompt_name="revise",
+        prompt=revise_prompt,
+        prompt_file=revise_prompt_file,
+        extra_prompt=extra_revise_prompt,
+        extra_prompt_file=extra_revise_prompt_file,
+    )
+    review_command.run_refine(
+        RefineArgs(
+            max_steps=_positive_int(max_steps, command_path=["refine"], name="--max-steps"),
+            runner=runner,
+            reviewer=reviewer,
+            reviser=reviser,
+            scope=scope,
+            aspects=aspects,
+            review_prompt=review_prompt,
+            review_prompt_file=review_prompt_file,
+            extra_review_prompt=extra_review_prompt,
+            extra_review_prompt_file=extra_review_prompt_file,
+            revise_prompt=revise_prompt,
+            revise_prompt_file=revise_prompt_file,
+            extra_revise_prompt=extra_revise_prompt,
+            extra_revise_prompt_file=extra_revise_prompt_file,
+        )
+    )
 
 
 @app.command(context_settings=_RUN_CONTEXT_SETTINGS)

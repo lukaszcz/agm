@@ -162,6 +162,20 @@ def test_load_loop_config_prefers_command_specific_overrides(tmp_path: Path) -> 
     assert config.tasks_dir == str(cwd / "codex" / "tasks")
 
 
+def test_load_loop_config_rejects_missing_named_section(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[loop]\nrunner = "claude -p"\n')
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    with pytest.raises(ConfigCommandNotFound) as exc_info:
+        load_loop_config(home=home, proj_dir=None, cwd=cwd, command_name="fronend")
+
+    assert exc_info.value.section_name == "loop"
+    assert exc_info.value.command_name == "fronend"
+
+
 def test_load_run_config_prefers_dot_agm_memory_after_project_config(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()

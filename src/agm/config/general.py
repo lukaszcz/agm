@@ -307,11 +307,12 @@ def load_loop_config(
     *, home: Path, proj_dir: Path | None, cwd: Path, command_name: str | None = None
 ) -> LoopConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    loop_table = _toml_dict(merged.get("loop"))
-    selected_loop_table = loop_table
-    if command_name is not None:
-        command_table = _toml_dict(loop_table.get(command_name))
-        selected_loop_table = _merge_config(loop_table, command_table)
+    selected_loop_table = _select_command_table(
+        _toml_dict(merged.get("loop")),
+        section_name="loop",
+        command_name=command_name,
+        require_command=True,
+    )
     runner = selected_loop_table.get("runner")
     selector = selected_loop_table.get("selector")
     no_selector_raw = selected_loop_table.get("no_selector")

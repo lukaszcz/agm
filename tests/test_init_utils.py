@@ -369,7 +369,7 @@ class TestConfigureProjectDirEmbedded:
         assert (agm_dir / "config").is_dir()
         assert (agm_dir / "worktrees").is_dir()
 
-    def test_adds_dot_agm_to_gitignore(
+    def test_adds_embedded_layout_entries_to_gitignore(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
@@ -381,7 +381,25 @@ class TestConfigureProjectDirEmbedded:
 
         gitignore = project_dir / ".gitignore"
         assert gitignore.is_file()
-        assert ".agm" in gitignore.read_text(encoding="utf-8").splitlines()
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        assert ".agm" in lines
+        assert ".agent-files/" in lines
+
+    def test_adds_agent_files_to_existing_gitignore(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
+        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / ".gitignore").write_text("*.pyc\n.agm\n", encoding="utf-8")
+        configure_project_dir(project_dir, embedded=True)
+
+        lines = (project_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
+        assert ".agm" in lines
+        assert ".agent-files/" in lines
+        assert lines.count(".agm") == 1
 
     def test_creates_config_files_under_dot_agm(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

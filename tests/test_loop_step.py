@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import agm.core.log as log_mod
 from agm.agent.runner import ResolvedPrompt
 from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.commands.loop.common import PreparedSelectInvocation
@@ -26,7 +27,12 @@ from agm.commands.loop.step import (
     prepare_runtime,
     run,
 )
-from agm.core.log import append_log, prepare_log_file, resolve_log_file
+from agm.core.log import (
+    append_log,
+    ensure_agent_files_gitignored,
+    prepare_log_file,
+    resolve_log_file,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -245,6 +251,58 @@ class TestLogFile:
         out = capsys.readouterr().out
         assert out == f"Logging to {log_file}\n"
         assert log_file.parent.is_dir()
+
+    def test_prepare_log_file_adds_agent_files_to_existing_repo_gitignore(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(log_mod.git_helpers, "is_git_repo", lambda _path: True)
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("*.pyc", encoding="utf-8")
+        log_file = tmp_path / ".agent-files" / "loop-20260513-120000.log"
+
+        prepare_log_file(log_file, explicit=False)
+
+        assert gitignore.read_text(encoding="utf-8") == "*.pyc\n.agent-files\n"
+
+
+class TestEnsureAgentFilesGitignored:
+    def test_creates_gitignore_for_agent_files_in_repo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(log_mod.git_helpers, "is_git_repo", lambda _path: True)
+
+        ensure_agent_files_gitignored(tmp_path / ".agent-files")
+
+        assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == ".agent-files\n"
+
+    def test_keeps_existing_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(log_mod.git_helpers, "is_git_repo", lambda _path: True)
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".agent-files\n", encoding="utf-8")
+
+        ensure_agent_files_gitignored(tmp_path / ".agent-files")
+
+        assert gitignore.read_text(encoding="utf-8") == ".agent-files\n"
+
+    def test_ignores_non_agent_files_dirs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(log_mod.git_helpers, "is_git_repo", lambda _path: True)
+
+        ensure_agent_files_gitignored(tmp_path / "logs")
+
+        assert not (tmp_path / ".gitignore").exists()
+
+    def test_ignores_non_git_repos(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(log_mod.git_helpers, "is_git_repo", lambda _path: False)
+
+        ensure_agent_files_gitignored(tmp_path / ".agent-files")
+
+        assert not (tmp_path / ".gitignore").exists()
 
 
 # ===========================================================================

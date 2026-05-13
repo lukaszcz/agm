@@ -30,7 +30,7 @@ from agm.config.general import (
 )
 from agm.core import dry_run
 from agm.core.fs import mkdir, write_text
-from agm.core.log import default_agent_files_dir
+from agm.core.log import default_agent_files_dir, ensure_agent_files_gitignored
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"
 DEFAULT_REVIEW_ASPECTS = "correctness, completeness, maintainability, adherence to AGENTS.md"
@@ -128,6 +128,7 @@ def _resolve_output_review_file(args: ReviewArgs, config: ReviewConfig) -> Path 
 def _save_review_output(path: Path | None, output: str) -> Path | None:
     if path is None:
         return None
+    ensure_agent_files_gitignored(path.parent)
     mkdir(path.parent, parents=True, exist_ok=True)
     write_text(path, output, encoding="utf-8")
     return path

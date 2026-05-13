@@ -586,6 +586,37 @@ def test_review_once_honors_explicit_and_disabled_review_file(
     assert not (tmp_path / ".agent-files").exists()
 
 
+def test_review_once_warns_before_overwriting_existing_review_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    review_file = tmp_path / "saved" / "review.md"
+    review_file.parent.mkdir()
+    review_file.write_text("existing\n", encoding="utf-8")
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        del command, target, env, stdout_callback, stderr_callback
+        return "new review output\n"
+
+    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+
+    review_mod.review_once(_review_args(review_file="saved/review.md"))
+
+    captured = capsys.readouterr()
+    assert f"warning: overwriting existing review file {review_file}\n" in captured.err
+    assert review_file.read_text(encoding="utf-8") == "new review output\n"
+
+
 def test_review_once_honors_none_and_absolute_review_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

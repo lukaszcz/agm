@@ -157,6 +157,8 @@ def review_once(
         )
         if dry_run.enabled():
             return output
+        if review_file is not None and review_file.exists():
+            stderr_callback(f"warning: overwriting existing review file {review_file}\n")
         saved_review_file = _save_review_output(review_file, output)
         if saved_review_file is not None:
             stdout_callback(f"Saved review to {saved_review_file}\n")

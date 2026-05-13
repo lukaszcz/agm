@@ -679,6 +679,7 @@ def test_review_once_dry_run_prints_configuration(
     captured = capsys.readouterr()
     assert output == ""
     assert "dry-run: review configuration" in captured.out
+    assert f"dry-run:   review file: {tmp_path / '.agent-files' / 'review-'}" in captured.out
 
 
 def test_write_stream_helpers_ignore_empty_chunks(

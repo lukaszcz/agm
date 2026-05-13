@@ -146,6 +146,10 @@ def review_once(
         prepared = prepare_review(args, temp_files=temp_files, config=config)
         if dry_run.enabled():
             dry_run.print_configuration("review")
+            dry_run.print_detail(
+                "review file",
+                "disabled" if review_file is None else str(review_file),
+            )
         output = run_prepared_prompt(
             prepared,
             stdout_callback=stdout_callback,

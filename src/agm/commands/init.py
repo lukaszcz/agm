@@ -95,10 +95,9 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
     for dirname in layout_dirs:
         mkdir(dirname, parents=True, exist_ok=True)
     if not embedded:
-        ensure_gitignore_entry(
-            project_repo_dir(project_dir) / ".gitignore",
-            AGENT_FILES_GITIGNORE_ENTRY,
-        )
+        repo_dir = project_repo_dir(project_dir)
+        if git_helpers.is_git_repo(repo_dir):
+            ensure_gitignore_entry(repo_dir / ".gitignore", AGENT_FILES_GITIGNORE_ENTRY)
 
     notes_dir = project_notes_dir(project_dir)
     ensure_git_repo(config_dir)

@@ -298,9 +298,10 @@ class TestConfigureProjectDirWorkspace:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
-        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
+        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: True)
 
         project_dir = tmp_path / "proj"
+        (project_dir / "repo" / ".git").mkdir(parents=True)
         configure_project_dir(project_dir, embedded=False)
 
         lines = (project_dir / "repo" / ".gitignore").read_text(encoding="utf-8").splitlines()

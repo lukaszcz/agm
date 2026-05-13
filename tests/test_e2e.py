@@ -2455,6 +2455,7 @@ class TestInit:
 
         assert proj.is_dir()
         assert (proj / "repo" / "README.md").exists()
+        assert ".agent-files" in (proj / "repo" / ".gitignore").read_text().splitlines()
         assert not (proj / "myproject").exists()
 
     def test_init_clone_with_url_only_uses_derived_directory(
@@ -2656,7 +2657,6 @@ class TestInit:
         assert "git repo detected" not in result.stdout.lower()
         assert (project / "repo").is_dir()
         assert (project / "config").is_dir()
-        assert ".agent-files" in (project / "repo" / ".gitignore").read_text().splitlines()
 
     def test_init_embedded_with_url_only(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "embedded.git", env)

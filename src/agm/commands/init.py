@@ -19,7 +19,8 @@ from agm.project.layout import (
     project_repo_dir,
 )
 
-EMBEDDED_GITIGNORE_ENTRIES = (".agm", ".agent-files/")
+EMBEDDED_PROJECT_GITIGNORE_ENTRY = ".agm"
+AGENT_FILES_GITIGNORE_ENTRY = ".agent-files"
 
 
 def looks_like_repo_url(value: str) -> bool:
@@ -72,8 +73,8 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
     if embedded:
         data_dir = project_dir / ".agm"
         mkdir(data_dir, parents=True, exist_ok=True)
-        for entry in EMBEDDED_GITIGNORE_ENTRIES:
-            ensure_gitignore_entry(project_dir / ".gitignore", entry)
+        ensure_gitignore_entry(project_dir / ".gitignore", EMBEDDED_PROJECT_GITIGNORE_ENTRY)
+        ensure_gitignore_entry(project_dir / ".gitignore", AGENT_FILES_GITIGNORE_ENTRY)
         config_dir = data_dir / "config"
         layout_dirs = (
             data_dir / "deps",
@@ -93,6 +94,11 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
         )
     for dirname in layout_dirs:
         mkdir(dirname, parents=True, exist_ok=True)
+    if not embedded:
+        ensure_gitignore_entry(
+            project_repo_dir(project_dir) / ".gitignore",
+            AGENT_FILES_GITIGNORE_ENTRY,
+        )
 
     notes_dir = project_notes_dir(project_dir)
     ensure_git_repo(config_dir)

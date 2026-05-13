@@ -2656,6 +2656,7 @@ class TestInit:
         assert "git repo detected" not in result.stdout.lower()
         assert (project / "repo").is_dir()
         assert (project / "config").is_dir()
+        assert ".agent-files" in (project / "repo" / ".gitignore").read_text().splitlines()
 
     def test_init_embedded_with_url_only(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "embedded.git", env)
@@ -2672,7 +2673,9 @@ class TestInit:
         assert (proj / ".agm" / "worktrees").is_dir()
         assert (proj / ".agm" / "config" / ".git").is_dir()
         assert (proj / ".agm" / "notes" / ".git").is_dir()
-        assert ".agm" in (proj / ".gitignore").read_text().splitlines()
+        gitignore_lines = (proj / ".gitignore").read_text().splitlines()
+        assert ".agm" in gitignore_lines
+        assert ".agent-files" in gitignore_lines
         assert (proj / "README.md").exists()
         assert (proj / "config").exists() is False
         assert (proj / "deps").exists() is False
@@ -2691,7 +2694,9 @@ class TestInit:
         assert (proj / ".agm" / "worktrees").is_dir()
         assert (proj / ".agm" / "config" / ".git").is_dir()
         assert (proj / ".agm" / "notes" / ".git").is_dir()
-        assert ".agm" in (proj / ".gitignore").read_text().splitlines()
+        gitignore_lines = (proj / ".gitignore").read_text().splitlines()
+        assert ".agm" in gitignore_lines
+        assert ".agent-files" in gitignore_lines
         assert not (proj / "repo").exists()
         assert not (proj / "worktrees").exists()
         assert not (proj / "config").exists()

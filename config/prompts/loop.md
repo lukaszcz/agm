@@ -4,7 +4,7 @@ CRITICAL: Before you stop, always update ${TASKS_DIR}/PROGRESS.md and commit in 
 
 CRITICAL: If you are CERTAIN that ALL tasks are complete, reply COMPLETE on a single line, with NO other text in the reply and NO other lines.
 
-IMPORTANT: A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete. Do not consider deferrals as sings of completion.
+IMPORTANT: A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete. Do not consider deferrals as signs of completion.
 
 ## Format of PROGRESS.md
 

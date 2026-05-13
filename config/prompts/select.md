@@ -8,7 +8,7 @@ Respond with either:
 
 CRITICAL: The response must contain ONLY the file path or COMPLETE on a single line, NO other text.
 
-IMPORTANT: A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete. Do not consider deferrals as sings of completion.
+IMPORTANT: A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete. Do not consider deferrals as signs of completion.
 
 ## Format of PROGRESS.md
 

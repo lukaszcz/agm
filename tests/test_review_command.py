@@ -586,6 +586,39 @@ def test_review_once_honors_explicit_and_disabled_review_file(
     assert not (tmp_path / ".agent-files").exists()
 
 
+def test_review_once_saves_to_configured_review_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    (home / ".agm" / "config.toml").write_text(
+        '[review]\nreview_file = "configured/review.md"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        del command, target, env, stdout_callback, stderr_callback
+        return "review output\n"
+
+    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+
+    review_mod.review_once(_review_args())
+
+    assert (tmp_path / "configured" / "review.md").read_text(encoding="utf-8") == (
+        "review output\n"
+    )
+    assert not (tmp_path / ".agent-files").exists()
+
+
 def test_review_once_warns_before_overwriting_existing_review_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

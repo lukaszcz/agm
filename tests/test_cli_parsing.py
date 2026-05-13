@@ -306,6 +306,8 @@ class TestReviewReviseRefine:
                 "review this",
                 "--extra-prompt",
                 "extra",
+                "--review-file",
+                "review.md",
             ],
         )
 
@@ -317,6 +319,17 @@ class TestReviewReviseRefine:
         assert calls[0].extra_aspects == "tests"
         assert calls[0].prompt == "review this"
         assert calls[0].extra_prompt == "extra"
+        assert calls[0].review_file == "review.md"
+        assert calls[0].no_review_file is False
+
+    def test_review_rejects_no_review_file_with_review_file(
+        self, runner: CliRunner
+    ) -> None:
+        result = invoke(
+            runner,
+            ["review", "--no-review-file", "--review-file", "review.md"],
+        )
+        assert result.exit_code != 0
 
     def test_review_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -428,6 +441,7 @@ class TestReviewReviseRefine:
                 "extra-revise.md",
                 "--log-file",
                 "refine.log",
+                "--save-review",
             ],
         )
 
@@ -445,6 +459,7 @@ class TestReviewReviseRefine:
         assert calls[0].extra_revise_prompt_file == "extra-revise.md"
         assert calls[0].log_file == "refine.log"
         assert calls[0].no_log is False
+        assert calls[0].save_review is True
 
     def test_refine_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch

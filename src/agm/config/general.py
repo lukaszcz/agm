@@ -42,6 +42,7 @@ _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
     "review": [
         "prompt_file",
         "extra_prompt_file",
+        "review_file",
     ],
     "revise": [
         "prompt_file",
@@ -172,6 +173,7 @@ class ReviewConfig:
     prompt_file: str | None
     extra_prompt: str | None
     extra_prompt_file: str | None
+    review_file: str | None
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,7 @@ class RefineConfig:
     revise_prompt_file: str | None
     extra_revise_prompt: str | None
     extra_revise_prompt_file: str | None
+    save_review: bool
 
 
 def _resolve_section_paths(
@@ -214,6 +217,9 @@ def _resolve_section_paths(
         if not isinstance(value, str) or not value.strip():
             continue
         expanded = os.path.expanduser(os.path.expandvars(value))
+        if expanded in {"auto", "none"}:
+            resolved[field] = expanded
+            continue
         path = Path(expanded)
         if path.is_absolute():
             resolved[field] = expanded
@@ -446,6 +452,7 @@ def load_review_config(
         prompt_file=_optional_str(table, "prompt_file"),
         extra_prompt=_optional_str(table, "extra_prompt"),
         extra_prompt_file=_optional_str(table, "extra_prompt_file"),
+        review_file=_optional_str(table, "review_file"),
     )
 
 
@@ -503,4 +510,7 @@ def load_refine_config(
         revise_prompt_file=_optional_str(table, "revise_prompt_file"),
         extra_revise_prompt=_optional_str(table, "extra_revise_prompt"),
         extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
+        save_review=bool(table.get("save_review"))
+        if isinstance(table.get("save_review"), bool)
+        else False,
     )

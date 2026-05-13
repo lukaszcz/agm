@@ -64,6 +64,8 @@ def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewAr
         extra_prompt_file=args.extra_review_prompt_file or config.extra_review_prompt_file,
         command_name=args.command_name,
         require_command_config=False,
+        review_file="auto" if args.save_review or config.save_review else None,
+        no_review_file=not (args.save_review or config.save_review),
     )
 
 

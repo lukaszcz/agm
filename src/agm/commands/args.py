@@ -146,6 +146,8 @@ class ReviewArgs:
     extra_prompt_file: str | None
     command_name: str | None = None
     require_command_config: bool = True
+    review_file: str | None = None
+    no_review_file: bool = False
 
 
 @dataclass(slots=True)
@@ -179,6 +181,7 @@ class RefineArgs:
     command_name: str | None = None
     no_log: bool = False
     log_file: str | None = None
+    save_review: bool = False
 
 
 @dataclass(slots=True)

@@ -985,6 +985,17 @@ def review(
         help="Extra review prompt file.",
         autocompletion=completion.complete_path_argument,
     ),
+    review_file: str | None = typer.Option(
+        None,
+        "--review-file",
+        help="Write review output to FILE, 'auto', or 'none'.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    no_review_file: bool = typer.Option(
+        False,
+        "--no-review-file",
+        help="Disable saving review output.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -997,6 +1008,11 @@ def review(
         extra_prompt=extra_prompt,
         extra_prompt_file=extra_prompt_file,
     )
+    if no_review_file and review_file is not None:
+        exit_with_usage_error(
+            ["review"],
+            "error: --no-review-file and --review-file are mutually exclusive",
+        )
     review_command.run(
         ReviewArgs(
             runner=runner,
@@ -1008,6 +1024,8 @@ def review(
             extra_prompt=extra_prompt,
             extra_prompt_file=extra_prompt_file,
             command_name=command_name,
+            review_file=review_file,
+            no_review_file=no_review_file,
         )
     )
 
@@ -1142,6 +1160,11 @@ def refine(
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(False, "--no-log", help="Disable command output logging."),
+    save_review: bool = typer.Option(
+        False,
+        "--save-review",
+        help="Save each review output to the default review file path.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1187,6 +1210,7 @@ def refine(
             command_name=command_name,
             no_log=no_log,
             log_file=log_file,
+            save_review=save_review,
         )
     )
 

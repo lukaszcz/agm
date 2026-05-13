@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 from agm.agent.prompt_source import PromptSourceOptions, resolve_prompt_source
@@ -28,9 +29,13 @@ from agm.config.general import (
     resolve_default_prompt_file,
 )
 from agm.core import dry_run
+from agm.core.fs import mkdir, write_text
+from agm.core.log import default_agent_files_dir
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"
 DEFAULT_REVIEW_ASPECTS = "correctness, completeness, maintainability, adherence to AGENTS.md"
+REVIEW_FILE_AUTO = "auto"
+REVIEW_FILE_NONE = "none"
 
 def _review_config(command_name: str | None, *, require_command: bool) -> ReviewConfig:
     context = current_config_context()
@@ -97,6 +102,33 @@ def prepare_review(
     )
 
 
+def _default_review_file() -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return default_agent_files_dir() / f"review-{timestamp}.md"
+
+
+def _resolve_output_review_file(args: ReviewArgs, config: ReviewConfig) -> Path | None:
+    if args.no_review_file:
+        return None
+    value = args.review_file or config.review_file or REVIEW_FILE_AUTO
+    if value == REVIEW_FILE_NONE:
+        return None
+    if value == REVIEW_FILE_AUTO:
+        return _default_review_file()
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return current_config_context().cwd / path
+
+
+def _save_review_output(path: Path | None, output: str) -> Path | None:
+    if path is None:
+        return None
+    mkdir(path.parent, parents=True, exist_ok=True)
+    write_text(path, output, encoding="utf-8")
+    return path
+
+
 def review_once(
     args: ReviewArgs,
     *,
@@ -105,14 +137,22 @@ def review_once(
 ) -> str:
     temp_files: list[Path] = []
     try:
+        config = _review_config(args.command_name, require_command=args.require_command_config)
+        review_file = _resolve_output_review_file(args, config)
         prepared = prepare_review(args, temp_files=temp_files)
         if dry_run.enabled():
             dry_run.print_configuration("review")
-        return run_prepared_prompt(
+        output = run_prepared_prompt(
             prepared,
             stdout_callback=stdout_callback,
             stderr_callback=stderr_callback,
         )
+        if dry_run.enabled():
+            return output
+        saved_review_file = _save_review_output(review_file, output)
+        if saved_review_file is not None:
+            stdout_callback(f"Saved review to {saved_review_file}\n")
+        return output
     finally:
         cleanup_temp_files(temp_files)
 

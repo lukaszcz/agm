@@ -382,6 +382,7 @@ def test_load_review_revise_and_refine_config_read_new_sections(tmp_path: Path) 
                 'aspects = "correctness"',
                 'extra_aspects = "tests"',
                 'prompt_file = "review.md"',
+                'review_file = "saved-review.md"',
                 "",
                 "[revise]",
                 'runner = "reviser"',
@@ -392,6 +393,7 @@ def test_load_review_revise_and_refine_config_read_new_sections(tmp_path: Path) 
                 'runner = "both"',
                 'reviewer = "review-only"',
                 'reviser = "revise-only"',
+                "save_review = true",
                 'review_prompt_file = "review.md"',
                 'revise_prompt_file = "revise.md"',
             ]
@@ -407,14 +409,38 @@ def test_load_review_revise_and_refine_config_read_new_sections(tmp_path: Path) 
     assert review.runner == "reviewer"
     assert review.extra_aspects == "tests"
     assert review.prompt_file == str(home / ".agm" / "review.md")
+    assert review.review_file == str(cwd / "saved-review.md")
     assert revise.runner == "reviser"
     assert revise.prompt_file == str(home / ".agm" / "revise.md")
     assert refine.max_steps == 7
     assert refine.runner == "both"
     assert refine.reviewer == "review-only"
     assert refine.reviser == "revise-only"
+    assert refine.save_review is True
     assert refine.review_prompt_file == str(home / ".agm" / "review.md")
     assert refine.revise_prompt_file == str(home / ".agm" / "revise.md")
+
+
+def test_load_review_config_preserves_special_review_file_values(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(
+        '[review]\nreview_file = "none"\n[review.frontend]\nreview_file = "auto"\n',
+        encoding="utf-8",
+    )
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    base = load_review_config(home=home, proj_dir=None, cwd=cwd)
+    frontend = load_review_config(
+        home=home,
+        proj_dir=None,
+        cwd=cwd,
+        command_name="frontend",
+    )
+
+    assert base.review_file == "none"
+    assert frontend.review_file == "auto"
 
 
 def test_load_review_revise_and_refine_config_read_named_sections(tmp_path: Path) -> None:

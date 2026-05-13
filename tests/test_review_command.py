@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,12 @@ from agm.commands.review import (
 )
 from agm.commands.revise import prepare_revise
 from agm.core import dry_run
+
+
+class _FixedDatetime:
+    @classmethod
+    def now(cls) -> datetime:
+        return datetime(2026, 5, 13, 14, 25, 30)
 
 
 def _setup_home(tmp_path: Path) -> Path:
@@ -43,6 +50,8 @@ def _review_args(
     prompt_file: str | None = None,
     extra_prompt: str | None = None,
     extra_prompt_file: str | None = None,
+    review_file: str | None = None,
+    no_review_file: bool = False,
 ) -> ReviewArgs:
     return ReviewArgs(
         command_name=command_name,
@@ -54,6 +63,8 @@ def _review_args(
         prompt_file=prompt_file,
         extra_prompt=extra_prompt,
         extra_prompt_file=extra_prompt_file,
+        review_file=review_file,
+        no_review_file=no_review_file,
     )
 
 
@@ -469,13 +480,103 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
     monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
     monkeypatch.setattr("agm.commands.review.cleanup_temp_files", fake_cleanup)
 
-    output = review_mod.review_once(_review_args())
+    output = review_mod.review_once(_review_args(no_review_file=True))
 
     captured = capsys.readouterr()
     assert captured.out == "out"
     assert captured.err == "err"
     assert output == "outerr"
     assert len(cleaned) == 1
+
+
+def test_review_once_saves_output_to_default_review_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
+    monkeypatch.setattr("agm.commands.review.datetime", _FixedDatetime)
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        del command, target, env, stdout_callback, stderr_callback
+        return "review output\n"
+
+    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+
+    output = review_mod.review_once(_review_args())
+
+    review_file = tmp_path / ".agent-files" / "review-20260513-142530.md"
+    assert output == "review output\n"
+    assert review_file.read_text(encoding="utf-8") == "review output\n"
+    assert capsys.readouterr().out == f"Saved review to {review_file}\n"
+
+
+def test_review_once_honors_explicit_and_disabled_review_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        del command, target, env, stdout_callback, stderr_callback
+        return "review output\n"
+
+    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+
+    review_mod.review_once(_review_args(review_file="saved/review.md"))
+    review_mod.review_once(_review_args(no_review_file=True))
+
+    assert (tmp_path / "saved" / "review.md").read_text(encoding="utf-8") == (
+        "review output\n"
+    )
+    assert not (tmp_path / ".agent-files").exists()
+
+
+def test_review_once_honors_none_and_absolute_review_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        del command, target, env, stdout_callback, stderr_callback
+        return "review output\n"
+
+    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+
+    absolute_review_file = tmp_path / "absolute-review.md"
+    review_mod.review_once(_review_args(review_file="none"))
+    review_mod.review_once(_review_args(review_file=str(absolute_review_file)))
+
+    assert absolute_review_file.read_text(encoding="utf-8") == "review output\n"
+    assert not (tmp_path / ".agent-files").exists()
 
 
 def test_revise_once_dry_run_prints_configuration_and_command(
@@ -664,6 +765,64 @@ def test_refine_runs_fresh_review_after_continue(
     assert reviews[0].runner == "reviewer"
     assert reviews[0].scope == "scope"
     assert reviews[0].aspects == "aspects"
+    assert all(review.no_review_file for review in reviews)
+    assert all(review.review_file is None for review in reviews)
+
+
+def test_refine_save_review_enables_auto_review_file_for_each_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    reviews: list[ReviewArgs] = []
+    outputs = iter(["CONTINUE\n", "COMPLETE\n"])
+
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
+        reviews.append(args)
+        return "review result\n"
+
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        return next(outputs)
+
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=5,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+            save_review=True,
+        )
+    )
+
+    assert len(reviews) == 2
+    assert all(review.review_file == "auto" for review in reviews)
+    assert not any(review.no_review_file for review in reviews)
 
 
 def test_refine_leaves_missing_scope_and_aspects_for_review_config(

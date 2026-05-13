@@ -233,9 +233,14 @@ _HELP_TEXTS: dict[str, str] = {
                    [--extra-aspects REVIEW_ASPECTS] [--runner COMMAND]
                    [--prompt TEXT|--prompt-file PATH]
                    [--extra-prompt TEXT|--extra-prompt-file PATH]
+                   [--review-file FILE|auto|none|--no-review-file]
 
         Run the review prompt with REVIEW_SCOPE and REVIEW_ASPECTS available
         during prompt preprocessing. The default prompt is review.md.
+        Review output is also saved to .agent-files/review-YYYYMMDD-HHMMSS.md
+        by default. Use --review-file FILE to choose a path, --review-file none
+        or --no-review-file to disable saving, and --review-file auto to use
+        the default timestamped path.
         When COMMAND is provided, config from [review.COMMAND] is merged over
         [review].
 
@@ -243,7 +248,8 @@ _HELP_TEXTS: dict[str, str] = {
           [review] runner = "claude -p" sets the review runner. When unset,
           AGM uses the same default runner as agm loop.
           [review] scope, aspects, extra_aspects, prompt, prompt_file,
-          extra_prompt, and extra_prompt_file correspond to the CLI options.
+          extra_prompt, extra_prompt_file, and review_file correspond to the
+          CLI options.
     """),
     "revise": textwrap.dedent("""\
         agm revise [COMMAND] [--runner COMMAND] [--prompt TEXT|--prompt-file PATH]
@@ -269,11 +275,14 @@ _HELP_TEXTS: dict[str, str] = {
                    [--extra-review-prompt TEXT|--extra-review-prompt-file PATH]
                    [--revise-prompt TEXT|--revise-prompt-file PATH]
                    [--extra-revise-prompt TEXT|--extra-revise-prompt-file PATH]
+                   [--save-review]
 
         Run review/revise cycles until revise returns COMPLETE, or until the
         maximum number of revision attempts is reached. A CONTINUE response
         starts a fresh review; any other response retries revise with the same
         review file. The default maximum is 20.
+        Review handoff files remain temporary by default. Use --save-review to
+        also save each review output to the default timestamped review path.
         When COMMAND is provided, config from [refine.COMMAND] is merged over
         [refine] and the same command name is forwarded to review/revise
         config lookup.
@@ -282,8 +291,8 @@ _HELP_TEXTS: dict[str, str] = {
           [refine] max_steps, runner, reviewer, reviser, scope, aspects,
           review_prompt, review_prompt_file, extra_review_prompt,
           extra_review_prompt_file, revise_prompt, revise_prompt_file,
-          extra_revise_prompt, and extra_revise_prompt_file correspond to the
-          CLI options.
+          extra_revise_prompt, extra_revise_prompt_file, and save_review
+          correspond to the CLI options.
     """),
     "config": textwrap.dedent("""\
         agm config copy DIRNAME

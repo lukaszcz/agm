@@ -9,7 +9,7 @@ from agm.core.fs import append_text, mkdir
 from agm.vcs import git as git_helpers
 
 
-def _default_log_dir() -> Path:
+def default_agent_files_dir() -> Path:
     cwd = Path.cwd()
     root = git_helpers.containing_root(cwd)
     return (root if root is not None else cwd) / ".agent-files"
@@ -28,7 +28,8 @@ def resolve_log_file(
         if not resolved.is_absolute():
             resolved = Path.cwd() / resolved
         return resolved
-    return _default_log_dir() / f"{command_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return default_agent_files_dir() / f"{command_name}-{timestamp}.log"
 
 
 def append_log(log_file: Path | None, content: str) -> None:

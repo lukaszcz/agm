@@ -56,6 +56,12 @@ _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
     ],
 }
 
+_CONFIG_PATH_SENTINELS: dict[str, dict[str, set[str]]] = {
+    "review": {
+        "review_file": {"auto", "none"},
+    },
+}
+
 
 def _toml_dict(value: object) -> TomlDict:
     if isinstance(value, dict):
@@ -209,7 +215,12 @@ class RefineConfig:
 
 
 def _resolve_section_paths(
-    section: TomlDict, fields: list[str], config_dir: Path, cwd: Path
+    section: TomlDict,
+    fields: list[str],
+    config_dir: Path,
+    cwd: Path,
+    *,
+    sentinels: dict[str, set[str]],
 ) -> TomlDict:
     resolved = dict(section)
     for field in fields:
@@ -217,7 +228,7 @@ def _resolve_section_paths(
         if not isinstance(value, str) or not value.strip():
             continue
         expanded = os.path.expanduser(os.path.expandvars(value))
-        if expanded in {"auto", "none"}:
+        if expanded in sentinels.get(field, set()):
             resolved[field] = expanded
             continue
         path = Path(expanded)
@@ -232,7 +243,11 @@ def _resolve_section_paths(
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
             resolved[key] = _resolve_section_paths(
-                _toml_dict(value), fields, config_dir, cwd
+                _toml_dict(value),
+                fields,
+                config_dir,
+                cwd,
+                sentinels=sentinels,
             )
     return resolved
 
@@ -243,7 +258,11 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
         section = resolved.get(section_name)
         if isinstance(section, dict):
             resolved[section_name] = _resolve_section_paths(
-                _toml_dict(section), fields, config_dir, cwd
+                _toml_dict(section),
+                fields,
+                config_dir,
+                cwd,
+                sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
             )
     return resolved
 

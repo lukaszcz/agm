@@ -443,6 +443,30 @@ def test_load_review_config_preserves_special_review_file_values(tmp_path: Path)
     assert frontend.review_file == "auto"
 
 
+def test_load_review_config_resolves_prompt_paths_named_like_review_file_sentinels(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(
+        "\n".join(
+            [
+                "[review]",
+                'prompt_file = "auto"',
+                'extra_prompt_file = "none"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    config = load_review_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert config.prompt_file == str(cwd / "auto")
+    assert config.extra_prompt_file == str(cwd / "none")
+
+
 def test_load_review_revise_and_refine_config_read_named_sections(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)

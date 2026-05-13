@@ -550,7 +550,7 @@ def test_review_once_saves_output_to_default_review_file(
 
     output = review_mod.review_once(_review_args())
 
-    review_file = tmp_path / ".agent-files" / "review-20260513-142530.md"
+    review_file = tmp_path / ".agent-files" / "review-20260513-142530-000000.md"
     assert output == "review output\n"
     assert review_file.read_text(encoding="utf-8") == "review output\n"
     assert capsys.readouterr().out == f"Saved review to {review_file}\n"

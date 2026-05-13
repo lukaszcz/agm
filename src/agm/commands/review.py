@@ -107,7 +107,7 @@ def prepare_review(
 
 
 def _default_review_file() -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     return default_agent_files_dir() / f"review-{timestamp}.md"
 
 

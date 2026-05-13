@@ -237,7 +237,7 @@ _HELP_TEXTS: dict[str, str] = {
 
         Run the review prompt with REVIEW_SCOPE and REVIEW_ASPECTS available
         during prompt preprocessing. The default prompt is review.md.
-        Review output is also saved to .agent-files/review-YYYYMMDD-HHMMSS.md
+        Review output is also saved to .agent-files/review-YYYYMMDD-HHMMSS-microseconds.md
         by default. Use --review-file FILE to choose a path, --review-file none
         or --no-review-file to disable saving, and --review-file auto to use
         the default timestamped path.

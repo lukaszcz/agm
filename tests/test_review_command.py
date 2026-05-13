@@ -489,6 +489,42 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
     assert len(cleaned) == 1
 
 
+def test_review_once_reuses_config_for_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    original_review_config = review_mod._review_config
+    load_count = 0
+
+    def counting_review_config(
+        command_name: str | None, *, require_command: bool
+    ) -> review_mod.ReviewConfig:
+        nonlocal load_count
+        load_count += 1
+        return original_review_config(command_name, require_command=require_command)
+
+    def fake_run_prompt_command(
+        command: list[str],
+        target: Path,
+        *,
+        env: dict[str, str],
+        stdout_callback: Callable[[str], None] | None = None,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> str:
+        del command, target, env, stdout_callback, stderr_callback
+        return "review output\n"
+
+    monkeypatch.setattr("agm.commands.review._review_config", counting_review_config)
+    monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
+
+    review_mod.review_once(_review_args(no_review_file=True))
+
+    assert load_count == 1
+
+
 def test_review_once_saves_output_to_default_review_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

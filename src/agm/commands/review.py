@@ -60,11 +60,15 @@ def _resolved_review_aspects(args: ReviewArgs, config: ReviewConfig) -> str:
 
 
 def prepare_review(
-    args: ReviewArgs, *, temp_files: list[Path] | None = None
+    args: ReviewArgs,
+    *,
+    temp_files: list[Path] | None = None,
+    config: ReviewConfig | None = None,
 ) -> PreparedPromptRun:
     owned_temp_files: list[Path] = [] if temp_files is None else temp_files
     context = current_config_context()
-    config = _review_config(args.command_name, require_command=args.require_command_config)
+    if config is None:
+        config = _review_config(args.command_name, require_command=args.require_command_config)
     runner = args.runner or config.runner or default_agent_runner()
     scope = args.scope or config.scope or DEFAULT_REVIEW_SCOPE
     aspects = _resolved_review_aspects(args, config)
@@ -139,7 +143,7 @@ def review_once(
     try:
         config = _review_config(args.command_name, require_command=args.require_command_config)
         review_file = _resolve_output_review_file(args, config)
-        prepared = prepare_review(args, temp_files=temp_files)
+        prepared = prepare_review(args, temp_files=temp_files, config=config)
         if dry_run.enabled():
             dry_run.print_configuration("review")
         output = run_prepared_prompt(

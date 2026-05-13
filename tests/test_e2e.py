@@ -3816,7 +3816,7 @@ class TestLoop:
                 if line:
                     output_lines.append(line)
                     if line.startswith("Logging to "):
-                        log_file = work / line.removeprefix("Logging to ").strip()
+                        log_file = work / ".agent-files" / line.removeprefix("Logging to ").strip()
                     if line == "runner line 1\n":
                         break
                 elif process.poll() is not None:
@@ -3913,7 +3913,7 @@ class TestLoop:
                 if line:
                     output_lines.append(line)
                     if line.startswith("Logging to "):
-                        log_file = work / line.removeprefix("Logging to ").strip()
+                        log_file = work / ".agent-files" / line.removeprefix("Logging to ").strip()
                     if line == "task-1.md\n":
                         break
                 elif process.poll() is not None:
@@ -3959,7 +3959,7 @@ class TestLoop:
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
 
-        log_file = next(work.glob("loop-*.log"))
+        log_file = next((work / ".agent-files").glob("loop-*.log"))
         log_text = log_file.read_text()
         assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
@@ -4023,7 +4023,7 @@ class TestLoop:
         assert result.returncode == 0
         assert "Step 1" in result.stdout
         assert "Step 2" not in result.stdout
-        log_file = next(work.glob("loop-*.log"))
+        log_file = next((work / ".agent-files").glob("loop-*.log"))
         log_text = log_file.read_text()
         assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert "  COMPLETE  \n" in log_text
@@ -4445,7 +4445,7 @@ class TestLoop:
         # Runner receives preprocessed implement.md with TASK_FILE expanded
         runner_log = Path(env["FAKE_RUNNER_LOG"]).read_text()
         assert f"@{tasks_dir / 'task-1.md'}" in runner_log
-        log_file = next(work.glob("loop-*.log"))
+        log_file = next((work / ".agent-files").glob("loop-*.log"))
         log_text = log_file.read_text()
         assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
@@ -5065,7 +5065,7 @@ class TestLoop:
         assert result.returncode == 0
         assert "agm loop" in result.stdout
         assert "Step 1" not in result.stdout
-        assert list(work.glob("loop-*.log")) == []
+        assert list((work / ".agent-files").glob("loop-*.log")) == []
         assert not Path(env["FAKE_CLAUDE_LOG"]).exists()
 
     def test_loop_accepts_no_log_before_positional_command(
@@ -5093,7 +5093,7 @@ class TestLoop:
         assert "Step 1" in result.stdout
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
-        assert list(work.glob("loop-*.log")) == []
+        assert list((work / ".agent-files").glob("loop-*.log")) == []
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
     def test_loop_treats_loop_flags_after_command_as_runner_args(
@@ -5122,7 +5122,7 @@ class TestLoop:
             Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines()
             == [f"-p --no-log @{prompt_file}"] * 2
         )
-        assert len(list(work.glob("loop-*.log"))) == 1
+        assert len(list((work / ".agent-files").glob("loop-*.log"))) == 1
 
     def test_log_file_writes_loop_output_to_explicit_path(
         self, tmp_path: Path, env: dict[str, str]
@@ -5149,7 +5149,7 @@ class TestLoop:
 
         assert result.returncode == 0
         assert f"Logging to {log_file}" in result.stdout
-        assert not list(work.glob("loop-*.log"))
+        assert not list((work / ".agent-files").glob("loop-*.log"))
         log_text = log_file.read_text()
         assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)

@@ -175,10 +175,11 @@ class TestLogFile:
         )
         assert result == Path(explicit)
 
-    def test_generates_timestamped_log_file_in_cwd_when_no_log_file_set(
+    def test_generates_timestamped_log_file_in_agent_files_when_no_log_file_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
         args = _make_loop_args(no_log=False, log_file=None)
         result = resolve_log_file(
             command_name="loop",
@@ -186,8 +187,27 @@ class TestLogFile:
             log_file=args.log_file,
         )
         assert result is not None
-        assert result.parent == tmp_path
+        assert result.parent == tmp_path / ".agent-files"
         assert result.name.startswith("loop-")
+        assert result.suffix == ".log"
+
+    def test_generates_timestamped_log_file_in_checkout_agent_files_when_under_git(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        checkout = tmp_path / "checkout"
+        nested = checkout / "nested"
+        nested.mkdir(parents=True)
+        monkeypatch.chdir(nested)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: checkout)
+        args = _make_loop_args(no_log=False, log_file=None)
+        result = resolve_log_file(
+            command_name="refine",
+            no_log=args.no_log,
+            log_file=args.log_file,
+        )
+        assert result is not None
+        assert result.parent == checkout / ".agent-files"
+        assert result.name.startswith("refine-")
         assert result.suffix == ".log"
 
     def test_relative_log_file_resolves_against_cwd(

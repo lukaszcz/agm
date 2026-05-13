@@ -836,9 +836,70 @@ def test_refine_writes_review_and_revise_output_to_log_file(
         )
     )
 
-    assert log_file.read_text(encoding="utf-8") == (
-        "review stdout\nreview stderr\nrevise stdout\nrevise stderr\n"
+    log_content = log_file.read_text(encoding="utf-8")
+    assert "Step 1" in log_content
+    assert log_content.endswith("review stdout\nreview stderr\nrevise stdout\nrevise stderr\n")
+
+
+def test_refine_step_header_is_printed_and_logged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    log_file = tmp_path / "refine.log"
+
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del args, stderr_callback
+        stdout_callback("review stdout\n")
+        return "review result\n"
+
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del args, stderr_callback
+        stdout_callback("revise stdout\n")
+        return "COMPLETE\n"
+
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=1,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+            log_file=str(log_file),
+        )
     )
+
+    out = capsys.readouterr().out
+    log_content = log_file.read_text(encoding="utf-8")
+    assert "Step 1" in out
+    assert out.index("Step 1") < out.index("review stdout")
+    assert "Step 1" in log_content
+    assert log_content.index("Step 1") < log_content.index("review stdout")
 
 
 def test_refine_exits_when_named_config_is_missing(

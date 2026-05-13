@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from agm.agent.output import step_header_text
 from agm.agent.response import last_response_line
 from agm.agent.runner import cleanup_temp_files
 from agm.commands.agent_io import exit_config_command_not_found, write_stderr, write_stdout
@@ -107,6 +108,10 @@ def refine(args: RefineArgs) -> None:
         step = 0
         review_file: Path | None = None
         while step < max_steps:
+            step += 1
+            header = step_header_text(step)
+            append_log(log_file, header)
+            write_stdout(header)
             if review_file is None:
                 review_args = _review_args_from_refine(args, config)
                 review_output = review_once(
@@ -115,7 +120,6 @@ def refine(args: RefineArgs) -> None:
                     stderr_callback=stderr_callback,
                 )
                 review_file = _write_review_file(review_output, temp_files=temp_files)
-            step += 1
             revise_output = revise_once(
                 _revise_args_from_refine(args, config, review_file),
                 stdout_callback=stdout_callback,

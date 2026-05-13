@@ -5,11 +5,13 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
+from agm.agent.output import step_header_text as step_header_text
+from agm.agent.prompt import dry_run_prompt_text as dry_run_prompt_text
 from agm.agent.prompt import preprocess_prompt_file
 from agm.agent.prompt_source import PromptSourceOptions, resolve_prompt_source
+from agm.agent.response import is_complete_output as is_complete_output
 from agm.agent.response import last_response_line
 from agm.agent.runner import (
     prepare_prompt_from_source,
@@ -45,19 +47,6 @@ def configured_loop_settings(command_name: str | None) -> LoopConfig:
         proj_dir=context.proj_dir,
         cwd=context.cwd,
         command_name=command_name,
-    )
-
-
-def step_header_text(step: int) -> str:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    label = f"Step {step}  ({now})"
-    sep = "-" * 61
-    return (
-        "\n"
-        f"{sep}\n"
-        f"{label.center(61)}\n"
-        f"{sep}\n"
-        "\n"
     )
 
 
@@ -169,12 +158,6 @@ def extra_selector_prompt_source(args: LoopCommandArgs) -> str | Path | None:
     )
 
 
-def dry_run_prompt_text(source_file: Path, effective_file: Path) -> str:
-    if source_file == effective_file:
-        return str(source_file)
-    return f"{source_file} -> {effective_file} (preprocessed)"
-
-
 def loop_env(tasks_dir: Path, *, task_file: Path | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env["TASKS_DIR"] = str(tasks_dir)
@@ -225,10 +208,6 @@ def prepare_select_invocation(
         runner_command=resolved_runner_command,
         selector_command=resolved_selector_command,
     )
-
-
-def is_complete_output(output: str) -> bool:
-    return "".join(last_response_line(output).split()) == "COMPLETE"
 
 
 def selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:

@@ -10,3 +10,7 @@ def last_response_line(output: str) -> str:
     if not lines:
         return output.strip()
     return lines[-1].strip()
+
+
+def is_complete_output(output: str) -> bool:
+    return "".join(last_response_line(output).split()) == "COMPLETE"

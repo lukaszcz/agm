@@ -39,3 +39,9 @@ def preprocess_prompt_file(
         path = Path(handle.name)
     temp_files.append(path)
     return path
+
+
+def dry_run_prompt_text(source_file: Path, effective_file: Path) -> str:
+    if source_file == effective_file:
+        return str(source_file)
+    return f"{source_file} -> {effective_file} (preprocessed)"

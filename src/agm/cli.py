@@ -917,12 +917,32 @@ def dep_rm(
 ) -> None:
     del _help
     del _dry_run
+    _run_dep_remove(command_path=["dep", "rm"], target=target, all=all)
+
+
+@dep_app.command(name="remove")
+def dep_remove(
+    target: str | None = typer.Argument(
+        None,
+        metavar="TARGET",
+        autocompletion=completion.complete_dep_target,
+    ),
+    all: bool = typer.Option(False, "--all", help="Remove the entire dependency directory."),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_dep_remove(command_path=["dep", "remove"], target=target, all=all)
+
+
+def _run_dep_remove(*, command_path: list[str], target: str | None, all: bool) -> None:
     dep_remove_command.run(
         DepRemoveArgs(
             all=all,
             target=_require_value(
                 target,
-                command_path=["dep", "rm"],
+                command_path=command_path,
                 name="target",
             ),
         )

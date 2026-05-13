@@ -243,6 +243,14 @@ class TestDep:
         assert calls[0].target == "mylib"
         assert calls[0].all is True
 
+    def test_dep_remove(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.dep_remove_command)
+        result = invoke(runner, ["dep", "remove", "mylib/feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].target == "mylib/feat/x"
+        assert calls[0].all is False
+
     def test_dep_rm_missing_target(self, runner: CliRunner) -> None:
         result = invoke(runner, ["dep", "rm"])
         assert result.exit_code != 0

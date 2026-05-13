@@ -26,7 +26,7 @@ from agm.commands.loop.step import (
     prepare_runtime,
     run,
 )
-from agm.core.log import append_log, resolve_log_file
+from agm.core.log import append_log, prepare_log_file, resolve_log_file
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -234,6 +234,17 @@ class TestLogFile:
             )
             is None
         )
+
+    def test_prepare_log_file_prints_full_default_log_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        log_file = tmp_path / ".agent-files" / "loop-20260513-120000.log"
+
+        prepare_log_file(log_file, explicit=False)
+
+        out = capsys.readouterr().out
+        assert out == f"Logging to {log_file}\n"
+        assert log_file.parent.is_dir()
 
 
 # ===========================================================================

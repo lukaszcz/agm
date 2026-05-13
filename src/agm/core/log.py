@@ -42,7 +42,8 @@ def prepare_log_file(
     *,
     explicit: bool,
 ) -> None:
+    del explicit
     if log_file is None:
         return
-    print(f"Logging to {log_file if explicit else log_file.name}")
+    print(f"Logging to {log_file}")
     mkdir(log_file.parent, parents=True, exist_ok=True)

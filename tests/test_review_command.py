@@ -902,6 +902,61 @@ def test_refine_step_header_is_printed_and_logged(
     assert log_content.index("Step 1") < log_content.index("review stdout")
 
 
+def test_refine_prints_logging_to_full_default_log_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
+
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        return "review result\n"
+
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        return "COMPLETE\n"
+
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=1,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+        )
+    )
+
+    first_line = capsys.readouterr().out.splitlines()[0]
+    assert first_line.startswith(f"Logging to {tmp_path / '.agent-files' / 'refine-'}")
+    assert first_line.endswith(".log")
+
+
 def test_refine_exits_when_named_config_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

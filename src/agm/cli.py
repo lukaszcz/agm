@@ -1165,6 +1165,12 @@ def refine(
         "--save-review",
         help="Save each review output to the default review file path.",
     ),
+    review_file: str | None = typer.Option(
+        None,
+        "--review-file",
+        help="Save each review output to this path, or use auto/none.",
+        autocompletion=completion.complete_path_argument,
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1211,6 +1217,7 @@ def refine(
             no_log=no_log,
             log_file=log_file,
             save_review=save_review,
+            review_file=review_file,
         )
     )
 

@@ -53,7 +53,7 @@ def _unlink_temp_file(path: Path, *, temp_files: list[Path]) -> None:
 
 def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewArgs:
     runner = args.reviewer or args.runner or config.reviewer or config.runner
-    save_review = args.save_review or config.save_review
+    save_review = args.save_review or args.review_file is not None or config.save_review
     return ReviewArgs(
         runner=runner,
         scope=args.scope or config.scope,
@@ -65,7 +65,7 @@ def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewAr
         extra_prompt_file=args.extra_review_prompt_file or config.extra_review_prompt_file,
         command_name=args.command_name,
         require_command_config=False,
-        review_file="auto" if save_review else None,
+        review_file=args.review_file or ("auto" if save_review else None),
         no_review_file=not save_review,
     )
 

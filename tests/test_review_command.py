@@ -861,6 +861,62 @@ def test_refine_save_review_enables_auto_review_file_for_each_review(
     assert not any(review.no_review_file for review in reviews)
 
 
+def test_refine_review_file_uses_custom_review_file_for_each_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    reviews: list[ReviewArgs] = []
+    outputs = iter(["CONTINUE\n", "COMPLETE\n"])
+
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
+        reviews.append(args)
+        return "review result\n"
+
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
+        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        return next(outputs)
+
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=5,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+            review_file="reviews/last.md",
+        )
+    )
+
+    assert len(reviews) == 2
+    assert all(review.review_file == "reviews/last.md" for review in reviews)
+    assert not any(review.no_review_file for review in reviews)
+
+
 def test_refine_leaves_missing_scope_and_aspects_for_review_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

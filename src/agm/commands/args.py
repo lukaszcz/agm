@@ -182,6 +182,7 @@ class RefineArgs:
     no_log: bool = False
     log_file: str | None = None
     save_review: bool = False
+    review_file: str | None = None
 
 
 @dataclass(slots=True)

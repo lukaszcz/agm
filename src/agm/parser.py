@@ -275,14 +275,15 @@ _HELP_TEXTS: dict[str, str] = {
                    [--extra-review-prompt TEXT|--extra-review-prompt-file PATH]
                    [--revise-prompt TEXT|--revise-prompt-file PATH]
                    [--extra-revise-prompt TEXT|--extra-revise-prompt-file PATH]
-                   [--save-review]
+                   [--save-review] [--review-file FILE|auto|none]
 
         Run review/revise cycles until revise returns COMPLETE, or until the
         maximum number of revision attempts is reached. A CONTINUE response
         starts a fresh review; any other response retries revise with the same
         review file. The default maximum is 20.
         Review handoff files remain temporary by default. Use --save-review to
-        also save each review output to the default timestamped review path.
+        also save each review output to the default timestamped review path, or
+        --review-file FILE to choose a path.
         When COMMAND is provided, config from [refine.COMMAND] is merged over
         [refine] and the same command name is forwarded to review/revise
         config lookup.

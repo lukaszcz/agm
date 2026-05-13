@@ -442,6 +442,8 @@ class TestReviewReviseRefine:
                 "--log-file",
                 "refine.log",
                 "--save-review",
+                "--review-file",
+                "reviews/last.md",
             ],
         )
 
@@ -460,6 +462,7 @@ class TestReviewReviseRefine:
         assert calls[0].log_file == "refine.log"
         assert calls[0].no_log is False
         assert calls[0].save_review is True
+        assert calls[0].review_file == "reviews/last.md"
 
     def test_refine_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch

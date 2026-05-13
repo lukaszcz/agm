@@ -430,6 +430,11 @@ def _optional_positive_int(table: TomlDict, key: str) -> int | None:
     return None
 
 
+def _optional_bool(table: TomlDict, key: str) -> bool:
+    value = table.get(key)
+    return value if isinstance(value, bool) else False
+
+
 def _select_command_table(
     table: TomlDict,
     *,
@@ -529,7 +534,5 @@ def load_refine_config(
         revise_prompt_file=_optional_str(table, "revise_prompt_file"),
         extra_revise_prompt=_optional_str(table, "extra_revise_prompt"),
         extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
-        save_review=bool(table.get("save_review"))
-        if isinstance(table.get("save_review"), bool)
-        else False,
+        save_review=_optional_bool(table, "save_review"),
     )

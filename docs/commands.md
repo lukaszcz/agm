@@ -176,18 +176,13 @@ Dependency commands track selected dependency checkout names in config `config.t
 | `agm tmux close SESSION` | Close a tmux session |
 | `agm tmux layout PANES [-w\|--window WINDOW_ID]` | Apply AGM's tmux pane layout to a window |
 
-`agm config copy` copies known files from the shared project config directory, including:
-
-- `.setup.sh`
-- `.env`
-- `.env.local`
-- `.config`
-- `.agents`
-- `.opencode`
-- `.codex`
-- `.claude`
-- `.pi`
-- `.mcp.json`
+`agm config copy` copies dot-prefixed files and directories from the shared project
+config directory into an existing target directory. When run from a branch
+worktree, AGM first copies shared dot entries, then copies matching entries from
+the branch config subdirectory so branch entries override shared entries.
+For `.env` and `.env.local`, AGM writes merged dotenv values using the same
+precedence as `agm config env`: shared `.env`, shared `.env.local`, branch
+`.env`, then branch `.env.local`.
 
 `agm config env` uses the same environment resolution as `agm open`: project and branch
 `config.toml` `[deps]` tables first, then project `.env`, project `.env.local`, project

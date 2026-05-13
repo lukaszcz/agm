@@ -7,7 +7,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core import dry_run
-from agm.core.env import load_dotenv_files, source_env_file
+from agm.core.env import load_config_dotenv_files, source_env_file
 from agm.core.process import require_success
 from agm.project.dependency_env import load_dependency_toml_env
 from agm.project.layout import (
@@ -42,10 +42,7 @@ def load_config_env(
         env=resolved_env,
     )
     for env_dir in config_dirs:
-        resolved_env = load_dotenv_files(
-            [env_dir / ".env", env_dir / ".env.local"],
-            resolved_env,
-        )
+        resolved_env = load_config_dotenv_files([env_dir], resolved_env)
         resolved_env = source_env_file(env_dir / "env.sh", resolved_env, cwd=checkout_dir)
     return resolved_env
 

@@ -129,6 +129,21 @@ def load_dotenv_files(
     return resolved_env
 
 
+def load_config_dotenv_files(
+    config_dirs: list[Path],
+    env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return *env* updated from ``.env`` and ``.env.local`` in each config dir."""
+
+    resolved_env = dict(os.environ if env is None else env)
+    for config_dir in config_dirs:
+        resolved_env = load_dotenv_files(
+            [config_dir / ".env", config_dir / ".env.local"],
+            resolved_env,
+        )
+    return resolved_env
+
+
 def source_env_file(
     path: Path,
     env: dict[str, str],

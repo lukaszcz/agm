@@ -9,7 +9,6 @@ import pytest
 
 import agm.project.layout as layout_module
 from agm.project.layout import (
-    CONFIG_FILES,
     _copy_existing_config_files,
     _merge_branch_env_file,
     _project_dir_from_checkout,
@@ -634,7 +633,7 @@ def test_copy_existing_config_files_copies_present_files(tmp_path: Path) -> None
     assert (target / ".env.local").read_text(encoding="utf-8") == "BAR=baz\n"
 
 
-def test_copy_existing_config_files_skips_empty_env(tmp_path: Path) -> None:
+def test_copy_existing_config_files_copies_empty_env(tmp_path: Path) -> None:
     source = tmp_path / "source"
     target = tmp_path / "target"
     source.mkdir()
@@ -645,7 +644,7 @@ def test_copy_existing_config_files_skips_empty_env(tmp_path: Path) -> None:
 
     _copy_existing_config_files(source, target)
 
-    assert not (target / ".env").exists()
+    assert (target / ".env").read_text(encoding="utf-8") == ""
     assert (target / ".env.local").read_text(encoding="utf-8") == "BAR=baz\n"
 
 
@@ -673,23 +672,6 @@ def test_copy_existing_config_files_does_nothing_when_source_is_empty(tmp_path: 
     _copy_existing_config_files(source, target)
 
     assert list(target.iterdir()) == []
-
-
-def test_copy_existing_config_files_covers_all_config_files_entries(tmp_path: Path) -> None:
-    """Verify all CONFIG_FILES names are candidates for copying."""
-    source = tmp_path / "source"
-    target = tmp_path / "target"
-    source.mkdir()
-    target.mkdir()
-
-    # Create all config files (non-empty)
-    for name in CONFIG_FILES:
-        (source / name).write_text(f"# {name}\n", encoding="utf-8")
-
-    _copy_existing_config_files(source, target)
-
-    for name in CONFIG_FILES:
-        assert (target / name).exists(), f"Expected {name} to be copied"
 
 
 # ---------------------------------------------------------------------------
@@ -793,7 +775,7 @@ def test_copy_config_merges_branch_env_when_branch_given(tmp_path: Path) -> None
 
     copy_config(project_dir=project, target=target, branch="feat", cwd=None)
 
-    target_env_content = (target / ".env").read_text(encoding="utf-8")
+    target_env_content = (target / ".env.local").read_text(encoding="utf-8")
     assert "BASE_KEY=base" in target_env_content
     assert "BRANCH_KEY=branch" in target_env_content
 
@@ -879,6 +861,138 @@ def test_copy_config_uses_relative_target_resolved_against_cwd(tmp_path: Path) -
     )
 
     assert "REL_KEY=relative" in (target / ".env").read_text(encoding="utf-8")
+
+
+def test_copy_config_copies_arbitrary_dot_files_and_directories(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    config_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "checkout"
+    target.mkdir()
+
+    (config_dir / ".new-tool").mkdir()
+    (config_dir / ".new-tool" / "settings.json").write_text("{}", encoding="utf-8")
+    (config_dir / ".customrc").write_text("custom\n", encoding="utf-8")
+    (config_dir / "not-dot").write_text("skip\n", encoding="utf-8")
+
+    copy_config(project_dir=project, target=target, branch=None, cwd=None)
+
+    assert (target / ".new-tool" / "settings.json").read_text(encoding="utf-8") == "{}"
+    assert (target / ".customrc").read_text(encoding="utf-8") == "custom\n"
+    assert not (target / "not-dot").exists()
+
+
+def test_copy_config_branch_dot_entries_override_base_entries(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    branch_config_dir = config_dir / "feat"
+    branch_config_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "checkout"
+    target.mkdir()
+
+    (config_dir / ".tool").mkdir()
+    (config_dir / ".tool" / "settings.json").write_text("base\n", encoding="utf-8")
+    (config_dir / ".base-only").write_text("base\n", encoding="utf-8")
+    (branch_config_dir / ".tool").mkdir()
+    (branch_config_dir / ".tool" / "settings.json").write_text("branch\n", encoding="utf-8")
+    (branch_config_dir / ".branch-only").write_text("branch\n", encoding="utf-8")
+
+    copy_config(project_dir=project, target=target, branch="feat", cwd=None)
+
+    assert (target / ".tool" / "settings.json").read_text(encoding="utf-8") == "branch\n"
+    assert (target / ".base-only").read_text(encoding="utf-8") == "base\n"
+    assert (target / ".branch-only").read_text(encoding="utf-8") == "branch\n"
+
+
+def test_copy_config_merges_dotenv_files_with_config_env_precedence(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    branch_config_dir = config_dir / "feat"
+    branch_config_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "checkout"
+    target.mkdir()
+
+    (config_dir / ".env").write_text(
+        "BASE_ONLY=base\nSHARED=base-env\n",
+        encoding="utf-8",
+    )
+    (config_dir / ".env.local").write_text(
+        "LOCAL_ONLY=base-local\nSHARED=base-local\n",
+        encoding="utf-8",
+    )
+    (branch_config_dir / ".env").write_text(
+        "BRANCH_ONLY=branch\nSHARED=branch-env\n",
+        encoding="utf-8",
+    )
+    (branch_config_dir / ".env.local").write_text(
+        "BRANCH_LOCAL_ONLY=branch-local\nSHARED=branch-local\n",
+        encoding="utf-8",
+    )
+
+    copy_config(project_dir=project, target=target, branch="feat", cwd=None)
+
+    assert (target / ".env").read_text(encoding="utf-8") == (
+        "BASE_ONLY=base\nSHARED=base-env\n"
+    )
+    target_local = (target / ".env.local").read_text(encoding="utf-8")
+    assert "BASE_ONLY=base" in target_local
+    assert "LOCAL_ONLY=base-local" in target_local
+    assert "BRANCH_ONLY=branch" in target_local
+    assert "BRANCH_LOCAL_ONLY=branch-local" in target_local
+    assert "SHARED=branch-local" in target_local
+
+
+def test_copy_config_replaces_existing_target_env_local_when_merging(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    branch_config_dir = config_dir / "feat"
+    branch_config_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "checkout"
+    target.mkdir()
+
+    (config_dir / ".env").write_text("CONFIGURED=yes\n", encoding="utf-8")
+    (branch_config_dir / ".env").write_text("BRANCH=yes\n", encoding="utf-8")
+    (target / ".env.local").write_text("STALE=value\n", encoding="utf-8")
+
+    copy_config(project_dir=project, target=target, branch="feat", cwd=None)
+
+    target_local = (target / ".env.local").read_text(encoding="utf-8")
+    assert "CONFIGURED=yes" in target_local
+    assert "BRANCH=yes" in target_local
+    assert "STALE=value" not in target_local
+
+
+def test_copy_config_detects_current_checkout_branch_when_branch_not_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    branch_config_dir = config_dir / "feat"
+    branch_config_dir.mkdir(parents=True)
+    checkout_dir = project / "worktrees" / "feat"
+    checkout_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+
+    (branch_config_dir / ".branch-tool").write_text("branch\n", encoding="utf-8")
+    monkeypatch.setattr(
+        layout_module,
+        "current_checkout",
+        lambda _project_dir, *, cwd=None, env=None: layout_module.CurrentCheckout(
+            checkout_dir=checkout_dir,
+            branch="feat",
+            is_main=False,
+        ),
+    )
+
+    copy_config(project_dir=project, target=target, branch=None, cwd=checkout_dir)
+
+    assert (target / ".branch-tool").read_text(encoding="utf-8") == "branch\n"
 
 
 # ---------------------------------------------------------------------------

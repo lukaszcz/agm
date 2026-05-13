@@ -291,7 +291,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm config env
         agm config update
 
-        Copy project configuration files into an existing target directory.
+        Copy project dot configuration files into an existing target directory.
         Print shell statements that refresh the current checkout environment
         from project and branch config.toml [deps] tables, .env,
         .env.local, and env.sh files.
@@ -474,12 +474,12 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("config", "cp"): textwrap.dedent("""\
         agm config cp DIRNAME
 
-        Copy known project config files into an existing target directory.
+        Copy project dot config files into an existing target directory.
     """),
     ("config", "copy"): textwrap.dedent("""\
         agm config copy DIRNAME
 
-        Copy known project config files into an existing target directory.
+        Copy project dot config files into an existing target directory.
     """),
     ("config", "env"): textwrap.dedent("""\
         agm config env

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core.dotenv import set_dotenv_value
-from agm.core.env import load_dotenv_file
+from agm.core.env import load_config_dotenv_files
 from agm.core.process import require_success
 
 
@@ -22,38 +22,49 @@ class CurrentCheckout:
     branch: str | None
     is_main: bool
 
-CONFIG_FILES: list[str] = [
-    ".setup.sh",
-    ".env",
-    ".env.local",
-    ".config",
-    ".agents",
-    ".opencode",
-    ".codex",
-    ".claude",
-    ".pi",
-    ".mcp.json",
-]
+_DOTENV_CONFIG_FILES = frozenset({".env", ".env.local"})
+_DOT_CONFIG_COPY_EXCLUDES = frozenset({".git"})
 
 
-def _copy_existing_config_files(source_dir: Path, target_dir: Path) -> None:
+def _path_name(path: Path) -> str:
+    return path.name
+
+
+def _copy_existing_config_files(
+    source_dir: Path,
+    target_dir: Path,
+    *,
+    include_dotenv: bool = True,
+) -> None:
     existing_paths = [
-        str(source_dir / name)
-        for name in CONFIG_FILES
-        if (source_dir / name).exists()
-        and not (name == ".env" and (source_dir / name).stat().st_size == 0)
+        str(path)
+        for path in sorted(source_dir.iterdir(), key=_path_name)
+        if path.name.startswith(".")
+        and path.name not in _DOT_CONFIG_COPY_EXCLUDES
+        and (include_dotenv or path.name not in _DOTENV_CONFIG_FILES)
     ]
     if not existing_paths:
         return
     require_success(["cp", "-r", *existing_paths, str(target_dir)])
 
 
+def _merge_config_dotenv_files(config_dirs: list[Path], target_dir: Path) -> None:
+    merged_env = load_config_dotenv_files(config_dirs, env={})
+    if not merged_env:
+        return
+    target_env = target_dir / ".env.local"
+    if target_env.exists():
+        target_env.unlink()
+    for key, value in sorted(merged_env.items()):
+        set_dotenv_value(target_env, key, value)
+
+
 def _merge_branch_env_file(source_dir: Path, target_dir: Path) -> None:
-    source_env = source_dir / ".env"
-    if not source_env.is_file():
+    merged_env = load_config_dotenv_files([source_dir], env={})
+    if not merged_env:
         return
     target_env = target_dir / ".env"
-    for key, value in load_dotenv_file(source_env).items():
+    for key, value in sorted(merged_env.items()):
         set_dotenv_value(target_env, key, value)
 
 
@@ -359,6 +370,18 @@ def copy_config(
 
     config_dir = project_config_dir(proj_dir)
     if config_dir.is_dir():
-        _copy_existing_config_files(config_dir, resolved_target)
-        if branch is not None:
-            _merge_branch_env_file(config_dir / branch, resolved_target)
+        resolved_branch = branch
+        if resolved_branch is None:
+            checkout = current_checkout(proj_dir, cwd=current)
+            if checkout is not None:
+                resolved_branch = checkout.branch
+        if resolved_branch is None:
+            _copy_existing_config_files(config_dir, resolved_target)
+            return
+        branch_config_dir = config_dir / resolved_branch
+        _copy_existing_config_files(config_dir, resolved_target, include_dotenv=False)
+        if (config_dir / ".env").exists():
+            require_success(["cp", "-r", str(config_dir / ".env"), str(resolved_target)])
+        if branch_config_dir.is_dir():
+            _copy_existing_config_files(branch_config_dir, resolved_target, include_dotenv=False)
+        _merge_config_dotenv_files([config_dir, branch_config_dir], resolved_target)

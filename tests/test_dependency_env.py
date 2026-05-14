@@ -1455,7 +1455,7 @@ class TestDependencyConfigCheckoutNameFallback:
         dep_dir.mkdir()
         main_dir = dep_dir / "main"
         main_dir.mkdir()
-        (main_dir / ".git").mkdir()  # .git marker so _dependency_repo_paths finds it
+        (main_dir / ".git").mkdir()  # .git marker so dependency_repo_paths finds it
         feat_dir = dep_dir / "feat"
         feat_dir.mkdir()
         # main is a git repo, feat is not

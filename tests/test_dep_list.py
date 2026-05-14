@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 from typer.main import get_command
 
 import agm.cli as cli
@@ -14,18 +15,18 @@ import agm.commands.dep.list as dep_list_cmd
 from agm.project.dependency_env import read_deps_table
 
 
-def _invoke(runner: CliRunner, argv: list[str]) -> object:
+def _invoke(runner: CliRunner, argv: list[str]) -> Result:
     return runner.invoke(get_command(cli.app), argv, prog_name="agm")
+
+
+def subprocess_run(args: list[str]) -> None:
+    subprocess.run(args, check=True, capture_output=True)
 
 
 def _init_git_repo(path: Path) -> None:
     """Create a minimal git repo at *path* for testing."""
     subprocess_run(["git", "init", str(path)])
     subprocess_run(["git", "-C", str(path), "commit", "--allow-empty", "-m", "init"])
-
-
-def subprocess_run(args: list[str]) -> None:
-    subprocess.run(args, check=True, capture_output=True)
 
 
 # ---------------------------------------------------------------------------
@@ -80,15 +81,21 @@ class TestReadDepsFromToml:
         result = read_deps_table(config_file)
         assert result == {"other": "dev"}
 
-    def test_handles_corrupt_toml(self, tmp_path: Path) -> None:
+    def test_raises_on_corrupt_toml(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
         config_file.write_text("this is not valid toml {{{", encoding="utf-8")
-        result = read_deps_table(config_file)
-        assert result == {}
+        with pytest.raises(tomllib.TOMLDecodeError):
+            read_deps_table(config_file)
 
-    def test_handles_unreadable_file(self, tmp_path: Path) -> None:
-        result = read_deps_table(tmp_path / "nope" / "config.toml")
-        assert result == {}
+    def test_raises_on_unreadable_file(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("[deps]\nmylib = \"main\"\n", encoding="utf-8")
+        config_file.chmod(0)
+        try:
+            with pytest.raises(OSError):
+                read_deps_table(config_file)
+        finally:
+            config_file.chmod(0o644)
 
 
 # ---------------------------------------------------------------------------
@@ -229,16 +236,16 @@ class TestListDepsCurrentCheckout:
         (deps_dir / "other" / "main").mkdir(parents=True)
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "project_config_dir", lambda pd: project_dir / "config"
+            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd, cwd=None, env=None: "feature"
+            dep_list_cmd, "current_config_branch", lambda pd: "feature"
         )
 
         dep_list_cmd.list_deps()
@@ -268,16 +275,16 @@ class TestListDepsCurrentCheckout:
         (deps_dir / "mylib" / "main").mkdir(parents=True)
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "project_config_dir", lambda pd: project_dir / "config"
+            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd, cwd=None, env=None: None
+            dep_list_cmd, "current_config_branch", lambda pd: None
         )
 
         dep_list_cmd.list_deps()
@@ -306,16 +313,16 @@ class TestListDepsCurrentCheckout:
         (deps_dir / "mylib" / "main").mkdir(parents=True)
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "project_config_dir", lambda pd: project_dir / "config"
+            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd, cwd=None, env=None: None
+            dep_list_cmd, "current_config_branch", lambda pd: None
         )
 
         dep_list_cmd.list_deps(verbose=True)
@@ -340,16 +347,16 @@ class TestListDepsCurrentCheckout:
         config_file.write_text("", encoding="utf-8")
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "project_config_dir", lambda pd: project_dir / "config"
+            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd, cwd=None, env=None: None
+            dep_list_cmd, "current_config_branch", lambda pd: None
         )
 
         dep_list_cmd.list_deps()
@@ -381,7 +388,7 @@ class TestListDepsAll:
         _init_git_repo(deps_dir / "other" / "develop")
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
@@ -409,7 +416,7 @@ class TestListDepsAll:
         _init_git_repo(deps_dir / "mylib" / "main")
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
@@ -435,7 +442,7 @@ class TestListDepsAll:
         deps_dir.mkdir()
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
@@ -456,7 +463,7 @@ class TestListDepsAll:
         project_dir.mkdir()
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
@@ -493,16 +500,16 @@ class TestRun:
         (deps_dir / "mylib" / "main").mkdir(parents=True)
 
         monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+            dep_list_cmd, "require_current_project_dir", lambda: project_dir
         )
         monkeypatch.setattr(
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "project_config_dir", lambda pd: project_dir / "config"
+            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd, cwd=None, env=None: None
+            dep_list_cmd, "current_config_branch", lambda pd: None
         )
 
         dep_list_cmd.run()
@@ -516,16 +523,16 @@ class TestRun:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "argv, verbose, all_checkouts",
-    [
-        pytest.param(["dep", "list"], False, False, id="default"),
-        pytest.param(["dep", "list", "-v"], True, False, id="verbose"),
-        pytest.param(["dep", "list", "--all"], False, True, id="all"),
-        pytest.param(["dep", "list", "-v", "--all"], True, True, id="verbose_and_all"),
-    ],
-)
 class TestDepListViaCli:
+    @pytest.mark.parametrize(
+        "argv, verbose, all_checkouts",
+        [
+            pytest.param(["dep", "list"], False, False, id="default"),
+            pytest.param(["dep", "list", "-v"], True, False, id="verbose"),
+            pytest.param(["dep", "list", "--all"], False, True, id="all"),
+            pytest.param(["dep", "list", "-v", "--all"], True, True, id="verbose_and_all"),
+        ],
+    )
     def test_dep_list_via_cli(
         self,
         monkeypatch: pytest.MonkeyPatch,

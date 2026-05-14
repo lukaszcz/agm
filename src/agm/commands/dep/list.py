@@ -6,13 +6,13 @@ from pathlib import Path
 
 from agm.core.fs import is_dir
 from agm.project.dependency_env import (
-    _dependency_repo_paths,
-    _dependency_repo_sort_key,
+    config_toml_file,
     current_config_branch,
+    dependency_repo_paths,
+    dependency_repo_sort_key,
     read_deps_table,
 )
 from agm.project.layout import (
-    project_config_dir,
     project_deps_dir,
     require_current_project_dir,
 )
@@ -23,19 +23,14 @@ def _deps_for_branch(
     branch: str | None,
 ) -> dict[str, str]:
     """Return the dependency checkouts configured for *branch* (or main)."""
-    config_dir = project_config_dir(project_dir)
-    if branch is None:
-        config_file = config_dir / "config.toml"
-    else:
-        config_file = config_dir / branch / "config.toml"
-    return read_deps_table(config_file)
+    return read_deps_table(config_toml_file(project_dir, branch))
 
 
 def _list_all_dep_checkouts(deps_dir: Path) -> dict[str, list[tuple[str, Path]]]:
     """Return all dependency checkouts found on disk.
 
     Returns a dict mapping dep name to a list of (checkout_name, path) tuples.
-    Uses ``_dependency_repo_paths`` so nested checkouts at any depth are
+    Uses ``dependency_repo_paths`` so nested checkouts at any depth are
     included, consistent with how dependency repos are discovered elsewhere.
     """
     result: dict[str, list[tuple[str, Path]]] = {}
@@ -44,10 +39,12 @@ def _list_all_dep_checkouts(deps_dir: Path) -> dict[str, list[tuple[str, Path]]]
     for dep_dir in sorted(p for p in deps_dir.iterdir() if is_dir(p)):
 
         def _sort_key(repo: Path, _dep_dir: Path = dep_dir) -> tuple[int, str]:
-            return _dependency_repo_sort_key(_dep_dir, repo)
+            return dependency_repo_sort_key(_dep_dir, repo)
 
         repo_paths = sorted(
-            [repo for repo in _dependency_repo_paths(dep_dir) if repo != dep_dir],
+            # Exclude dep_dir itself (when it's a git repo at root);
+            # only nested checkouts are meaningful dep entries.
+            [repo for repo in dependency_repo_paths(dep_dir) if repo != dep_dir],
             key=_sort_key,
         )
         entries: list[tuple[str, Path]] = []
@@ -62,7 +59,6 @@ def list_deps(
     *,
     verbose: bool = False,
     all_checkouts: bool = False,
-    cwd: Path | None = None,
 ) -> None:
     """Print dependency checkouts for the current project checkout (or all).
 
@@ -73,7 +69,7 @@ def list_deps(
     Output format is ``dep/branch``.  With -v/--verbose the checkout path is
     appended after the name.
     """
-    project_dir = require_current_project_dir(cwd=cwd)
+    project_dir = require_current_project_dir()
     deps_dir = project_deps_dir(project_dir)
 
     if all_checkouts:
@@ -86,7 +82,7 @@ def list_deps(
                     print(f"{dep_name}/{checkout_name}")
         return
 
-    config_branch = current_config_branch(project_dir, cwd=cwd)
+    config_branch = current_config_branch(project_dir)
     deps = _deps_for_branch(project_dir, config_branch)
     for dep_name, dep_branch in sorted(deps.items()):
         dep_path = deps_dir / dep_name / dep_branch

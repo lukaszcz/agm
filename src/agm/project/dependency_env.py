@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import tomllib
 from pathlib import Path
 from typing import cast
 
@@ -52,21 +51,17 @@ def config_toml_file(project_dir: Path, branch: str | None) -> Path:
     return config_dir / branch / "config.toml"
 
 
-
-
-
 def read_deps_table(config_file: Path) -> dict[str, str]:
     """Read the [deps] table from a config TOML file.
 
     Returns a dict mapping dep name to dep branch (checkout name).
     Returns an empty dict if the file does not exist or has no [deps] table.
+    Raises ``OSError`` or ``TOMLDecodeError`` if the file is
+    unreadable or malformed, consistent with ``load_dependency_toml_env``.
     """
     if not config_file.is_file():
         return {}
-    try:
-        deps_table = toml_dict(load_toml_file(config_file).get("deps"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
+    deps_table = toml_dict(load_toml_file(config_file).get("deps"))
     result: dict[str, str] = {}
     for dep_name, dep_branch in deps_table.items():
         if isinstance(dep_branch, str) and dep_branch:
@@ -191,7 +186,7 @@ def update_dependency_config(
     )
 
 
-def _dependency_repo_paths(dep_dir: Path) -> list[Path]:
+def dependency_repo_paths(dep_dir: Path) -> list[Path]:
     candidates = [dep_dir, *rglob(dep_dir, "*")]
     return [
         path
@@ -200,7 +195,7 @@ def _dependency_repo_paths(dep_dir: Path) -> list[Path]:
     ]
 
 
-def _dependency_repo_sort_key(dep_dir: Path, repo_path: Path) -> tuple[int, str]:
+def dependency_repo_sort_key(dep_dir: Path, repo_path: Path) -> tuple[int, str]:
     return len(repo_path.relative_to(dep_dir).parts), str(repo_path)
 
 
@@ -210,8 +205,8 @@ def _dependency_checkout_name(dep_dir: Path, repo_path: Path) -> str:
 
 def _main_dependency_checkout_name(dep_dir: Path) -> str | None:
     repos = [
-        (*_dependency_repo_sort_key(dep_dir, repo_path), repo_path)
-        for repo_path in _dependency_repo_paths(dep_dir)
+        (*dependency_repo_sort_key(dep_dir, repo_path), repo_path)
+        for repo_path in dependency_repo_paths(dep_dir)
     ]
     if not repos:
         return None

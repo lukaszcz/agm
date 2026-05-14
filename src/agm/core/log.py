@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agm.core.fs import append_text, exists, mkdir, read_text, write_text
+from agm.core.path import display_path
 from agm.vcs import git as git_helpers
 
 AGENT_FILES_DIRNAME = ".agent-files"
@@ -70,6 +71,6 @@ def prepare_log_file(
     del explicit
     if log_file is None:
         return
-    print(f"Logging to {log_file}")
+    print(f"Logging to {display_path(log_file)}")
     ensure_agent_files_gitignored(log_file.parent)
     mkdir(log_file.parent, parents=True, exist_ok=True)

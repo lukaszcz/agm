@@ -3821,7 +3821,7 @@ class TestLoop:
                 if line:
                     output_lines.append(line)
                     if line.startswith("Logging to "):
-                        log_file = work / ".agent-files" / line.removeprefix("Logging to ").strip()
+                        log_file = work / line.removeprefix("Logging to ").strip()
                     if line == "runner line 1\n":
                         break
                 elif process.poll() is not None:
@@ -3918,7 +3918,7 @@ class TestLoop:
                 if line:
                     output_lines.append(line)
                     if line.startswith("Logging to "):
-                        log_file = work / ".agent-files" / line.removeprefix("Logging to ").strip()
+                        log_file = work / line.removeprefix("Logging to ").strip()
                     if line == "task-1.md\n":
                         break
                 elif process.poll() is not None:
@@ -3959,7 +3959,7 @@ class TestLoop:
         result = run_agm(["loop", "--no-selector", "claude"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert f"Logging to {work / '.agent-files' / 'loop-'}" in result.stdout
+        assert "Logging to .agent-files/loop-" in result.stdout
         assert "Step 1" in result.stdout
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
@@ -4957,7 +4957,7 @@ class TestLoop:
         result = run_agm(["--dry-run", "loop", "run"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert f"Logging to {work / '.agent-files' / 'loop-'}" in result.stdout
+        assert "Logging to .agent-files/loop-" in result.stdout
         assert f"dry-run: agm mkdir {work}" in result.stdout
         assert "dry-run: loop configuration" in result.stdout
         assert f"dry-run:   tasks dir: {work / 'config' / 'tasks'}" in result.stdout
@@ -5122,7 +5122,7 @@ class TestLoop:
         result = run_agm(["loop", "--no-selector", "claude", "--no-log"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert f"Logging to {work / '.agent-files' / 'loop-'}" in result.stdout
+        assert "Logging to .agent-files/loop-" in result.stdout
         assert (
             Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines()
             == [f"-p --no-log @{prompt_file}"] * 2
@@ -5636,7 +5636,7 @@ class TestLoop:
         result = run_agm(["loop", "step", "runner"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert f"Logging to {work / '.agent-files' / 'loop-'}" in result.stdout
+        assert "Logging to .agent-files/loop-" in result.stdout
         assert "Step 1" in result.stdout
         assert "task-1.md\n\nSelected task: " + str(tasks_dir / "task-1.md") in result.stdout
         assert result.stdout.endswith("runner iteration\n")

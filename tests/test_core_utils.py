@@ -32,6 +32,7 @@ from agm.core.fs import (
 from agm.core.fs import (
     stat as fs_stat,
 )
+from agm.core.path import display_path
 
 # ---------------------------------------------------------------------------
 # Fixture: always reset dry-run state after each test
@@ -538,3 +539,33 @@ class TestSetDotenvValue:
         f.write_text("#!/bin/sh\n", encoding="utf-8")
         f.chmod(stat.S_IRWXU)
         assert access(f, os.X_OK) is True
+
+
+# ===========================================================================
+# agm.core.path — display_path
+# ===========================================================================
+
+
+class TestDisplayPath:
+    def test_path_under_cwd_returns_relative(self, tmp_path: Path) -> None:
+        path = tmp_path / "sub" / "file.log"
+        assert display_path(path, cwd=tmp_path) == str(Path("sub") / "file.log")
+
+    def test_path_equals_cwd_returns_dot(self, tmp_path: Path) -> None:
+        assert display_path(tmp_path, cwd=tmp_path) == "."
+
+    def test_path_outside_cwd_returns_absolute(self, tmp_path: Path) -> None:
+        other = Path("/tmp/other/place.log")
+        assert display_path(other, cwd=tmp_path) == str(other)
+
+    def test_uses_path_cwd_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        child = tmp_path / "a.log"
+        assert display_path(child) == "a.log"
+
+    def test_nested_directory_under_cwd(self, tmp_path: Path) -> None:
+        path = tmp_path / ".agent-files" / "loop-20250101-120000.log"
+        result = display_path(path, cwd=tmp_path)
+        assert result == str(Path(".agent-files") / "loop-20250101-120000.log")

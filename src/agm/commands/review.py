@@ -31,6 +31,7 @@ from agm.config.general import (
 from agm.core import dry_run
 from agm.core.fs import mkdir, write_text
 from agm.core.log import default_agent_files_dir, ensure_agent_files_gitignored
+from agm.core.path import display_path
 
 DEFAULT_REVIEW_SCOPE = "changes on current branch"
 DEFAULT_REVIEW_ASPECTS = "correctness, completeness, maintainability, adherence to AGENTS.md"
@@ -162,7 +163,7 @@ def review_once(
             stderr_callback(f"warning: overwriting existing review file {review_file}\n")
         saved_review_file = _save_review_output(review_file, output)
         if saved_review_file is not None:
-            stdout_callback(f"Saved review to {saved_review_file}\n")
+            stdout_callback(f"Saved review to {display_path(saved_review_file)}\n")
         return output
     finally:
         cleanup_temp_files(temp_files)

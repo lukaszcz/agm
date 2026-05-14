@@ -553,7 +553,10 @@ def test_review_once_saves_output_to_default_review_file(
     review_file = tmp_path / ".agent-files" / "review-20260513-142530-000000.md"
     assert output == "review output\n"
     assert review_file.read_text(encoding="utf-8") == "review output\n"
-    assert capsys.readouterr().out == f"Saved review to {review_file}\n"
+    assert (
+        capsys.readouterr().out
+        == "Saved review to .agent-files/review-20260513-142530-000000.md\n"
+    )
 
 
 def test_review_once_honors_explicit_and_disabled_review_file(
@@ -1269,7 +1272,7 @@ def test_refine_prints_logging_to_full_default_log_path(
     )
 
     first_line = capsys.readouterr().out.splitlines()[0]
-    assert first_line.startswith(f"Logging to {tmp_path / '.agent-files' / 'refine-'}")
+    assert first_line.startswith("Logging to .agent-files/refine-")
     assert first_line.endswith(".log")
 
 

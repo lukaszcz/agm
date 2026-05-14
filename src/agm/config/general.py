@@ -8,9 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agm.core.env import agm_installation_prefix
-from agm.core.toml import TomlDict
-from agm.core.toml import load_toml_file as _load_config_file
-from agm.core.toml import toml_dict as _toml_dict
+from agm.core.toml import TomlDict, load_toml_file, toml_dict
 from agm.project.layout import project_config_dir
 
 
@@ -62,19 +60,15 @@ _CONFIG_PATH_SENTINELS: dict[str, dict[str, set[str]]] = {
 }
 
 
-
-
 def _merge_config(base: TomlDict, override: TomlDict) -> TomlDict:
     merged = dict(base)
     for key, value in override.items():
         existing = merged.get(key)
         if isinstance(existing, dict) and isinstance(value, dict):
-            merged[key] = _merge_config(_toml_dict(existing), _toml_dict(value))
+            merged[key] = _merge_config(toml_dict(existing), toml_dict(value))
             continue
         merged[key] = value
     return merged
-
-
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:
@@ -234,7 +228,7 @@ def _resolve_section_paths(
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
             resolved[key] = _resolve_section_paths(
-                _toml_dict(value),
+                toml_dict(value),
                 fields,
                 config_dir,
                 cwd,
@@ -249,7 +243,7 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
         section = resolved.get(section_name)
         if isinstance(section, dict):
             resolved[section_name] = _resolve_section_paths(
-                _toml_dict(section),
+                toml_dict(section),
                 fields,
                 config_dir,
                 cwd,
@@ -262,7 +256,7 @@ def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlD
     merged: TomlDict = {}
     for path in config_file_candidates(home=home, proj_dir=proj_dir, cwd=cwd):
         if path.is_file():
-            raw = _load_config_file(path)
+            raw = load_toml_file(path)
             resolved = _resolve_config_file_paths(raw, config_dir=path.parent, cwd=cwd)
             merged = _merge_config(merged, resolved)
     return merged
@@ -270,7 +264,7 @@ def load_merged_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> TomlD
 
 def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    run_table = _toml_dict(merged.get("run"))
+    run_table = toml_dict(merged.get("run"))
     aliases: dict[str, str] = {}
     command_memory_limits: dict[str, str] = {}
     command_swap_limits: dict[str, str] = {}
@@ -281,7 +275,7 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
     default_swap = run_table.get("swap")
     default_swap_limit = default_swap if isinstance(default_swap, str) and default_swap else None
     for command_name, command_config in run_table.items():
-        config = _toml_dict(command_config)
+        config = toml_dict(command_config)
         alias = config.get("alias")
         if isinstance(alias, str) and alias:
             aliases[command_name] = alias
@@ -335,7 +329,7 @@ def load_loop_config(
 ) -> LoopConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     selected_loop_table = _select_command_table(
-        _toml_dict(merged.get("loop")),
+        toml_dict(merged.get("loop")),
         section_name="loop",
         command_name=command_name,
         require_command=require_command,
@@ -437,7 +431,7 @@ def _select_command_table(
         return table
     command_table = table.get(command_name)
     if isinstance(command_table, dict):
-        return _merge_config(table, _toml_dict(command_table))
+        return _merge_config(table, toml_dict(command_table))
     if require_command:
         raise ConfigCommandNotFound(section_name=section_name, command_name=command_name)
     return table
@@ -453,7 +447,7 @@ def load_review_config(
 ) -> ReviewConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     table = _select_command_table(
-        _toml_dict(merged.get("review")),
+        toml_dict(merged.get("review")),
         section_name="review",
         command_name=command_name,
         require_command=require_command,
@@ -481,7 +475,7 @@ def load_revise_config(
 ) -> ReviseConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     table = _select_command_table(
-        _toml_dict(merged.get("revise")),
+        toml_dict(merged.get("revise")),
         section_name="revise",
         command_name=command_name,
         require_command=require_command,
@@ -505,7 +499,7 @@ def load_refine_config(
 ) -> RefineConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     table = _select_command_table(
-        _toml_dict(merged.get("refine")),
+        toml_dict(merged.get("refine")),
         section_name="refine",
         command_name=command_name,
         require_command=require_command,
@@ -526,4 +520,4 @@ def load_refine_config(
         extra_revise_prompt=_optional_str(table, "extra_revise_prompt"),
         extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
         save_review=_optional_bool(table, "save_review", default=True),
-    )
+    )  

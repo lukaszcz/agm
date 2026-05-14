@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,8 +25,6 @@ def _init_git_repo(path: Path) -> None:
 
 
 def subprocess_run(args: list[str]) -> None:
-    import subprocess
-
     subprocess.run(args, check=True, capture_output=True)
 
 
@@ -38,7 +37,7 @@ class TestReadDepsFromToml:
     def test_reads_valid_toml(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "main"' + chr(10) + 'other = "develop"' + chr(10),
+            "[deps]" + "\n" + 'mylib = "main"' + "\n" + 'other = "develop"' + "\n",
             encoding="utf-8",
         )
         result = read_deps_table(config_file)
@@ -52,7 +51,7 @@ class TestReadDepsFromToml:
     def test_returns_empty_when_no_deps_table(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
         config_file.write_text(
-            "[run]" + chr(10) + 'runner = "echo"' + chr(10),
+            "[run]" + "\n" + 'runner = "echo"' + "\n",
             encoding="utf-8",
         )
         result = read_deps_table(config_file)
@@ -61,7 +60,7 @@ class TestReadDepsFromToml:
     def test_skips_non_string_values(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "main"' + chr(10) + "count = 42" + chr(10),
+            "[deps]" + "\n" + 'mylib = "main"' + "\n" + "count = 42" + "\n",
             encoding="utf-8",
         )
         result = read_deps_table(config_file)
@@ -71,11 +70,11 @@ class TestReadDepsFromToml:
         config_file = tmp_path / "config.toml"
         config_file.write_text(
             "[deps]"
-            + chr(10)
+            + "\n"
             + 'mylib = ""'
-            + chr(10)
+            + "\n"
             + 'other = "dev"'
-            + chr(10),
+            + "\n",
             encoding="utf-8",
         )
         result = read_deps_table(config_file)
@@ -103,7 +102,7 @@ class TestDepsForBranch:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "main"' + chr(10),
+            "[deps]" + "\n" + 'mylib = "main"' + "\n",
             encoding="utf-8",
         )
 
@@ -116,7 +115,7 @@ class TestDepsForBranch:
         branch_dir.mkdir(parents=True)
         config_file = branch_dir / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "feature"' + chr(10),
+            "[deps]" + "\n" + 'mylib = "feature"' + "\n",
             encoding="utf-8",
         )
 
@@ -192,6 +191,16 @@ class TestListAllDepCheckouts:
         result = dep_list_cmd._list_all_dep_checkouts(deps_dir)
         assert result == {"mylib": [("main", mylib / "main")]}
 
+    def test_finds_nested_dep_checkouts(self, tmp_path: Path) -> None:
+        deps_dir = tmp_path / "deps"
+        mylib = deps_dir / "mylib"
+        nested = mylib / "sub" / "deep"
+        nested.mkdir(parents=True)
+        _init_git_repo(nested)
+
+        result = dep_list_cmd._list_all_dep_checkouts(deps_dir)
+        assert result == {"mylib": [("sub/deep", nested)]}
+
 
 # ---------------------------------------------------------------------------
 # list_deps — current checkout mode (no --all)
@@ -212,7 +221,7 @@ class TestListDepsCurrentCheckout:
         branch_dir.mkdir(parents=True)
         config_file = branch_dir / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "feature"' + chr(10) + 'other = "main"' + chr(10),
+            "[deps]" + "\n" + 'mylib = "feature"' + "\n" + 'other = "main"' + "\n",
             encoding="utf-8",
         )
         deps_dir = project_dir / "deps"
@@ -252,7 +261,7 @@ class TestListDepsCurrentCheckout:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "main"' + chr(10),
+            "[deps]" + "\n" + 'mylib = "main"' + "\n",
             encoding="utf-8",
         )
         deps_dir = project_dir / "deps"
@@ -290,7 +299,7 @@ class TestListDepsCurrentCheckout:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "main"' + chr(10),
+            "[deps]" + "\n" + 'mylib = "main"' + "\n",
             encoding="utf-8",
         )
         deps_dir = project_dir / "deps"
@@ -477,7 +486,7 @@ class TestRun:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            "[deps]" + chr(10) + 'mylib = "main"' + chr(10),
+            "[deps]" + "\n" + 'mylib = "main"' + "\n",
             encoding="utf-8",
         )
         deps_dir = project_dir / "deps"

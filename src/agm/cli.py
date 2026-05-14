@@ -853,7 +853,7 @@ def dep_callback(
 @dep_app.command(name="list")
 def dep_list(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show checkout paths."),
-    list_all: bool = typer.Option(False, "--all", help="List checkouts for every worktree."),
+    list_all: bool = typer.Option(False, "--all", help="List all dependency checkouts on disk."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:

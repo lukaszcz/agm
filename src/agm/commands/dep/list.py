@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import agm.vcs.git as git_helpers
-from agm.core.fs import exists, is_dir
-from agm.project.dependency_env import current_config_branch, read_deps_table
+from agm.core.fs import is_dir
+from agm.project.dependency_env import (
+    _dependency_repo_paths,
+    _dependency_repo_sort_key,
+    current_config_branch,
+    read_deps_table,
+)
 from agm.project.layout import (
     project_config_dir,
     project_deps_dir,
@@ -31,20 +35,24 @@ def _list_all_dep_checkouts(deps_dir: Path) -> dict[str, list[tuple[str, Path]]]
     """Return all dependency checkouts found on disk.
 
     Returns a dict mapping dep name to a list of (checkout_name, path) tuples.
-    Only includes directories that are git repos, consistent with
-    ``_dependency_repo_paths``.
+    Uses ``_dependency_repo_paths`` so nested checkouts at any depth are
+    included, consistent with how dependency repos are discovered elsewhere.
     """
     result: dict[str, list[tuple[str, Path]]] = {}
     if not is_dir(deps_dir):
         return result
     for dep_dir in sorted(p for p in deps_dir.iterdir() if is_dir(p)):
+
+        def _sort_key(repo: Path, _dep_dir: Path = dep_dir) -> tuple[int, str]:
+            return _dependency_repo_sort_key(_dep_dir, repo)
+
+        repo_paths = sorted(
+            [repo for repo in _dependency_repo_paths(dep_dir) if repo != dep_dir],
+            key=_sort_key,
+        )
         entries: list[tuple[str, Path]] = []
-        for child in sorted(
-            p
-            for p in dep_dir.iterdir()
-            if is_dir(p) and exists(p / ".git") and git_helpers.is_git_repo(p)
-        ):
-            entries.append((child.name, child))
+        for repo_path in repo_paths:
+            entries.append((repo_path.relative_to(dep_dir).as_posix(), repo_path))
         if entries:
             result[dep_dir.name] = entries
     return result

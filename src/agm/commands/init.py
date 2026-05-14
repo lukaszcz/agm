@@ -54,7 +54,9 @@ def ensure_gitignore_entry(path: Path, entry: str) -> None:
     if exists(path):
         content = read_text(path, encoding="utf-8")
         existing_lines = content.splitlines()
-        if entry in existing_lines:
+        # Treat "foo" and "foo/" as equivalent gitignore entries for directories.
+        base = entry.rstrip("/")
+        if base in existing_lines or f"{base}/" in existing_lines:
             return
         suffix = "" if content.endswith("\n") else "\n"
         write_text(path, f"{content}{suffix}{entry}\n", encoding="utf-8")

@@ -5,39 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from agm.core.fs import append_text, exists, mkdir, read_text, write_text
+from agm.core.fs import append_text, mkdir
 from agm.core.path import display_path
 from agm.vcs import git as git_helpers
 
 AGENT_FILES_DIRNAME = ".agent-files"
-AGENT_FILES_GITIGNORE_ENTRY = ".agent-files"
 
 
 def default_agent_files_dir() -> Path:
     cwd = Path.cwd()
     root = git_helpers.containing_root(cwd)
     return (root if root is not None else cwd) / AGENT_FILES_DIRNAME
-
-
-def ensure_agent_files_gitignored(agent_files_dir: Path) -> None:
-    if agent_files_dir.name != AGENT_FILES_DIRNAME:
-        return
-    repo_dir = agent_files_dir.parent
-    if not git_helpers.is_git_repo(repo_dir):
-        return
-    gitignore = repo_dir / ".gitignore"
-    if exists(gitignore):
-        content = read_text(gitignore, encoding="utf-8")
-        if AGENT_FILES_GITIGNORE_ENTRY in content.splitlines():
-            return
-        suffix = "" if content.endswith("\n") else "\n"
-        write_text(
-            gitignore,
-            f"{content}{suffix}{AGENT_FILES_GITIGNORE_ENTRY}\n",
-            encoding="utf-8",
-        )
-        return
-    write_text(gitignore, f"{AGENT_FILES_GITIGNORE_ENTRY}\n", encoding="utf-8")
 
 
 def resolve_log_file(
@@ -72,5 +50,4 @@ def prepare_log_file(
     if log_file is None:
         return
     print(f"Logging to {display_path(log_file)}")
-    ensure_agent_files_gitignored(log_file.parent)
     mkdir(log_file.parent, parents=True, exist_ok=True)

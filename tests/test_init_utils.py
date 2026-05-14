@@ -218,6 +218,28 @@ class TestEnsureGitignoreEntry:
         ensure_gitignore_entry(gitignore, ".agm")
         assert gitignore.read_text(encoding="utf-8").endswith("\n")
 
+    def test_does_not_duplicate_when_entry_with_trailing_slash_exists(
+        self, tmp_path: Path
+    ) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".agent-files/\n*.pyc\n", encoding="utf-8")
+        ensure_gitignore_entry(gitignore, ".agent-files")
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        assert lines.count(".agent-files") == 0
+        assert ".agent-files/" in lines
+        assert lines.count(".agent-files/") == 1
+
+    def test_does_not_duplicate_when_entry_without_trailing_slash_exists(
+        self, tmp_path: Path
+    ) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".agent-files\n*.pyc\n", encoding="utf-8")
+        ensure_gitignore_entry(gitignore, ".agent-files/")
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        assert lines.count(".agent-files/") == 0
+        assert ".agent-files" in lines
+        assert lines.count(".agent-files") == 1
+
 
 # ---------------------------------------------------------------------------
 # ensure_git_repo

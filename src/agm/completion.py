@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import click
 
@@ -169,9 +170,12 @@ def _path_candidates(incomplete: str) -> list[str]:
     return sorted(candidates)
 
 
-def complete_help_path(args: list[str], incomplete: str) -> list[str]:
+def complete_help_path(ctx: click.Context, incomplete: str) -> list[str]:
     try:
-        path_key = args[0] if args else ""
+        params = cast(dict[str, object], ctx.params)
+        raw_help = params.get("help_command")
+        help_command = cast(list[str], raw_help) if isinstance(raw_help, list) else []
+        path_key = help_command[-1] if help_command else ""
         return _match(_HELP_TREE.get(path_key, []), incomplete)
     except (Exception, SystemExit):
         return []
@@ -220,9 +224,11 @@ def complete_dep_name(incomplete: str) -> list[str]:
         return []
 
 
-def complete_dep_branch(args: list[str], incomplete: str) -> list[str]:
+def complete_dep_branch(ctx: click.Context, incomplete: str) -> list[str]:
     try:
-        dep_name = next((arg for arg in args if not arg.startswith("-")), "")
+        params = cast(dict[str, object], ctx.params)
+        raw_dep = params.get("dep")
+        dep_name = raw_dep if isinstance(raw_dep, str) else ""
         if not dep_name:
             return []
         repo_dir = _resolve_dep_repo(dep_name)
@@ -254,9 +260,12 @@ def complete_dep_target(incomplete: str) -> list[str]:
         return []
 
 
-def complete_run_command(args: list[str], incomplete: str) -> list[str]:
+def complete_run_command(ctx: click.Context, incomplete: str) -> list[str]:
     try:
-        if args:
+        params = cast(dict[str, object], ctx.params)
+        raw_cmd = params.get("run_command_args")
+        cmd_args = cast(list[str], raw_cmd) if isinstance(raw_cmd, list) else []
+        if cmd_args:
             return _path_candidates(incomplete)
 
         candidates: set[str] = set()

@@ -13,6 +13,13 @@ import agm.completion as completion
 import agm.vcs.git as git_helpers
 
 
+def _make_ctx(**params: Any) -> click.Context:
+    """Create a Click Context with the given params for completion testing."""
+    ctx = click.Context(click.Command("test"))
+    ctx.params.update(params)
+    return ctx
+
+
 def test_complete_open_target_includes_repo_and_branches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -109,10 +116,11 @@ def test_complete_close_branch_infers_branch_name_from_checkout_worktree_path(
 
 
 def test_complete_help_path_suggests_subcommands() -> None:
-    assert completion.complete_help_path(["wt"], "n") == ["new"]
-    assert completion.complete_help_path(["loop"], "n") == ["next"]
-    assert completion.complete_help_path(["config"], "e") == ["env"]
-    assert completion.complete_help_path([], "o") == ["open"]
+    assert completion.complete_help_path(_make_ctx(help_command=["wt"]), "n") == ["new"]
+    assert completion.complete_help_path(_make_ctx(help_command=["loop"]), "n") == ["next"]
+    assert completion.complete_help_path(_make_ctx(help_command=["config"]), "e") == ["env"]
+    assert completion.complete_help_path(_make_ctx(help_command=[]), "o") == ["open"]
+    assert completion.complete_help_path(_make_ctx(), "o") == ["open"]
 
 
 def test_complete_dep_name_lists_dependencies(
@@ -152,7 +160,7 @@ def test_complete_dep_branch_uses_selected_dependency(
     monkeypatch.setattr(git_helpers, "worktree_list", lambda repo_dir: [])
     monkeypatch.setattr(git_helpers, "current_branch", lambda repo_dir: "main")
 
-    assert completion.complete_dep_branch(["alpha"], "feature/") == [
+    assert completion.complete_dep_branch(_make_ctx(dep="alpha"), "feature/") == [
         "feature/local",
         "feature/remote",
     ]
@@ -201,8 +209,10 @@ def test_complete_run_command_lists_executables_and_paths(
     (cwd / "package.json").write_text("{}")
     monkeypatch.chdir(cwd)
 
-    assert completion.complete_run_command([], "np") == ["npm"]
-    assert completion.complete_run_command(["npm"], "pack") == ["package.json"]
+    assert completion.complete_run_command(_make_ctx(), "np") == ["npm"]
+    assert completion.complete_run_command(
+        _make_ctx(run_command_args=["npm"]), "pack"
+    ) == ["package.json"]
 
 
 def test_complete_run_command_lists_executables_without_home(
@@ -218,7 +228,7 @@ def test_complete_run_command_lists_executables_without_home(
     monkeypatch.delenv("PROJ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
 
-    assert completion.complete_run_command([], "np") == ["npm"]
+    assert completion.complete_run_command(_make_ctx(), "np") == ["npm"]
 
 
 def test_complete_run_command_includes_config_aliases(
@@ -245,7 +255,7 @@ def test_complete_run_command_includes_config_aliases(
         "agm.config.context.discover_current_project_dir", lambda cwd=None, env=None: project
     )
 
-    assert completion.complete_run_command([], "ai") == ["ai-review"]
+    assert completion.complete_run_command(_make_ctx(), "ai") == ["ai-review"]
 
 
 def test_complete_run_command_swallows_config_errors(
@@ -259,7 +269,7 @@ def test_complete_run_command_swallows_config_errors(
         lambda **kwargs: (_ for _ in ()).throw(ValueError("bad")),
     )
 
-    assert completion.complete_run_command([], "x") == []
+    assert completion.complete_run_command(_make_ctx(), "x") == []
 
 
 def test_complete_tmux_session_reads_tmux_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -460,6 +470,27 @@ class TestBranchCandidates:
         result = completion._branch_candidates(repo_dir)
         # Empty line should not be in candidates
         assert "" not in result
+
+    def test_dedupes_local_and_remote_with_same_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        monkeypatch.setattr(git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(git_helpers, "worktree_list", lambda p, env=None: [])
+
+        def fake_fetch(args: list[str], cwd: Any = None, env: Any = None) -> tuple[int, str, str]:
+            ref = args[-1]
+            if ref == "refs/heads":
+                return 0, "main\nfeature\n", ""
+            if ref == "refs/remotes/origin":
+                return 0, "origin/HEAD\norigin/feature\n", ""
+            return 0, "", ""
+
+        monkeypatch.setattr(git_helpers, "fetch_output", fake_fetch)
+        result = completion._branch_candidates(repo_dir)
+        # "feature" appears in both local and remote, but set dedupes
+        assert result == {"main", "feature"}
 
 
 class TestWorktreeBranchCandidates:
@@ -676,13 +707,14 @@ class TestCompleteDepName:
 
 
 class TestCompleteDepBranch:
-    def test_returns_empty_when_no_dep_name_in_args(self) -> None:
-        # All args start with '-', so no dep_name is found
-        assert completion.complete_dep_branch(["-b"], "") == []
+    def test_returns_empty_when_no_dep_name_in_ctx(self) -> None:
+        # dep param not set in context
+        assert completion.complete_dep_branch(_make_ctx(dep=""), "") == []
+        assert completion.complete_dep_branch(_make_ctx(), "") == []
 
     def test_returns_empty_when_dep_repo_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(completion, "_resolve_dep_repo", lambda name: None)
-        assert completion.complete_dep_branch(["mylib"], "") == []
+        assert completion.complete_dep_branch(_make_ctx(dep="mylib"), "") == []
 
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
@@ -690,7 +722,27 @@ class TestCompleteDepBranch:
             "_resolve_dep_repo",
             lambda name: (_ for _ in ()).throw(RuntimeError("boom")),
         )
-        assert completion.complete_dep_branch(["mylib"], "") == []
+        assert completion.complete_dep_branch(_make_ctx(dep="mylib"), "") == []
+
+    def test_returns_branches_when_dep_found(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        repo_dir = tmp_path / "deps" / "mylib" / "repo"
+        repo_dir.mkdir(parents=True)
+        monkeypatch.setattr(
+            completion,
+            "_resolve_dep_repo",
+            lambda name: repo_dir if name == "mylib" else None,
+        )
+        monkeypatch.setattr(git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(git_helpers, "worktree_list", lambda p, env=None: [])
+        monkeypatch.setattr(
+            git_helpers,
+            "fetch_output",
+            lambda args, cwd=None, env=None: (0, "main\nfeature/x\n", ""),
+        )
+        result = completion.complete_dep_branch(_make_ctx(dep="mylib"), "feature/")
+        assert result == ["feature/x"]
 
 
 class TestCompleteDepTarget:
@@ -744,7 +796,7 @@ class TestCompleteRunCommand:
             lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
         # Should still return [] without crashing
-        result = completion.complete_run_command([], "")
+        result = completion.complete_run_command(_make_ctx(), "")
         assert result == []
 
     def test_handles_oserror_in_load_run_config(
@@ -762,7 +814,7 @@ class TestCompleteRunCommand:
             "load_run_config",
             lambda **kwargs: (_ for _ in ()).throw(OSError("io")),
         )
-        result = completion.complete_run_command([], "")
+        result = completion.complete_run_command(_make_ctx(), "")
         assert result == []
 
     def test_returns_empty_on_path_iteration_error(
@@ -775,7 +827,7 @@ class TestCompleteRunCommand:
             lambda _path: (_ for _ in ()).throw(RuntimeError("boom")),
         )
 
-        assert completion.complete_run_command([], "") == []
+        assert completion.complete_run_command(_make_ctx(), "") == []
 
     def test_skips_non_directory_path_entries(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -784,7 +836,7 @@ class TestCompleteRunCommand:
         monkeypatch.setenv("PATH", str(tmp_path / "missing-bin"))
         monkeypatch.setenv("HOME", str(tmp_path))
 
-        result = completion.complete_run_command([], "")
+        result = completion.complete_run_command(_make_ctx(), "")
 
         assert result == []
 
@@ -1133,7 +1185,49 @@ class TestCompleteHelpPathExceptionHandler:
             "_match",
             lambda candidates, incomplete: (_ for _ in ()).throw(RuntimeError("boom")),
         )
-        assert completion.complete_help_path(["wt"], "n") == []
+        assert completion.complete_help_path(_make_ctx(help_command=["wt"]), "n") == []
+
+
+class TestCompleteHelpPathCtx:
+    def test_suggests_top_level_when_no_command(self) -> None:
+        assert completion.complete_help_path(_make_ctx(), "o") == ["open"]
+        assert completion.complete_help_path(_make_ctx(help_command=[]), "o") == ["open"]
+
+    def test_suggests_subcommands_after_first_command(self) -> None:
+        result = completion.complete_help_path(_make_ctx(help_command=["dep"]), "")
+        assert result == ["list", "new", "remove", "rm", "switch"]
+
+    def test_no_suggestions_for_leaf_command(self) -> None:
+        result = completion.complete_help_path(_make_ctx(help_command=["fetch"]), "")
+        assert result == []
+
+
+class TestCompleteRunCommandCtx:
+    def test_shows_executables_when_no_command_args(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        tool = bin_dir / "mytool"
+        tool.write_text("#!/bin/sh\n")
+        tool.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bin_dir))
+        monkeypatch.chdir(tmp_path)
+
+        assert completion.complete_run_command(_make_ctx(), "my") == ["mytool"]
+
+    def test_shows_path_completions_when_command_args_given(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "file.txt").write_text("x")
+        monkeypatch.chdir(work)
+
+        result = completion.complete_run_command(
+            _make_ctx(run_command_args=["python"]), "f"
+        )
+        assert result == ["file.txt"]
 
 
 class TestCompleteDepTargetExceptionHandler:

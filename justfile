@@ -2,6 +2,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 default_prefix := env_var_or_default("HOME", "") + "/.local"
 prefix := default_prefix
+prompts_dir := justfile_directory() + "/prompts"
 
 # Create the virtualenv and install the project with dev dependencies
 setup:
@@ -29,4 +30,5 @@ install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
 install *args: install-agm
+    test -d "{{prompts_dir}}"
     uv run python tools/install_agm_config.py {{args}}

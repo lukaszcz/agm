@@ -74,7 +74,7 @@ def install_user_config(
         else:
             skipped.append(sandbox_destination)
 
-    for prompt_source in sorted((repo_root / "config" / "prompts").iterdir()):
+    for prompt_source in sorted((repo_root / "prompts").iterdir()):
         if not prompt_source.is_file():
             continue
         prompt_destination = prompts_dir / prompt_source.name

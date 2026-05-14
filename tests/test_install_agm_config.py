@@ -69,8 +69,8 @@ def test_install_user_config_installs_prompts(tmp_path: Path) -> None:
 
     (repo_root / "config" / "sandbox").mkdir(parents=True)
     (repo_root / "config" / "sandbox" / "default.json").write_text("{}")
-    (repo_root / "config" / "prompts").mkdir(parents=True)
-    (repo_root / "config" / "prompts" / "loop.md").write_text("loop prompt\n")
+    (repo_root / "prompts").mkdir(parents=True)
+    (repo_root / "prompts" / "loop.md").write_text("loop prompt\n")
     (repo_root / "config" / "config.toml").write_text("[run]\n")
 
     result = module.install_user_config(repo_root=repo_root, install_root=install_root)

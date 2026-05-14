@@ -345,7 +345,7 @@ _HELP_TEXTS: dict[str, str] = {
           agm dep list --verbose
               Show the checkout path after each dep/branch.
           agm dep list --all
-              List all dependency checkouts for every worktree, instead of
+              List all dependency checkouts on disk, instead of
               only the current checkout.
           agm dep new --branch BRANCH REPO_URL
               Clone the dependency's initial checkout from BRANCH instead of

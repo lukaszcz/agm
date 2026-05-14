@@ -42,7 +42,7 @@ _HELP_TREE: dict[str, list[str]] = {
     "config": ["cp", "copy", "env", "update"],
     "wt": ["new", "rm", "remove"],
     "worktree": ["new", "rm", "remove"],
-    "dep": ["new", "switch", "rm"],
+    "dep": ["list", "new", "switch", "rm", "remove"],
     "tmux": ["open", "close", "layout"],
 }
 

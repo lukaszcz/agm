@@ -12,6 +12,7 @@ import agm.commands.close as close_command
 import agm.commands.config.copy as config_copy_command
 import agm.commands.config.env as config_env_command
 import agm.commands.config.update as config_update_command
+import agm.commands.dep.list as dep_list_command
 import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
@@ -847,6 +848,18 @@ def dep_callback(
     if ctx.invoked_subcommand is None:
         print_help_for_command_path(["dep"])
         raise typer.Exit()
+
+
+@dep_app.command(name="list")
+def dep_list(
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show checkout paths."),
+    all: bool = typer.Option(False, "--all", help="List checkouts for every worktree."),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    dep_list_command.run(verbose=verbose, all_checks=all)
 
 
 @dep_app.command(name="new")

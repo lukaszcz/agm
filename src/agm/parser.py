@@ -332,6 +332,7 @@ _HELP_TEXTS: dict[str, str] = {
         Run configured setup scripts for the current checkout.
     """),
     "dep": textwrap.dedent("""\
+        agm dep list   [-v|--verbose] [--all]
         agm dep new    [-b|--branch BRANCH] REPO_URL
         agm dep rm     --all DEP
         agm dep rm     DEP/NAME_OR_BRANCH | DEP/repo | DEP/MAIN_CHECKOUT
@@ -341,6 +342,11 @@ _HELP_TEXTS: dict[str, str] = {
         AGM tracks dependency checkout names in config.toml [deps] tables.
 
         Options:
+          agm dep list --verbose
+              Show the checkout path after each dep/branch.
+          agm dep list --all
+              List all dependency checkouts for every worktree, instead of
+              only the current checkout.
           agm dep new --branch BRANCH REPO_URL
               Clone the dependency's initial checkout from BRANCH instead of
               its default branch.
@@ -583,6 +589,13 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm worktree remove [-f|--force] BRANCH
 
         Remove a worktree and delete its local branch.
+    """),
+    ("dep", "list"): textwrap.dedent("""\
+        agm dep list [-v|--verbose] [--all]
+
+        List dependency checkouts for the current worktree.  With --all, list
+        all dependency checkouts for every worktree.  By default only dep/branch
+        names are printed; with -v/--verbose the checkout path is also shown.
     """),
     ("dep", "new"): textwrap.dedent("""\
         agm dep new [-b|--branch BRANCH] REPO_URL

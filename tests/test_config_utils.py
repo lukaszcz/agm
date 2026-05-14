@@ -8,6 +8,7 @@ import pytest
 
 from agm.config.general import (
     ConfigCommandNotFound,
+    _optional_bool,
     _unique_paths,
     load_loop_config,
     load_refine_config,
@@ -645,3 +646,24 @@ class TestUniquePaths:
         paths = [tmp_path / name for name in ["c", "a", "b", "a"]]
         result = _unique_paths(paths)
         assert result == [tmp_path / "c", tmp_path / "a", tmp_path / "b"]
+
+
+class TestOptionalBool:
+    def test_returns_bool_value(self) -> None:
+        assert _optional_bool({"flag": True}, "flag") is True
+        assert _optional_bool({"flag": False}, "flag") is False
+
+    def test_defaults_to_false(self) -> None:
+        assert _optional_bool({}, "flag") is False
+
+    def test_defaults_to_false_for_malformed_value(self) -> None:
+        assert _optional_bool({"flag": "yes"}, "flag") is False
+
+    def test_custom_default_true(self) -> None:
+        assert _optional_bool({}, "flag", default=True) is True
+
+    def test_custom_default_false(self) -> None:
+        assert _optional_bool({}, "flag", default=False) is False
+
+    def test_custom_default_ignored_when_value_is_bool(self) -> None:
+        assert _optional_bool({"flag": False}, "flag", default=True) is False

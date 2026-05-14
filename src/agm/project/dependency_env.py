@@ -10,6 +10,7 @@ from typing import cast
 
 import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, is_file, iterdir, mkdir, read_text, rglob, write_text
+from agm.core.toml import TomlDict, load_toml_file, toml_dict
 from agm.project.layout import (
     current_checkout,
     default_worktrees_dir,
@@ -17,8 +18,6 @@ from agm.project.layout import (
     project_deps_dir,
     project_repo_dir,
 )
-
-TomlDict = dict[str, object]
 
 
 def current_config_branch(
@@ -53,16 +52,7 @@ def config_toml_file(project_dir: Path, branch: str | None) -> Path:
     return config_dir / branch / "config.toml"
 
 
-def toml_dict(value: object) -> TomlDict:
-    if isinstance(value, dict):
-        return cast(TomlDict, value)
-    return {}
 
-
-def load_toml_file(path: Path) -> TomlDict:
-    with path.open("rb") as handle:
-        loaded = cast(object, tomllib.load(handle))
-    return toml_dict(loaded)
 
 
 def read_deps_table(config_file: Path) -> dict[str, str]:

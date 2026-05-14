@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import os
 import re
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from agm.core.env import agm_installation_prefix
+from agm.core.toml import TomlDict
+from agm.core.toml import load_toml_file as _load_config_file
+from agm.core.toml import toml_dict as _toml_dict
 from agm.project.layout import project_config_dir
-
-TomlDict = dict[str, object]
 
 
 class ConfigCommandNotFound(ValueError):
@@ -63,10 +62,6 @@ _CONFIG_PATH_SENTINELS: dict[str, dict[str, set[str]]] = {
 }
 
 
-def _toml_dict(value: object) -> TomlDict:
-    if isinstance(value, dict):
-        return cast(TomlDict, value)
-    return {}
 
 
 def _merge_config(base: TomlDict, override: TomlDict) -> TomlDict:
@@ -80,10 +75,6 @@ def _merge_config(base: TomlDict, override: TomlDict) -> TomlDict:
     return merged
 
 
-def _load_config_file(path: Path) -> TomlDict:
-    with path.open("rb") as handle:
-        raw: object = tomllib.load(handle)
-    return _toml_dict(raw)
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:
@@ -430,9 +421,9 @@ def _optional_positive_int(table: TomlDict, key: str) -> int | None:
     return None
 
 
-def _optional_bool(table: TomlDict, key: str) -> bool:
+def _optional_bool(table: TomlDict, key: str, *, default: bool = False) -> bool:
     value = table.get(key)
-    return value if isinstance(value, bool) else True
+    return value if isinstance(value, bool) else default
 
 
 def _select_command_table(
@@ -534,5 +525,5 @@ def load_refine_config(
         revise_prompt_file=_optional_str(table, "revise_prompt_file"),
         extra_revise_prompt=_optional_str(table, "extra_revise_prompt"),
         extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
-        save_review=_optional_bool(table, "save_review"),
+        save_review=_optional_bool(table, "save_review", default=True),
     )

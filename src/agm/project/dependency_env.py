@@ -53,16 +53,35 @@ def config_toml_file(project_dir: Path, branch: str | None) -> Path:
     return config_dir / branch / "config.toml"
 
 
-def _toml_dict(value: object) -> TomlDict:
+def toml_dict(value: object) -> TomlDict:
     if isinstance(value, dict):
         return cast(TomlDict, value)
     return {}
 
 
-def _load_toml_file(path: Path) -> TomlDict:
+def load_toml_file(path: Path) -> TomlDict:
     with path.open("rb") as handle:
         loaded = cast(object, tomllib.load(handle))
-    return _toml_dict(loaded)
+    return toml_dict(loaded)
+
+
+def read_deps_table(config_file: Path) -> dict[str, str]:
+    """Read the [deps] table from a config TOML file.
+
+    Returns a dict mapping dep name to dep branch (checkout name).
+    Returns an empty dict if the file does not exist or has no [deps] table.
+    """
+    if not config_file.is_file():
+        return {}
+    try:
+        deps_table = toml_dict(load_toml_file(config_file).get("deps"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    result: dict[str, str] = {}
+    for dep_name, dep_branch in deps_table.items():
+        if isinstance(dep_branch, str) and dep_branch:
+            result[dep_name] = dep_branch
+    return result
 
 
 def load_dependency_toml_env(
@@ -78,7 +97,7 @@ def load_dependency_toml_env(
     for config_file in config_files:
         if not config_file.is_file():
             continue
-        deps_table = _toml_dict(_load_toml_file(config_file).get("deps"))
+        deps_table = toml_dict(load_toml_file(config_file).get("deps"))
         for dep_name, dep_branch in deps_table.items():
             if not isinstance(dep_branch, str) or not dep_branch:
                 continue
@@ -343,7 +362,7 @@ def ensure_dependency_configs_for_branch(
     config_file = config_toml_file(project_dir, branch)
     existing_deps: TomlDict = {}
     if config_file.is_file():
-        existing_deps = _toml_dict(_load_toml_file(config_file).get("deps"))
+        existing_deps = toml_dict(load_toml_file(config_file).get("deps"))
 
     for dep_dir in sorted(path for path in iterdir(deps_dir) if is_dir(path)):
         existing_branch = existing_deps.get(dep_dir.name)

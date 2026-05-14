@@ -15,16 +15,16 @@ from agm.project.dependency_env import (
     _is_deps_table_header,
     _is_table_header,
     _line_sets_toml_key,
-    _load_toml_file,
     _seed_from_parent_config,
     _set_toml_deps_value,
-    _toml_dict,
     _toml_key,
     _toml_string,
     config_toml_file,
     dep_env_var_name,
     ensure_dependency_configs_for_branch,
     load_dependency_toml_env,
+    load_toml_file,
+    toml_dict,
     update_all_project_dependency_configs,
     update_dependency_config,
     update_dependency_configs_for_branch,
@@ -140,27 +140,27 @@ class TestConfigTomlFile:
 class TestTomlDict:
     def test_dict_is_returned_as_is(self) -> None:
         d: dict[str, object] = {"key": "value"}
-        result = _toml_dict(d)
+        result = toml_dict(d)
         assert result == {"key": "value"}
 
     def test_none_returns_empty_dict(self) -> None:
-        assert _toml_dict(None) == {}
+        assert toml_dict(None) == {}
 
     def test_string_returns_empty_dict(self) -> None:
-        assert _toml_dict("string") == {}
+        assert toml_dict("string") == {}
 
     def test_int_returns_empty_dict(self) -> None:
-        assert _toml_dict(42) == {}
+        assert toml_dict(42) == {}
 
     def test_list_returns_empty_dict(self) -> None:
-        assert _toml_dict([1, 2, 3]) == {}
+        assert toml_dict([1, 2, 3]) == {}
 
     def test_empty_dict_returns_empty_dict(self) -> None:
-        assert _toml_dict({}) == {}
+        assert toml_dict({}) == {}
 
     def test_nested_dict_returned_correctly(self) -> None:
         d: dict[str, object] = {"a": {"b": 1}}
-        result = _toml_dict(d)
+        result = toml_dict(d)
         assert result == {"a": {"b": 1}}
 
 
@@ -451,7 +451,7 @@ class TestSetTomlDepsValue:
 
 
 # ---------------------------------------------------------------------------
-# _load_toml_file
+# load_toml_file
 # ---------------------------------------------------------------------------
 
 
@@ -459,27 +459,27 @@ class TestLoadTomlFile:
     def test_loads_simple_toml(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "config.toml"
         toml_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
-        result = _load_toml_file(toml_file)
+        result = load_toml_file(toml_file)
         assert result["deps"] == {"mylib": "main"}
 
     def test_loads_empty_toml(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "config.toml"
         toml_file.write_bytes(b"")
-        result = _load_toml_file(toml_file)
+        result = load_toml_file(toml_file)
         assert result == {}
 
     def test_loads_nested_toml(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "config.toml"
         toml_content = "[section]\nkey = \"value\"\n[deps]\nlib = \"branch\"\n"
         toml_file.write_text(toml_content, encoding="utf-8")
-        result = _load_toml_file(toml_file)
+        result = load_toml_file(toml_file)
         assert result["section"] == {"key": "value"}
         assert result["deps"] == {"lib": "branch"}
 
     def test_returns_toml_dict_type(self, tmp_path: Path) -> None:
         toml_file = tmp_path / "config.toml"
         toml_file.write_text("key = 42\n", encoding="utf-8")
-        result = _load_toml_file(toml_file)
+        result = load_toml_file(toml_file)
         assert isinstance(result, dict)
         assert result["key"] == 42
 

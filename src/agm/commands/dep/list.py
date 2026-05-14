@@ -2,50 +2,16 @@
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
-from typing import cast
 
-from agm.core.fs import is_dir
-from agm.project.dependency_env import current_config_branch
+import agm.vcs.git as git_helpers
+from agm.core.fs import exists, is_dir
+from agm.project.dependency_env import current_config_branch, read_deps_table
 from agm.project.layout import (
     project_config_dir,
     project_deps_dir,
     require_current_project_dir,
 )
-
-TomlDict = dict[str, object]
-
-
-def _toml_dict(value: object) -> TomlDict:
-    if isinstance(value, dict):
-        return cast(TomlDict, value)
-    return {}
-
-
-def _load_toml_file(path: Path) -> TomlDict:
-    with path.open("rb") as handle:
-        loaded = cast(object, tomllib.load(handle))
-    return _toml_dict(loaded)
-
-
-def _read_deps_from_toml(config_file: Path) -> dict[str, str]:
-    """Read the [deps] table from a config TOML file.
-
-    Returns a dict mapping dep name to dep branch (checkout name).
-    Returns an empty dict if the file does not exist or has no [deps] table.
-    """
-    if not config_file.is_file():
-        return {}
-    try:
-        deps_table = _toml_dict(_load_toml_file(config_file).get("deps"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
-    result: dict[str, str] = {}
-    for dep_name, dep_branch in deps_table.items():
-        if isinstance(dep_branch, str) and dep_branch:
-            result[dep_name] = dep_branch
-    return result
 
 
 def _deps_for_branch(
@@ -58,20 +24,26 @@ def _deps_for_branch(
         config_file = config_dir / "config.toml"
     else:
         config_file = config_dir / branch / "config.toml"
-    return _read_deps_from_toml(config_file)
+    return read_deps_table(config_file)
 
 
 def _list_all_dep_checkouts(deps_dir: Path) -> dict[str, list[tuple[str, Path]]]:
     """Return all dependency checkouts found on disk.
 
     Returns a dict mapping dep name to a list of (checkout_name, path) tuples.
+    Only includes directories that are git repos, consistent with
+    ``_dependency_repo_paths``.
     """
     result: dict[str, list[tuple[str, Path]]] = {}
     if not is_dir(deps_dir):
         return result
-    for dep_dir in sorted(p for p in deps_dir.iterdir() if p.is_dir()):
+    for dep_dir in sorted(p for p in deps_dir.iterdir() if is_dir(p)):
         entries: list[tuple[str, Path]] = []
-        for child in sorted(p for p in dep_dir.iterdir() if p.is_dir()):
+        for child in sorted(
+            p
+            for p in dep_dir.iterdir()
+            if is_dir(p) and exists(p / ".git") and git_helpers.is_git_repo(p)
+        ):
             entries.append((child.name, child))
         if entries:
             result[dep_dir.name] = entries
@@ -81,7 +53,7 @@ def _list_all_dep_checkouts(deps_dir: Path) -> dict[str, list[tuple[str, Path]]]
 def list_deps(
     *,
     verbose: bool = False,
-    all_checks: bool = False,
+    all_checkouts: bool = False,
     cwd: Path | None = None,
 ) -> None:
     """Print dependency checkouts for the current project checkout (or all).
@@ -96,7 +68,7 @@ def list_deps(
     project_dir = require_current_project_dir(cwd=cwd)
     deps_dir = project_deps_dir(project_dir)
 
-    if all_checks:
+    if all_checkouts:
         all_deps = _list_all_dep_checkouts(deps_dir)
         for dep_name, entries in all_deps.items():
             for checkout_name, checkout_path in entries:
@@ -116,5 +88,5 @@ def list_deps(
             print(f"{dep_name}/{dep_branch}")
 
 
-def run(*, verbose: bool = False, all_checks: bool = False) -> None:
-    list_deps(verbose=verbose, all_checks=all_checks)
+def run(*, verbose: bool = False, all_checkouts: bool = False) -> None:
+    list_deps(verbose=verbose, all_checkouts=all_checkouts)

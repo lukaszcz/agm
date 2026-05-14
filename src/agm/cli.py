@@ -853,13 +853,13 @@ def dep_callback(
 @dep_app.command(name="list")
 def dep_list(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show checkout paths."),
-    all: bool = typer.Option(False, "--all", help="List checkouts for every worktree."),
+    list_all: bool = typer.Option(False, "--all", help="List checkouts for every worktree."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
     del _dry_run
-    dep_list_command.run(verbose=verbose, all_checks=all)
+    dep_list_command.run(verbose=verbose, all_checkouts=list_all)
 
 
 @dep_app.command(name="new")

@@ -51,6 +51,8 @@ def write_file_if_missing(path: Path, content: str) -> None:
 
 
 def ensure_gitignore_entry(path: Path, entry: str) -> None:
+    if not entry:
+        return
     if exists(path):
         content = read_text(path, encoding="utf-8")
         existing_lines = content.splitlines()

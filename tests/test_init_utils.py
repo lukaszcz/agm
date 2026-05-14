@@ -175,6 +175,11 @@ class TestWriteFileIfMissing:
 
 
 class TestEnsureGitignoreEntry:
+    def test_empty_entry_is_noop(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        ensure_gitignore_entry(gitignore, "")
+        assert not gitignore.exists()
+
     def test_creates_file_when_missing(self, tmp_path: Path) -> None:
         gitignore = tmp_path / ".gitignore"
         ensure_gitignore_entry(gitignore, ".agm")

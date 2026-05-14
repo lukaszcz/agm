@@ -1173,8 +1173,8 @@ def refine(
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(False, "--no-log", help="Disable command output logging."),
-    save_review: bool = typer.Option(
-        True,
+    save_review: bool | None = typer.Option(
+        None,
         "--save-review/--no-save-review",
         help="Save each review output to the default review file path.",
     ),

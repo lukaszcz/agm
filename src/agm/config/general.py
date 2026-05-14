@@ -432,7 +432,7 @@ def _optional_positive_int(table: TomlDict, key: str) -> int | None:
 
 def _optional_bool(table: TomlDict, key: str) -> bool:
     value = table.get(key)
-    return value if isinstance(value, bool) else False
+    return value if isinstance(value, bool) else True
 
 
 def _select_command_table(

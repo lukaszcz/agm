@@ -53,7 +53,9 @@ def _unlink_temp_file(path: Path, *, temp_files: list[Path]) -> None:
 
 def _review_args_from_refine(args: RefineArgs, config: RefineConfig) -> ReviewArgs:
     runner = args.reviewer or args.runner or config.reviewer or config.runner
-    save_review = args.save_review or args.review_file is not None
+    save_review = (
+        args.save_review if args.save_review is not None else config.save_review
+    ) or args.review_file is not None
     return ReviewArgs(
         runner=runner,
         scope=args.scope or config.scope,

@@ -555,7 +555,7 @@ def test_review_once_saves_output_to_default_review_file(
     assert review_file.read_text(encoding="utf-8") == "review output\n"
     assert (
         capsys.readouterr().out
-        == "Saved review to .agent-files/review-20260513-142530-000000.md\n"
+        == "\nSaved review to .agent-files/review-20260513-142530-000000.md\n"
     )
 
 
@@ -1213,7 +1213,7 @@ def test_refine_writes_review_and_revise_output_to_log_file(
 
     log_content = log_file.read_text(encoding="utf-8")
     assert "Step 1" in log_content
-    assert log_content.endswith("review stdout\nreview stderr\nrevise stdout\nrevise stderr\n")
+    assert log_content.endswith("review stdout\nreview stderr\n\nrevise stdout\nrevise stderr\n")
 
 
 def test_refine_step_header_is_printed_and_logged(

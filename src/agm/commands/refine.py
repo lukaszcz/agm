@@ -125,6 +125,7 @@ def refine(args: RefineArgs) -> None:
                     stderr_callback=stderr_callback,
                 )
                 review_file = _write_review_file(review_output, temp_files=temp_files)
+                stdout_callback("\n")
             revise_output = revise_once(
                 _revise_args_from_refine(args, config, review_file),
                 stdout_callback=stdout_callback,

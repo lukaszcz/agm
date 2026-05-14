@@ -162,7 +162,7 @@ def review_once(
             stderr_callback(f"warning: overwriting existing review file {review_file}\n")
         saved_review_file = _save_review_output(review_file, output)
         if saved_review_file is not None:
-            stdout_callback(f"Saved review to {display_path(saved_review_file)}\n")
+            stdout_callback(f"\nSaved review to {display_path(saved_review_file)}\n")
         return output
     finally:
         cleanup_temp_files(temp_files)

@@ -242,7 +242,13 @@ class TestListDepsCurrentCheckout:
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
+            dep_list_cmd,
+            "config_toml_file",
+            lambda pd, branch=None: (
+                project_dir / "config" / branch / "config.toml"
+                if branch
+                else project_dir / "config" / "config.toml"
+            ),
         )
         monkeypatch.setattr(
             dep_list_cmd, "current_config_branch", lambda pd: "feature"
@@ -281,7 +287,13 @@ class TestListDepsCurrentCheckout:
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
+            dep_list_cmd,
+            "config_toml_file",
+            lambda pd, branch=None: (
+                project_dir / "config" / branch / "config.toml"
+                if branch
+                else project_dir / "config" / "config.toml"
+            ),
         )
         monkeypatch.setattr(
             dep_list_cmd, "current_config_branch", lambda pd: None
@@ -319,7 +331,13 @@ class TestListDepsCurrentCheckout:
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
+            dep_list_cmd,
+            "config_toml_file",
+            lambda pd, branch=None: (
+                project_dir / "config" / branch / "config.toml"
+                if branch
+                else project_dir / "config" / "config.toml"
+            ),
         )
         monkeypatch.setattr(
             dep_list_cmd, "current_config_branch", lambda pd: None
@@ -353,7 +371,13 @@ class TestListDepsCurrentCheckout:
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
+            dep_list_cmd,
+            "config_toml_file",
+            lambda pd, branch=None: (
+                project_dir / "config" / branch / "config.toml"
+                if branch
+                else project_dir / "config" / "config.toml"
+            ),
         )
         monkeypatch.setattr(
             dep_list_cmd, "current_config_branch", lambda pd: None
@@ -506,7 +530,13 @@ class TestRun:
             dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
         )
         monkeypatch.setattr(
-            dep_list_cmd, "config_toml_file", lambda pd, branch=None: project_dir / "config" / branch / "config.toml" if branch else project_dir / "config" / "config.toml"
+            dep_list_cmd,
+            "config_toml_file",
+            lambda pd, branch=None: (
+                project_dir / "config" / branch / "config.toml"
+                if branch
+                else project_dir / "config" / "config.toml"
+            ),
         )
         monkeypatch.setattr(
             dep_list_cmd, "current_config_branch", lambda pd: None

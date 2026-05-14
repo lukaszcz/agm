@@ -244,7 +244,7 @@ class TestLogFile:
     ) -> None:
         log_file = tmp_path / ".agent-files" / "loop-20260513-120000.log"
 
-        prepare_log_file(log_file, explicit=False)
+        prepare_log_file(log_file)
 
         out = capsys.readouterr().out
         assert out == f"Logging to {log_file}\n"

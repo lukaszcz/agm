@@ -43,10 +43,7 @@ def append_log(log_file: Path | None, content: str) -> None:
 
 def prepare_log_file(
     log_file: Path | None,
-    *,
-    explicit: bool,
 ) -> None:
-    del explicit
     if log_file is None:
         return
     print(f"Logging to {display_path(log_file)}")

@@ -98,7 +98,7 @@ def refine(args: RefineArgs) -> None:
         no_log=args.no_log,
         log_file=args.log_file,
     )
-    prepare_log_file(log_file, explicit=args.log_file is not None)
+    prepare_log_file(log_file)
 
     def stdout_callback(chunk: str) -> None:
         append_log(log_file, chunk)

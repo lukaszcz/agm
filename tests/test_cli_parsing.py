@@ -507,6 +507,24 @@ class TestReviewReviseRefine:
         )
         assert result.exit_code != 0
 
+    def test_refine_save_review_defaults_to_true(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.refine_command, "run")
+        result = invoke(runner, ["refine"])
+
+        assert result.exit_code == 0
+        assert calls[0].save_review is True
+
+    def test_refine_no_save_review_disables_save(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.refine_command, "run")
+        result = invoke(runner, ["refine", "--no-save-review"])
+
+        assert result.exit_code == 0
+        assert calls[0].save_review is False
+
     def test_refine_rejects_extra_review_prompt_with_extra_review_prompt_file(
         self, runner: CliRunner
     ) -> None:

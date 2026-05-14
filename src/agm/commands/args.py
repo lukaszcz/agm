@@ -181,7 +181,7 @@ class RefineArgs:
     command_name: str | None = None
     no_log: bool = False
     log_file: str | None = None
-    save_review: bool = False
+    save_review: bool = True
     review_file: str | None = None
 
 

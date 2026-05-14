@@ -1161,8 +1161,8 @@ def refine(
     ),
     no_log: bool = typer.Option(False, "--no-log", help="Disable command output logging."),
     save_review: bool = typer.Option(
-        False,
-        "--save-review",
+        True,
+        "--save-review/--no-save-review",
         help="Save each review output to the default review file path.",
     ),
     review_file: str | None = typer.Option(

@@ -70,4 +70,5 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 
 - Avoid code duplication. Abstract common logic into parameterized functions.
 - Do NOT try to circumvent static analysis tools. Adapt the code to pass `just check` properly - do not ignore checks or suppress rules. If you absolutely need to bypass a static analysis tool, ALWAYS ask the user for approval and explain why this is necessary.
+- Keep docs (README.md and docs/commands.md) and command help texts up to date with implemented command functionality. README.md is a brief description of the AGM program and should not contain overhwelming details, while docs/commands.md and the help texts are comprehensive command references.
 - When finished, verify with `just check`.

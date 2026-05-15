@@ -276,6 +276,7 @@ _HELP_TEXTS: dict[str, str] = {
                    [--revise-prompt TEXT|--revise-prompt-file PATH]
                    [--extra-revise-prompt TEXT|--extra-revise-prompt-file PATH]
                    [--save-review|--no-save-review] [--review-file FILE|auto|none]
+                   [--log-file PATH|--no-log]
 
         Run review/revise cycles until revise returns COMPLETE, or until the
         maximum number of revision attempts is reached. A CONTINUE response
@@ -288,12 +289,17 @@ _HELP_TEXTS: dict[str, str] = {
         [refine] and the same command name is forwarded to review/revise
         config lookup.
 
+        Logging:
+          By default writes refine-YYYYMMDD-HHMMSS.log in the current
+          directory. --log-file PATH writes to a specific file. --no-log
+          disables file logging.
+
         Command config:
           [refine] max_steps, runner, reviewer, reviser, scope, aspects,
           review_prompt, review_prompt_file, extra_review_prompt,
           extra_review_prompt_file, revise_prompt, revise_prompt_file,
-          extra_revise_prompt, extra_revise_prompt_file, and save_review
-          correspond to the CLI options.
+          extra_revise_prompt, extra_revise_prompt_file, save_review,
+          log_file, and no_log correspond to the CLI options.
     """),
     "config": textwrap.dedent("""\
         agm config copy DIRNAME
@@ -523,6 +529,11 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Remove a worktree and delete its local branch.
     """),
+    ("wt", "remove"): textwrap.dedent("""\
+        agm wt remove [-f|--force] BRANCH
+
+        Remove a worktree and delete its local branch.
+    """),
     ("loop", "next"): textwrap.dedent("""\
         agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
                       [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
@@ -590,6 +601,11 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Remove a worktree and delete its local branch.
     """),
+    ("worktree", "rm"): textwrap.dedent("""\
+        agm worktree rm [-f|--force] BRANCH
+
+        Remove a worktree and delete its local branch.
+    """),
     ("dep", "list"): textwrap.dedent("""\
         agm dep list [-v|--verbose] [--all]
 
@@ -614,6 +630,13 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("dep", "rm"): textwrap.dedent("""\
         agm dep rm --all DEP
         agm dep rm TARGET
+
+        Remove a dependency worktree by DEP/NAME_OR_BRANCH, or remove the main
+        checkout with DEP/repo, DEP/MAIN_CHECKOUT, or --all DEP.
+    """),
+    ("dep", "remove"): textwrap.dedent("""\
+        agm dep remove --all DEP
+        agm dep remove TARGET
 
         Remove a dependency worktree by DEP/NAME_OR_BRANCH, or remove the main
         checkout with DEP/repo, DEP/MAIN_CHECKOUT, or --all DEP.

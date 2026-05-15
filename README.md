@@ -106,6 +106,7 @@ Remove a branch worktree and close its tmux session.
 
 ```bash
 agm close feat/search
+agm close --force feat/search
 ```
 
 `repo` and the branch currently checked out in the main checkout resolve to the main checkout and
@@ -134,6 +135,50 @@ remote branches that are not yet merged into `origin/main`.
 agm fetch
 ```
 
+### `agm list`
+
+List all open worktrees, with the main repo at the top. The current worktree is marked with `*`.
+
+```bash
+agm list
+agm list -v
+```
+
+### `agm setup`
+
+Run configured setup scripts for the current checkout.
+
+```bash
+agm setup
+```
+
+### `agm review`
+
+Run the review prompt. Review output is saved to a timestamped file by default.
+
+```bash
+agm review
+agm review --scope "full codebase" implement_feature
+```
+
+### `agm revise`
+
+Run the revision prompt against a review file.
+
+```bash
+agm revise .agent-files/review-20260101-120000-000000.md
+agm revise implement_feature .agent-files/review-20260101-120000-000000.md
+```
+
+### `agm refine`
+
+Run review/revise cycles until the revise response is `COMPLETE` or the step limit is reached.
+
+```bash
+agm refine
+agm refine --max-steps 10 implement_feature
+```
+
 ### `agm loop`
 
 Run an iterative prompt loop using a configured runner, with optional selector-based task
@@ -146,52 +191,15 @@ agm loop step fix_tests --log-file loop.log
 agm loop next review --selector "codex exec"
 ```
 
-**Config** — Loop configuration is loaded from merged `config.toml` files:
-
-- `[loop]` defines default `runner`, `selector`, `no_selector`, and `tasks_dir`
-- `[loop.<command>]` overrides the base loop config for a specific prompt command
-- `agm loop CMD` is shorthand for `agm loop run CMD` when `CMD` is not a built-in
-  subcommand, and selects `[loop.CMD]` overrides
-- CLI flags (`--runner`, `--selector`, `--no-selector`, `--tasks-dir`) override config
-  values; `RUNNER_ARGS` are appended to the final runner command
-
-**Prompt preprocessing** — Before a prompt file is passed to the runner or selector, AGM
-expands environment variable references in the prompt content using `$VAR` or `${VAR}` syntax.
-Unrecognized variables are left unchanged. When expansions modify the content, AGM writes the
-expanded text to a temporary file; otherwise the original file path is used. Beyond the process
-environment, AGM provides:
-
-- `TASKS_DIR` — the resolved tasks directory path
-- `TASK_FILE` — the selected task file path (selector mode; set in the runner process environment at runtime)
-
-**Prompt file path** — AGM passes the resolved prompt file path to the runner/selector:
-
-- by default it is appended as `@<path>` to the command
-- use `%%` or `%{PROMPT_FILE}` in the command to insert the path at a specific position
-  — when either placeholder is present, it is replaced with the path and no `@<path>`
-  suffix is appended
-
-**Selector mode** (default):
-
-- AGM runs the selector with `@select.md`; if the selector returns `COMPLETE`
-  after whitespace is removed, the loop stops
-- otherwise the selector output is treated as the next task path and the runner is invoked
-  with that task file
-- when no explicit selector command is configured, the runner command is used for the
-  progress update
-
-**No-selector mode** (`--no-selector` / `no_selector = true`):
-
-- AGM appends the loop prompt to the runner command; stops when the runner response is
-  `COMPLETE` after whitespace is removed
+**Config** — Loop configuration is loaded from merged `config.toml` `[loop]` and `[loop.<command>]`
+sections. CLI flags override config values; `RUNNER_ARGS` are appended to the final runner command.
 
 **Subcommands**:
 
-- `agm loop step` — single loop iteration (same runner, selector, and logging as `run`)
+- `agm loop step` — single loop iteration
 - `agm loop next` — run `select.md` once; requires selector mode
 
-**Logging** — by default writes `loop-YYYYMMDD-HHMMSS.log` in the current directory;
-`--log-file PATH` writes to a specific file; `--no-log` disables file logging.
+See `agm help loop` for selector/no-selector mode, prompt options, timeout, and logging details.
 
 ### `agm run`
 
@@ -235,6 +243,14 @@ Print shell statements that refresh the current checkout environment from projec
 eval "$(agm config env)"
 ```
 
+### `agm config update`
+
+Create missing project and branch `config.toml` files and commit generated changes.
+
+```bash
+agm config update
+```
+
 ### `agm worktree`
 
 Low-level worktree operations for the main project repo.
@@ -258,6 +274,7 @@ agm wt rm old-branch
 Manage dependency checkouts under the project dependency directory.
 
 ```bash
+agm dep list
 agm dep new https://github.com/org/lib.git
 agm dep new --branch develop https://github.com/org/lib.git
 agm dep switch mylib feat/update
@@ -281,7 +298,8 @@ agm tmux layout 4 --window @1
 
 - `agm wt` → `agm worktree`
 - `agm config cp` → `agm config copy`
-- `agm wt rm` → `agm worktree remove`
+- `agm wt rm` / `agm worktree rm` → `agm worktree remove`
+- `agm dep remove` → `agm dep rm`
 
 ## Help
 

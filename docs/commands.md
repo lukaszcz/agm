@@ -17,12 +17,14 @@ Global options:
 | Command | Description |
 |---|---|
 | `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Open the main checkout or a branch worktree, creating or checking it out when needed |
-| `agm close BRANCH` | Remove a branch worktree and close its tmux session |
+| `agm close [-f\|--force] [-D] BRANCH` | Remove a branch worktree and close its tmux session |
 | `agm init [--embedded \| --workspace]` | Initialize the current directory without cloning a repo |
 | `agm init [--embedded \| --workspace] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
 | `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
 | `agm init --clone [--embedded \| --workspace] [-b\|--branch BRANCH] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
 | `agm fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
+| `agm list [-v\|--verbose]` | List all open worktrees |
+| `agm setup` | Run setup scripts for the current checkout |
 
 `agm open` behavior:
 
@@ -38,10 +40,24 @@ Global options:
 - `-n`, `--num-panes PANES`: create the session with `PANES` panes
 - `-p`, `--parent PARENT`: base a newly created branch worktree on `PARENT`
 
+`agm close` options:
+
+- `-f`, `--force`: force remove the worktree (even with untracked or uncommitted changes) and force delete the branch (`git branch -D`). Implies `-D`.
+- `-D`: force delete the branch (`git branch -D`) instead of safe delete (`git branch -d`). The worktree is only removed if the branch deletion would succeed.
+
 `agm close` notes:
 
 - closes only branch worktrees
 - `repo` and the main checkout branch cannot be removed with `agm close`
+
+`agm list` options:
+
+- `-v`, `--verbose`: show the worktree directory path after each branch name
+
+`agm list` notes:
+
+- the main repo worktree is listed first
+- the current worktree is indicated with a leading `*`
 
 `agm init` options:
 
@@ -63,19 +79,26 @@ Global options:
 
 | Command | Description |
 |---|---|
-| `agm loop [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [--no-log\|--log-file PATH] CMD [RUNNER_ARGS...]` | Shorthand for `agm loop run` when `CMD` is not a built-in subcommand |
-| `agm loop run [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [--no-log\|--log-file PATH] [CMD [RUNNER_ARGS...]]` | Run the loop until completion |
-| `agm loop step [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [--no-log\|--log-file PATH] CMD [RUNNER_ARGS...]` | Perform a single loop iteration |
-| `agm loop next [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [CMD [RUNNER_ARGS...]]` | Run the progress-update prompt once |
+| `agm loop [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [--no-log\|--log-file PATH] [--prompt TEXT\|--prompt-file PATH] [--selector-prompt TEXT\|--selector-prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] [--extra-selector-prompt TEXT\|--extra-selector-prompt-file PATH] [--timeout DURATION] CMD [RUNNER_ARGS...]` | Shorthand for `agm loop run` when `CMD` is not a built-in subcommand |
+| `agm loop run [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [--no-log\|--log-file PATH] [--prompt TEXT\|--prompt-file PATH] [--selector-prompt TEXT\|--selector-prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] [--extra-selector-prompt TEXT\|--extra-selector-prompt-file PATH] [--timeout DURATION] [CMD [RUNNER_ARGS...]]` | Run the loop until completion |
+| `agm loop step [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [--no-log\|--log-file PATH] [--prompt TEXT\|--prompt-file PATH] [--selector-prompt TEXT\|--selector-prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] [--extra-selector-prompt TEXT\|--extra-selector-prompt-file PATH] [--timeout DURATION] CMD [RUNNER_ARGS...]` | Perform a single loop iteration |
+| `agm loop next [--runner COMMAND] [--selector COMMAND\|--no-selector] [--tasks-dir DIR] [--prompt TEXT\|--prompt-file PATH] [--selector-prompt TEXT\|--selector-prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] [--extra-selector-prompt TEXT\|--extra-selector-prompt-file PATH] [--timeout DURATION] [CMD [RUNNER_ARGS...]]` | Run the progress-update prompt once |
 
 Loop config is loaded from merged `config.toml` files:
 
-- `[loop]` defines default `runner`, `selector`, `no_selector`, and `tasks_dir`
+- `[loop]` defines default `runner`, `selector`, `no_selector`, `tasks_dir`, `timeout`, `prompt`/`prompt_file`, `selector_prompt`/`selector_prompt_file`, `extra_prompt`/`extra_prompt_file`, and `extra_selector_prompt`/`extra_selector_prompt_file`
 - `[loop.<command>]` overrides the base loop config for a specific prompt command
 - `agm loop CMD` is shorthand for `agm loop run CMD` when `CMD` is not a built-in subcommand, and selects `[loop.CMD]` overrides
-- CLI flags (`--runner`, `--selector`, `--no-selector`, `--tasks-dir`) override config values
+- CLI flags (`--runner`, `--selector`, `--no-selector`, `--tasks-dir`, `--prompt`, `--prompt-file`, `--selector-prompt`, `--selector-prompt-file`, `--extra-prompt`, `--extra-prompt-file`, `--extra-selector-prompt`, `--extra-selector-prompt-file`, `--timeout`) override config values
 - `RUNNER_ARGS` are appended to the final runner command after AGM resolves `--runner`, config, or the built-in default
 - bare `agm loop` prints help text
+
+Prompt options:
+
+- `--prompt TEXT` / `--prompt-file PATH`: override the default runner prompt (task file in selector mode, `loop.md` in no-selector mode). Mutually exclusive.
+- `--selector-prompt TEXT` / `--selector-prompt-file PATH`: override the default `select.md` selector prompt. Mutually exclusive.
+- `--extra-prompt TEXT` / `--extra-prompt-file PATH`: append extra content to the runner prompt, after the primary prompt. Mutually exclusive.
+- `--extra-selector-prompt TEXT` / `--extra-selector-prompt-file PATH`: append extra content to the selector prompt, after the primary selector prompt. Mutually exclusive.
 
 Prompt preprocessing:
 
@@ -91,6 +114,13 @@ Prompt file path:
 - AGM passes the resolved prompt file path to the runner/selector command
 - by default it is appended as `@<path>` to the command
 - use `%%` or `%{PROMPT_FILE}` in the command to insert the path at a specific position — when either placeholder is present, it is replaced with the path and no `@<path>` suffix is appended
+
+Timeout:
+
+- `--timeout DURATION` sets an idle timeout that kills the runner process tree when no output is received for the given duration
+- accepts seconds (plain number or `Ns`), minutes (`Nm`), or hours (`Nh`)
+- disabled by default
+- also configurable via `[loop] timeout` in `config.toml`
 
 Selector mode (default):
 
@@ -122,13 +152,18 @@ Logging:
 | `agm worktree new [-d\|--dir DIR] BRANCH` | Create a new branch worktree or check out an existing branch |
 | `agm worktree setup` | Run configured setup scripts for the current checkout |
 | `agm worktree remove [-f\|--force] BRANCH` | Remove a worktree and delete its local branch |
+| `agm worktree rm [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
 | `agm wt new [-d\|--dir DIR] BRANCH` | Alias form of `agm worktree new` |
 | `agm wt setup` | Alias form of `agm worktree setup` |
 | `agm wt rm [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
+| `agm wt remove [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
+| `agm dep list [-v\|--verbose] [--all]` | List dependency checkouts |
 | `agm dep new [-b\|--branch BRANCH] REPO_URL` | Clone a new dependency checkout |
 | `agm dep switch [-b\|--branch] DEP BRANCH` | Select or add a dependency checkout |
 | `agm dep rm --all DEP` | Remove an entire dependency directory |
 | `agm dep rm DEP/NAME_OR_BRANCH \| DEP/repo \| DEP/MAIN_CHECKOUT` | Remove a dependency checkout or worktree |
+| `agm dep remove --all DEP` | Alias form of `agm dep rm --all` |
+| `agm dep remove DEP/NAME_OR_BRANCH \| DEP/repo \| DEP/MAIN_CHECKOUT` | Alias form of `agm dep rm` |
 
 `agm worktree new` options:
 
@@ -154,6 +189,11 @@ Logging:
 
 Dependency commands track selected dependency checkout names in config `config.toml` `[deps]` tables. Environment loading turns those entries into dependency path variables, so `[deps].vyper-automation = "feat/app"` provides `VYPER_AUTOMATION=/path/to/proj/deps/vyper-automation/feat/app` before `.env` and `env.sh` are loaded.
 
+`agm dep list` options:
+
+- `-v`, `--verbose`: show the checkout path after each dep/branch
+- `--all`: list all dependency checkouts on disk instead of only the current checkout's dependencies
+
 `agm dep rm` targets:
 
 - `DEP/NAME_OR_BRANCH`: remove a dependency checkout by directory name under `deps/DEP/` or by checked-out branch name
@@ -164,6 +204,80 @@ Dependency commands track selected dependency checkout names in config `config.t
 
 - `--all DEP`: use `agm dep rm --all DEP` to remove the entire dependency directory, including the main checkout and any linked worktrees
 
+## Agent commands
+
+| Command | Description |
+|---|---|
+| `agm review [COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS] [--extra-aspects REVIEW_ASPECTS] [--runner COMMAND] [--prompt TEXT\|--prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] [--review-file FILE\|auto\|none\|--no-review-file]` | Run the review prompt |
+| `agm revise [COMMAND] [--runner COMMAND] [--prompt TEXT\|--prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] REVIEW_FILE` | Run the revision prompt |
+| `agm refine [COMMAND] [--max-steps N] [--runner COMMAND] [--reviewer COMMAND] [--reviser COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS] [--review-prompt TEXT\|--review-prompt-file PATH] [--extra-review-prompt TEXT\|--extra-review-prompt-file PATH] [--revise-prompt TEXT\|--revise-prompt-file PATH] [--extra-revise-prompt TEXT\|--extra-revise-prompt-file PATH] [--save-review\|--no-save-review] [--review-file FILE\|auto\|none] [--log-file PATH\|--no-log]` | Run review/revise refinement cycles |
+
+`agm review` runs the review prompt with `REVIEW_SCOPE` and `REVIEW_ASPECTS` available during prompt
+preprocessing. The default prompt is `review.md`. Review output is saved to
+`.agent-files/review-YYYYMMDD-HHMMSS-microseconds.md` by default. Use `--review-file FILE` to choose
+a path, `--review-file none` or `--no-review-file` to disable saving, and `--review-file auto` to
+use the default timestamped path. When `COMMAND` is provided, config from `[review.COMMAND]` is
+merged over `[review]`.
+
+`agm review` options:
+
+- `--runner COMMAND`: review runner command. When unset, the same default runner as `agm loop` is used.
+- `--scope REVIEW_SCOPE`: review scope (default: `changes on current branch`)
+- `--aspects REVIEW_ASPECTS`: review aspects (default: `correctness, completeness, maintainability, adherence to AGENTS.md`)
+- `--extra-aspects REVIEW_ASPECTS`: additional review aspects appended to the defaults
+- `--prompt TEXT` / `--prompt-file PATH`: override the default `review.md` prompt. Mutually exclusive.
+- `--extra-prompt TEXT` / `--extra-prompt-file PATH`: append extra content to the review prompt. Mutually exclusive.
+- `--review-file FILE|auto|none` / `--no-review-file`: save review output to a file. `auto` uses the default timestamped path, `none` or `--no-review-file` disables saving.
+
+`agm review` config keys in `config.toml`:
+
+- `[review] runner`, `scope`, `aspects`, `extra_aspects`, `prompt`, `prompt_file`, `extra_prompt`, `extra_prompt_file`, `review_file`
+- `[review.<command>]` overrides the base review config for a specific command
+
+`agm revise` runs the revision prompt with `REVIEW_FILE` available during prompt preprocessing. The
+default prompt is `revise.md`. When `COMMAND` is provided before `REVIEW_FILE`, config from
+`[revise.COMMAND]` is merged over `[revise]`.
+
+`agm revise` options:
+
+- `--runner COMMAND`: revision runner command. When unset, the same default runner as `agm loop` is used.
+- `--prompt TEXT` / `--prompt-file PATH`: override the default `revise.md` prompt. Mutually exclusive.
+- `--extra-prompt TEXT` / `--extra-prompt-file PATH`: append extra content to the revision prompt. Mutually exclusive.
+
+`agm revise` config keys in `config.toml`:
+
+- `[revise] runner`, `prompt`, `prompt_file`, `extra_prompt`, `extra_prompt_file`
+- `[revise.<command>]` overrides the base revise config for a specific command
+
+`agm refine` runs review/revise cycles until the revise response is `COMPLETE`, or until the maximum
+number of revision attempts is reached. A `CONTINUE` response from revise starts a fresh review;
+any other non-`COMPLETE` response retries revise with the same review file. The default maximum
+is 20. Review output is saved to the default timestamped review path by default.
+
+When `COMMAND` is provided, config from `[refine.COMMAND]` is merged over `[refine]` and the same
+command name is forwarded to review/revise config lookup.
+
+`agm refine` options:
+
+- `--max-steps N`: maximum revision attempts (default: 20)
+- `--runner COMMAND`: runner command for both review and revise
+- `--reviewer COMMAND`: review runner command. Overrides `--runner` for the review step.
+- `--reviser COMMAND`: revision runner command. Overrides `--runner` for the revise step.
+- `--scope REVIEW_SCOPE`: review scope
+- `--aspects REVIEW_ASPECTS`: review aspects
+- `--review-prompt TEXT` / `--review-prompt-file PATH`: override the default review prompt. Mutually exclusive.
+- `--extra-review-prompt TEXT` / `--extra-review-prompt-file PATH`: append extra content to the review prompt. Mutually exclusive.
+- `--revise-prompt TEXT` / `--revise-prompt-file PATH`: override the default revision prompt. Mutually exclusive.
+- `--extra-revise-prompt TEXT` / `--extra-revise-prompt-file PATH`: append extra content to the revision prompt. Mutually exclusive.
+- `--save-review` / `--no-save-review`: save or skip saving review output (default: save)
+- `--review-file FILE|auto|none`: review output file path, `auto`, or `none`
+- `--log-file PATH` / `--no-log`: write command output to a log file or disable logging
+
+`agm refine` config keys in `config.toml`:
+
+- `[refine] max_steps`, `runner`, `reviewer`, `reviser`, `scope`, `aspects`, `review_prompt`, `review_prompt_file`, `extra_review_prompt`, `extra_review_prompt_file`, `revise_prompt`, `revise_prompt_file`, `extra_revise_prompt`, `extra_revise_prompt_file`, `save_review`, `log_file`, `no_log`
+- `[refine.<command>]` overrides the base refine config for a specific command
+
 ## Configuration, sandboxing, and tmux
 
 | Command | Description |
@@ -171,6 +285,7 @@ Dependency commands track selected dependency checkout names in config `config.t
 | `agm config copy DIRNAME` | Copy known project config files into an existing target directory |
 | `agm config cp DIRNAME` | Alias form of `agm config copy` |
 | `agm config env` | Print shell statements for refreshing the current checkout environment |
+| `agm config update` | Create missing config.toml files and commit generated changes |
 | `agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
 | `agm tmux open [-d\|--detach] [-n\|--num-panes PANES] [SESSION]` | Open a tmux session |
 | `agm tmux close SESSION` | Close a tmux session |
@@ -192,6 +307,10 @@ Apply the printed shell statements with:
 ```bash
 eval "$(agm config env)"
 ```
+
+`agm config update` creates missing project and branch `config.toml` files under the project
+config directory, updates dependency configuration entries, and commits any generated
+changes to the config repository's git history with a `chore: update config` commit message.
 
 `agm run` config lookup:
 
@@ -245,7 +364,10 @@ Sandbox settings resolution:
 | Alias | Canonical form |
 |---|---|
 | `agm wt` | `agm worktree` |
-| `agm config cp` | `agm config copy` |
 | `agm wt rm` | `agm worktree remove` |
+| `agm wt remove` | `agm worktree remove` |
+| `agm worktree rm` | `agm worktree remove` |
+| `agm config cp` | `agm config copy` |
+| `agm dep remove` | `agm dep rm` |
 
 Use `agm help` to show the command overview and `agm help <command>` for detailed command help.

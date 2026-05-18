@@ -3318,7 +3318,7 @@ class TestSandbox:
         assert result.returncode == 0
         _assert_systemd_run_command(
             result,
-            memory_limit="20G",
+            memory_limit="32G",
             swap_limit="0",
             inner_command=f"srt --settings {work / '.sandbox' / 'npm.json'} -- npm test --coverage",
         )
@@ -3573,7 +3573,7 @@ class TestSandbox:
         assert result.returncode == 0
         _assert_systemd_run_command(
             result,
-            memory_limit="20G",
+            memory_limit="32G",
             swap_limit=None,
             inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
@@ -3595,7 +3595,7 @@ class TestSandbox:
         assert result.returncode == 0
         _assert_systemd_run_command(
             result,
-            memory_limit="20G",
+            memory_limit="32G",
             swap_limit="infinity",
             inner_command=f"srt --settings {work / '.sandbox' / 'echo.json'} -- echo hi",
         )
@@ -6582,8 +6582,8 @@ class TestHelp:
         assert "$HOME/.agm/config.toml" in result.stdout
         assert "project config.toml and ./.agm/config.toml" in result.stdout
         assert '[run.<command>] alias = "<other-command>"' in result.stdout
-        assert '[run] memory = "20G"' in result.stdout or (
-            "The default\n               memory limit is 20G" in result.stdout
+        assert '[run] memory = "32G"' in result.stdout or (
+            "The default\n               memory limit is 32G" in result.stdout
         )
         assert "--memory LIMIT" in result.stdout
         assert "--swap LIMIT" in result.stdout

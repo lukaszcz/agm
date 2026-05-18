@@ -16,7 +16,7 @@ from agm.core import dry_run
 from agm.core.process import run_foreground
 from agm.sandbox import srt
 
-DEFAULT_MEMORY_LIMIT = "20G"
+DEFAULT_MEMORY_LIMIT = "32G"
 DEFAULT_SWAP_LIMIT = "0"
 _SYSTEMD_DELEGATED_CGROUP_BOOTSTRAP = (
     'CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup); '

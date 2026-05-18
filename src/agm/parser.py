@@ -402,7 +402,7 @@ _HELP_TEXTS: dict[str, str] = {
                        Delegate=yes.
                        The wrapper exports SANDBOX_CGROUP and enables the
                        memory controller for descendant cgroups. The default
-                       memory limit is 20G. Use 0 for a zero limit or
+                       memory limit is 32G. Use 0 for a zero limit or
                        unlimited for no memory cap.
           --swap LIMIT
                        Set MemorySwapMax=LIMIT in the delegated systemd-run

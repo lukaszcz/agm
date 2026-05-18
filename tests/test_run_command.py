@@ -93,7 +93,7 @@ def test_run_delegates_sandbox_execution_to_srt(
             "--scope",
             "-q",
             "-p",
-            "MemoryMax=20G",
+            "MemoryMax=32G",
             "-p",
             "MemorySwapMax=0",
             "-p",
@@ -353,7 +353,7 @@ def test_run_no_swap_limit_omits_memory_swap_max_property(
 
     process_prefix = captured["process_prefix"]
     assert isinstance(process_prefix, list)
-    assert "MemoryMax=20G" in process_prefix
+    assert "MemoryMax=32G" in process_prefix
     assert "MemorySwapMax=0" not in process_prefix
     assert captured["interrupt_cleanup_cmd"] is not None
 

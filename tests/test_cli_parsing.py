@@ -505,6 +505,34 @@ class TestReviewReviseRefine:
         result = invoke(runner, ["refine", "--max-steps", "0"])
         assert result.exit_code != 0
 
+    def test_refine_accepts_max_steps_unlimited(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.refine_command, "run")
+        result = invoke(runner, ["refine", "--max-steps", "unlimited"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].max_steps is None
+        assert calls[0].no_max_steps is True
+
+    def test_refine_accepts_no_max_steps_flag(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.refine_command, "run")
+        result = invoke(runner, ["refine", "--no-max-steps"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].max_steps is None
+        assert calls[0].no_max_steps is True
+
+    def test_refine_rejects_no_max_steps_with_max_steps(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["refine", "--no-max-steps", "--max-steps", "5"])
+        assert result.exit_code != 0
+
+    def test_refine_rejects_invalid_max_steps_value(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["refine", "--max-steps", "abc"])
+        assert result.exit_code != 0
+
     def test_refine_rejects_no_log_with_log_file(self, runner: CliRunner) -> None:
         result = invoke(runner, ["refine", "--no-log", "--log-file", "out.log"])
         assert result.exit_code != 0

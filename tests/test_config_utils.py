@@ -667,3 +667,35 @@ class TestOptionalBool:
 
     def test_custom_default_ignored_when_value_is_bool(self) -> None:
         assert _optional_bool({"flag": False}, "flag", default=True) is False
+
+
+def test_load_refine_config_no_max_steps(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(
+        '[refine]\nno_max_steps = true\n',
+        encoding="utf-8",
+    )
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert refine.no_max_steps is True
+    assert refine.max_steps is None
+
+
+def test_load_refine_config_max_steps_unlimited(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(
+        '[refine]\nmax_steps = "unlimited"\n',
+        encoding="utf-8",
+    )
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    refine = load_refine_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert refine.max_steps is None
+    assert refine.no_max_steps is False

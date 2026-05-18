@@ -217,7 +217,7 @@ Dependency commands track selected dependency checkout names in config `config.t
 |---|---|
 | `agm review [COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS] [--extra-aspects REVIEW_ASPECTS] [--runner COMMAND] [--prompt TEXT\|--prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] [--review-file FILE\|auto\|none\|--no-review-file]` | Run the review prompt |
 | `agm revise [COMMAND] [--runner COMMAND] [--prompt TEXT\|--prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] REVIEW_FILE` | Run the revision prompt |
-| `agm refine [COMMAND] [--max-steps N] [--runner COMMAND] [--reviewer COMMAND] [--reviser COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS] [--review-prompt TEXT\|--review-prompt-file PATH] [--extra-review-prompt TEXT\|--extra-review-prompt-file PATH] [--revise-prompt TEXT\|--revise-prompt-file PATH] [--extra-revise-prompt TEXT\|--extra-revise-prompt-file PATH] [--save-review\|--no-save-review] [--review-file FILE\|auto\|none] [--log-file PATH\|--no-log]` | Run review/revise refinement cycles |
+| `agm refine [COMMAND] [--max-steps N\|unlimited] [--no-max-steps] [--runner COMMAND] [--reviewer COMMAND] [--reviser COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS] [--review-prompt TEXT\|--review-prompt-file PATH] [--extra-review-prompt TEXT\|--extra-review-prompt-file PATH] [--revise-prompt TEXT\|--revise-prompt-file PATH] [--extra-revise-prompt TEXT\|--extra-revise-prompt-file PATH] [--save-review\|--no-save-review] [--review-file FILE\|auto\|none] [--log-file PATH\|--no-log]` | Run review/revise refinement cycles |
 
 `agm review` runs the review prompt with `REVIEW_SCOPE` and `REVIEW_ASPECTS` available during prompt
 preprocessing. The default prompt is `review.md`. Review output is saved to
@@ -266,7 +266,8 @@ command name is forwarded to review/revise config lookup.
 
 `agm refine` options:
 
-- `--max-steps N`: maximum revision attempts (default: 20)
+- `--max-steps N|unlimited`: maximum revision attempts (default: 20). Use `unlimited` for no limit.
+- `--no-max-steps`: disable the step limit (run until COMPLETE). Mutually exclusive with `--max-steps`.
 - `--runner COMMAND`: runner command for both review and revise
 - `--reviewer COMMAND`: review runner command. Overrides `--runner` for the review step.
 - `--reviser COMMAND`: revision runner command. Overrides `--runner` for the revise step.
@@ -282,7 +283,7 @@ command name is forwarded to review/revise config lookup.
 
 `agm refine` config keys in `config.toml`:
 
-- `[refine] max_steps`, `runner`, `reviewer`, `reviser`, `scope`, `aspects`, `review_prompt`, `review_prompt_file`, `extra_review_prompt`, `extra_review_prompt_file`, `revise_prompt`, `revise_prompt_file`, `extra_revise_prompt`, `extra_revise_prompt_file`, `save_review`, `log_file`, `no_log`
+- `[refine] max_steps`, `no_max_steps`, `runner`, `reviewer`, `reviser`, `scope`, `aspects`, `review_prompt`, `review_prompt_file`, `extra_review_prompt`, `extra_review_prompt_file`, `revise_prompt`, `revise_prompt_file`, `extra_revise_prompt`, `extra_revise_prompt_file`, `save_review`, `log_file`, `no_log`
 - `[refine.<command>]` overrides the base refine config for a specific command
 
 ## Configuration, sandboxing, and tmux

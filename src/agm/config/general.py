@@ -183,6 +183,7 @@ class RefineConfig:
     """Resolved refine-command configuration."""
 
     max_steps: int | None
+    no_max_steps: bool
     runner: str | None
     reviewer: str | None
     reviser: str | None
@@ -408,8 +409,10 @@ def _optional_str(table: TomlDict, key: str) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _optional_positive_int(table: TomlDict, key: str) -> int | None:
+def _optional_positive_int_or_unlimited(table: TomlDict, key: str) -> int | None:
     value = table.get(key)
+    if isinstance(value, str) and value.strip().lower() == "unlimited":
+        return None
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return None
@@ -505,7 +508,8 @@ def load_refine_config(
         require_command=require_command,
     )
     return RefineConfig(
-        max_steps=_optional_positive_int(table, "max_steps"),
+        max_steps=_optional_positive_int_or_unlimited(table, "max_steps"),
+        no_max_steps=_optional_bool(table, "no_max_steps"),
         runner=_optional_str(table, "runner"),
         reviewer=_optional_str(table, "reviewer"),
         reviser=_optional_str(table, "reviser"),

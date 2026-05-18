@@ -545,10 +545,22 @@ def _validate_refine_prompt_options(
         )
 
 
-def _positive_int(value: int | None, *, command_path: Sequence[str], name: str) -> int | None:
-    if value is not None and value < 1:
+def _parse_max_steps(
+    value: str | None, *, command_path: Sequence[str], name: str
+) -> int | None:
+    if value is None:
+        return None
+    if value.strip().lower() == "unlimited":
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        exit_with_usage_error(
+            command_path, f"error: {name} must be a positive integer or 'unlimited'"
+        )
+    if parsed < 1:
         exit_with_usage_error(command_path, f"error: {name} must be positive")
-    return value
+    return parsed
 
 
 app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
@@ -1116,10 +1128,15 @@ def revise(
 @app.command()
 def refine(
     command_name: str | None = typer.Argument(None, metavar="COMMAND"),
-    max_steps: int | None = typer.Option(
+    max_steps: str | None = typer.Option(
         None,
         "--max-steps",
-        help="Maximum revision attempts.",
+        help="Maximum revision attempts. Use 'unlimited' for no limit.",
+    ),
+    no_max_steps: bool = typer.Option(
+        False,
+        "--no-max-steps",
+        help="Disable the step limit (run until COMPLETE).",
     ),
     runner: str | None = typer.Option(
         None,
@@ -1218,9 +1235,17 @@ def refine(
             ["refine"],
             "error: --no-log and --log-file are mutually exclusive",
         )
+    if no_max_steps and max_steps is not None:
+        exit_with_usage_error(
+            ["refine"],
+            "error: --no-max-steps and --max-steps are mutually exclusive",
+        )
+    parsed_max_steps = _parse_max_steps(max_steps, command_path=["refine"], name="--max-steps")
+    effective_no_max_steps = no_max_steps or (max_steps is not None and parsed_max_steps is None)
     refine_command.run(
         RefineArgs(
-            max_steps=_positive_int(max_steps, command_path=["refine"], name="--max-steps"),
+            max_steps=parsed_max_steps,
+            no_max_steps=effective_no_max_steps,
             runner=runner,
             reviewer=reviewer,
             reviser=reviser,

@@ -274,7 +274,7 @@ _HELP_TEXTS: dict[str, str] = {
           correspond to the CLI options.
     """),
     "refine": textwrap.dedent("""\
-        agm refine [COMMAND] [--max-steps N] [--runner COMMAND]
+        agm refine [COMMAND] [--max-steps N|unlimited] [--no-max-steps] [--runner COMMAND]
                    [--reviewer COMMAND] [--reviser COMMAND]
                    [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
                    [--review-prompt TEXT|--review-prompt-file PATH]
@@ -301,7 +301,7 @@ _HELP_TEXTS: dict[str, str] = {
           disables file logging.
 
         Command config:
-          [refine] max_steps, runner, reviewer, reviser, scope, aspects,
+          [refine] max_steps, no_max_steps, runner, reviewer, reviser, scope, aspects,
           review_prompt, review_prompt_file, extra_review_prompt,
           extra_review_prompt_file, revise_prompt, revise_prompt_file,
           extra_revise_prompt, extra_revise_prompt_file, save_review,

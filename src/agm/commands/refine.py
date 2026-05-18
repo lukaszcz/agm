@@ -92,7 +92,10 @@ def _revise_args_from_refine(
 
 def refine(args: RefineArgs) -> None:
     config = _refine_config(args.command_name)
-    max_steps = args.max_steps or config.max_steps or DEFAULT_MAX_STEPS
+    if args.no_max_steps or config.no_max_steps:
+        max_steps = None
+    else:
+        max_steps = args.max_steps or config.max_steps or DEFAULT_MAX_STEPS
     log_file = resolve_log_file(
         command_name="refine",
         no_log=args.no_log,
@@ -112,7 +115,7 @@ def refine(args: RefineArgs) -> None:
     try:
         step = 0
         review_file: Path | None = None
-        while step < max_steps:
+        while max_steps is None or step < max_steps:
             step += 1
             header = step_header_text(step)
             append_log(log_file, header)

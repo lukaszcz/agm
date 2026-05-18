@@ -165,6 +165,7 @@ class ReviseArgs:
 @dataclass(slots=True)
 class RefineArgs:
     max_steps: int | None
+    no_max_steps: bool
     runner: str | None
     reviewer: str | None
     reviser: str | None

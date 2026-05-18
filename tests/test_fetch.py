@@ -85,6 +85,55 @@ class TestFetchRepo:
         assert synced == [repo_dir]
 
 
+class TestFetchProjectRepos:
+    def test_returns_main_repo_only_without_deps_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+
+        monkeypatch.setattr(fetch_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(fetch_cmd, "is_dir", lambda p: p == repo_dir)
+        monkeypatch.setattr(fetch_cmd, "is_git_repo", lambda p: True)
+
+        assert fetch_cmd.project_git_repos(project_dir) == [repo_dir]
+
+    def test_returns_main_repo_and_dependency_repos(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        deps_dir = project_dir / "deps"
+        dep1_dir = deps_dir / "libfoo"
+        dep1_repo = dep1_dir / "main"
+
+        def fake_is_dir(p: Path) -> bool:
+            return p in {repo_dir, deps_dir, dep1_dir}
+
+        monkeypatch.setattr(fetch_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(fetch_cmd, "project_deps_dir", lambda pd: deps_dir)
+        monkeypatch.setattr(fetch_cmd, "is_dir", fake_is_dir)
+        monkeypatch.setattr(fetch_cmd, "is_git_repo", lambda p: True)
+        monkeypatch.setattr(fetch_cmd, "iterdir", lambda p: [dep1_dir])
+        monkeypatch.setattr(fetch_cmd, "find_first_git_repo", lambda p: dep1_repo)
+
+        assert fetch_cmd.project_git_repos(project_dir) == [repo_dir, dep1_repo]
+
+
+class TestFetchProjectReposRunner:
+    def test_fetches_each_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        dep_repo = project_dir / "deps" / "mylib" / "main"
+        fetched: list[Path] = []
+
+        monkeypatch.setattr(fetch_cmd, "_fetch_repo", lambda pd, repo: fetched.append(repo))
+
+        fetch_cmd.fetch_project_repos(project_dir, [repo_dir, dep_repo])
+
+        assert fetched == [repo_dir, dep_repo]
+
+
 class TestFetchRun:
     """Tests for the fetch run() entrypoint."""
 

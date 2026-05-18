@@ -129,10 +129,19 @@ When only `REPO_URL` is provided, AGM derives the project name from the reposito
 ### `agm fetch`
 
 Fetch the main repo and all checked-out dependencies, then create local tracking branches for
-remote branches that are not yet merged into `origin/main`.
+remote branches that are not yet merged into the default origin branch.
 
 ```bash
 agm fetch
+```
+
+### `agm pull`
+
+Run `agm fetch`, then run `git merge` in every checkout: dependency worktrees, the main repo,
+and project worktrees.
+
+```bash
+agm pull
 ```
 
 ### `agm list`

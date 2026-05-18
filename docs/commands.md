@@ -23,6 +23,7 @@ Global options:
 | `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
 | `agm init --clone [--embedded \| --workspace] [-b\|--branch BRANCH] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
 | `agm fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
+| `agm pull` | Run `agm fetch`, then run `git merge` in every dependency, main repo, and worktree checkout |
 | `agm list [-v\|--verbose]` | List all open worktrees |
 | `agm setup` | Run setup scripts for the current checkout |
 
@@ -49,6 +50,12 @@ Global options:
 
 - closes only branch worktrees
 - `repo` and the main checkout branch cannot be removed with `agm close`
+
+`agm pull` notes:
+
+- runs the same fetch and tracking-branch sync as `agm fetch` first
+- runs `git merge` in each dependency checkout/worktree, the main repo checkout, and each project worktree
+- relies on each checkout's current branch upstream, matching plain `git merge`
 
 `agm list` options:
 

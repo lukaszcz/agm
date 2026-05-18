@@ -287,6 +287,32 @@ class TestFetch:
         assert result.exit_code != 0
 
 
+class TestPull:
+    def test_pull(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.pull_command)
+        result = invoke(runner, ["pull"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+
+    def test_pull_accepts_global_dry_run(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observed: list[bool] = []
+
+        def record(args: object) -> None:
+            del args
+            observed.append(dry_run_state.enabled())
+
+        monkeypatch.setattr(cli.pull_command, "run", record)
+        result = invoke(runner, ["--dry-run", "pull"])
+        assert result.exit_code == 0
+        assert observed == [True]
+
+    def test_pull_rejects_args(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["pull", "extra"])
+        assert result.exit_code != 0
+
+
 class TestReviewReviseRefine:
     def test_review_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.review_command, "run")

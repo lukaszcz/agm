@@ -2440,6 +2440,100 @@ class TestFetch:
         )
 
 
+# ── agm pull ────────────────────────────────────────────────────────────────
+
+
+class TestPull:
+    """agm pull: fetch repo and dependencies, then merge every checkout."""
+
+    def test_pulls_main_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+
+        other = make_working_repo(tmp_path / "other", bare, env)
+        (other / "new.txt").write_text("new")
+        _git("add", ".", cwd=str(other), env=env)
+        _git("commit", "-m", "new commit", cwd=str(other), env=env)
+        _git("push", cwd=str(other), env=env)
+
+        result = run_agm(["pull"], env=env, cwd=str(project))
+
+        assert result.returncode == 0
+        assert "Fetching repo" in result.stdout
+        assert "Merging repo" in result.stdout
+        log = _git("log", "--oneline", cwd=str(project / "repo"), env=env).stdout
+        assert "new commit" in log
+
+    def test_pulls_main_worktrees(self, tmp_path: Path, env: dict[str, str]) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        worktree = project / "worktrees" / "feat/app"
+        _git(
+            "worktree",
+            "add",
+            "-b",
+            "feat/app",
+            str(worktree),
+            cwd=str(project / "repo"),
+            env=env,
+        )
+        _git("push", "-u", "origin", "feat/app", cwd=str(worktree), env=env)
+
+        other = make_working_repo(tmp_path / "other", bare, env)
+        _git("checkout", "feat/app", cwd=str(other), env=env)
+        (other / "remote-worktree.txt").write_text("remote worktree")
+        _git("add", ".", cwd=str(other), env=env)
+        _git("commit", "-m", "update worktree branch", cwd=str(other), env=env)
+        _git("push", cwd=str(other), env=env)
+
+        result = run_agm(["pull"], env=env, cwd=str(project))
+
+        assert result.returncode == 0
+        assert "Merging worktrees/feat/app" in result.stdout
+        assert (worktree / "remote-worktree.txt").read_text() == "remote worktree"
+
+    def test_pulls_dependencies_and_dependency_worktrees(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "dep.git", env)
+        project = _make_project(tmp_path, bare_main, env)
+        dep_repo = project / "deps" / "mylib" / "main"
+        dep_repo.parent.mkdir(parents=True)
+        make_working_repo(dep_repo, bare_dep, env)
+        dep_worktree = project / "deps" / "mylib" / "feat/dep"
+        _git(
+            "worktree",
+            "add",
+            "-b",
+            "feat/dep",
+            str(dep_worktree),
+            cwd=str(dep_repo),
+            env=env,
+        )
+        _git("push", "-u", "origin", "feat/dep", cwd=str(dep_worktree), env=env)
+
+        dep_other = make_working_repo(tmp_path / "dep-other", bare_dep, env)
+        (dep_other / "main-remote.txt").write_text("main remote")
+        _git("add", ".", cwd=str(dep_other), env=env)
+        _git("commit", "-m", "update dependency main", cwd=str(dep_other), env=env)
+        _git("push", cwd=str(dep_other), env=env)
+        _git("checkout", "feat/dep", cwd=str(dep_other), env=env)
+        (dep_other / "dep-worktree-remote.txt").write_text("dep worktree remote")
+        _git("add", ".", cwd=str(dep_other), env=env)
+        _git("commit", "-m", "update dependency worktree", cwd=str(dep_other), env=env)
+        _git("push", cwd=str(dep_other), env=env)
+
+        result = run_agm(["pull"], env=env, cwd=str(project))
+
+        assert result.returncode == 0
+        assert "Fetching deps/mylib/" in result.stdout
+        assert "Merging deps/mylib/main" in result.stdout
+        assert "Merging deps/mylib/feat/dep" in result.stdout
+        assert (dep_repo / "main-remote.txt").read_text() == "main remote"
+        assert (dep_worktree / "dep-worktree-remote.txt").read_text() == "dep worktree remote"
+
+
 # ── agm init ────────────────────────────────────────────────────────────────
 
 
@@ -6441,6 +6535,7 @@ class TestHelp:
             "open",
             "init",
             "fetch",
+            "pull",
             "close",
             "config",
             "worktree",
@@ -6457,6 +6552,7 @@ class TestHelp:
             "open",
             "init",
             "fetch",
+            "pull",
             "close",
             "config",
             "worktree",
@@ -6563,6 +6659,7 @@ class TestHelp:
             (["close", "-h"], ["help", "close"]),
             (["init", "-h"], ["help", "init"]),
             (["fetch", "-h"], ["help", "fetch"]),
+            (["pull", "-h"], ["help", "pull"]),
             (["config", "-h"], ["help", "config"]),
             (["config", "cp", "-h"], ["help", "config", "cp"]),
             (["config", "env", "-h"], ["help", "config", "env"]),

@@ -30,6 +30,7 @@ _HELP_TREE: dict[str, list[str]] = {
         "init",
         "setup",
         "fetch",
+        "pull",
         "config",
         "wt",
         "worktree",

@@ -121,6 +121,7 @@ def test_complete_help_path_suggests_subcommands() -> None:
     assert completion.complete_help_path(_make_ctx(help_command=["config"]), "e") == ["env"]
     assert completion.complete_help_path(_make_ctx(help_command=[]), "o") == ["open"]
     assert completion.complete_help_path(_make_ctx(), "o") == ["open"]
+    assert completion.complete_help_path(_make_ctx(), "p") == ["pull"]
 
 
 def test_complete_dep_name_lists_dependencies(
@@ -1198,7 +1199,7 @@ class TestCompleteHelpPathCtx:
         assert result == ["list", "new", "remove", "rm", "switch"]
 
     def test_no_suggestions_for_leaf_command(self) -> None:
-        result = completion.complete_help_path(_make_ctx(help_command=["fetch"]), "")
+        result = completion.complete_help_path(_make_ctx(help_command=["pull"]), "")
         assert result == []
 
 

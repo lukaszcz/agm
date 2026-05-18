@@ -24,6 +24,7 @@ import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
 import agm.commands.loop.step as loop_step_command
 import agm.commands.open as open_command
+import agm.commands.pull as pull_command
 import agm.commands.refine as refine_command
 import agm.commands.review as review_command
 import agm.commands.revise as revise_command
@@ -967,6 +968,13 @@ def fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> N
     del _help
     del _dry_run
     fetch_command.run(object())
+
+
+@app.command()
+def pull(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
+    del _help
+    del _dry_run
+    pull_command.run(object())
 
 
 @app.command()

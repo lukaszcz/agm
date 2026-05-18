@@ -129,6 +129,12 @@ def fetch_prune_origin(repo_dir: Path, *, env: dict[str, str] | None = None) -> 
     require_success([*_git_args(repo_dir), "fetch", "--prune", "origin"], env=env)
 
 
+def merge(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
+    """Run git merge using the current branch's configured upstream."""
+
+    require_success([*_git_args(repo_dir), "merge"], env=env)
+
+
 def current_branch(repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
     """Return the current branch name."""
 

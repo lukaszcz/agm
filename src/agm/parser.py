@@ -86,6 +86,12 @@ _HELP_TEXTS: dict[str, str] = {
         missing local tracking branches for origin branches not merged into
         the default origin branch in each repo.
     """),
+    "pull": textwrap.dedent("""\
+        agm pull
+
+        Run agm fetch, then run git merge in every checkout: all dependency
+        worktrees, the main repository checkout, and every project worktree.
+    """),
     "loop": textwrap.dedent("""\
         agm loop [--runner COMMAND] [--selector COMMAND|--no-selector]
                  [--tasks-dir DIR] [--no-log|--log-file PATH]
@@ -480,6 +486,7 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
         "fetch",
         "Fetch upstream changes for the repo and all dependencies",
     ),
+    ("pull", "Fetch and merge the repo, dependencies, and worktrees"),
     ("loop", "Run the loop prompt until completion"),
     ("review", "Run the review prompt"),
     ("revise", "Run the revision prompt"),

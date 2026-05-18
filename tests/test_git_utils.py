@@ -30,6 +30,7 @@ from agm.vcs.git import (
     local_branch_exists,
     local_branches,
     ls_remote_head,
+    merge,
     remote_branch_exists,
     remote_unmerged_branches,
     repo_name_from_url,
@@ -320,6 +321,33 @@ class TestFetch:
         )
         fetch_prune_origin(tmp_path)
         assert captured[0] == ["git", "-C", str(tmp_path), "fetch", "--prune", "origin"]
+
+
+class TestMerge:
+    def test_merge_calls_require_success_with_correct_args(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            "agm.vcs.git.require_success",
+            lambda cmd, **kwargs: captured.append(cmd),
+        )
+        merge(tmp_path)
+        assert captured[0] == ["git", "-C", str(tmp_path), "merge"]
+
+    def test_merge_passes_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        received_env: list[dict[str, str] | None] = []
+
+        def fake_require_success(cmd: list[str], **kwargs: object) -> None:
+            del cmd
+            env = kwargs.get("env")
+            assert env is None or isinstance(env, dict)
+            received_env.append(env)
+
+        monkeypatch.setattr("agm.vcs.git.require_success", fake_require_success)
+        custom_env = {"TOKEN": "abc"}
+        merge(tmp_path, env=custom_env)
+        assert received_env[0] == custom_env
 
 
 # ---------------------------------------------------------------------------

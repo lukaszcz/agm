@@ -12,19 +12,12 @@ import agm.project.dependency_env as dep_env_module
 from agm.project.dependency_env import (
     _dependency_config_checkout_name,
     _ensure_config_toml_file,
-    _is_deps_table_header,
-    _is_table_header,
-    _line_sets_toml_key,
     _seed_from_parent_config,
     _set_toml_deps_value,
-    _toml_key,
-    _toml_string,
     config_toml_file,
     dep_env_var_name,
     ensure_dependency_configs_for_branch,
     load_dependency_toml_env,
-    load_toml_file,
-    toml_dict,
     update_all_project_dependency_configs,
     update_dependency_config,
     update_dependency_configs_for_branch,
@@ -135,214 +128,8 @@ class TestConfigTomlFile:
 
 
 # ---------------------------------------------------------------------------
-# _toml_dict
+# _set_toml_deps_value
 # ---------------------------------------------------------------------------
-
-
-class TestTomlDict:
-    def test_dict_is_returned_as_is(self) -> None:
-        d: dict[str, object] = {"key": "value"}
-        result = toml_dict(d)
-        assert result == {"key": "value"}
-
-    def test_none_returns_empty_dict(self) -> None:
-        assert toml_dict(None) == {}
-
-    def test_string_returns_empty_dict(self) -> None:
-        assert toml_dict("string") == {}
-
-    def test_int_returns_empty_dict(self) -> None:
-        assert toml_dict(42) == {}
-
-    def test_list_returns_empty_dict(self) -> None:
-        assert toml_dict([1, 2, 3]) == {}
-
-    def test_empty_dict_returns_empty_dict(self) -> None:
-        assert toml_dict({}) == {}
-
-    def test_nested_dict_returned_correctly(self) -> None:
-        d: dict[str, object] = {"a": {"b": 1}}
-        result = toml_dict(d)
-        assert result == {"a": {"b": 1}}
-
-
-# ---------------------------------------------------------------------------
-# _toml_key
-# ---------------------------------------------------------------------------
-
-
-class TestTomlKey:
-    def test_simple_alphanumeric_key(self) -> None:
-        assert _toml_key("mykey") == "mykey"
-
-    def test_key_with_underscore(self) -> None:
-        assert _toml_key("my_key") == "my_key"
-
-    def test_key_with_hyphen(self) -> None:
-        assert _toml_key("my-key") == "my-key"
-
-    def test_key_with_digits(self) -> None:
-        assert _toml_key("key123") == "key123"
-
-    def test_key_with_dot_is_quoted(self) -> None:
-        assert _toml_key("my.key") == '"my.key"'
-
-    def test_key_with_space_is_quoted(self) -> None:
-        assert _toml_key("my key") == '"my key"'
-
-    def test_empty_string_is_quoted(self) -> None:
-        assert _toml_key("") == '""'
-
-    def test_key_with_slash_is_quoted(self) -> None:
-        assert _toml_key("feat/x") == '"feat/x"'
-
-    def test_key_with_special_chars_is_quoted(self) -> None:
-        assert _toml_key("a@b") == '"a@b"'
-
-    def test_uppercase_letters_are_bare(self) -> None:
-        assert _toml_key("MyKey") == "MyKey"
-
-    def test_mixed_alnum_underscore_hyphen(self) -> None:
-        assert _toml_key("My-Key_1") == "My-Key_1"
-
-
-# ---------------------------------------------------------------------------
-# _toml_string
-# ---------------------------------------------------------------------------
-
-
-class TestTomlString:
-    def test_simple_string(self) -> None:
-        assert _toml_string("hello") == '"hello"'
-
-    def test_string_with_special_chars(self) -> None:
-        assert _toml_string("feat/x") == '"feat/x"'
-
-    def test_empty_string(self) -> None:
-        assert _toml_string("") == '""'
-
-    def test_string_with_backslash(self) -> None:
-        assert _toml_string("a\\b") == '"a\\\\b"'
-
-    def test_string_with_quotes(self) -> None:
-        assert _toml_string('say "hello"') == '"say \\"hello\\""'
-
-
-# ---------------------------------------------------------------------------
-# _is_table_header
-# ---------------------------------------------------------------------------
-
-
-class TestIsTableHeader:
-    def test_simple_table_header(self) -> None:
-        assert _is_table_header("[section]") is True
-
-    def test_table_header_with_leading_whitespace(self) -> None:
-        assert _is_table_header("  [section]") is True
-
-    def test_table_header_with_trailing_whitespace(self) -> None:
-        assert _is_table_header("[section]  ") is True
-
-    def test_table_header_with_comment(self) -> None:
-        assert _is_table_header("[section] # comment") is True
-
-    def test_deps_table_header(self) -> None:
-        assert _is_table_header("[deps]") is True
-
-    def test_dotted_table_header(self) -> None:
-        assert _is_table_header("[section.sub]") is True
-
-    def test_array_of_tables_not_matched(self) -> None:
-        # [[array]] has double brackets — not matched (only single [])
-        assert _is_table_header("[[array]]") is False
-
-    def test_plain_key_value_not_matched(self) -> None:
-        assert _is_table_header("key = value") is False
-
-    def test_comment_line_not_matched(self) -> None:
-        assert _is_table_header("# comment") is False
-
-    def test_empty_brackets_not_matched(self) -> None:
-        # "[]" — the pattern is [^\]]+ so at least one char required
-        assert _is_table_header("[]") is False
-
-    def test_empty_string_not_matched(self) -> None:
-        assert _is_table_header("") is False
-
-
-# ---------------------------------------------------------------------------
-# _is_deps_table_header
-# ---------------------------------------------------------------------------
-
-
-class TestIsDepsTableHeader:
-    def test_exact_deps_header(self) -> None:
-        assert _is_deps_table_header("[deps]") is True
-
-    def test_deps_header_with_leading_space(self) -> None:
-        assert _is_deps_table_header("  [deps]") is True
-
-    def test_deps_header_with_comment(self) -> None:
-        assert _is_deps_table_header("[deps] # comment") is True
-
-    def test_deps_header_with_trailing_space(self) -> None:
-        assert _is_deps_table_header("[deps]  ") is True
-
-    def test_other_section_not_matched(self) -> None:
-        assert _is_deps_table_header("[other]") is False
-
-    def test_deps_subsection_not_matched(self) -> None:
-        assert _is_deps_table_header("[deps.sub]") is False
-
-    def test_empty_string_not_matched(self) -> None:
-        assert _is_deps_table_header("") is False
-
-    def test_key_value_not_matched(self) -> None:
-        assert _is_deps_table_header("deps = true") is False
-
-
-# ---------------------------------------------------------------------------
-# _line_sets_toml_key
-# ---------------------------------------------------------------------------
-
-
-class TestLineSetsTomlKey:
-    def test_bare_key_match(self) -> None:
-        assert _line_sets_toml_key("mylib = \"main\"\n", "mylib") is True
-
-    def test_bare_key_no_match(self) -> None:
-        assert _line_sets_toml_key("other = \"main\"\n", "mylib") is False
-
-    def test_quoted_key_match(self) -> None:
-        assert _line_sets_toml_key('"feat/x" = "branch"\n', "feat/x") is True
-
-    def test_quoted_key_no_match(self) -> None:
-        assert _line_sets_toml_key('"feat/y" = "branch"\n', "feat/x") is False
-
-    def test_key_with_leading_spaces(self) -> None:
-        assert _line_sets_toml_key("  mylib = \"main\"\n", "mylib") is True
-
-    def test_comment_line_not_matched(self) -> None:
-        assert _line_sets_toml_key("# mylib = \"main\"\n", "mylib") is False
-
-    def test_empty_line_not_matched(self) -> None:
-        assert _line_sets_toml_key("", "mylib") is False
-
-    def test_section_header_not_matched(self) -> None:
-        assert _line_sets_toml_key("[deps]", "deps") is False
-
-    def test_bare_key_prefix_no_match(self) -> None:
-        # "mylib2 = ..." should not match "mylib"
-        assert _line_sets_toml_key("mylib2 = \"main\"\n", "mylib") is False
-
-    def test_quoted_key_with_special_chars_match(self) -> None:
-        assert _line_sets_toml_key('"some.dep" = "branch"\n', "some.dep") is True
-
-    def test_key_with_hyphen(self) -> None:
-        assert _line_sets_toml_key("my-lib = \"main\"\n", "my-lib") is True
-
-    def test_key_with_underscore(self) -> None:
-        assert _line_sets_toml_key("my_lib = \"main\"\n", "my_lib") is True
 
 
 # ---------------------------------------------------------------------------
@@ -455,35 +242,6 @@ class TestSetTomlDepsValue:
 # ---------------------------------------------------------------------------
 # load_toml_file
 # ---------------------------------------------------------------------------
-
-
-class TestLoadTomlFile:
-    def test_loads_simple_toml(self, tmp_path: Path) -> None:
-        toml_file = tmp_path / "config.toml"
-        toml_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
-        result = load_toml_file(toml_file)
-        assert result["deps"] == {"mylib": "main"}
-
-    def test_loads_empty_toml(self, tmp_path: Path) -> None:
-        toml_file = tmp_path / "config.toml"
-        toml_file.write_bytes(b"")
-        result = load_toml_file(toml_file)
-        assert result == {}
-
-    def test_loads_nested_toml(self, tmp_path: Path) -> None:
-        toml_file = tmp_path / "config.toml"
-        toml_content = "[section]\nkey = \"value\"\n[deps]\nlib = \"branch\"\n"
-        toml_file.write_text(toml_content, encoding="utf-8")
-        result = load_toml_file(toml_file)
-        assert result["section"] == {"key": "value"}
-        assert result["deps"] == {"lib": "branch"}
-
-    def test_returns_toml_dict_type(self, tmp_path: Path) -> None:
-        toml_file = tmp_path / "config.toml"
-        toml_file.write_text("key = 42\n", encoding="utf-8")
-        result = load_toml_file(toml_file)
-        assert isinstance(result, dict)
-        assert result["key"] == 42
 
 
 # ---------------------------------------------------------------------------
@@ -1442,13 +1200,6 @@ class TestUpdateAllProjectDependencyConfigs:
         assert branch_config.exists()
 
 
-class TestLineSetTomlKeyWithInvalidJsonQuotedKey:
-    def test_invalid_json_quoted_key_returns_false(self) -> None:
-        # A line with an invalid JSON quoted key
-        result = _line_sets_toml_key('"invalid json\\q" = "val"', "invalid json\\q")
-        assert result is False
-
-
 class TestDependencyConfigCheckoutNameFallback:
     def test_falls_back_to_main_when_branch_path_not_git_repo(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1648,49 +1399,6 @@ class TestUpdateDependencyConfigsForBranchNoCheckout:
 # ===========================================================================
 # [project].name helpers
 # ===========================================================================
-
-
-class TestIsProjectTableHeader:
-    def test_matches_project_header(self) -> None:
-        assert dep_env_module._is_project_table_header("[project]") is True
-
-    def test_matches_indented(self) -> None:
-        assert dep_env_module._is_project_table_header("  [project]  ") is True
-
-    def test_matches_with_comment(self) -> None:
-        assert dep_env_module._is_project_table_header("[project] # info") is True
-
-    def test_rejects_deps_header(self) -> None:
-        assert dep_env_module._is_project_table_header("[deps]") is False
-
-    def test_rejects_nested_header(self) -> None:
-        assert dep_env_module._is_project_table_header("[project.something]") is False
-
-
-class TestIsProjectNameLine:
-    def test_matches_name_key(self) -> None:
-        assert dep_env_module._is_project_name_line('name = "foo"') is True
-
-    def test_matches_indented(self) -> None:
-        assert dep_env_module._is_project_name_line('  name = "foo"') is True
-
-    def test_rejects_other_key(self) -> None:
-        assert dep_env_module._is_project_name_line('other = "bar"') is False
-
-    def test_rejects_empty_line(self) -> None:
-        assert dep_env_module._is_project_name_line("") is False
-
-    def test_rejects_comment(self) -> None:
-        assert dep_env_module._is_project_name_line("# name = x") is False
-
-    def test_matches_quoted_name_key(self) -> None:
-        assert dep_env_module._is_project_name_line('"name" = "foo"') is True
-
-    def test_rejects_quoted_other_key(self) -> None:
-        assert dep_env_module._is_project_name_line('"other" = "x"') is False
-
-    def test_rejects_quoted_invalid_json(self) -> None:
-        assert dep_env_module._is_project_name_line('"invalid\\" = "x"') is False
 
 
 class TestSetTomlProjectName:

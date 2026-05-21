@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
-from typing import cast
+
+import tomlkit
 
 import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, is_file, iterdir, mkdir, read_text, rglob, write_text
-from agm.core.toml import TomlDict, load_toml_file, toml_dict
+from agm.core.toml import TomlDict, load_toml_file, set_toml_table_value, toml_dict
 from agm.project.layout import (
     current_checkout,
     default_worktrees_dir,
@@ -56,7 +56,7 @@ def read_deps_table(config_file: Path) -> dict[str, str]:
 
     Returns a dict mapping dep name to dep branch (checkout name).
     Returns an empty dict if the file does not exist or has no [deps] table.
-    Raises ``OSError`` or ``TOMLDecodeError`` if the file is
+    Raises ``OSError`` or ``tomlkit.exceptions.ParseError`` if the file is
     unreadable or malformed, consistent with ``load_dependency_toml_env``.
     """
     if not config_file.is_file():
@@ -91,113 +91,20 @@ def load_dependency_toml_env(
     return resolved_env
 
 
-def _toml_key(key: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9_-]+", key):
-        return key
-    return json.dumps(key)
+def _set_toml_deps_value(content: str, dep_name: str, dep_branch: str) -> str:
+    """Set *dep_name* = *dep_branch* in ``[deps]``, preserving formatting and comments."""
 
-
-def _toml_string(value: str) -> str:
-    return json.dumps(value)
-
-
-def _is_table_header(line: str) -> bool:
-    return re.match(r"^\s*\[[^\]]+\]\s*(?:#.*)?$", line) is not None
-
-
-def _is_project_table_header(line: str) -> bool:
-    return re.match(r"^\s*\[project\]\s*(?:#.*)?$", line) is not None
-
-
-def _is_deps_table_header(line: str) -> bool:
-    return re.match(r"^\s*\[deps\]\s*(?:#.*)?$", line) is not None
-
-
-def _line_sets_toml_key(line: str, dep_name: str) -> bool:
-    match: re.Match[str] | None = re.match(r'^\s*("[^"]+"|[A-Za-z0-9_-]+)\s*=', line)
-    if match is None:
-        return False
-    raw_key: str = match.group(1)
-    if not raw_key.startswith('"'):
-        return raw_key == dep_name
-    try:
-        loaded_key = cast(object, json.loads(raw_key))
-    except json.JSONDecodeError:
-        return False
-    return isinstance(loaded_key, str) and loaded_key == dep_name
-
-
-def _is_project_name_line(line: str) -> bool:
-    match: re.Match[str] | None = re.match(r'^\s*("[^"]+"|[A-Za-z0-9_-]+)\s*=\s*', line)
-    if match is None:
-        return False
-    raw_key: str = match.group(1)
-    if not raw_key.startswith('"'):
-        return raw_key == "name"
-    try:
-        loaded_key = cast(object, json.loads(raw_key))
-    except json.JSONDecodeError:
-        return False
-    return isinstance(loaded_key, str) and loaded_key == "name"
+    doc = tomlkit.parse(content) if content.strip() else tomlkit.document()
+    set_toml_table_value(doc, "deps", dep_name, dep_branch)
+    return tomlkit.dumps(doc)
 
 
 def _set_toml_project_name(content: str, name: str) -> str:
-    lines = content.splitlines(keepends=True)
-    setting = f"name = {_toml_string(name)}\n"
-    project_start: int | None = None
-    project_end = len(lines)
-    for index, line in enumerate(lines):
-        if not _is_project_table_header(line):
-            continue
-        project_start = index
-        for end_index in range(index + 1, len(lines)):
-            if _is_table_header(lines[end_index]):
-                project_end = end_index
-                break
-        break
+    """Set ``name`` in ``[project]``, preserving formatting and comments."""
 
-    if project_start is None:
-        prefix = "" if not content or content.endswith("\n") else "\n"
-        separator = "" if not content else "\n"
-        return f"{content}{prefix}{separator}[project]\n{setting}"
-
-    for index in range(project_start + 1, project_end):
-        if _is_project_name_line(lines[index]):
-            lines[index] = setting
-            return "".join(lines)
-
-    lines.insert(project_end, setting)
-    return "".join(lines)
-
-
-def _set_toml_deps_value(content: str, dep_name: str, dep_branch: str) -> str:
-    lines = content.splitlines(keepends=True)
-    key = _toml_key(dep_name)
-    setting = f"{key} = {_toml_string(dep_branch)}\n"
-    deps_start: int | None = None
-    deps_end = len(lines)
-    for index, line in enumerate(lines):
-        if not _is_deps_table_header(line):
-            continue
-        deps_start = index
-        for end_index in range(index + 1, len(lines)):
-            if _is_table_header(lines[end_index]):
-                deps_end = end_index
-                break
-        break
-
-    if deps_start is None:
-        prefix = "" if not content or content.endswith("\n") else "\n"
-        separator = "" if not content else "\n"
-        return f"{content}{prefix}{separator}[deps]\n{setting}"
-
-    for index in range(deps_start + 1, deps_end):
-        if _line_sets_toml_key(lines[index], dep_name):
-            lines[index] = setting
-            return "".join(lines)
-
-    lines.insert(deps_end, setting)
-    return "".join(lines)
+    doc = tomlkit.parse(content) if content.strip() else tomlkit.document()
+    set_toml_table_value(doc, "project", "name", name)
+    return tomlkit.dumps(doc)
 
 
 def update_dependency_toml_config(

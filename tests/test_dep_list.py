@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -84,7 +83,9 @@ class TestReadDepsFromToml:
     def test_raises_on_corrupt_toml(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
         config_file.write_text("this is not valid toml {{{", encoding="utf-8")
-        with pytest.raises(tomllib.TOMLDecodeError):
+        import tomlkit.exceptions
+
+        with pytest.raises(tomlkit.exceptions.ParseError):
             read_deps_table(config_file)
 
     def test_raises_on_unreadable_file(self, tmp_path: Path) -> None:

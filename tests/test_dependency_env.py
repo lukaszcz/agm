@@ -120,16 +120,18 @@ class TestConfigTomlFile:
     def test_embedded_layout_uses_agm_subdir(self, tmp_path: Path) -> None:
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
-        (project_dir / ".agm").mkdir()
-        result = config_toml_file(project_dir, None)
-        assert result == project_dir / ".agm" / "config" / "config.toml"
+        agm_dir = project_dir / ".agm"
+        agm_dir.mkdir()
+        result = config_toml_file(agm_dir, None)
+        assert result == agm_dir / "config" / "config.toml"
 
     def test_embedded_layout_with_branch(self, tmp_path: Path) -> None:
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
-        (project_dir / ".agm").mkdir()
-        result = config_toml_file(project_dir, "main")
-        assert result == project_dir / ".agm" / "config" / "main" / "config.toml"
+        agm_dir = project_dir / ".agm"
+        agm_dir.mkdir()
+        result = config_toml_file(agm_dir, "main")
+        assert result == agm_dir / "config" / "main" / "config.toml"
 
 
 # ---------------------------------------------------------------------------
@@ -1641,3 +1643,115 @@ class TestUpdateDependencyConfigsForBranchNoCheckout:
         # No config should be created
         config_file = project_dir / "config" / "feat" / "config.toml"
         assert not config_file.exists()
+
+
+# ===========================================================================
+# [project].name helpers
+# ===========================================================================
+
+
+class TestIsProjectTableHeader:
+    def test_matches_project_header(self) -> None:
+        assert dep_env_module._is_project_table_header("[project]") is True
+
+    def test_matches_indented(self) -> None:
+        assert dep_env_module._is_project_table_header("  [project]  ") is True
+
+    def test_matches_with_comment(self) -> None:
+        assert dep_env_module._is_project_table_header("[project] # info") is True
+
+    def test_rejects_deps_header(self) -> None:
+        assert dep_env_module._is_project_table_header("[deps]") is False
+
+    def test_rejects_nested_header(self) -> None:
+        assert dep_env_module._is_project_table_header("[project.something]") is False
+
+
+class TestIsProjectNameLine:
+    def test_matches_name_key(self) -> None:
+        assert dep_env_module._is_project_name_line('name = "foo"') is True
+
+    def test_matches_indented(self) -> None:
+        assert dep_env_module._is_project_name_line('  name = "foo"') is True
+
+    def test_rejects_other_key(self) -> None:
+        assert dep_env_module._is_project_name_line('other = "bar"') is False
+
+    def test_rejects_empty_line(self) -> None:
+        assert dep_env_module._is_project_name_line("") is False
+
+    def test_rejects_comment(self) -> None:
+        assert dep_env_module._is_project_name_line("# name = x") is False
+
+    def test_matches_quoted_name_key(self) -> None:
+        assert dep_env_module._is_project_name_line('"name" = "foo"') is True
+
+    def test_rejects_quoted_other_key(self) -> None:
+        assert dep_env_module._is_project_name_line('"other" = "x"') is False
+
+    def test_rejects_quoted_invalid_json(self) -> None:
+        assert dep_env_module._is_project_name_line('"invalid\\" = "x"') is False
+
+
+class TestSetTomlProjectName:
+    def test_adds_to_empty_content(self) -> None:
+        result = dep_env_module._set_toml_project_name("", "my-proj")
+        assert "[project]" in result
+        assert 'name = "my-proj"' in result
+
+    def test_adds_to_existing_content(self) -> None:
+        content = '[deps]\nfoo = "bar"\n'
+        result = dep_env_module._set_toml_project_name(content, "hello")
+        assert "[project]" in result
+        assert 'name = "hello"' in result
+        assert "[deps]" in result
+
+    def test_updates_existing_name(self) -> None:
+        content = "[project]\nname = \"old\"\n"
+        result = dep_env_module._set_toml_project_name(content, "new")
+        assert 'name = "new"' in result
+        assert "old" not in result
+
+    def test_adds_name_before_next_section(self) -> None:
+        content = '[project]\nexisting = "yes"\n[deps]\nfoo = "bar"\n'
+        result = dep_env_module._set_toml_project_name(content, "mine")
+        lines = result.splitlines()
+        project_idx = next(i for i, ln in enumerate(lines) if ln == "[project]")
+        deps_idx = next(i for i, ln in enumerate(lines) if ln == "[deps]")
+        name_idx = next(i for i, ln in enumerate(lines) if 'name = "mine"' in ln)
+        assert project_idx < name_idx < deps_idx
+
+    def test_appends_after_existing_keys(self) -> None:
+        content = "[project]\nalpha = \"1\"\n"
+        result = dep_env_module._set_toml_project_name(content, "beta")
+        lines = result.splitlines()
+        assert any("alpha" in ln for ln in lines)
+        assert any('name = "beta"' in ln for ln in lines)
+
+
+class TestEnsureProjectNameInConfig:
+    def test_creates_config_with_project_name(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "config").mkdir()
+
+        dep_env_module.ensure_project_name_in_config(project_dir=project_dir, name="myproj")
+
+        config_file = project_dir / "config" / "config.toml"
+        assert config_file.is_file()
+        content = config_file.read_text(encoding="utf-8")
+        assert "[project]" in content
+        assert 'name = "myproj"' in content
+
+    def test_updates_existing_config(self, tmp_path: Path) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("[deps]\nfoo = \"bar\"\n", encoding="utf-8")
+
+        dep_env_module.ensure_project_name_in_config(project_dir=project_dir, name="hello")
+
+        content = (config_dir / "config.toml").read_text(encoding="utf-8")
+        assert 'name = "hello"' in content
+        assert 'foo = "bar"' in content

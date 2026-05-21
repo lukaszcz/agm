@@ -10,13 +10,14 @@ import agm.vcs.git as git_helpers
 from agm.commands.args import InitArgs
 from agm.core.fs import chmod, exists, is_empty_dir, mkdir, read_text, stat, write_text
 from agm.core.process import require_success
-from agm.project.dependency_env import update_main_dependency_configs
+from agm.project.dependency_env import ensure_project_name_in_config, update_main_dependency_configs
 from agm.project.layout import (
     default_worktrees_dir,
     project_config_dir,
     project_deps_dir,
     project_notes_dir,
     project_repo_dir,
+    project_root,
 )
 
 EMBEDDED_PROJECT_GITIGNORE_ENTRY = ".agm"
@@ -75,16 +76,17 @@ def ensure_git_repo(path: Path) -> None:
 def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
     layout_dirs: Sequence[Path]
     if embedded:
-        data_dir = project_dir / ".agm"
-        mkdir(data_dir, parents=True, exist_ok=True)
-        ensure_gitignore_entry(project_dir / ".gitignore", EMBEDDED_PROJECT_GITIGNORE_ENTRY)
-        ensure_gitignore_entry(project_dir / ".gitignore", AGENT_FILES_GITIGNORE_ENTRY)
-        config_dir = data_dir / "config"
+        # project_dir is the .agm data directory; the git repo is its parent.
+        mkdir(project_dir, parents=True, exist_ok=True)
+        repo_root = project_dir.parent
+        ensure_gitignore_entry(repo_root / ".gitignore", EMBEDDED_PROJECT_GITIGNORE_ENTRY)
+        ensure_gitignore_entry(repo_root / ".gitignore", AGENT_FILES_GITIGNORE_ENTRY)
+        config_dir = project_dir / "config"
         layout_dirs = (
-            data_dir / "deps",
-            data_dir / "notes",
+            project_dir / "deps",
+            project_dir / "notes",
             config_dir,
-            data_dir / "worktrees",
+            project_dir / "worktrees",
         )
     else:
         mkdir(project_dir, parents=True, exist_ok=True)
@@ -107,6 +109,7 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
     ensure_git_repo(config_dir)
     ensure_git_repo(notes_dir)
     update_main_dependency_configs(project_dir)
+    ensure_project_name_in_config(project_dir=project_dir, name=project_root(project_dir).name)
 
     write_file_if_missing(
         config_dir / "env.sh",
@@ -161,13 +164,14 @@ def run(args: InitArgs) -> None:
     if args.clone and not proj:
         proj = derive_project_name(repo_url)
 
-    project_dir = Path.cwd() / proj if proj else Path.cwd()
-    embedded_layout = use_embedded_layout(args, project_dir=project_dir, repo_url=repo_url)
+    base_dir = Path.cwd() / proj if proj else Path.cwd()
+    embedded_layout = use_embedded_layout(args, project_dir=base_dir, repo_url=repo_url)
+    project_dir = base_dir / ".agm" if embedded_layout else base_dir
     if not repo_url:
         configure_project_dir(project_dir, embedded=embedded_layout)
         return
 
-    repo_dir = project_repo_dir(project_dir) if embedded_layout else project_dir / "repo"
+    repo_dir = base_dir if embedded_layout else base_dir / "repo"
     if exists(repo_dir) and not is_empty_dir(repo_dir):
         try:
             relative_repo_dir = repo_dir.relative_to(Path.cwd())

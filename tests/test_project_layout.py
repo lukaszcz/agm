@@ -12,6 +12,7 @@ from agm.project.layout import (
     _copy_existing_config_files,
     _merge_branch_env_file,
     _project_dir_from_checkout,
+    _project_dir_from_env,
     _resolved_cwd,
     branch_session_name,
     branch_worktree_path,
@@ -28,10 +29,11 @@ from agm.project.layout import (
     is_workspace_project,
     main_repo_dir,
     project_config_dir,
-    project_data_dir,
     project_deps_dir,
+    project_name,
     project_notes_dir,
     project_repo_dir,
+    project_root,
     require_current_project_dir,
     require_project_dir,
 )
@@ -84,7 +86,7 @@ def test_expected_branch_worktree_path_resolves_branch_path(
 def test_project_dir_from_checkout_finds_agm_marker(tmp_path: Path) -> None:
     project = tmp_path / "myproject"
     (project / ".agm").mkdir(parents=True)
-    assert _project_dir_from_checkout(project) == project
+    assert _project_dir_from_checkout(project) == project / ".agm"
 
 
 def test_project_dir_from_checkout_finds_repo_subdir(tmp_path: Path) -> None:
@@ -136,6 +138,36 @@ def test_project_dir_from_checkout_returns_none_for_plain_dir(tmp_path: Path) ->
     assert _project_dir_from_checkout(plain) is None
 
 
+def test_project_dir_from_checkout_finds_agm_from_embedded_worktree(tmp_path: Path) -> None:
+    project = tmp_path / "myproject"
+    worktree_dir = project / ".agm" / "worktrees" / "feat"
+    worktree_dir.mkdir(parents=True)
+    assert _project_dir_from_checkout(worktree_dir) == project / ".agm"
+
+
+# ---------------------------------------------------------------------------
+# _project_dir_from_env
+# ---------------------------------------------------------------------------
+
+
+def test_project_dir_from_env_returns_path_from_proj_dir(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    assert _project_dir_from_env(env={"PROJ_DIR": str(project)}) == project
+
+
+def test_project_dir_from_env_returns_none_when_unset() -> None:
+    assert _project_dir_from_env(env={}) is None
+
+
+def test_project_dir_from_env_returns_none_when_empty() -> None:
+    assert _project_dir_from_env(env={"PROJ_DIR": ""}) is None
+
+
+def test_project_dir_from_env_returns_agm_dir_directly(tmp_path: Path) -> None:
+    agm_dir = tmp_path / "project" / ".agm"
+    assert _project_dir_from_env(env={"PROJ_DIR": str(agm_dir)}) == agm_dir
+
+
 # ---------------------------------------------------------------------------
 # is_workspace_project
 # ---------------------------------------------------------------------------
@@ -165,9 +197,10 @@ def test_is_embedded_project_true_for_git_repo_with_agm_dir(
 ) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
-    assert is_embedded_project(project) is True
+    assert is_embedded_project(agm_dir) is True
 
 
 def test_is_embedded_project_false_without_agm_dir(
@@ -182,7 +215,15 @@ def test_is_embedded_project_false_without_agm_dir(
 def test_is_embedded_project_false_without_git_repo(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    assert is_embedded_project(agm_dir) is False
+
+
+def test_is_embedded_project_false_for_workspace_project_dir(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "repo").mkdir()
     assert is_embedded_project(project) is False
 
 
@@ -207,9 +248,10 @@ def test_is_project_dir_true_for_embedded_project(
 ) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
-    assert is_project_dir(project) is True
+    assert is_project_dir(agm_dir) is True
 
 
 def test_is_project_dir_false_for_plain_dir(tmp_path: Path) -> None:
@@ -293,31 +335,28 @@ def test_require_current_project_dir_exits_when_not_a_project(tmp_path: Path) ->
 
 
 # ---------------------------------------------------------------------------
-# project_data_dir
+# project_root
 # ---------------------------------------------------------------------------
 
 
-def test_project_data_dir_returns_agm_subdir_for_embedded_project(tmp_path: Path) -> None:
+def test_project_root_returns_repo_parent_for_embedded_project(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-    assert project_data_dir(project) == project / ".agm"
+    assert project_root(agm_dir) == project
 
 
-def test_project_data_dir_returns_project_dir_for_workspace_project(tmp_path: Path) -> None:
+def test_project_root_returns_project_dir_for_workspace_project(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
 
-    assert project_data_dir(project) == project
-
-
-def test_project_data_dir_returns_project_dir_when_no_agm_marker(tmp_path: Path) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-
-    assert project_data_dir(project) == project
+    assert project_root(project) == project
 
 
 # ---------------------------------------------------------------------------
@@ -333,15 +372,19 @@ def test_project_repo_dir_returns_repo_subdir_for_workspace_project(tmp_path: Pa
     assert project_repo_dir(project) == project / "repo"
 
 
-def test_project_repo_dir_returns_project_dir_for_embedded_project(tmp_path: Path) -> None:
+def test_project_repo_dir_returns_parent_for_embedded_project(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-    assert project_repo_dir(project) == project
+    assert project_repo_dir(agm_dir) == project
 
 
-def test_project_repo_dir_returns_project_dir_when_no_repo_subdir(tmp_path: Path) -> None:
+def test_project_repo_dir_returns_input_when_no_layout_markers(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
 
@@ -361,12 +404,16 @@ def test_main_repo_dir_is_alias_for_project_repo_dir_workspace(tmp_path: Path) -
     assert main_repo_dir(project) == project_repo_dir(project)
 
 
-def test_main_repo_dir_is_alias_for_project_repo_dir_embedded(tmp_path: Path) -> None:
+def test_main_repo_dir_is_alias_for_project_repo_dir_embedded(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-    assert main_repo_dir(project) == project_repo_dir(project)
+    assert main_repo_dir(agm_dir) == project_repo_dir(agm_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -384,12 +431,11 @@ def test_default_worktrees_dir_workspace_project(tmp_path: Path) -> None:
 
 
 def test_default_worktrees_dir_embedded_project(tmp_path: Path) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = tmp_path / "proj" / ".agm"
+    agm_dir.mkdir(parents=True)
 
-    # embedded: data_dir == project/.agm
-    assert default_worktrees_dir(project) == project / ".agm" / "worktrees"
+    # embedded: data_dir == project_dir (.agm), worktrees directly inside
+    assert default_worktrees_dir(agm_dir) == agm_dir / "worktrees"
 
 
 # ---------------------------------------------------------------------------
@@ -406,11 +452,10 @@ def test_project_config_dir_workspace(tmp_path: Path) -> None:
 
 
 def test_project_config_dir_embedded(tmp_path: Path) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = tmp_path / "proj" / ".agm"
+    agm_dir.mkdir(parents=True)
 
-    assert project_config_dir(project) == project / ".agm" / "config"
+    assert project_config_dir(agm_dir) == agm_dir / "config"
 
 
 # ---------------------------------------------------------------------------
@@ -427,11 +472,10 @@ def test_project_deps_dir_workspace(tmp_path: Path) -> None:
 
 
 def test_project_deps_dir_embedded(tmp_path: Path) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = tmp_path / "proj" / ".agm"
+    agm_dir.mkdir(parents=True)
 
-    assert project_deps_dir(project) == project / ".agm" / "deps"
+    assert project_deps_dir(agm_dir) == agm_dir / "deps"
 
 
 # ---------------------------------------------------------------------------
@@ -448,11 +492,10 @@ def test_project_notes_dir_workspace(tmp_path: Path) -> None:
 
 
 def test_project_notes_dir_embedded(tmp_path: Path) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = tmp_path / "proj" / ".agm"
+    agm_dir.mkdir(parents=True)
 
-    assert project_notes_dir(project) == project / ".agm" / "notes"
+    assert project_notes_dir(agm_dir) == agm_dir / "notes"
 
 
 # ---------------------------------------------------------------------------
@@ -522,13 +565,18 @@ def test_branch_worktree_path_for_worktree_branch_workspace(tmp_path: Path) -> N
     assert result == project / "worktrees" / "feat/my-feature"
 
 
-def test_branch_worktree_path_for_worktree_branch_embedded(tmp_path: Path) -> None:
+def test_branch_worktree_path_for_worktree_branch_embedded(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
     project = tmp_path / "proj"
-    (project / ".agm").mkdir(parents=True)
+    project.mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-    result = branch_worktree_path(project, "feat/abc", repo_branch="main")
+    result = branch_worktree_path(agm_dir, "feat/abc", repo_branch="main")
 
-    assert result == project / ".agm" / "worktrees" / "feat/abc"
+    assert result == agm_dir / "worktrees" / "feat/abc"
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +626,24 @@ def test_branch_session_name_for_main_branch_same_as_repo_branch(
     monkeypatch.setattr(layout_module.git_helpers, "current_branch", fake_current_branch)
 
     assert branch_session_name(project, "main") == "proj"
+
+
+def test_branch_session_name_for_embedded_project(
+    tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "myproject"
+    project.mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+
+    def fake_current_branch(_repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
+        del env
+        return "main"
+
+    monkeypatch.setattr(layout_module.git_helpers, "current_branch", fake_current_branch)
+    assert branch_session_name(agm_dir, "main") == "myproject"
+    assert branch_session_name(agm_dir, "feat/x") == "myproject/feat/x"
 
 
 # ---------------------------------------------------------------------------
@@ -1005,12 +1071,13 @@ def test_current_project_dir_from_nested_subdir_of_embedded_project(
 ) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
     deep = project / "src" / "pkg" / "module"
     deep.mkdir(parents=True)
     monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda _path: True)
 
-    assert discover_current_project_dir(deep) == project
+    assert discover_current_project_dir(deep) == agm_dir
 
 
 def test_current_project_root_candidate_falls_back_when_no_markers_and_not_git(
@@ -1035,6 +1102,31 @@ def test_discover_current_project_dir_uses_proj_dir_env(tmp_path: Path) -> None:
     project = tmp_path / "project"
 
     assert discover_current_project_dir(tmp_path, env={"PROJ_DIR": str(project)}) == project
+
+
+def test_current_checkout_or_project_root_uses_proj_dir_env_with_agm_dir(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    agm_dir = project / ".agm"
+    agm_dir.mkdir(parents=True)
+
+    assert current_checkout_or_project_root(
+        tmp_path, env={"PROJ_DIR": str(agm_dir)}
+    ) == agm_dir
+
+
+def test_discover_current_project_dir_uses_proj_dir_env_with_agm_dir(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "project"
+    agm_dir = project / ".agm"
+    agm_dir.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+
+    assert discover_current_project_dir(
+        tmp_path, env={"PROJ_DIR": str(agm_dir)}
+    ) == agm_dir
 
 
 def test_current_checkout_or_project_root_falls_back_to_git_checkout_root(
@@ -1738,3 +1830,67 @@ class TestCurrentProjectDirGitCommonDirPath:
 
         result = current_checkout_or_project_root(worktree)
         assert result == worktree
+
+
+# ---------------------------------------------------------------------------
+# project_name
+# ---------------------------------------------------------------------------
+
+
+def test_project_name_falls_back_to_root_dir_name(tmp_path: Path) -> None:
+    project = tmp_path / "myproj"
+    project.mkdir()
+    (project / "repo").mkdir()
+
+    assert project_name(project) == "myproj"
+
+
+def test_project_name_reads_from_config_toml(tmp_path: Path) -> None:
+    project = tmp_path / "dirname"
+    project.mkdir()
+    (project / "repo").mkdir()
+    config_dir = project / "config"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        '[project]\nname = "custom-name"\n', encoding="utf-8"
+    )
+
+    assert project_name(project) == "custom-name"
+
+
+def test_project_name_ignores_empty_name_in_config(tmp_path: Path) -> None:
+    project = tmp_path / "myproj"
+    project.mkdir()
+    (project / "repo").mkdir()
+    config_dir = project / "config"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        '[project]\nname = ""\n', encoding="utf-8"
+    )
+
+    assert project_name(project) == "myproj"
+
+
+def test_project_name_ignores_non_string_name_in_config(tmp_path: Path) -> None:
+    project = tmp_path / "myproj"
+    project.mkdir()
+    (project / "repo").mkdir()
+    config_dir = project / "config"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        '[project]\nname = 42\n', encoding="utf-8"
+    )
+
+    assert project_name(project) == "myproj"
+
+
+def test_project_name_for_embedded_project(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "myproj"
+    project.mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+
+    assert project_name(agm_dir) == "myproj"

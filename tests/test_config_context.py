@@ -28,6 +28,26 @@ def test_current_config_context_uses_explicit_proj_dir(
     assert context.cwd == tmp_path
 
 
+def test_current_config_context_uses_explicit_proj_dir_pointing_to_agm(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    """When PROJ_DIR points to .agm (embedded layout), context uses it as project dir."""
+    home = Path(env["HOME"])
+    project = tmp_path / "project"
+    agm_dir = project / ".agm"
+    agm_dir.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+
+    context = current_config_context(
+        cwd=tmp_path,
+        env={**env, "PROJ_DIR": str(agm_dir)},
+    )
+
+    assert context.home == home
+    assert context.proj_dir == agm_dir
+    assert context.cwd == tmp_path
+
+
 def test_current_config_context_uses_discovered_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

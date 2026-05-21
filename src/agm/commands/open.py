@@ -15,6 +15,7 @@ from agm.project.layout import (
     branch_worktree_path,
     is_main_checkout_branch,
     parent_config_branch,
+    project_name,
     project_repo_dir,
     require_current_project_dir,
 )
@@ -92,7 +93,7 @@ def open_session(
 
     if branch is None:
         repo_path = project_repo_dir(proj_dir)
-        session_name = proj_dir.name
+        session_name = project_name(proj_dir)
     else:
         repo_path = branch_worktree_path(proj_dir, branch, repo_branch=repo_branch)
         if not has_expected_worktree(proj_dir, branch):

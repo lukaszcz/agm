@@ -376,7 +376,7 @@ class TestEnsureWorktree:
     ) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
-        worktrees_dir = project_dir / ".agm" / "worktrees"
+        worktrees_dir = project_dir / "worktrees"
         worktree_path = worktrees_dir / "feat"
         project_dir.mkdir()
         repo_dir.mkdir()
@@ -403,7 +403,7 @@ class TestEnsureWorktree:
     ) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
-        worktrees_dir = project_dir / ".agm" / "worktrees"
+        worktrees_dir = project_dir / "worktrees"
         worktree_path = worktrees_dir / "feat"
         project_dir.mkdir()
         repo_dir.mkdir()
@@ -515,7 +515,7 @@ class TestRemoveWorktree:
     ) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
-        worktree_path = project_dir / ".agm" / "worktrees" / "feat"
+        worktree_path = project_dir / "worktrees" / "feat"
         project_dir.mkdir()
         repo_dir.mkdir()
         worktree_path.mkdir(parents=True)
@@ -595,7 +595,7 @@ class TestRemoveWorktree:
     ) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
-        worktree_path = project_dir / ".agm" / "worktrees" / "feat"
+        worktree_path = project_dir / "worktrees" / "feat"
         project_dir.mkdir()
         repo_dir.mkdir()
         worktree_path.mkdir(parents=True)
@@ -633,7 +633,7 @@ class TestRemoveWorktree:
     ) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
-        worktree_path = project_dir / ".agm" / "worktrees" / "feat"
+        worktree_path = project_dir / "worktrees" / "feat"
         project_dir.mkdir()
         repo_dir.mkdir()
         worktree_path.mkdir(parents=True)

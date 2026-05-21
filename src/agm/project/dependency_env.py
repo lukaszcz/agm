@@ -105,6 +105,10 @@ def _is_table_header(line: str) -> bool:
     return re.match(r"^\s*\[[^\]]+\]\s*(?:#.*)?$", line) is not None
 
 
+def _is_project_table_header(line: str) -> bool:
+    return re.match(r"^\s*\[project\]\s*(?:#.*)?$", line) is not None
+
+
 def _is_deps_table_header(line: str) -> bool:
     return re.match(r"^\s*\[deps\]\s*(?:#.*)?$", line) is not None
 
@@ -121,6 +125,49 @@ def _line_sets_toml_key(line: str, dep_name: str) -> bool:
     except json.JSONDecodeError:
         return False
     return isinstance(loaded_key, str) and loaded_key == dep_name
+
+
+def _is_project_name_line(line: str) -> bool:
+    match: re.Match[str] | None = re.match(r'^\s*("[^"]+"|[A-Za-z0-9_-]+)\s*=\s*', line)
+    if match is None:
+        return False
+    raw_key: str = match.group(1)
+    if not raw_key.startswith('"'):
+        return raw_key == "name"
+    try:
+        loaded_key = cast(object, json.loads(raw_key))
+    except json.JSONDecodeError:
+        return False
+    return isinstance(loaded_key, str) and loaded_key == "name"
+
+
+def _set_toml_project_name(content: str, name: str) -> str:
+    lines = content.splitlines(keepends=True)
+    setting = f"name = {_toml_string(name)}\n"
+    project_start: int | None = None
+    project_end = len(lines)
+    for index, line in enumerate(lines):
+        if not _is_project_table_header(line):
+            continue
+        project_start = index
+        for end_index in range(index + 1, len(lines)):
+            if _is_table_header(lines[end_index]):
+                project_end = end_index
+                break
+        break
+
+    if project_start is None:
+        prefix = "" if not content or content.endswith("\n") else "\n"
+        separator = "" if not content else "\n"
+        return f"{content}{prefix}{separator}[project]\n{setting}"
+
+    for index in range(project_start + 1, project_end):
+        if _is_project_name_line(lines[index]):
+            lines[index] = setting
+            return "".join(lines)
+
+    lines.insert(project_end, setting)
+    return "".join(lines)
 
 
 def _set_toml_deps_value(content: str, dep_name: str, dep_branch: str) -> str:
@@ -362,3 +409,17 @@ def ensure_dependency_configs_for_branch(
             dep_branch=checkout_name,
             config_branch=branch,
         )
+
+
+def ensure_project_name_in_config(
+    *,
+    project_dir: Path,
+    name: str,
+) -> None:
+    """Write ``[project].name`` into the main config TOML if not already set."""
+
+    config_file = config_toml_file(project_dir, None)
+    content = read_text(config_file, encoding="utf-8") if exists(config_file) else ""
+    updated = _set_toml_project_name(content, name)
+    mkdir(config_file.parent, parents=True, exist_ok=True)
+    write_text(config_file, updated, encoding="utf-8")

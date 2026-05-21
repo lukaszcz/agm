@@ -6,14 +6,19 @@ import sys
 from pathlib import Path
 
 from agm.core.fs import is_dir, iterdir
-from agm.project.layout import project_deps_dir, project_repo_dir, require_current_project_dir
+from agm.project.layout import (
+    project_deps_dir,
+    project_repo_dir,
+    project_root,
+    require_current_project_dir,
+)
 from agm.project.worktree import sync_remote_tracking_branches
 from agm.vcs.git import fetch_prune_all, find_first_git_repo, is_git_repo
 
 
 def _fetch_repo(project_dir: Path, repo_path: Path) -> None:
     try:
-        relative_path = repo_path.relative_to(project_dir)
+        relative_path = repo_path.relative_to(project_root(project_dir))
         display_path = "." if relative_path == Path(".") else str(relative_path)
     except ValueError:
         display_path = str(repo_path)

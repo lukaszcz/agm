@@ -340,18 +340,19 @@ def test_load_loop_config_project_config_relative_paths_resolve_against_project_
     home.mkdir()
 
     project = tmp_path / "project"
-    (project / ".agm" / "config").mkdir(parents=True)
-    (project / ".agm" / "config" / "config.toml").write_text(
+    agm_dir = project / ".agm"
+    (agm_dir / "config").mkdir(parents=True)
+    (agm_dir / "config" / "config.toml").write_text(
         '[loop]\nprompt_file = "proj-prompt.md"\n'
     )
-    (project / ".agm" / "config" / "proj-prompt.md").write_text("project prompt")
+    (agm_dir / "config" / "proj-prompt.md").write_text("project prompt")
 
     cwd = tmp_path / "work"
     cwd.mkdir()
 
-    config = load_loop_config(home=home, proj_dir=project, cwd=cwd)
+    config = load_loop_config(home=home, proj_dir=agm_dir, cwd=cwd)
 
-    assert config.prompt_file == str(project / ".agm" / "config" / "proj-prompt.md")
+    assert config.prompt_file == str(agm_dir / "config" / "proj-prompt.md")
 
 
 def test_load_loop_config_keeps_absolute_paths_unchanged(tmp_path: Path) -> None:

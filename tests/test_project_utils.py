@@ -58,7 +58,7 @@ def test_current_project_dir_from_worktree_dir(tmp_path: Path, env: dict[str, st
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
-    branch_dir = project / ".agm" / "worktrees" / "feat" / "branch"
+    branch_dir = project / "worktrees" / "feat" / "branch"
     branch_dir.mkdir(parents=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=project / "repo", env=env, check=True)
 
@@ -70,12 +70,13 @@ def test_current_project_dir_from_embedded_project_subdir(
 ) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    (project / ".agm").mkdir()
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
     subdir = project / "src"
     subdir.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-    assert discover_current_project_dir(subdir) == project
+    assert discover_current_project_dir(subdir) == agm_dir
 
 
 def test_main_repo_dir_for_embedded_project(tmp_path: Path) -> None:

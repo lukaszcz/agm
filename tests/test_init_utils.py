@@ -387,11 +387,12 @@ class TestConfigureProjectDirEmbedded:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-        configure_project_dir(project_dir, embedded=True)
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        configure_project_dir(agm_dir, embedded=True)
 
-        assert (project_dir / ".agm").is_dir()
+        assert agm_dir.is_dir()
 
     def test_creates_expected_subdirectories_under_dot_agm(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -399,11 +400,11 @@ class TestConfigureProjectDirEmbedded:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-        configure_project_dir(project_dir, embedded=True)
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        configure_project_dir(agm_dir, embedded=True)
 
-        agm_dir = project_dir / ".agm"
         assert (agm_dir / "deps").is_dir()
         assert (agm_dir / "notes").is_dir()
         assert (agm_dir / "config").is_dir()
@@ -415,11 +416,12 @@ class TestConfigureProjectDirEmbedded:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-        configure_project_dir(project_dir, embedded=True)
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        configure_project_dir(agm_dir, embedded=True)
 
-        gitignore = project_dir / ".gitignore"
+        gitignore = project / ".gitignore"
         assert gitignore.is_file()
         lines = gitignore.read_text(encoding="utf-8").splitlines()
         assert ".agm" in lines
@@ -431,12 +433,13 @@ class TestConfigureProjectDirEmbedded:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-        (project_dir / ".gitignore").write_text("*.pyc\n.agm\n", encoding="utf-8")
-        configure_project_dir(project_dir, embedded=True)
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".gitignore").write_text("*.pyc\n.agm\n", encoding="utf-8")
+        agm_dir = project / ".agm"
+        configure_project_dir(agm_dir, embedded=True)
 
-        lines = (project_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
+        lines = (project / ".gitignore").read_text(encoding="utf-8").splitlines()
         assert ".agm" in lines
         assert ".agent-files" in lines
         assert lines.count(".agm") == 1
@@ -447,11 +450,12 @@ class TestConfigureProjectDirEmbedded:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-        configure_project_dir(project_dir, embedded=True)
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        configure_project_dir(agm_dir, embedded=True)
 
-        config_dir = project_dir / ".agm" / "config"
+        config_dir = agm_dir / "config"
         assert (config_dir / "env.sh").is_file()
         assert (config_dir / "setup.sh").is_file()
 
@@ -461,11 +465,12 @@ class TestConfigureProjectDirEmbedded:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-        configure_project_dir(project_dir, embedded=True)
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        configure_project_dir(agm_dir, embedded=True)
 
-        assert not (project_dir / "repo").exists()
+        assert not (project / "repo").exists()
 
 
 # ---------------------------------------------------------------------------

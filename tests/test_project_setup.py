@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -603,4 +604,70 @@ class TestRunSetupWithCurrentCheckoutResult:
 
         captured = capsys.readouterr()
         assert str(setup_script) in captured.out
+
+
+class TestLoadConfigEnvProjDir:
+    """Tests for PROJ_DIR and REPO_DIR env vars set by load_config_env."""
+
+    def test_embedded_layout_proj_dir_points_to_agm_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """For embedded layout, PROJ_DIR should point to .agm inside the repo."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        agm_dir.mkdir()
+        (agm_dir / "config").mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+        checkout_dir = project
+
+        result_env = project_setup.load_config_env(
+            project_dir=agm_dir,
+            branch=None,
+            checkout_dir=checkout_dir,
+            env={},
+        )
+
+        assert result_env["PROJ_DIR"] == str(agm_dir)
+        assert result_env["REPO_DIR"] == str(project)
+
+    def test_workspace_layout_proj_dir_points_to_project_root(self, tmp_path: Path) -> None:
+        """For workspace layout, PROJ_DIR should point to the project root."""
+        project = tmp_path / "proj"
+        repo_dir = project / "repo"
+        repo_dir.mkdir(parents=True)
+        (project / "config").mkdir()
+
+        env = project_setup.load_config_env(
+            project_dir=project,
+            branch=None,
+            checkout_dir=repo_dir,
+            env={},
+        )
+
+        assert env["PROJ_DIR"] == str(project)
+        assert env["REPO_DIR"] == str(repo_dir)
+
+    def test_embedded_layout_worktree_proj_dir_still_points_to_agm(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """For embedded layout with a worktree checkout, PROJ_DIR still points to .agm."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        agm_dir = project / ".agm"
+        agm_dir.mkdir()
+        (agm_dir / "config").mkdir()
+        worktree_dir = agm_dir / "worktrees" / "feat"
+        worktree_dir.mkdir(parents=True)
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+
+        result_env = project_setup.load_config_env(
+            project_dir=agm_dir,
+            branch="feat",
+            checkout_dir=worktree_dir,
+            env={},
+        )
+
+        assert result_env["PROJ_DIR"] == str(agm_dir)
+        assert result_env["REPO_DIR"] == str(worktree_dir)
 

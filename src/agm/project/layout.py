@@ -12,6 +12,7 @@ import agm.vcs.git as git_helpers
 from agm.core.dotenv import set_dotenv_value
 from agm.core.env import load_config_dotenv_files
 from agm.core.process import require_success
+from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ def _resolved_cwd(cwd: Path | None = None) -> Path:
 
 def _project_dir_from_checkout(checkout_dir: Path) -> Path | None:
     if (checkout_dir / ".agm").is_dir():
-        return checkout_dir
+        return checkout_dir / ".agm"
     if (checkout_dir / "repo").is_dir():
         return checkout_dir
     if checkout_dir.name == "repo" and (
@@ -83,6 +84,8 @@ def _project_dir_from_checkout(checkout_dir: Path) -> Path | None:
     ):
         return checkout_dir.parent
     if checkout_dir.parent.name == ".worktrees":
+        return checkout_dir.parent.parent
+    if checkout_dir.parent.name == "worktrees" and checkout_dir.parent.parent.name == ".agm":
         return checkout_dir.parent.parent
     if checkout_dir.parent.name == "worktrees" and (checkout_dir.parent.parent / "repo").is_dir():
         return checkout_dir.parent.parent
@@ -142,7 +145,7 @@ def is_workspace_project(project_dir: Path) -> bool:
 def is_embedded_project(project_dir: Path) -> bool:
     """Return whether *project_dir* uses the embedded layout."""
 
-    return (project_dir / ".agm").is_dir() and git_helpers.is_git_repo(project_dir)
+    return project_dir.name == ".agm" and git_helpers.is_git_repo(project_dir.parent)
 
 
 def is_project_dir(project_dir: Path) -> bool:
@@ -200,10 +203,15 @@ def current_checkout(
     repo_dir_var = resolved_env.get("REPO_DIR", "").strip()
     if repo_dir_var:
         candidate = Path(repo_dir_var).resolve(strict=False)
-        # Must be inside the project and must be a git repo
-        if (
-            candidate == resolved_project_dir or resolved_project_dir in candidate.parents
-        ) and git_helpers.is_git_repo(candidate):
+        # For embedded layout the main repo is the parent of the .agm project
+        # dir, so it is not *inside* project_dir.  Accept it when it matches the
+        # known repo_dir, or when it falls inside either project_dir or repo_dir.
+        if git_helpers.is_git_repo(candidate) and (
+            candidate == repo_dir
+            or repo_dir in candidate.parents
+            or candidate == resolved_project_dir
+            or resolved_project_dir in candidate.parents
+        ):
             checkout_dir = candidate
 
     # --- Fall back to cwd-based detection ---
@@ -241,12 +249,37 @@ def current_checkout(
     return CurrentCheckout(checkout_dir=checkout_dir, branch=branch, is_main=False)
 
 
-def project_data_dir(project_dir: Path) -> Path:
-    """Return the AGM data directory for *project_dir*."""
+def project_root(project_dir: Path) -> Path:
+    """Return the top-level directory of the AGM project.
 
-    if (project_dir / ".agm").is_dir():
-        return project_dir / ".agm"
+    For embedded layout this is the git repository directory (``.agm``'s
+    parent); for workspace layout it is the workspace root directory (same
+    as *project_dir*).
+    """
+    if is_embedded_project(project_dir):
+        return project_dir.parent
     return project_dir
+
+
+def _load_project_config_toml(project_dir: Path) -> TomlDict:
+    config_file = project_config_dir(project_dir) / "config.toml"
+    if not config_file.is_file():
+        return {}
+    return load_toml_file(config_file)
+
+
+def project_name(project_dir: Path) -> str:
+    """Return the human-readable project name.
+
+    Reads ``[project].name`` from ``config.toml`` when present; otherwise
+    falls back to the directory name of the project root.
+    """
+    config = _load_project_config_toml(project_dir)
+    project_table = toml_dict(config.get("project"))
+    name_value = project_table.get("name")
+    if isinstance(name_value, str) and name_value:
+        return name_value
+    return project_root(project_dir).name
 
 
 def project_repo_dir(project_dir: Path) -> Path:
@@ -254,6 +287,8 @@ def project_repo_dir(project_dir: Path) -> Path:
 
     if is_workspace_project(project_dir):
         return project_dir / "repo"
+    if is_embedded_project(project_dir):
+        return project_dir.parent
     return project_dir
 
 
@@ -266,25 +301,25 @@ def main_repo_dir(project_dir: Path) -> Path:
 def default_worktrees_dir(project_dir: Path) -> Path:
     """Return the default worktrees directory for *project_dir*."""
 
-    return project_data_dir(project_dir) / "worktrees"
+    return project_dir / "worktrees"
 
 
 def project_config_dir(project_dir: Path) -> Path:
     """Return the shared project config directory."""
 
-    return project_data_dir(project_dir) / "config"
+    return project_dir / "config"
 
 
 def project_deps_dir(project_dir: Path) -> Path:
     """Return the dependency checkout directory."""
 
-    return project_data_dir(project_dir) / "deps"
+    return project_dir / "deps"
 
 
 def project_notes_dir(project_dir: Path) -> Path:
     """Return the project notes directory."""
 
-    return project_data_dir(project_dir) / "notes"
+    return project_dir / "notes"
 
 
 def is_main_checkout_branch(project_dir: Path, branch: str, *, repo_branch: str) -> bool:
@@ -326,13 +361,15 @@ def parent_config_branch(project_dir: Path, parent: str | None) -> str | None:
 def branch_session_name(project_dir: Path, branch: str) -> str:
     """Return the tmux session name corresponding to *branch*."""
 
+    name = project_name(project_dir)
+
     if branch == "repo":
-        return project_dir.name
+        return name
 
     repo_branch = git_helpers.current_branch(project_repo_dir(project_dir))
     if is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
-        return project_dir.name
-    return f"{project_dir.name}/{branch}"
+        return name
+    return f"{name}/{branch}"
 
 
 def exit_if_main_checkout_branch(project_dir: Path, branch: str, *, repo_branch: str) -> None:

@@ -1,7 +1,7 @@
 {
   "network": {
     "allowedDomains": [
-      "calude.ai",
+      "claude.ai",
       "platform.claude.com",
       "api.anthropic.com",
       "openrouter.ai",

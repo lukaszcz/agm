@@ -148,6 +148,18 @@ def run_sandboxed(
     require_srt_installed(env.get("PATH"))
     resolved_process_prefix = [] if process_prefix is None else list(process_prefix)
 
+    # Node.js's built-in fetch() does not respect HTTP_PROXY/HTTPS_PROXY
+    # environment variables by default (unlike curl, wget, etc.).  Inside
+    # the SRT sandbox all DNS resolution must go through the proxy bridges
+    # (bwrap --unshare-net removes network access), so without this flag
+    # any Node.js process using globalThis.fetch() will fail with
+    # getaddrinfo EAI_AGAIN.  NODE_USE_ENV_PROXY=1 tells Node.js to honour
+    # the proxy env vars that SRT injects via bwrap --setenv.
+    # This is a no-op outside the sandbox (no proxy vars are set) and safe
+    # to always include when running under SRT.
+    resolved_env = dict(env)
+    resolved_env.setdefault("NODE_USE_ENV_PROXY", "1")
+
     if dry_run.enabled():
         _print_dry_run(
             cwd=cwd,
@@ -195,7 +207,7 @@ def run_sandboxed(
                 run_foreground(
                     subprocess_args,
                     cwd=cwd,
-                    env=env,
+                    env=resolved_env,
                     interrupt_cleanup_cmd=interrupt_cleanup_cmd,
                     isolate_process_group=True,
                 )

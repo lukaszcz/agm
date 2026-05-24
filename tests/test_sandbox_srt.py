@@ -73,7 +73,7 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
 
     assert exc_info.value.code == 0
     assert calls["cwd"] == work
-    assert calls["env"] == {"HOME": str(home), "PATH": "/bin"}
+    assert calls["env"] == {"HOME": str(home), "PATH": "/bin", "NODE_USE_ENV_PROXY": "1"}
     assert calls["cmd"][0:3] == ["systemd-run", "--user", "--scope"]
     assert calls["cmd"][3:6] == ["srt", "--settings", calls["cmd"][5]]
     assert calls["cmd"][6:9] == ["--", "echo", "hi"]
@@ -91,3 +91,92 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
 
     assert not tracked_dir.exists()
     assert not tracked_file.exists()
+
+
+def test_run_sandboxed_injects_node_use_env_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """NODE_USE_ENV_PROXY=1 is injected so Node.js built-in fetch honours proxy env vars."""
+    home = tmp_path / "home"
+    work = tmp_path / "work"
+    home_sandbox = home / ".agm" / "sandbox"
+    home_sandbox.mkdir(parents=True)
+    work.mkdir()
+
+    (home_sandbox / "default.json").write_text("{}", encoding="utf-8")
+
+    captured_env: dict[str, str] = {}
+
+    def fake_run_foreground(
+        cmd: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        interrupt_cleanup_cmd: list[str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> int:
+        captured_env.update(env or {})
+        return 0
+
+    monkeypatch.setattr(srt, "require_srt_installed", lambda _path=None: None)
+    monkeypatch.setattr(srt, "run_foreground", fake_run_foreground)
+
+    with pytest.raises(SystemExit) as exc_info:
+        srt.run_sandboxed(
+            command=["echo", "hi"],
+            cwd=work,
+            env={"HOME": str(home), "PATH": "/bin"},
+            home=home,
+            proj_dir=None,
+            command_name="echo",
+            alias_command_name=None,
+            settings_file=None,
+            patch_proj_dir=None,
+        )
+    assert exc_info.value.code == 0
+    assert captured_env["NODE_USE_ENV_PROXY"] == "1"
+
+
+def test_run_sandboxed_preserves_existing_node_use_env_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An explicitly set NODE_USE_ENV_PROXY is not overridden."""
+    home = tmp_path / "home"
+    work = tmp_path / "work"
+    home_sandbox = home / ".agm" / "sandbox"
+    home_sandbox.mkdir(parents=True)
+    work.mkdir()
+
+    (home_sandbox / "default.json").write_text("{}", encoding="utf-8")
+
+    captured_env: dict[str, str] = {}
+
+    def fake_run_foreground(
+        cmd: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        interrupt_cleanup_cmd: list[str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> int:
+        captured_env.update(env or {})
+        return 0
+
+    monkeypatch.setattr(srt, "require_srt_installed", lambda _path=None: None)
+    monkeypatch.setattr(srt, "run_foreground", fake_run_foreground)
+
+    with pytest.raises(SystemExit) as exc_info:
+        srt.run_sandboxed(
+            command=["echo", "hi"],
+            cwd=work,
+            env={"HOME": str(home), "PATH": "/bin", "NODE_USE_ENV_PROXY": "0"},
+            home=home,
+            proj_dir=None,
+            command_name="echo",
+            alias_command_name=None,
+            settings_file=None,
+            patch_proj_dir=None,
+        )
+    assert exc_info.value.code == 0
+    # setdefault should not override an explicit "0"
+    assert captured_env["NODE_USE_ENV_PROXY"] == "0"

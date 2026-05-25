@@ -16,6 +16,7 @@ from agm.agent.runner import (
 )
 from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.commands.loop.common import (
+    configured_loop_settings,
     is_complete_output,
     loop_env,
     loop_prompt_source,
@@ -2123,3 +2124,52 @@ class TestResolveExtraSelectorPromptSourceRelativePath:
         )
         result = extra_selector_prompt_source(args)
         assert result == tmp_path / "relative" / "sel-extra.md"
+
+
+class TestConfiguredLoopSettingsCommandNotFound:
+    def test_exits_when_command_name_not_in_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """configured_loop_settings exits with error when command_name is not in config."""
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude -p"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            configured_loop_settings("nonexistent")
+        assert exc_info.value.code == 1
+
+    def test_succeeds_when_command_name_exists_in_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """configured_loop_settings succeeds when command_name exists in config."""
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude -p"\n[loop.frontend]\nrunner = "codex"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        config = configured_loop_settings("frontend")
+        assert config.runner == "codex"
+
+    def test_succeeds_without_command_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """configured_loop_settings succeeds when command_name is None."""
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[loop]\nrunner = "claude -p"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+
+        config = configured_loop_settings(None)
+        assert config.runner == "claude -p"

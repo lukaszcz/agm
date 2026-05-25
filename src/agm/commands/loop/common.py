@@ -18,9 +18,15 @@ from agm.agent.runner import (
     split_command,
     validate_command,
 )
+from agm.commands.agent_io import exit_config_command_not_found
 from agm.commands.args import LoopArgs, LoopNextArgs
 from agm.config.context import current_config_context
-from agm.config.general import LoopConfig, load_loop_config, resolve_default_prompt_file
+from agm.config.general import (
+    ConfigCommandNotFound,
+    LoopConfig,
+    load_loop_config,
+    resolve_default_prompt_file,
+)
 from agm.core.fs import is_file
 
 LoopCommandArgs = LoopArgs | LoopNextArgs
@@ -42,12 +48,17 @@ def prompt_file(filename: str) -> Path:
 
 def configured_loop_settings(command_name: str | None) -> LoopConfig:
     context = current_config_context()
-    return load_loop_config(
-        home=context.home,
-        proj_dir=context.proj_dir,
-        cwd=context.cwd,
-        command_name=command_name,
-    )
+    require_command = command_name is not None
+    try:
+        return load_loop_config(
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
+            command_name=command_name,
+            require_command=require_command,
+        )
+    except ConfigCommandNotFound as error:
+        exit_config_command_not_found(error)
 
 
 def selected_task_text(task_file: Path) -> str:

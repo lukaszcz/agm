@@ -3988,11 +3988,11 @@ class TestLoop:
                 "-m",
                 "agm.cli",
                 "loop",
+                "run",
                 "--runner",
                 "runner",
                 "--selector",
                 "selector",
-                "runner",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -4050,7 +4050,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--no-selector", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run", "--no-selector"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to .agent-files/loop-" in result.stdout
@@ -4088,7 +4088,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--no-selector", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run", "--no-selector"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -4117,7 +4117,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "--no-selector", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run", "--no-selector"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
@@ -4175,7 +4175,7 @@ class TestLoop:
         work.mkdir()
 
         result = run_agm(
-            ["loop", "--no-selector", "--runner", "runner", "runner"], env=env, cwd=str(work)
+            ["loop", "run", "--no-selector", "--runner", "runner"], env=env, cwd=str(work)
         )
 
         assert result.returncode == 0
@@ -4230,12 +4230,12 @@ class TestLoop:
         result = run_agm(
             [
                 "loop",
+                "run",
                 "--no-selector",
                 "--runner",
                 "runner",
                 "--tasks-dir",
                 "custom/tasks",
-                "runner",
             ],
             env=env,
             cwd=str(work),
@@ -4267,7 +4267,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert (
@@ -4355,7 +4355,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--runner", "claude --stream", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run", "--runner", "claude --stream"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert (
@@ -4380,6 +4380,10 @@ class TestLoop:
         work.mkdir()
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        (home / ".agm" / "config.toml").write_text(
+            '[loop.claude]\nno_selector = true\n'
+        )
 
         result = run_agm(
             ["loop", "--no-selector", "claude", "-p", "--model", "sonnet"], env=env, cwd=str(work)
@@ -4410,7 +4414,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--no-selector", "--runner", 'claude -p "@%%"', "claude"],
+            ["loop", "run", "--no-selector", "--runner", 'claude -p "@%%"'],
             env=env,
             cwd=str(work),
         )
@@ -4440,7 +4444,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p {prompt_file}"] * 2
@@ -4462,6 +4466,10 @@ class TestLoop:
         work.mkdir()
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        (home / ".agm" / "config.toml").write_text(
+            '[loop.claude]\nno_selector = true\n'
+        )
 
         result = run_agm(
             ["loop", "--no-selector", "claude", "--", "-p", "%%"], env=env, cwd=str(work)
@@ -4527,7 +4535,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector", "runner"],
+            ["loop", "run", "--runner", "runner", "--selector", "selector"],
             env=env,
             cwd=str(work),
         )
@@ -4659,7 +4667,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "run", "--runner", "runner", "--selector", "selector", "runner"],
+            ["loop", "run", "--runner", "runner", "--selector", "selector"],
             env=env,
             cwd=str(work),
         )
@@ -4738,13 +4746,13 @@ class TestLoop:
         result = run_agm(
             [
                 "loop",
+                "run",
                 "--runner",
                 "runner",
                 "--selector",
                 "selector",
                 "--tasks-dir",
                 "custom/tasks",
-                "runner",
             ],
             env=env,
             cwd=str(work),
@@ -4818,7 +4826,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector %{PROMPT_FILE}", "runner"],
+            ["loop", "run", "--runner", "runner", "--selector", "selector %{PROMPT_FILE}"],
             env=env,
             cwd=str(work),
         )
@@ -4892,7 +4900,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector", "runner"],
+            ["loop", "run", "--runner", "runner", "--selector", "selector"],
             env=env,
             cwd=str(work),
         )
@@ -4961,7 +4969,7 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         result = run_agm(
-            ["loop", "--runner", "runner", "--selector", "selector", "runner"],
+            ["loop", "run", "--runner", "runner", "--selector", "selector"],
             env=env,
             cwd=str(work),
         )
@@ -4999,7 +5007,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [
@@ -5138,7 +5146,7 @@ class TestLoop:
         (work / "cli" / "tasks").mkdir(parents=True)
         (work / "cli" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--tasks-dir", "cli/tasks", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run", "--tasks-dir", "cli/tasks"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -5185,7 +5193,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "--no-selector", "--no-log", "claude"], env=env, cwd=str(work))
+        result = run_agm(["loop", "run", "--no-selector", "--no-log"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to " not in result.stdout
@@ -5212,6 +5220,10 @@ class TestLoop:
         work.mkdir()
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
+
+        (home / ".agm" / "config.toml").write_text(
+            '[loop.claude]\nno_selector = true\n'
+        )
 
         result = run_agm(["loop", "--no-selector", "claude", "--no-log"], env=env, cwd=str(work))
 
@@ -5243,7 +5255,7 @@ class TestLoop:
 
         log_file = tmp_path / "logs" / "custom-loop.log"
         result = run_agm(
-            ["loop", "--no-selector", "--log-file", str(log_file), "claude"], env=env, cwd=str(work)
+            ["loop", "run", "--no-selector", "--log-file", str(log_file)], env=env, cwd=str(work)
         )
 
         assert result.returncode == 0
@@ -5296,9 +5308,9 @@ class TestLoop:
                 "-m",
                 "agm.cli",
                 "loop",
+                "run",
                 "--no-selector",
                 "--runner",
-                "runner",
                 "runner",
             ],
             stdout=subprocess.PIPE,
@@ -5379,11 +5391,11 @@ class TestLoop:
                 "-m",
                 "agm.cli",
                 "loop",
+                "run",
                 "--runner",
                 "runner",
                 "--selector",
                 "selector",
-                "runner",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -5727,7 +5739,7 @@ class TestLoop:
         tasks_dir.mkdir(parents=True)
         (tasks_dir / "task-1.md").write_text("task one\n")
 
-        result = run_agm(["loop", "step", "runner"], env=env, cwd=str(work))
+        result = run_agm(["loop", "step"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to .agent-files/loop-" in result.stdout

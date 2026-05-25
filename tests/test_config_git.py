@@ -55,23 +55,22 @@ class TestAddPaths:
         git_root = tmp_path / "config"
         git_root.mkdir()
 
+        run_capture_calls: list[list[str]] = []
+
         def fake_run_capture(cmd: list[str], **kw: Any) -> tuple[int, str, str]:
+            run_capture_calls.append(cmd)
             if "add" in cmd:
                 return 1, "", "some unexpected error"
             return 0, "", ""
 
         monkeypatch.setattr(config_git, "run_capture", fake_run_capture)
 
-        require_success_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success",
-            lambda cmd, env=None: require_success_calls.append(cmd),
-        )
+        with pytest.raises(SystemExit) as exc_info:
+            _add_paths(git_root, [git_root / "feature"], env={})
 
-        _add_paths(git_root, [git_root / "feature"], env={})
-
-        # require_success should be called to re-raise the error
-        assert len(require_success_calls) == 1
+        # The failure is surfaced without re-running the failing git add.
+        assert exc_info.value.code == 1
+        assert len(run_capture_calls) == 1
 
 
 class TestCommitConfigDirChanges:

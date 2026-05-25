@@ -7,7 +7,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core.fs import rglob
-from agm.core.process import require_success, run_capture
+from agm.core.process import exit_with_output, require_success, run_capture
 from agm.project.layout import project_config_dir
 
 
@@ -27,10 +27,7 @@ def _add_paths(config_git_root: Path, paths: list[Path], *, env: dict[str, str] 
         # git add fails with "pathspec did not match any files" when the
         # path was never tracked and has been deleted – that is harmless.
         if "did not match any files" not in stderr:
-            require_success(
-                ["git", "-C", str(config_git_root), "add", "-A", "--", *relative_paths],
-                env=env,
-            )
+            exit_with_output(returncode, stderr=stderr)
 
 
 def commit_config_dir_changes(

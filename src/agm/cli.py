@@ -19,9 +19,9 @@ import agm.commands.dep.switch as dep_switch_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
 import agm.commands.list as list_command
-import agm.commands.loop.next as loop_next_command
 import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
+import agm.commands.loop.select as loop_select_command
 import agm.commands.loop.step as loop_step_command
 import agm.commands.open as open_command
 import agm.commands.pull as pull_command
@@ -47,7 +47,7 @@ from agm.commands.args import (
     DepSwitchArgs,
     InitArgs,
     LoopArgs,
-    LoopNextArgs,
+    LoopSelectArgs,
     OpenArgs,
     RefineArgs,
     ReviewArgs,
@@ -362,9 +362,9 @@ def _parse_loop_args(
     )
 
 
-def _parse_loop_next_args(
-    raw_args: list[str], *, command_path: Sequence[str] = ("loop", "next")
-) -> LoopNextArgs:
+def _parse_loop_select_args(
+    raw_args: list[str], *, command_path: Sequence[str] = ("loop", "select")
+) -> LoopSelectArgs:
     runner: str | None = None
     selector: str | None = None
     no_selector = False
@@ -484,7 +484,7 @@ def _parse_loop_next_args(
     if remaining:
         command_name = remaining[0]
         runner_args = run_command.normalize_run_command(remaining[1:])
-    return LoopNextArgs(
+    return LoopSelectArgs(
         command_name=command_name,
         runner=runner,
         runner_args=runner_args,
@@ -1280,8 +1280,8 @@ def loop(
     if not raw_args:
         print_help_for_command_path(["loop"])
         raise typer.Exit()
-    if raw_args[0] == "next":
-        loop_next_command.run(_parse_loop_next_args(raw_args[1:]))
+    if raw_args[0] == "select":
+        loop_select_command.run(_parse_loop_select_args(raw_args[1:]))
         return
     if raw_args[0] == "run":
         loop_run_command.run(

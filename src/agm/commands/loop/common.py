@@ -19,7 +19,7 @@ from agm.agent.runner import (
     validate_command,
 )
 from agm.commands.agent_io import exit_config_command_not_found
-from agm.commands.args import LoopArgs, LoopNextArgs
+from agm.commands.args import LoopArgs, LoopSelectArgs
 from agm.config.context import current_config_context
 from agm.config.general import (
     ConfigCommandNotFound,
@@ -29,7 +29,7 @@ from agm.config.general import (
 )
 from agm.core.fs import is_file
 
-LoopCommandArgs = LoopArgs | LoopNextArgs
+LoopCommandArgs = LoopArgs | LoopSelectArgs
 
 
 @dataclass(slots=True)

@@ -1,4 +1,4 @@
-"""agm loop next."""
+"""agm loop select."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from agm.agent.runner import (
     command_with_prompt_target,
     run_prompt_command,
 )
-from agm.commands.args import LoopNextArgs
+from agm.commands.args import LoopSelectArgs
 from agm.core import dry_run
 
 from .common import (
@@ -29,7 +29,7 @@ def _print_dry_run_prompt(label: str, prompt_text: str) -> None:
     print(f"dry-run: prompt [{label}]: {prompt_text}")
 
 
-def run(args: LoopNextArgs) -> None:
+def run(args: LoopSelectArgs) -> None:
     temp_files: list[Path] = []
     resolved_tasks_dir = tasks_dir(args)
     env = loop_env(resolved_tasks_dir)
@@ -37,7 +37,7 @@ def run(args: LoopNextArgs) -> None:
 
     if not use_selector_mode(args):
         print(
-            "Error: agm loop next requires selector mode. "
+            "Error: agm loop select requires selector mode. "
             "Remove --no-selector to enable it.",
             file=sys.stderr,
         )
@@ -56,7 +56,7 @@ def run(args: LoopNextArgs) -> None:
             )
 
         if dry_run.enabled():
-            dry_run.print_configuration("loop-next")
+            dry_run.print_configuration("loop-select")
             dry_run.print_detail("tasks dir", str(resolved_tasks_dir))
             dry_run.print_detail(
                 "runner command",

@@ -1123,9 +1123,9 @@ class TestLoop:
         assert calls[0].command_name == "claude"
         assert calls[0].runner_args == []
 
-    def test_loop_next(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next"])
+    def test_loop_select(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command_name is None
@@ -1135,42 +1135,42 @@ class TestLoop:
         assert calls[0].no_selector is False
         assert calls[0].tasks_dir is None
 
-    def test_loop_next_with_positional_command_and_runner_args(
+    def test_loop_select_with_positional_command_and_runner_args(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next", "claude", "-p", "--model", "sonnet"])
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select", "claude", "-p", "--model", "sonnet"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command_name == "claude"
         assert calls[0].runner_args == ["-p", "--model", "sonnet"]
 
-    def test_loop_next_with_selector_override(
+    def test_loop_select_with_selector_override(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next", "--selector", "codex exec", "claude"])
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select", "--selector", "codex exec", "claude"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command_name == "claude"
         assert calls[0].selector == "codex exec"
         assert calls[0].no_selector is False
 
-    def test_loop_next_with_no_selector(
+    def test_loop_select_with_no_selector(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next", "--no-selector", "claude"])
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select", "--no-selector", "claude"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command_name == "claude"
         assert calls[0].no_selector is True
 
-    def test_loop_next_rejects_selector_with_no_selector(
+    def test_loop_select_rejects_selector_with_no_selector(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next", "--selector", "cmd", "--no-selector"])
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select", "--selector", "cmd", "--no-selector"])
         assert result.exit_code != 0
         assert len(calls) == 0
 
@@ -1260,32 +1260,32 @@ class TestLoop:
         assert calls[0].prompt is None
         assert calls[0].prompt_file == "task.md"
 
-    def test_loop_next_with_prompt(
+    def test_loop_select_with_prompt(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next", "--prompt", "do it"])
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select", "--prompt", "do it"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].prompt == "do it"
         assert calls[0].prompt_file is None
 
-    def test_loop_next_with_prompt_file(
+    def test_loop_select_with_prompt_file(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next", "--prompt-file", "prompt.md"])
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select", "--prompt-file", "prompt.md"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].prompt is None
         assert calls[0].prompt_file == "prompt.md"
 
-    def test_loop_next_rejects_prompt_with_prompt_file(
+    def test_loop_select_rejects_prompt_with_prompt_file(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
         result = invoke(
-            runner, ["loop", "next", "--prompt", "text", "--prompt-file", "file.md"]
+            runner, ["loop", "select", "--prompt", "text", "--prompt-file", "file.md"]
         )
         assert result.exit_code != 0
         assert len(calls) == 0
@@ -1356,37 +1356,37 @@ class TestLoop:
         assert calls[0].selector_prompt is None
         assert calls[0].selector_prompt_file == "sel.md"
 
-    def test_loop_next_with_selector_prompt(
+    def test_loop_select_with_selector_prompt(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
-        result = invoke(runner, ["loop", "next", "--selector-prompt", "review tasks"])
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
+        result = invoke(runner, ["loop", "select", "--selector-prompt", "review tasks"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].selector_prompt == "review tasks"
         assert calls[0].selector_prompt_file is None
 
-    def test_loop_next_with_selector_prompt_file(
+    def test_loop_select_with_selector_prompt_file(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
         result = invoke(
-            runner, ["loop", "next", "--selector-prompt-file", "selector.md"]
+            runner, ["loop", "select", "--selector-prompt-file", "selector.md"]
         )
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].selector_prompt is None
         assert calls[0].selector_prompt_file == "selector.md"
 
-    def test_loop_next_rejects_selector_prompt_with_selector_prompt_file(
+    def test_loop_select_rejects_selector_prompt_with_selector_prompt_file(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.loop_next_command)
+        calls = make_recorder(monkeypatch, cli.loop_select_command)
         result = invoke(
             runner,
             [
                 "loop",
-                "next",
+                "select",
                 "--selector-prompt",
                 "text",
                 "--selector-prompt-file",
@@ -1845,14 +1845,14 @@ class TestHelpTextForPathUnknownMultiElement:
             parser_helpers._help_text_for_path(["nonexistent", "subcommand"])
 
 
-class TestParseLoopNextArgsMissingBranches:
-    """Cover lines 330, 332-335, 346-349, 376-377 in _parse_loop_next_args."""
+class TestParseLoopSelectArgsMissingBranches:
+    """Cover lines 330, 332-335, 346-349, 376-377 in _parse_loop_select_args."""
 
     def test_double_dash_stops_parsing(self) -> None:
         """Line 330: 'break' after '--' separator."""
-        args = cli._parse_loop_next_args(
+        args = cli._parse_loop_select_args(
             ["--", "--runner", "val", "cmd"],
-            command_path=["loop", "next"],
+            command_path=["loop", "select"],
         )
         # After --, the -- itself becomes command_name and the rest become runner_args
         assert args.runner is None
@@ -1860,35 +1860,35 @@ class TestParseLoopNextArgsMissingBranches:
         assert args.runner_args == ["--runner", "val", "cmd"]
 
     def test_runner_flag(self) -> None:
-        """Lines 332-335: --runner parsing in _parse_loop_next_args."""
-        args = cli._parse_loop_next_args(
+        """Lines 332-335: --runner parsing in _parse_loop_select_args."""
+        args = cli._parse_loop_select_args(
             ["--runner", "my-runner", "cmd"],
-            command_path=["loop", "next"],
+            command_path=["loop", "select"],
         )
         assert args.runner == "my-runner"
         assert args.command_name == "cmd"
 
     def test_tasks_dir_flag(self) -> None:
-        """Lines 346-349: --tasks-dir parsing in _parse_loop_next_args."""
-        args = cli._parse_loop_next_args(
+        """Lines 346-349: --tasks-dir parsing in _parse_loop_select_args."""
+        args = cli._parse_loop_select_args(
             ["--tasks-dir", "custom/tasks", "cmd"],
-            command_path=["loop", "next"],
+            command_path=["loop", "select"],
         )
         assert args.tasks_dir == "custom/tasks"
         assert args.command_name == "cmd"
 
     def test_timeout_invalid_format_exits(self) -> None:
-        """Lines 376-377: --timeout with invalid format in _parse_loop_next_args."""
+        """Lines 376-377: --timeout with invalid format in _parse_loop_select_args."""
         with pytest.raises(SystemExit):
-            cli._parse_loop_next_args(
+            cli._parse_loop_select_args(
                 ["--timeout", "abc", "cmd"],
-                command_path=["loop", "next"],
+                command_path=["loop", "select"],
             )
 
     def test_timeout_flag(self) -> None:
-        args = cli._parse_loop_next_args(
+        args = cli._parse_loop_select_args(
             ["--timeout", "1h", "cmd"],
-            command_path=["loop", "next"],
+            command_path=["loop", "select"],
         )
         assert args.timeout == 3600
         assert args.command_name == "cmd"
@@ -1991,48 +1991,48 @@ class TestParseLoopArgsExtraPromptFlags:
             )
 
 
-class TestParseLoopNextArgsExtraPromptFlags:
-    """Cover --extra-prompt* flags in _parse_loop_next_args."""
+class TestParseLoopSelectArgsExtraPromptFlags:
+    """Cover --extra-prompt* flags in _parse_loop_select_args."""
 
     def test_extra_prompt_flag(self) -> None:
-        args = cli._parse_loop_next_args(
-            ["--extra-prompt", "extra context", "cmd"], command_path=["loop", "next"]
+        args = cli._parse_loop_select_args(
+            ["--extra-prompt", "extra context", "cmd"], command_path=["loop", "select"]
         )
         assert args.extra_prompt == "extra context"
         assert args.extra_prompt_file is None
 
     def test_extra_prompt_file_flag(self) -> None:
-        args = cli._parse_loop_next_args(
-            ["--extra-prompt-file", "/tmp/extra.md", "cmd"], command_path=["loop", "next"]
+        args = cli._parse_loop_select_args(
+            ["--extra-prompt-file", "/tmp/extra.md", "cmd"], command_path=["loop", "select"]
         )
         assert args.extra_prompt_file == "/tmp/extra.md"
 
     def test_extra_selector_prompt_flag(self) -> None:
-        args = cli._parse_loop_next_args(
-            ["--extra-selector-prompt", "extra sel", "cmd"], command_path=["loop", "next"]
+        args = cli._parse_loop_select_args(
+            ["--extra-selector-prompt", "extra sel", "cmd"], command_path=["loop", "select"]
         )
         assert args.extra_selector_prompt == "extra sel"
 
     def test_extra_selector_prompt_file_flag(self) -> None:
-        args = cli._parse_loop_next_args(
+        args = cli._parse_loop_select_args(
             ["--extra-selector-prompt-file", "/tmp/sel.md", "cmd"],
-            command_path=["loop", "next"],
+            command_path=["loop", "select"],
         )
         assert args.extra_selector_prompt_file == "/tmp/sel.md"
 
 
 
-class TestParseLoopNextArgsExtraPromptMutualExclusion:
+class TestParseLoopSelectArgsExtraPromptMutualExclusion:
     def test_extra_prompt_and_extra_prompt_file_mutually_exclusive(self) -> None:
         with pytest.raises(SystemExit):
-            cli._parse_loop_next_args(
+            cli._parse_loop_select_args(
                 ["--extra-prompt", "text", "--extra-prompt-file", "file.md", "cmd"],
-                command_path=["loop", "next"],
+                command_path=["loop", "select"],
             )
 
     def test_extra_selector_prompt_and_file_mutually_exclusive(self) -> None:
         with pytest.raises(SystemExit):
-            cli._parse_loop_next_args(
+            cli._parse_loop_select_args(
                 [
                     "--extra-selector-prompt",
                     "text",
@@ -2040,5 +2040,5 @@ class TestParseLoopNextArgsExtraPromptMutualExclusion:
                     "file.md",
                     "cmd",
                 ],
-                command_path=["loop", "next"],
+                command_path=["loop", "select"],
             )

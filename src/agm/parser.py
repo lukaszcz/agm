@@ -128,13 +128,13 @@ _HELP_TEXTS: dict[str, str] = {
                       [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
                       [--timeout DURATION]
                       CMD [RUNNER_ARGS...]
-        agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
-                      [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
-                      [--selector-prompt TEXT|--selector-prompt-file PATH]
-                      [--extra-prompt TEXT|--extra-prompt-file PATH]
-                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                      [--timeout DURATION]
-                      [CMD [RUNNER_ARGS...]]
+        agm loop select [--runner COMMAND] [--selector COMMAND|--no-selector]
+                       [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
+                       [--selector-prompt TEXT|--selector-prompt-file PATH]
+                       [--extra-prompt TEXT|--extra-prompt-file PATH]
+                       [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
+                       [--timeout DURATION]
+                       [CMD [RUNNER_ARGS...]]
 
         Repeatedly run a prompt command until the selected loop mode reports
         completion, perform one loop iteration, or run the progress-update
@@ -240,10 +240,10 @@ _HELP_TEXTS: dict[str, str] = {
 
           ``agm loop step`` performs a single loop iteration using the same
           runner, selector, and logging behavior as ``agm loop run``.
-          ``agm loop next`` runs ``select.md`` once using the
+          ``agm loop select`` runs ``select.md`` once using the
           resolved selector, or the resolved runner when no selector is
           configured. It requires selector mode; ``--no-selector`` is an
-          error for ``loop next``.
+          error for ``loop select``.
     """),
     "review": textwrap.dedent("""\
         agm review [COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS]
@@ -552,19 +552,19 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
         Remove a worktree and delete its local branch.
     """),
-    ("loop", "next"): textwrap.dedent("""\
-        agm loop next [--runner COMMAND] [--selector COMMAND|--no-selector]
-                      [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
-                      [--selector-prompt TEXT|--selector-prompt-file PATH]
-                      [--extra-prompt TEXT|--extra-prompt-file PATH]
-                      [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                      [--timeout DURATION]
-                      [CMD [RUNNER_ARGS...]]
+    ("loop", "select"): textwrap.dedent("""\
+        agm loop select [--runner COMMAND] [--selector COMMAND|--no-selector]
+                        [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
+                        [--selector-prompt TEXT|--selector-prompt-file PATH]
+                        [--extra-prompt TEXT|--extra-prompt-file PATH]
+                        [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
+                        [--timeout DURATION]
+                        [CMD [RUNNER_ARGS...]]
 
         Run the update-progress prompt once using the resolved selector, or
         the resolved runner when no selector is configured. Requires selector
         mode; ``--no-selector`` is an error for this subcommand.
-        ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
+        `--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
         the default select.md prompt. ``--timeout DURATION`` sets an idle
         timeout; see ``agm help loop`` for details. Prompt files are
         preprocessed for environment variable expansion.

@@ -197,7 +197,7 @@ selection.
 agm loop implement_feature
 agm loop run review --runner "claude -p"
 agm loop step fix_tests --log-file loop.log
-agm loop next review --selector "codex exec"
+agm loop select review --selector "codex exec"
 ```
 
 **Config** — Loop configuration is loaded from merged `config.toml` `[loop]` and `[loop.<command>]`
@@ -206,7 +206,7 @@ sections. CLI flags override config values; `RUNNER_ARGS` are appended to the fi
 **Subcommands**:
 
 - `agm loop step` — single loop iteration
-- `agm loop next` — run `select.md` once; requires selector mode
+- `agm loop select` — run `select.md` once; requires selector mode
 
 See `agm help loop` for selector/no-selector mode, prompt options, timeout, and logging details.
 

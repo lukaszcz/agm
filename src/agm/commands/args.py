@@ -119,7 +119,7 @@ class LoopArgs:
 
 
 @dataclass(slots=True)
-class LoopNextArgs:
+class LoopSelectArgs:
     command_name: str | None
     runner: str | None
     runner_args: list[str]

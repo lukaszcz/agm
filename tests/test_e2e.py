@@ -5429,7 +5429,7 @@ class TestLoop:
                 except ProcessLookupError:
                     pass
 
-    def test_loop_next_runs_selector_with_select_prompt(
+    def test_loop_select_runs_selector_with_select_prompt(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["FAKE_SELECTOR_LOG"] = str(tmp_path / "selector.log")
@@ -5472,7 +5472,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "next"], env=env, cwd=str(work))
+        result = run_agm(["loop", "select"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert result.stdout == "task-1.md\n"
@@ -5482,7 +5482,7 @@ class TestLoop:
         ]
         assert not Path(env["FAKE_RUNNER_LOG"]).exists()
 
-    def test_loop_next_runs_runner_when_selector_is_not_configured(
+    def test_loop_select_runs_runner_when_selector_is_not_configured(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
@@ -5513,7 +5513,7 @@ class TestLoop:
         work.mkdir()
 
         result = run_agm(
-            ["loop", "next", "--tasks-dir", "custom/tasks"],
+            ["loop", "select", "--tasks-dir", "custom/tasks"],
             env=env,
             cwd=str(work),
         )
@@ -5525,7 +5525,7 @@ class TestLoop:
         assert runner_log_lines[0].startswith("@")
         assert runner_log_lines[1] == f"update {work / 'custom' / 'tasks'}"
 
-    def test_loop_next_dry_run_summarizes_selector_mode_configuration(
+    def test_loop_select_dry_run_summarizes_selector_mode_configuration(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["TASK_LABEL"] = "expanded"
@@ -5554,10 +5554,10 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "next"], env=env, cwd=str(work))
+        result = run_agm(["--dry-run", "loop", "select"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert "dry-run: loop-next configuration" in result.stdout
+        assert "dry-run: loop-select configuration" in result.stdout
         assert f"dry-run:   tasks dir: {work / 'config' / 'tasks'}" in result.stdout
         assert "dry-run:   selector command: selector" in result.stdout
         assert "dry-run:   runner command: runner" in result.stdout
@@ -5567,7 +5567,7 @@ class TestLoop:
         assert "dry-run: command [selector]:" in result.stdout
         assert not Path(env["FAKE_SELECTOR_LOG"]).exists()
 
-    def test_loop_next_dry_run_summarizes_runner_mode_configuration(
+    def test_loop_select_dry_run_summarizes_runner_mode_configuration(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
@@ -5593,10 +5593,10 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "next"], env=env, cwd=str(work))
+        result = run_agm(["--dry-run", "loop", "select"], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert "dry-run: loop-next configuration" in result.stdout
+        assert "dry-run: loop-select configuration" in result.stdout
         assert f"dry-run:   tasks dir: {work / '.agent-files' / 'tasks'}" in result.stdout
         assert "dry-run:   selector command: disabled" in result.stdout
         assert "dry-run:   runner command: runner" in result.stdout
@@ -5605,7 +5605,7 @@ class TestLoop:
         assert "dry-run: command [runner]:" in result.stdout
         assert not Path(env["FAKE_RUNNER_LOG"]).exists()
 
-    def test_loop_next_errors_with_no_selector_flag(
+    def test_loop_select_errors_with_no_selector_flag(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
@@ -5631,7 +5631,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "next", "--no-selector"], env=env, cwd=str(work), check=False)
+        result = run_agm(["loop", "select", "--no-selector"], env=env, cwd=str(work), check=False)
 
         assert result.returncode != 0
         assert "requires selector mode" in result.stderr

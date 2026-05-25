@@ -117,7 +117,10 @@ def test_complete_close_branch_infers_branch_name_from_checkout_worktree_path(
 
 def test_complete_help_path_suggests_subcommands() -> None:
     assert completion.complete_help_path(_make_ctx(help_command=["wt"]), "n") == ["new"]
-    assert completion.complete_help_path(_make_ctx(help_command=["loop"]), "n") == ["next"]
+    assert completion.complete_help_path(_make_ctx(help_command=["loop"]), "s") == [
+        "select",
+        "step",
+    ]
     assert completion.complete_help_path(_make_ctx(help_command=["config"]), "e") == ["env"]
     assert completion.complete_help_path(_make_ctx(help_command=[]), "o") == ["open"]
     assert completion.complete_help_path(_make_ctx(), "o") == ["open"]

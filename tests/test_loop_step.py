@@ -1,4 +1,4 @@
-"""Comprehensive tests for agm.commands.loop.step, loop.next, and loop.run."""
+"""Comprehensive tests for agm.commands.loop.step, loop.select, and loop.run."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 
 from agm.agent.runner import ResolvedPrompt
-from agm.commands.args import LoopArgs, LoopNextArgs
+from agm.commands.args import LoopArgs, LoopSelectArgs
 from agm.commands.loop.common import PreparedSelectInvocation
 from agm.commands.loop.common import dry_run_prompt_text as next_dry_run_prompt_text
-from agm.commands.loop.next import _print_dry_run_prompt as next_print_dry_run_prompt
-from agm.commands.loop.next import run as next_run
 from agm.commands.loop.run import run as loop_run
+from agm.commands.loop.select import _print_dry_run_prompt as next_print_dry_run_prompt
+from agm.commands.loop.select import run as next_run
 from agm.commands.loop.step import (
     LoopStepRuntime,
     PreparedPrompt,
@@ -78,7 +78,7 @@ def _make_loop_args(
     )
 
 
-def _make_loop_next_args(
+def _make_loop_select_args(
     *,
     runner: str | None = "myrunner",
     runner_args: list[str] | None = None,
@@ -95,8 +95,8 @@ def _make_loop_next_args(
     extra_selector_prompt_file: str | None = None,
     command_name: str | None = None,
     timeout: float | None = None,
-) -> LoopNextArgs:
-    return LoopNextArgs(
+) -> LoopSelectArgs:
+    return LoopSelectArgs(
         command_name=command_name,
         runner=runner,
         runner_args=runner_args if runner_args is not None else [],
@@ -1146,7 +1146,7 @@ class TestStepRun:
 
 
 # ===========================================================================
-# loop.next — _dry_run_prompt_text
+# loop.select — _dry_run_prompt_text
 # ===========================================================================
 
 
@@ -1163,7 +1163,7 @@ class TestNextDryRunPromptText:
 
 
 # ===========================================================================
-# loop.next — _print_dry_run_prompt
+# loop.select — _print_dry_run_prompt
 # ===========================================================================
 
 
@@ -1181,7 +1181,7 @@ class TestNextPrintDryRunPrompt:
 
 
 # ===========================================================================
-# loop.next — run
+# loop.select — run
 # ===========================================================================
 
 
@@ -1208,10 +1208,10 @@ class TestNextRun:
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
-            "agm.commands.loop.next.use_selector_mode", lambda args: False
+            "agm.commands.loop.select.use_selector_mode", lambda args: False
         )
 
-        args = _make_loop_next_args(no_selector=True)
+        args = _make_loop_select_args(no_selector=True)
         with pytest.raises(SystemExit) as exc_info:
             next_run(args)
         assert exc_info.value.code == 1
@@ -1227,15 +1227,15 @@ class TestNextRun:
 
         invocation = self._make_invocation(tmp_path)
         monkeypatch.setattr(
-            "agm.commands.loop.next.use_selector_mode", lambda args: True
+            "agm.commands.loop.select.use_selector_mode", lambda args: True
         )
         monkeypatch.setattr(
-            "agm.commands.loop.next.prepare_select_invocation",
+            "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
         )
-        monkeypatch.setattr("agm.commands.loop.next.dry_run.enabled", lambda: True)
-        monkeypatch.setattr("agm.commands.loop.next.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
+        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: True)
+        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
+        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
 
         run_command_called = [False]
 
@@ -1249,9 +1249,9 @@ class TestNextRun:
             run_command_called[0] = True
             return ""
 
-        monkeypatch.setattr("agm.commands.loop.next.run_prompt_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.select.run_prompt_command", fake_run_command)
 
-        args = _make_loop_next_args()
+        args = _make_loop_select_args()
         next_run(args)
 
         assert run_command_called[0] is False
@@ -1267,22 +1267,22 @@ class TestNextRun:
 
         invocation = self._make_invocation(tmp_path)
         monkeypatch.setattr(
-            "agm.commands.loop.next.use_selector_mode", lambda args: True
+            "agm.commands.loop.select.use_selector_mode", lambda args: True
         )
         monkeypatch.setattr(
-            "agm.commands.loop.next.prepare_select_invocation",
+            "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
         )
-        monkeypatch.setattr("agm.commands.loop.next.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.next.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
-        monkeypatch.setattr("agm.commands.loop.next.cleanup_temp_files", lambda files: None)
+        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
+        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
+        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
+        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", lambda files: None)
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_prompt_command",
+            "agm.commands.loop.select.run_prompt_command",
             lambda command, target, *, env, idle_timeout=None: "task-1.md",
         )
 
-        args = _make_loop_next_args()
+        args = _make_loop_select_args()
         next_run(args)
 
         out, _ = capsys.readouterr()
@@ -1297,23 +1297,23 @@ class TestNextRun:
 
         invocation = self._make_invocation(tmp_path)
         monkeypatch.setattr(
-            "agm.commands.loop.next.use_selector_mode", lambda args: True
+            "agm.commands.loop.select.use_selector_mode", lambda args: True
         )
         monkeypatch.setattr(
-            "agm.commands.loop.next.prepare_select_invocation",
+            "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
         )
-        monkeypatch.setattr("agm.commands.loop.next.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.next.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
+        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
+        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
+        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_prompt_command",
+            "agm.commands.loop.select.run_prompt_command",
             lambda command, target, *, env, idle_timeout=None: (
                 _ for _ in ()
             ).throw(KeyboardInterrupt),
         )
 
-        args = _make_loop_next_args()
+        args = _make_loop_select_args()
         with pytest.raises(SystemExit) as exc_info:
             next_run(args)
         assert exc_info.value.code == 130
@@ -1327,17 +1327,17 @@ class TestNextRun:
 
         invocation = self._make_invocation(tmp_path)
         monkeypatch.setattr(
-            "agm.commands.loop.next.use_selector_mode", lambda args: True
+            "agm.commands.loop.select.use_selector_mode", lambda args: True
         )
         monkeypatch.setattr(
-            "agm.commands.loop.next.prepare_select_invocation",
+            "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
         )
-        monkeypatch.setattr("agm.commands.loop.next.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.next.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
+        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
+        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
+        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_prompt_command",
+            "agm.commands.loop.select.run_prompt_command",
             lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
         )
 
@@ -1346,9 +1346,9 @@ class TestNextRun:
         def fake_cleanup(files: list[Path]) -> None:
             cleanup_called[0] = True
 
-        monkeypatch.setattr("agm.commands.loop.next.cleanup_temp_files", fake_cleanup)
+        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", fake_cleanup)
 
-        args = _make_loop_next_args()
+        args = _make_loop_select_args()
         with pytest.raises(RuntimeError):
             next_run(args)
         assert cleanup_called[0] is True
@@ -2475,22 +2475,22 @@ class TestNextRunWithExtraSelectorPrompt:
             selector_command=["fake-selector"],
         )
         monkeypatch.setattr(
-            "agm.commands.loop.next.use_selector_mode", lambda args: True
+            "agm.commands.loop.select.use_selector_mode", lambda args: True
         )
         monkeypatch.setattr(
-            "agm.commands.loop.next.prepare_select_invocation",
+            "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
         )
-        monkeypatch.setattr("agm.commands.loop.next.dry_run.enabled", lambda: False)
-        monkeypatch.setattr("agm.commands.loop.next.tasks_dir", lambda args: tmp_path / "tasks")
-        monkeypatch.setattr("agm.commands.loop.next.loop_env", lambda d: {})
-        monkeypatch.setattr("agm.commands.loop.next.cleanup_temp_files", lambda files: None)
+        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
+        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
+        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
+        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", lambda files: None)
         monkeypatch.setattr(
-            "agm.commands.loop.next.run_prompt_command",
+            "agm.commands.loop.select.run_prompt_command",
             lambda command, target, *, env, idle_timeout=None: "task-1.md",
         )
 
-        args = _make_loop_next_args(
+        args = _make_loop_select_args(
             selector="fake-selector",
             extra_selector_prompt="extra selector context",
         )

@@ -212,12 +212,12 @@ class TestLoopTimeoutArg:
                 command_path=["loop"],
             )
 
-    def test_parse_loop_next_args_timeout(self) -> None:
-        from agm.cli import _parse_loop_next_args
+    def test_parse_loop_select_args_timeout(self) -> None:
+        from agm.cli import _parse_loop_select_args
 
-        args = _parse_loop_next_args(
+        args = _parse_loop_select_args(
             ["--timeout", "10m", "mycmd"],
-            command_path=["loop", "next"],
+            command_path=["loop", "select"],
         )
         assert args.timeout == 600.0
 

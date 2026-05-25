@@ -40,7 +40,7 @@ _HELP_TREE: dict[str, list[str]] = {
         "tmux",
         "help",
     ],
-    "loop": ["next", "run", "step"],
+    "loop": ["select", "run", "step"],
     "config": ["cp", "copy", "env", "update"],
     "wt": ["new", "rm", "remove"],
     "worktree": ["new", "rm", "remove"],

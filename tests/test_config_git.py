@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +13,8 @@ import pytest
 import agm.project.config_git as config_git
 import agm.vcs.git as git_helpers
 from agm.project.config_git import _add_paths, commit_config_dir_changes
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
 
 
 class TestAddPaths:
@@ -319,3 +324,90 @@ class TestCommitConfigDirChanges:
             assert "-C" in cmd
             idx = cmd.index("-C")
             assert cmd[idx + 1] == str(config_dir)
+
+
+@needs_git
+class TestCommitConfigDirChangesRealRepo:
+    """Integration tests exercising the real git commit path.
+
+    Unlike the mocked tests above, these run real ``git`` against a real
+    config repository whose author identity lives only in a global config
+    reachable via the ``HOME`` of the passed ``env``.  This mirrors the
+    common user setup and guards against passing an environment that
+    lacks ``HOME``/``PATH`` (where ``git commit`` would fail with
+    "Author identity unknown").
+    """
+
+    def _make_repo(self, tmp_path: Path) -> tuple[Path, dict[str, str]]:
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text(
+            "[user]\n\tname = Test User\n\temail = test@example.com\n",
+            encoding="utf-8",
+        )
+        env = {**os.environ, "HOME": str(home)}
+        env.pop("GIT_CONFIG_GLOBAL", None)
+
+        project_dir = tmp_path / "proj"
+        config_dir = project_dir / "config"
+        config_dir.mkdir(parents=True)
+        subprocess.run(
+            ["git", "-C", str(config_dir), "init", "-q"], check=True, env=env
+        )
+        # No local identity is configured: the commit must rely on the
+        # global config reachable through HOME.
+        return project_dir, env
+
+    def test_commits_new_branch_config_using_env_identity(
+        self, tmp_path: Path
+    ) -> None:
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+        branch_config = config_dir / "feature"
+        branch_config.mkdir()
+        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+
+        commit_config_dir_changes(
+            project_dir,
+            "chore: add config for feature",
+            add_paths=[branch_config],
+            env=env,
+        )
+
+        log = subprocess.run(
+            ["git", "-C", str(config_dir), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert "chore: add config for feature" in log.stdout
+
+    def test_fails_when_env_lacks_identity_and_home(self, tmp_path: Path) -> None:
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+        branch_config = config_dir / "feature"
+        branch_config.mkdir()
+        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+
+        # An environment without HOME (the previous open.py regression
+        # passed env={}) cannot resolve the global git identity and must
+        # fail loudly rather than create a broken or identity-less commit.
+        # GIT_CONFIG_NOSYSTEM keeps a system-wide identity from masking it.
+        broken_env = {"PATH": env["PATH"], "GIT_CONFIG_NOSYSTEM": "1"}
+        with pytest.raises(SystemExit) as exc_info:
+            commit_config_dir_changes(
+                project_dir,
+                "chore: add config for feature",
+                add_paths=[branch_config],
+                env=broken_env,
+            )
+        assert exc_info.value.code != 0
+
+        log = subprocess.run(
+            ["git", "-C", str(config_dir), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert log.stdout.strip() == ""

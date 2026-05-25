@@ -18,10 +18,10 @@ Global options:
 |---|---|
 | `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Open the main checkout or a branch worktree, creating or checking it out when needed |
 | `agm close [-f\|--force] [-D] BRANCH` | Remove a branch worktree and close its tmux session |
-| `agm init [--embedded \| --workspace]` | Initialize the current directory without cloning a repo |
-| `agm init [--embedded \| --workspace] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
-| `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
-| `agm init --clone [--embedded \| --workspace] [-b\|--branch BRANCH] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
+| `agm init [--embedded \| --workspace] [--no-git-init \| --no-config-git \| --no-notes-git]` | Initialize the current directory without cloning a repo |
+| `agm init [--embedded \| --workspace] [--no-git-init \| --no-config-git \| --no-notes-git] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
+| `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
+| `agm init --clone [--embedded \| --workspace] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
 | `agm fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
 | `agm pull` | Run `agm fetch`, then run `git merge` in every dependency, main repo, and worktree checkout |
 | `agm list [-v\|--verbose]` | List all open worktrees |
@@ -72,6 +72,9 @@ Global options:
 - `--workspace`: force the workspace layout with `repo/`, `deps/`, `notes/`, `worktrees/`, and `config/`
 - `--clone`: initialize a child directory derived from `REPO_URL` when no `PROJECT_NAME` is provided
 - `-b`, `--branch BRANCH`: clone this branch when `REPO_URL` is provided
+- `--no-git-init`: do not create git repositories in `config/` and `notes/`
+- `--no-config-git`: do not create a git repository in `config/`
+- `--no-notes-git`: do not create a git repository in `notes/`
 
 `agm init` layout selection:
 
@@ -319,6 +322,13 @@ eval "$(agm config env)"
 `agm config update` creates missing project and branch `config.toml` files under the project
 config directory, updates dependency configuration entries, and commits any generated
 changes to the config repository's git history with a `chore: update config` commit message.
+
+When the config directory is a git repository, AGM automatically commits changes it makes to
+the config directory. In addition to `agm config update`, this covers `agm init`,
+`agm open`, `agm close`, `agm dep new`, `agm dep switch`, and `agm worktree new`, each of
+which commits the config it adds, updates, or removes for the affected branch. Pass
+`agm init --no-git-init` (or `--no-config-git`) to opt out of creating the config git
+repository, which disables these automatic commits.
 
 `agm run` config lookup:
 

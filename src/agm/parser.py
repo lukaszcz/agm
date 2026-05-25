@@ -564,7 +564,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         Run the update-progress prompt once using the resolved selector, or
         the resolved runner when no selector is configured. Requires selector
         mode; ``--no-selector`` is an error for this subcommand.
-        `--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
+        ``--selector-prompt TEXT`` or ``--selector-prompt-file PATH`` overrides
         the default select.md prompt. ``--timeout DURATION`` sets an idle
         timeout; see ``agm help loop`` for details. Prompt files are
         preprocessed for environment variable expansion.

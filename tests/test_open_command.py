@@ -238,6 +238,42 @@ class TestOpenSession:
         assert len(create_calls) == 1
         assert "feature" in create_calls[0]["session_name"]
 
+    def test_commits_config_with_worktree_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
+        feat_path = tmp_path / "worktrees" / "feature"
+        feat_path.mkdir(parents=True)
+        monkeypatch.setattr(
+            open_module,
+            "branch_worktree_path",
+            lambda pd, branch, repo_branch: feat_path,
+        )
+        monkeypatch.setattr(
+            open_module, "has_expected_worktree", lambda pd, branch, **kw: True
+        )
+        monkeypatch.setattr(
+            open_module, "branch_session_name", lambda pd, branch: f"{pd.name}/{branch}"
+        )
+        monkeypatch.setattr(
+            open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
+        )
+        worktree_env = {"PATH": "/usr/bin", "HOME": "/home/user"}
+        monkeypatch.setattr(
+            open_module,
+            "load_worktree_env",
+            lambda pd, branch, checkout_dir: worktree_env,
+        )
+        commit_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            open_module,
+            "commit_config_dir_changes",
+            lambda *args, **kw: commit_calls.append(kw),
+        )
+        open_session(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
+        assert len(commit_calls) == 1
+        assert commit_calls[0]["env"] == worktree_env
+
 
 # ===========================================================================
 # new_session

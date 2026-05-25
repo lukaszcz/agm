@@ -106,11 +106,12 @@ def open_session(
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
         ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
+    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
+    if branch is not None:
         commit_config_dir_changes(
             proj_dir, f"chore: update config for {branch}",
-            add_paths=[project_config_dir(proj_dir) / branch], env={},
+            add_paths=[project_config_dir(proj_dir) / branch], env=env,
         )
-    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     create_tmux_session(
         detach=detached,
         pane_count=pane_count,

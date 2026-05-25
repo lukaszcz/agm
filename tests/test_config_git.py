@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import agm.core.dry_run as dry_run
 import agm.project.config_git as config_git
 import agm.vcs.git as git_helpers
 from agm.project.config_git import _add_paths, commit_config_dir_changes
@@ -53,6 +54,23 @@ class TestAddPaths:
 
         # Should not raise
         _add_paths(git_root, [git_root / "feature"], env={})
+
+    def test_dry_run_does_not_invoke_git_add(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        git_root = tmp_path / "config"
+        git_root.mkdir()
+
+        captured_cmds: list[list[str]] = []
+        monkeypatch.setattr(
+            config_git, "run_capture", lambda cmd, **kw: (captured_cmds.append(cmd) or (0, "", ""))
+        )
+        monkeypatch.setattr(dry_run, "enabled", lambda: True)
+
+        _add_paths(git_root, [git_root / "feature"], env={})
+
+        # Dry-run must not mutate the git index.
+        assert captured_cmds == []
 
     def test_reraises_unexpected_git_add_errors(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -382,6 +400,83 @@ class TestCommitConfigDirChangesRealRepo:
             env=env,
         )
         assert "chore: add config for feature" in log.stdout
+
+    def test_dry_run_leaves_index_and_history_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+        branch_config = config_dir / "feature"
+        branch_config.mkdir()
+        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+
+        monkeypatch.setattr(dry_run, "enabled", lambda: True)
+        commit_config_dir_changes(
+            project_dir,
+            "chore: add config for feature",
+            add_paths=[branch_config],
+            env=env,
+        )
+
+        # Nothing must be staged and no commit must exist after a dry run.
+        staged = subprocess.run(
+            ["git", "-C", str(config_dir), "diff", "--cached", "--name-only"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert staged.stdout.strip() == ""
+        log = subprocess.run(
+            ["git", "-C", str(config_dir), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert log.stdout.strip() == ""
+
+    def test_add_paths_commit_excludes_unrelated_staged_changes(
+        self, tmp_path: Path
+    ) -> None:
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+
+        # An unrelated file is staged before the scoped commit runs.
+        unrelated = config_dir / "unrelated.txt"
+        unrelated.write_text("hand-edited\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(config_dir), "add", "unrelated.txt"], check=True, env=env
+        )
+
+        branch_config = config_dir / "feature"
+        branch_config.mkdir()
+        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+
+        commit_config_dir_changes(
+            project_dir,
+            "chore: add config for feature",
+            add_paths=[branch_config],
+            env=env,
+        )
+
+        committed = subprocess.run(
+            ["git", "-C", str(config_dir), "show", "--name-only", "--format=", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        # Only the scoped path is committed; the unrelated staged file is left alone.
+        assert "feature/config.toml" in committed.stdout
+        assert "unrelated.txt" not in committed.stdout
+        still_staged = subprocess.run(
+            ["git", "-C", str(config_dir), "diff", "--cached", "--name-only"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert "unrelated.txt" in still_staged.stdout
 
     def test_fails_when_env_lacks_identity_and_home(self, tmp_path: Path) -> None:
         project_dir, env = self._make_repo(tmp_path)

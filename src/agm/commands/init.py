@@ -10,6 +10,7 @@ import agm.vcs.git as git_helpers
 from agm.commands.args import InitArgs
 from agm.core.fs import chmod, exists, is_empty_dir, mkdir, read_text, stat, write_text
 from agm.core.process import require_success
+from agm.project.config_git import commit_config_dir_changes
 from agm.project.dependency_env import ensure_project_name_in_config, update_main_dependency_configs
 from agm.project.layout import (
     default_worktrees_dir,
@@ -73,7 +74,14 @@ def ensure_git_repo(path: Path) -> None:
     require_success(["git", "init", "-q", str(path)])
 
 
-def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
+def configure_project_dir(
+    project_dir: Path,
+    *,
+    embedded: bool,
+    no_config_git: bool = False,
+    no_notes_git: bool = False,
+    no_git_init: bool = False,
+) -> None:
     layout_dirs: Sequence[Path]
     if embedded:
         # project_dir is the .agm data directory; the git repo is its parent.
@@ -106,8 +114,12 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
             ensure_gitignore_entry(repo_dir / ".gitignore", AGENT_FILES_GITIGNORE_ENTRY)
 
     notes_dir = project_notes_dir(project_dir)
-    ensure_git_repo(config_dir)
-    ensure_git_repo(notes_dir)
+    skip_config_git = no_config_git or no_git_init
+    skip_notes_git = no_notes_git or no_git_init
+    if not skip_config_git:
+        ensure_git_repo(config_dir)
+    if not skip_notes_git:
+        ensure_git_repo(notes_dir)
     update_main_dependency_configs(project_dir)
     ensure_project_name_in_config(project_dir=project_dir, name=project_root(project_dir).name)
 
@@ -122,6 +134,11 @@ def configure_project_dir(project_dir: Path, *, embedded: bool) -> None:
     )
     setup_mode = 0o755 if not exists(setup_path) else stat(setup_path).st_mode | 0o111
     chmod(setup_path, setup_mode)
+    if not skip_config_git:
+        commit_config_dir_changes(
+            project_dir, "chore: initialize config",
+            add_paths=[config_dir],
+        )
 
 
 def use_embedded_layout(args: InitArgs, *, project_dir: Path, repo_url: str) -> bool:
@@ -168,7 +185,13 @@ def run(args: InitArgs) -> None:
     embedded_layout = use_embedded_layout(args, project_dir=base_dir, repo_url=repo_url)
     project_dir = base_dir / ".agm" if embedded_layout else base_dir
     if not repo_url:
-        configure_project_dir(project_dir, embedded=embedded_layout)
+        configure_project_dir(
+            project_dir,
+            embedded=embedded_layout,
+            no_config_git=args.no_config_git,
+            no_notes_git=args.no_notes_git,
+            no_git_init=args.no_git_init,
+        )
         return
 
     repo_dir = base_dir if embedded_layout else base_dir / "repo"
@@ -188,4 +211,10 @@ def run(args: InitArgs) -> None:
         clone_args.extend(["--branch", args.branch])
     clone_args.extend([repo_url, str(repo_dir)])
     require_success(clone_args)
-    configure_project_dir(project_dir, embedded=embedded_layout)
+    configure_project_dir(
+        project_dir,
+        embedded=embedded_layout,
+        no_config_git=args.no_config_git,
+        no_notes_git=args.no_notes_git,
+        no_git_init=args.no_git_init,
+    )

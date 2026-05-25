@@ -33,6 +33,9 @@ def make_args(
     embedded: bool = False,
     workspace: bool = False,
     clone: bool = False,
+    no_config_git: bool = False,
+    no_notes_git: bool = False,
+    no_git_init: bool = False,
 ) -> InitArgs:
     return InitArgs(
         positional=positional or [],
@@ -40,6 +43,9 @@ def make_args(
         embedded=embedded,
         workspace=workspace,
         clone=clone,
+        no_config_git=no_config_git,
+        no_notes_git=no_notes_git,
+        no_git_init=no_git_init,
     )
 
 

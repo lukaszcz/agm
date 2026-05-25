@@ -1314,6 +1314,21 @@ def init(
     branch: str | None = typer.Option(
         None, "-b", "--branch", help="Clone this branch when a repository URL is provided."
     ),
+    no_config_git: bool = typer.Option(
+        False,
+        "--no-config-git",
+        help="Do not create a git repository in the config/ directory.",
+    ),
+    no_notes_git: bool = typer.Option(
+        False,
+        "--no-notes-git",
+        help="Do not create a git repository in the notes/ directory.",
+    ),
+    no_git_init: bool = typer.Option(
+        False,
+        "--no-git-init",
+        help="Do not create git repositories in config/ and notes/.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1329,6 +1344,9 @@ def init(
             embedded=embedded,
             workspace=workspace,
             clone=clone,
+            no_config_git=no_config_git,
+            no_notes_git=no_notes_git,
+            no_git_init=no_git_init,
         )
     )
 

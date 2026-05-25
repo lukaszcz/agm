@@ -9,12 +9,14 @@ import agm.vcs.git as git_helpers
 from agm.commands.args import OpenArgs
 from agm.core.fs import mkdir
 from agm.parser import exit_with_usage_error
+from agm.project.config_git import commit_config_dir_changes
 from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
     is_main_checkout_branch,
     parent_config_branch,
+    project_config_dir,
     project_name,
     project_repo_dir,
     require_current_project_dir,
@@ -104,6 +106,10 @@ def open_session(
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
         ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
+        commit_config_dir_changes(
+            proj_dir, f"chore: update config for {branch}",
+            add_paths=[project_config_dir(proj_dir) / branch], env={},
+        )
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
     create_tmux_session(
         detach=detached,
@@ -142,6 +148,10 @@ def new_session(
         cwd=parent_dir,
         env=env,
     )
+    commit_config_dir_changes(
+        proj_dir, f"chore: add config for {branch}",
+        add_paths=[project_config_dir(proj_dir) / branch], env=env,
+    )
     queue_setup_and_focus_session(
         detached=detached,
         pane_count=pane_count,
@@ -177,6 +187,10 @@ def checkout_session(
         existing_ok=True,
         cwd=parent_dir,
         env=env,
+    )
+    commit_config_dir_changes(
+        proj_dir, f"chore: add config for {branch}",
+        add_paths=[project_config_dir(proj_dir) / branch], env=env,
     )
     queue_setup_and_focus_session(
         detached=detached,

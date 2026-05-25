@@ -8,7 +8,7 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.commands.args import CloseArgs
 from agm.core import fs
-from agm.core.process import exit_with_output, require_success, run_capture
+from agm.project.config_git import commit_config_dir_changes
 from agm.project.layout import (
     branch_session_name,
     is_main_checkout_branch,
@@ -27,43 +27,14 @@ def _remove_branch_config(*, proj_dir: Path, branch: str, env: dict[str, str]) -
     if not branch_config_dir.exists():
         return
 
-    config_git_root = git_helpers.containing_root(config_dir, env=env)
-    relative_config_path: Path | None = None
-    if config_git_root is not None:
-        relative_config_path = branch_config_dir.resolve(strict=False).relative_to(
-            config_git_root.resolve()
-        )
-
     if branch_config_dir.is_dir():
         fs.rmtree(branch_config_dir)
     else:
         fs.unlink(branch_config_dir)
 
-    if config_git_root is None or relative_config_path is None:
-        return
-
-    returncode, _stdout, stderr = run_capture(
-        ["git", "-C", str(config_git_root), "add", "-A", "--", str(relative_config_path)],
-        env=env,
-    )
-    if returncode != 0:
-        # git add fails with "pathspec did not match any files" when the
-        # directory was never tracked – that is harmless.
-        if "did not match any files" not in stderr:
-            exit_with_output(returncode, stderr=stderr)
-        return
-    if not git_helpers.has_staged_changes(config_git_root, [relative_config_path], env=env):
-        return
-    require_success(
-        [
-            "git",
-            "-C",
-            str(config_git_root),
-            "commit",
-            "-m",
-            f"chore: remove config for {branch}",
-        ],
-        env=env,
+    commit_config_dir_changes(
+        proj_dir, f"chore: remove config for {branch}",
+        add_paths=[branch_config_dir], env=env,
     )
 
 

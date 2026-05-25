@@ -9,7 +9,12 @@ import agm.vcs.git as git_helpers
 from agm.commands.args import DepSwitchArgs
 from agm.commands.dep.common import main_dep_repo
 from agm.core.fs import exists, is_dir, mkdir
-from agm.project.dependency_env import current_config_branch, update_dependency_config
+from agm.project.config_git import commit_config_dir_changes
+from agm.project.dependency_env import (
+    config_toml_file,
+    current_config_branch,
+    update_dependency_config,
+)
 from agm.project.layout import project_deps_dir, require_current_project_dir
 
 
@@ -54,11 +59,16 @@ def run(args: DepSwitchArgs) -> None:
         target=args.branch,
     )
     if checkout_name is not None:
+        config_branch = current_config_branch(project_dir)
         update_dependency_config(
             project_dir=project_dir,
             dep_name=args.dep,
             dep_branch=checkout_name,
-            config_branch=current_config_branch(project_dir),
+            config_branch=config_branch,
+        )
+        commit_config_dir_changes(
+            project_dir, f"chore: switch dependency {args.dep}",
+            add_paths=[config_toml_file(project_dir, config_branch)],
         )
         return
 
@@ -80,9 +90,14 @@ def run(args: DepSwitchArgs) -> None:
         )
     else:
         git_helpers.worktree_add(repo_path, target_dir, args.branch)
+    config_branch = current_config_branch(project_dir)
     update_dependency_config(
         project_dir=project_dir,
         dep_name=args.dep,
         dep_branch=args.branch,
-        config_branch=current_config_branch(project_dir),
+        config_branch=config_branch,
+    )
+    commit_config_dir_changes(
+        project_dir, f"chore: switch dependency {args.dep}",
+        add_paths=[config_toml_file(project_dir, config_branch)],
     )

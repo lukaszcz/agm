@@ -955,6 +955,16 @@ class TestConfigUpdate:
         _git("commit", "-m", "initial config", cwd=project / "config", env=env)
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
 
+        # dep new auto-commits the config.toml change; verify it was committed.
+        dep_new_commit = _git(
+            "log", "-1", "--pretty=%s", cwd=project / "config", env=env
+        ).stdout.strip()
+        assert dep_new_commit == "chore: add dependency vyper-automation"
+        dep_new_files = _git(
+            "show", "--pretty=", "--name-only", "HEAD", cwd=project / "config", env=env
+        ).stdout.splitlines()
+        assert "config.toml" in dep_new_files
+
         run_agm(["config", "update"], env=env, cwd=str(project / "repo"))
 
         assert _git("status", "--short", cwd=project / "config", env=env).stdout == "?? local.txt\n"
@@ -965,7 +975,7 @@ class TestConfigUpdate:
         committed_files = _git(
             "show", "--pretty=", "--name-only", "HEAD", cwd=project / "config", env=env
         ).stdout.splitlines()
-        assert committed_files == ["config.toml", "feat/app/config.toml"]
+        assert committed_files == ["feat/app/config.toml"]
 
     def test_dependency_configs_use_dependency_worktree_names(
         self, tmp_path: Path, env: dict[str, str]
@@ -6621,7 +6631,11 @@ class TestHelp:
     ) -> None:
         result = run_agm(["help", "init"], env=env, cwd=str(tmp_path))
 
-        assert "agm init [--embedded | --workspace] PROJECT_NAME" in result.stdout
+        assert (
+            "agm init [--embedded | --workspace]"
+            "\n         [--no-git-init | --no-config-git | --no-notes-git] PROJECT_NAME"
+            in result.stdout
+        )
         assert (
             "agm init [--embedded | --workspace] [-b|--branch BRANCH] PROJECT_NAME"
             not in result.stdout

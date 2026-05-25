@@ -80,6 +80,9 @@ class InitArgs:
     embedded: bool
     workspace: bool
     clone: bool
+    no_config_git: bool
+    no_notes_git: bool
+    no_git_init: bool
 
 
 @dataclass(slots=True)

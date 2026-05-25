@@ -10,7 +10,12 @@ from agm.commands.dep.common import derive_dep_name
 from agm.core import dry_run
 from agm.core.fs import exists, mkdir, rmdir
 from agm.core.process import require_success
-from agm.project.dependency_env import current_config_branch, update_dependency_config
+from agm.project.config_git import commit_config_dir_changes
+from agm.project.dependency_env import (
+    config_toml_file,
+    current_config_branch,
+    update_dependency_config,
+)
 from agm.project.layout import project_deps_dir, require_current_project_dir
 
 
@@ -29,11 +34,16 @@ def run(args: DepNewArgs) -> None:
         require_success(
             ["git", "clone", "--branch", resolved_branch, args.repo_url, str(target_dir)],
         )
+        config_branch = current_config_branch(project_dir)
         update_dependency_config(
             project_dir=project_dir,
             dep_name=dep,
             dep_branch=resolved_branch,
-            config_branch=current_config_branch(project_dir),
+            config_branch=config_branch,
+        )
+        commit_config_dir_changes(
+            project_dir, f"chore: add dependency {dep}",
+            add_paths=[config_toml_file(project_dir, config_branch)],
         )
     except SystemExit:
         if dry_run.enabled():

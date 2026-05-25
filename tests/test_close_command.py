@@ -28,10 +28,17 @@ class TestRemoveBranchConfig:
         monkeypatch.setattr(
             close_module, "project_config_dir", lambda pd: config_dir
         )
-        # Should not raise
+        commit_calls: list[tuple[Path, str]] = []
+        monkeypatch.setattr(
+            close_module,
+            "commit_config_dir_changes",
+            lambda pd, msg, **kw: commit_calls.append((pd, msg)),
+        )
+        # Should not raise and should not call commit (no branch dir to remove)
         _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
+        assert commit_calls == []
 
-    def test_removes_branch_dir_and_commits_when_tracked(
+    def test_removes_branch_dir_and_commits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         proj_dir = tmp_path / "proj"
@@ -39,124 +46,26 @@ class TestRemoveBranchConfig:
         branch_config = config_dir / "feature"
         branch_config.mkdir(parents=True)
 
-        # git root must be a parent of config_dir so relative_to() works
-        git_root = tmp_path / "proj"
-
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(
-            close_module.git_helpers, "containing_root", lambda path, env: git_root
-        )
 
         rmtree_calls: list[Path] = []
         monkeypatch.setattr(close_module.fs, "rmtree", lambda p: rmtree_calls.append(p))
 
-        run_capture_calls: list[list[str]] = []
-
-        def fake_run_capture(cmd: list[str], **kw: Any) -> tuple[int, str, str]:
-            run_capture_calls.append(cmd)
-            return 0, "", ""
-
-        monkeypatch.setattr(close_module, "run_capture", fake_run_capture)
+        commit_calls: list[tuple[Path, str, list[Path]]] = []
         monkeypatch.setattr(
-            close_module.git_helpers, "has_staged_changes", lambda repo_dir, paths, env: True
-        )
-        require_success_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            close_module, "require_success", lambda cmd, env=None: require_success_calls.append(cmd)
+            close_module,
+            "commit_config_dir_changes",
+            lambda pd, msg, **kw: commit_calls.append((pd, msg, kw.get("add_paths", []))),
         )
 
-        _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
+        env = {"HOME": "/tmp"}
+        _remove_branch_config(proj_dir=proj_dir, branch="feature", env=env)
 
         assert rmtree_calls == [branch_config]
-        # git add was called
-        assert any("add" in " ".join(c) for c in run_capture_calls)
-        # git commit was called
-        assert any("commit" in " ".join(c) for c in require_success_calls)
-
-    def test_skips_commit_when_no_staged_changes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        config_dir = proj_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir(parents=True)
-
-        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(
-            close_module.git_helpers, "containing_root", lambda path, env: tmp_path / "proj"
-        )
-        monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
-        monkeypatch.setattr(
-            close_module, "run_capture", lambda cmd, **kw: (0, "", "")
-        )
-        monkeypatch.setattr(
-            close_module.git_helpers, "has_staged_changes", lambda repo_dir, paths, env: False
-        )
-        require_success_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            close_module, "require_success", lambda cmd, env=None: require_success_calls.append(cmd)
-        )
-
-        _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
-
-        assert not any("commit" in " ".join(c) for c in require_success_calls)
-
-    def test_skips_commit_when_git_add_path_not_tracked(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        config_dir = proj_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir(parents=True)
-
-        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(
-            close_module.git_helpers, "containing_root", lambda path, env: tmp_path / "proj"
-        )
-        monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
-
-        def fake_run_capture(cmd: list[str], **kw: Any) -> tuple[int, str, str]:
-            if "add" in cmd:
-                return 1, "", "did not match any files"
-            return 0, "", ""
-
-        monkeypatch.setattr(close_module, "run_capture", fake_run_capture)
-        require_success_calls: list[list[str]] = []
-        monkeypatch.setattr(
-            close_module, "require_success", lambda cmd, env=None: require_success_calls.append(cmd)
-        )
-
-        _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
-
-        assert not any("commit" in " ".join(c) for c in require_success_calls)
-
-    def test_exits_when_git_add_fails_with_unexpected_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        config_dir = proj_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir(parents=True)
-
-        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(
-            close_module.git_helpers, "containing_root", lambda path, env: tmp_path / "proj"
-        )
-        monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
-
-        def fake_run_capture(cmd: list[str], **kw: Any) -> tuple[int, str, str]:
-            if "add" in cmd:
-                return 1, "", "some other error"
-            return 0, "", ""
-
-        monkeypatch.setattr(close_module, "run_capture", fake_run_capture)
-
-        def _raise_exit(rc: int, stdout: str = "", stderr: str = "") -> None:
-            raise SystemExit(rc)
-
-        monkeypatch.setattr(close_module, "exit_with_output", _raise_exit)
-        with pytest.raises(SystemExit):
-            _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
+        assert len(commit_calls) == 1
+        assert commit_calls[0][0] == proj_dir
+        assert "remove config for feature" in commit_calls[0][1]
+        assert commit_calls[0][2] == [branch_config]
 
     def test_removes_file_not_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -168,35 +77,44 @@ class TestRemoveBranchConfig:
         branch_config_file.write_text("data")
 
         monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(close_module.git_helpers, "containing_root", lambda path, env: None)
 
         unlink_calls: list[Path] = []
         monkeypatch.setattr(close_module.fs, "unlink", lambda p: unlink_calls.append(p))
 
-        _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
-
-        assert unlink_calls == [branch_config_file]
-
-    def test_no_commit_when_no_git_root(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        config_dir = proj_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir(parents=True)
-
-        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(close_module.git_helpers, "containing_root", lambda path, env: None)
-        monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
-
-        require_success_calls: list[list[str]] = []
+        commit_calls: list[tuple[Path, str]] = []
         monkeypatch.setattr(
-            close_module, "require_success", lambda cmd, env=None: require_success_calls.append(cmd)
+            close_module,
+            "commit_config_dir_changes",
+            lambda pd, msg, **kw: commit_calls.append((pd, msg)),
         )
 
         _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
 
-        assert not any("commit" in " ".join(c) for c in require_success_calls)
+        assert unlink_calls == [branch_config_file]
+        assert len(commit_calls) == 1
+
+    def test_commits_with_branch_name_in_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        proj_dir = tmp_path / "proj"
+        config_dir = proj_dir / "config"
+        branch_config = config_dir / "my-feature"
+        branch_config.mkdir(parents=True)
+
+        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
+        monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
+
+        commit_calls: list[str] = []
+        monkeypatch.setattr(
+            close_module,
+            "commit_config_dir_changes",
+            lambda pd, msg, **kw: commit_calls.append(msg),
+        )
+
+        _remove_branch_config(proj_dir=proj_dir, branch="my-feature", env={})
+
+        assert len(commit_calls) == 1
+        assert "my-feature" in commit_calls[0]
 
 
 # ===========================================================================

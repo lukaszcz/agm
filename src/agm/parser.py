@@ -58,9 +58,14 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "init": textwrap.dedent("""\
         agm init [--embedded | --workspace]
-        agm init [--embedded | --workspace] PROJECT_NAME
-        agm init [--embedded | --workspace] [-b|--branch BRANCH] [PROJECT_NAME] REPO_URL
-        agm init --clone [--embedded | --workspace] [-b|--branch BRANCH] REPO_URL
+                 [--no-git-init | --no-config-git | --no-notes-git]
+        agm init [--embedded | --workspace]
+                 [--no-git-init | --no-config-git | --no-notes-git] PROJECT_NAME
+        agm init [--embedded | --workspace] [-b|--branch BRANCH]
+                 [--no-git-init | --no-config-git | --no-notes-git]
+                 [PROJECT_NAME] REPO_URL
+        agm init --clone [--embedded | --workspace] [-b|--branch BRANCH]
+                 [--no-git-init | --no-config-git | --no-notes-git] REPO_URL
 
         Initialize a project. Without PROJECT_NAME, agm initializes the current
         directory. With PROJECT_NAME, agm initializes a child directory with that
@@ -78,6 +83,12 @@ _HELP_TEXTS: dict[str, str] = {
           --clone      Initialize a new project directory derived from REPO_URL.
           -b, --branch BRANCH
                        Clone this branch when REPO_URL is provided.
+          --no-git-init
+                       Do not create git repositories in config/ and notes/.
+          --no-config-git
+                       Do not create a git repository in config/.
+          --no-notes-git
+                       Do not create a git repository in notes/.
     """),
     "fetch": textwrap.dedent("""\
         agm fetch

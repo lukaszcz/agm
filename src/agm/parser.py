@@ -129,12 +129,12 @@ _HELP_TEXTS: dict[str, str] = {
                       [--timeout DURATION]
                       CMD [RUNNER_ARGS...]
         agm loop select [--runner COMMAND] [--selector COMMAND|--no-selector]
-                       [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
-                       [--selector-prompt TEXT|--selector-prompt-file PATH]
-                       [--extra-prompt TEXT|--extra-prompt-file PATH]
-                       [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
-                       [--timeout DURATION]
-                       [CMD [RUNNER_ARGS...]]
+                        [--tasks-dir DIR] [--prompt TEXT|--prompt-file PATH]
+                        [--selector-prompt TEXT|--selector-prompt-file PATH]
+                        [--extra-prompt TEXT|--extra-prompt-file PATH]
+                        [--extra-selector-prompt TEXT|--extra-selector-prompt-file PATH]
+                        [--timeout DURATION]
+                        [CMD [RUNNER_ARGS...]]
 
         Repeatedly run a prompt command until the selected loop mode reports
         completion, perform one loop iteration, or run the progress-update

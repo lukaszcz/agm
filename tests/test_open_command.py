@@ -305,9 +305,7 @@ class TestNewSession:
             lambda pd, branch, checkout_dir: {"TMUX": ""},
         )
         monkeypatch.setattr(
-            open_module,
-            "resolve_parent_checkout_dir",
-            lambda pd, parent, env: repo_dir,
+            open_module, "project_repo_dir", lambda pd: repo_dir
         )
         monkeypatch.setattr(open_module, "ensure_worktree", lambda **kw: None)
         monkeypatch.setattr(
@@ -335,6 +333,25 @@ class TestNewSession:
         assert len(worktree_calls) == 1
         assert worktree_calls[0]["new_branch"] == "feature"
         assert worktree_calls[0]["existing_ok"] is False
+        assert worktree_calls[0]["start_point"] is None
+
+    def test_calls_ensure_worktree_with_parent_start_point(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        worktree_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            open_module,
+            "ensure_worktree",
+            lambda **kw: worktree_calls.append(kw),
+        )
+        new_session(
+            detached=True, pane_count=None, parent="shallow-parent",
+            branch="feature", cwd=tmp_path,
+        )
+        assert len(worktree_calls) == 1
+        assert worktree_calls[0]["start_point"] == "shallow-parent"
+        assert worktree_calls[0]["cwd"] == tmp_path / "proj" / "repo"
 
     def test_calls_queue_setup(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -381,7 +398,7 @@ class TestCheckoutSession:
             open_module, "load_worktree_env", lambda pd, branch, checkout_dir: {}
         )
         monkeypatch.setattr(
-            open_module, "resolve_parent_checkout_dir", lambda pd, parent, env: repo_dir
+            open_module, "project_repo_dir", lambda pd: repo_dir
         )
         monkeypatch.setattr(open_module, "ensure_worktree", lambda **kw: None)
         monkeypatch.setattr(
@@ -408,6 +425,7 @@ class TestCheckoutSession:
         assert worktree_calls[0]["branch"] == "feature"
         assert worktree_calls[0]["existing_ok"] is True
         assert worktree_calls[0]["new_branch"] is None
+        assert worktree_calls[0]["cwd"] == tmp_path / "proj" / "repo"
 
 
 # ===========================================================================

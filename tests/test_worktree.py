@@ -11,7 +11,6 @@ from agm.project.worktree import (
     branch_exists,
     ensure_worktree,
     has_expected_worktree,
-    resolve_parent_checkout_dir,
 )
 from agm.vcs.git import WorktreeInfo
 
@@ -67,33 +66,7 @@ class TestProjectWorktreeHelpers:
 
         assert branch_exists(tmp_path, "feature")
 
-    def test_resolve_parent_checkout_dir_returns_repo_for_main_parent(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project = tmp_path / "project"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda _project: repo)
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda _repo, env=None: "main"
-        )
 
-        assert resolve_parent_checkout_dir(project, None, env={}) == repo
-
-    def test_resolve_parent_checkout_dir_returns_worktree_for_other_parent(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project = tmp_path / "project"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        monkeypatch.setattr(worktree_mod, "project_repo_dir", lambda _project: repo)
-        monkeypatch.setattr(
-            worktree_mod.git_helpers, "current_branch", lambda _repo, env=None: "main"
-        )
-
-        result = resolve_parent_checkout_dir(project, "feature", env={})
-
-        assert result == project / "worktrees" / "feature"
 
 
 class TestSyncRemoteTrackingBranches:
@@ -302,9 +275,13 @@ class TestEnsureWorktree:
             branch: str,
             *,
             create: bool = False,
+            start_point: str | None = None,
             env: dict[str, str] | None = None,
         ) -> None:
-            add_calls.append({"repo": repo, "path": path, "branch": branch, "create": create})
+            add_calls.append(
+                {"repo": repo, "path": path, "branch": branch,
+                 "create": create, "start_point": start_point}
+            )
 
         monkeypatch.setattr(worktree_mod.git_helpers, "worktree_add", fake_worktree_add)
         return add_calls
@@ -455,6 +432,48 @@ class TestEnsureWorktree:
         # create should be False because branch already exists
         assert add_calls[0]["create"] is False
 
+    def test_passes_start_point_to_worktree_add(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        project_dir.mkdir()
+        repo_dir.mkdir()
+
+        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
+
+        ensure_worktree(
+            new_branch="feat",
+            worktrees_dir=None,
+            branch=None,
+            start_point="parent-branch",
+            cwd=project_dir,
+        )
+
+        assert len(add_calls) == 1
+        assert add_calls[0]["start_point"] == "parent-branch"
+        assert add_calls[0]["create"] is True
+
+    def test_no_start_point_defaults_to_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        project_dir.mkdir()
+        repo_dir.mkdir()
+
+        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
+
+        ensure_worktree(
+            new_branch="feat",
+            worktrees_dir=None,
+            branch=None,
+            cwd=project_dir,
+        )
+
+        assert len(add_calls) == 1
+        assert add_calls[0]["start_point"] is None
+
     def test_plain_git_repo_skips_agm_project_steps(
         self,
         tmp_path: Path,
@@ -492,7 +511,9 @@ class TestEnsureWorktree:
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "worktree_add",
-            lambda repo, path, branch, create=False, env=None: add_calls.append(path),
+            lambda repo, path, branch, create=False, start_point=None, env=None: (
+                add_calls.append(path)
+            ),
         )
 
         result = worktree_mod.ensure_worktree(
@@ -743,7 +764,7 @@ class TestEnsureWorktreeRelativePath:
         monkeypatch.setattr(
             worktree_module.git_helpers,
             "worktree_add",
-            lambda p, dirname, branch, create=False, env=None: None,
+            lambda p, dirname, branch, create=False, start_point=None, env=None: None,
         )
         monkeypatch.setattr(
             worktree_module,

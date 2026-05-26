@@ -9,7 +9,6 @@ import agm.vcs.git as git_helpers
 from agm.core.process import require_success
 from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
-    branch_worktree_path,
     copy_config,
     default_worktrees_dir,
     discover_current_project_dir,
@@ -63,17 +62,7 @@ def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = N
     ) or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
 
 
-def resolve_parent_checkout_dir(
-    project_dir: Path, parent: str | None, *, env: dict[str, str]
-) -> Path:
-    """Return the checkout directory to use as the parent for a new worktree."""
 
-    repo_dir = project_repo_dir(project_dir)
-    repo_branch = git_helpers.current_branch(repo_dir, env=env)
-    resolved_parent = parent or repo_branch
-    if resolved_parent == repo_branch:
-        return repo_dir
-    return branch_worktree_path(project_dir, resolved_parent, repo_branch=repo_branch)
 
 
 def ensure_worktree(
@@ -83,6 +72,7 @@ def ensure_worktree(
     branch: str | None,
     existing_ok: bool = False,
     reuse_existing_branch: bool = False,
+    start_point: str | None = None,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Path:
@@ -136,6 +126,7 @@ def ensure_worktree(
         dirname,
         branch_name,
         create=create_branch,
+        start_point=start_point,
         env=env,
     )
     if project_dir is not None:

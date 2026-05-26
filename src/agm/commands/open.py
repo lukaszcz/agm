@@ -26,7 +26,6 @@ from agm.project.worktree import (
     branch_exists,
     ensure_worktree,
     has_expected_worktree,
-    resolve_parent_checkout_dir,
 )
 from agm.tmux.session import (
     create_tmux_session,
@@ -134,19 +133,20 @@ def new_session(
     proj_dir = require_current_project_dir(current)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
+    start_point = parent_config_branch(proj_dir, parent)
     ensure_dependency_configs_for_branch(
         project_dir=proj_dir,
         branch=branch,
-        parent_branch=parent_config_branch(proj_dir, parent),
+        parent_branch=start_point,
     )
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
-    parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
         new_branch=branch,
         worktrees_dir=None,
         branch=None,
         existing_ok=False,
-        cwd=parent_dir,
+        cwd=project_repo_dir(proj_dir),
+        start_point=start_point,
         env=env,
     )
     commit_config_dir_changes(
@@ -180,13 +180,12 @@ def checkout_session(
         parent_branch=parent_config_branch(proj_dir, parent),
     )
     env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
-    parent_dir = resolve_parent_checkout_dir(proj_dir, parent, env=env)
     ensure_worktree(
         new_branch=None,
         worktrees_dir=None,
         branch=branch,
         existing_ok=True,
-        cwd=parent_dir,
+        cwd=project_repo_dir(proj_dir),
         env=env,
     )
     commit_config_dir_changes(

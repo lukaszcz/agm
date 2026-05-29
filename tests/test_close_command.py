@@ -2,14 +2,79 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 import agm.commands.close as close_module
 from agm.commands.args import CloseArgs
 from agm.commands.close import close_session
+
+
+def _make_git_close_project(
+    tmp_path: Path,
+    env: dict[str, str],
+    *,
+    unmerged: bool = False,
+    dirty: bool = False,
+) -> tuple[Path, Path, Path]:
+    project_dir = tmp_path / "proj"
+    repo_dir = project_dir / "repo"
+    worktree_dir = project_dir / "worktrees" / "feature"
+    (project_dir / "config").mkdir(parents=True)
+    repo_dir.mkdir()
+
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
+    (repo_dir / "README.md").write_text("main\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo_dir, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo_dir, env=env, check=True)
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "feature", str(worktree_dir)],
+        cwd=repo_dir,
+        env=env,
+        check=True,
+    )
+    if unmerged:
+        (worktree_dir / "feature.txt").write_text("feature\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.txt"], cwd=worktree_dir, env=env, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feature"],
+            cwd=worktree_dir,
+            env=env,
+            check=True,
+        )
+    if dirty:
+        (worktree_dir / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    return project_dir, repo_dir, worktree_dir
+
+
+def _branch_exists(repo_dir: Path, branch: str, env: dict[str, str]) -> bool:
+    result = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=repo_dir,
+        env=env,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _install_fake_tmux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, path: str
+) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "tmux.log"
+    tmux = bin_dir / "tmux"
+    tmux.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {log_path}\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{path}")
+    return log_path
 
 # ===========================================================================
 # close_session branch config removal
@@ -171,28 +236,20 @@ class TestCloseSession:
         )
         monkeypatch.setattr(close_module, "close_tmux_session", lambda **kw: None)
 
-    def test_calls_remove_worktree_and_close_session(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_removes_worktree_branch_and_closes_session(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        remove_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            close_module,
-            "remove_worktree",
-            lambda **kw: remove_calls.append(kw),
-        )
-        close_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            close_module,
-            "close_tmux_session",
-            lambda **kw: close_calls.append(kw),
-        )
-        close_session(branch="feature", cwd=tmp_path)
-        assert len(remove_calls) == 1
-        assert remove_calls[0]["branch"] == "feature"
-        assert remove_calls[0]["force"] is False
-        assert remove_calls[0]["force_delete"] is False
-        assert len(close_calls) == 1
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env)
+        tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+
+        close_session(branch="feature", cwd=project_dir)
+
+        assert not worktree_dir.exists()
+        assert not _branch_exists(repo_dir, "feature", env)
+        assert "kill-session -t proj/feature" in tmux_log.read_text(encoding="utf-8")
 
     def test_exits_when_branch_is_main_checkout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -203,24 +260,22 @@ class TestCloseSession:
         assert exc_info.value.code == 1
 
     def test_exits_without_removing_worktree_when_branch_not_deletable(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: False
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(
+            tmp_path, env, unmerged=True
         )
-        monkeypatch.setattr(
-            close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: False
-        )
-        remove_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            close_module, "remove_worktree", lambda **kw: remove_calls.append(kw)
-        )
+
         with pytest.raises(SystemExit) as exc_info:
-            close_session(branch="feature", cwd=tmp_path)
+            close_session(branch="feature", cwd=project_dir)
+
         assert exc_info.value.code == 1
-        # Worktree should NOT have been removed
-        assert remove_calls == []
+        assert worktree_dir.exists()
+        assert _branch_exists(repo_dir, "feature", env)
+        assert "not fully merged" in capsys.readouterr().err
 
     def test_exits_with_not_merged_message_when_branch_not_fully_merged(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -252,65 +307,37 @@ class TestCloseSession:
             close_session(branch="feature", cwd=tmp_path)
         assert "does not exist" in capsys.readouterr().err
 
-    def test_passes_force_delete_to_remove_worktree(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_force_delete_removes_unmerged_branch(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        remove_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            close_module,
-            "remove_worktree",
-            lambda **kw: remove_calls.append(kw),
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(
+            tmp_path, env, unmerged=True
         )
-        close_session(branch="feature", force_delete=True, cwd=tmp_path)
-        assert remove_calls[0]["force"] is False
-        assert remove_calls[0]["force_delete"] is True
+        _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
-    def test_skips_pre_check_when_force_delete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        # branch_can_delete with force=True just checks existence; it returns True
-        # even for unmerged branches
-        monkeypatch.setattr(
-            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: True
-        )
-        remove_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            close_module,
-            "remove_worktree",
-            lambda **kw: remove_calls.append(kw),
-        )
-        close_session(branch="feature", force_delete=True, cwd=tmp_path)
-        assert len(remove_calls) == 1
+        close_session(branch="feature", force_delete=True, cwd=project_dir)
 
-    def test_force_passes_force_and_force_delete_to_remove_worktree(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        remove_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            close_module,
-            "remove_worktree",
-            lambda **kw: remove_calls.append(kw),
-        )
-        close_session(branch="feature", force=True, cwd=tmp_path)
-        assert remove_calls[0]["force"] is True
-        assert remove_calls[0]["force_delete"] is True
+        assert not worktree_dir.exists()
+        assert not _branch_exists(repo_dir, "feature", env)
 
-    def test_force_implies_force_delete_even_when_force_delete_is_false(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_force_removes_dirty_worktree_and_branch(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        remove_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            close_module,
-            "remove_worktree",
-            lambda **kw: remove_calls.append(kw),
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(
+            tmp_path, env, dirty=True
         )
-        close_session(branch="feature", force=True, force_delete=False, cwd=tmp_path)
-        assert remove_calls[0]["force"] is True
-        assert remove_calls[0]["force_delete"] is True
+        _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+
+        close_session(branch="feature", force=True, force_delete=False, cwd=project_dir)
+
+        assert not worktree_dir.exists()
+        assert not _branch_exists(repo_dir, "feature", env)
 
 
 # ===========================================================================

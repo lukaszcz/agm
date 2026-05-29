@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -207,8 +208,9 @@ class TestSetTomlDepsValue:
         toml_file.write_bytes(result.encode())
         with toml_file.open("rb") as f:
             parsed = tomllib.load(f)
-        assert parsed["deps"]["existing"] == "branch"  # type: ignore[index]
-        assert parsed["deps"]["newlib"] == "feat"  # type: ignore[index]
+        deps = cast(dict[str, str], parsed["deps"])
+        assert deps["existing"] == "branch"
+        assert deps["newlib"] == "feat"
 
     def test_update_result_is_valid_toml(self, tmp_path: Path) -> None:
         import tomllib
@@ -219,7 +221,8 @@ class TestSetTomlDepsValue:
         toml_file.write_bytes(result.encode())
         with toml_file.open("rb") as f:
             parsed = tomllib.load(f)
-        assert parsed["deps"]["mylib"] == "new"  # type: ignore[index]
+        deps = cast(dict[str, str], parsed["deps"])
+        assert deps["mylib"] == "new"
 
     def test_deps_with_comment_header(self) -> None:
         content = "[deps] # my deps\nmylib = \"old\"\n"

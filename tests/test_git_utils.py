@@ -292,8 +292,8 @@ class TestFetch:
     ) -> None:
         received_env: list[dict[str, str] | None] = []
 
-        def fake_require_success(cmd: list[str], **kwargs: object) -> None:
-            received_env.append(kwargs.get("env"))  # type: ignore[arg-type]
+        def fake_require_success(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
+            received_env.append(env)
 
         monkeypatch.setattr("agm.vcs.git.require_success", fake_require_success)
         custom_env = {"MY_VAR": "value"}
@@ -390,8 +390,8 @@ class TestCurrentBranch:
     ) -> None:
         received_env: list[dict[str, str] | None] = []
 
-        def fake_require_capture(cmd: list[str], **kwargs: object) -> str:
-            received_env.append(kwargs.get("env"))  # type: ignore[arg-type]
+        def fake_require_capture(cmd: list[str], *, env: dict[str, str] | None = None) -> str:
+            received_env.append(env)
             return "main\n"
 
         monkeypatch.setattr("agm.vcs.git.require_capture", fake_require_capture)
@@ -1292,7 +1292,7 @@ class TestWorktreeInfo:
     def test_frozen_prevents_mutation(self, tmp_path: Path) -> None:
         wt = WorktreeInfo(path=tmp_path, branch="main")
         with pytest.raises(Exception):
-            wt.branch = "other"  # type: ignore[misc]
+            setattr(wt, "branch", "other")
 
     def test_equality(self, tmp_path: Path) -> None:
         a = WorktreeInfo(path=tmp_path, branch="main")

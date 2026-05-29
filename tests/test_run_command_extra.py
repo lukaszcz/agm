@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -177,10 +178,10 @@ class TestRunEmptyCommand:
 
 class TestRunDryRun:
     @pytest.fixture(autouse=True)
-    def reset_dry_run(self) -> None:
+    def reset_dry_run(self) -> Generator[None, None, None]:
         from agm.core import dry_run
         original = dry_run.enabled()
-        yield  # type: ignore[misc]
+        yield
         dry_run.set_enabled(original)
 
     def _enable_dry_run(self) -> None:

@@ -3,6 +3,7 @@ focus_tmux_session, kill_tmux_session, close_tmux_session."""
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +26,10 @@ from agm.tmux.session import (
 
 
 @pytest.fixture(autouse=True)
-def reset_dry_run() -> None:
+def reset_dry_run() -> Generator[None, None, None]:
     """Ensure dry-run state is restored after every test."""
     original = dry_run.enabled()
-    yield  # type: ignore[misc]
+    yield
     dry_run.set_enabled(original)
 
 

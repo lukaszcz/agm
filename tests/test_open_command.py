@@ -11,7 +11,6 @@ import pytest
 import agm.commands.open as open_module
 from agm.commands.args import OpenArgs
 from agm.commands.open import (
-    branch_path,
     checkout_session,
     new_session,
     open_session,
@@ -67,35 +66,6 @@ class TestValidatePaneCount:
         with pytest.raises(SystemExit) as exc_info:
             validate_pane_count("whatever")
         assert exc_info.value.code == 2
-
-
-# ===========================================================================
-# branch_path
-# ===========================================================================
-
-
-class TestBranchPath:
-    def _make_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            open_module.git_helpers, "current_branch", lambda rd, **kw: "main"
-        )
-        monkeypatch.setattr(
-            open_module,
-            "branch_worktree_path",
-            lambda pd, branch, repo_branch: pd / ".agm" / "worktrees" / branch,
-        )
-        return proj_dir
-
-    def test_returns_path_for_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = self._make_project(tmp_path, monkeypatch)
-        result = branch_path(proj_dir, "feature")
-        assert result == proj_dir / ".agm" / "worktrees" / "feature"
 
 
 # ===========================================================================

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -220,9 +219,18 @@ class TestOpenSession:
         assert "Detached tmux session proj/feature created" in out
 
     def test_commits_config_with_worktree_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
     ) -> None:
         proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
+        config_dir = proj_dir / "config"
+        config_dir.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=config_dir, env=env, check=True)
+        feature_config = config_dir / "feature"
+        feature_config.mkdir()
+        (feature_config / "config.toml").write_text("[settings]\n", encoding="utf-8")
         feat_path = tmp_path / "worktrees" / "feature"
         feat_path.mkdir(parents=True)
         monkeypatch.setattr(
@@ -239,21 +247,26 @@ class TestOpenSession:
         monkeypatch.setattr(
             open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
         )
-        worktree_env = {"PATH": "/usr/bin", "HOME": "/home/user"}
+        worktree_env = dict(env)
+        worktree_env["GIT_AUTHOR_NAME"] = "Worktree Env"
+        worktree_env["GIT_COMMITTER_NAME"] = "Worktree Env"
         monkeypatch.setattr(
             open_module,
             "load_worktree_env",
             lambda pd, branch, checkout_dir: worktree_env,
         )
-        commit_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module,
-            "commit_config_dir_changes",
-            lambda *args, **kw: commit_calls.append(kw),
-        )
+
         open_session(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
-        assert len(commit_calls) == 1
-        assert commit_calls[0]["env"] == worktree_env
+
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%an"],
+            cwd=config_dir,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == "Worktree Env"
 
 
 # ===========================================================================

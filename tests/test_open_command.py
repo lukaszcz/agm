@@ -104,29 +104,11 @@ class TestBranchPath:
 
 
 class TestQueueSetupAndFocusSession:
-    def _mock_all(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
-        calls: dict[str, list[Any]] = {"create": [], "queue": [], "focus": []}
-        monkeypatch.setattr(
-            open_module,
-            "create_tmux_session",
-            lambda **kw: (calls["create"].append(kw), "created-session")[1],
-        )
-        monkeypatch.setattr(
-            open_module,
-            "queue_command_in_session",
-            lambda **kw: calls["queue"].append(kw),
-        )
-        monkeypatch.setattr(
-            open_module,
-            "focus_tmux_session",
-            lambda **kw: (calls["focus"].append(kw), 0)[1],
-        )
-        return calls
-
     def test_detached_returns_without_focusing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        calls = self._mock_all(monkeypatch)
+        dry_run.set_enabled(True)
+
         queue_setup_and_focus_session(
             detached=True,
             pane_count=None,
@@ -134,14 +116,18 @@ class TestQueueSetupAndFocusSession:
             repo_path=tmp_path,
             env={},
         )
-        assert len(calls["create"]) == 1
-        assert len(calls["queue"]) == 1
-        assert len(calls["focus"]) == 0
+
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert "tmux send-keys -t s:0.0 'agm setup' C-m" in out
+        assert "tmux attach-session" not in out
+        assert "tmux switch-client" not in out
 
     def test_not_detached_raises_system_exit(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._mock_all(monkeypatch)
+        dry_run.set_enabled(True)
+
         with pytest.raises(SystemExit) as exc_info:
             queue_setup_and_focus_session(
                 detached=False,
@@ -151,6 +137,10 @@ class TestQueueSetupAndFocusSession:
                 env={},
             )
         assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert "tmux send-keys -t s:0.0 'agm setup' C-m" in out
+        assert "tmux attach-session -t s" in out
 
     def test_raises_assertion_when_session_name_is_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -319,44 +319,65 @@ class TestCloseSession:
 
 
 class TestCloseRun:
-    def test_run_delegates_to_close_session(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        calls: list[dict[str, object]] = []
-        monkeypatch.setattr(
-            close_module,
-            "close_session",
-            lambda *, branch, force=False, force_delete=False, cwd=None: calls.append(
-                {"branch": branch, "force": force, "force_delete": force_delete}
-            ),
-        )
-        close_module.run(CloseArgs(branch="feature", force=False, force_delete=False))
-        assert calls == [{"branch": "feature", "force": False, "force_delete": False}]
+    def _setup_force_sensitive_close(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> Path:
+        proj_dir = tmp_path / "proj"
+        repo_dir = proj_dir / "repo"
+        repo_dir.mkdir(parents=True)
+        (proj_dir / "config").mkdir()
 
-    def test_run_passes_force_delete_true(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            close_module, "require_current_project_dir", lambda cwd=None: proj_dir
+        )
+        monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
         monkeypatch.setattr(
             close_module,
-            "close_session",
-            lambda *, branch, force=False, force_delete=False, cwd=None: calls.append(
-                {"branch": branch, "force": force, "force_delete": force_delete}
-            ),
+            "is_main_checkout_branch",
+            lambda pd, branch, repo_branch: False,
         )
+        monkeypatch.setattr(
+            close_module.git_helpers,
+            "branch_can_delete",
+            lambda repo, branch, **kw: bool(kw.get("force")),
+        )
+        monkeypatch.setattr(
+            close_module.git_helpers, "local_branch_exists", lambda repo, branch: True
+        )
+        monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
+        monkeypatch.setattr(
+            close_module, "load_worktree_env", lambda pd, branch, checkout_dir: {}
+        )
+        monkeypatch.setattr(
+            close_module, "branch_session_name", lambda pd, branch: f"proj/{branch}"
+        )
+        monkeypatch.setattr(close_module, "close_tmux_session", lambda **kw: None)
+        return repo_dir
+
+    def test_run_without_force_rejects_unmerged_branch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._setup_force_sensitive_close(tmp_path, monkeypatch)
+
+        with pytest.raises(SystemExit):
+            close_module.run(CloseArgs(branch="feature", force=False, force_delete=False))
+
+        assert "not fully merged" in capsys.readouterr().err
+
+    def test_run_force_delete_allows_unmerged_branch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup_force_sensitive_close(tmp_path, monkeypatch)
+
         close_module.run(CloseArgs(branch="feature", force=False, force_delete=True))
-        assert calls == [{"branch": "feature", "force": False, "force_delete": True}]
 
-    def test_run_passes_force_true(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_run_force_allows_unmerged_branch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls: list[dict[str, object]] = []
-        monkeypatch.setattr(
-            close_module,
-            "close_session",
-            lambda *, branch, force=False, force_delete=False, cwd=None: calls.append(
-                {"branch": branch, "force": force, "force_delete": force_delete}
-            ),
-        )
+        self._setup_force_sensitive_close(tmp_path, monkeypatch)
+
         close_module.run(CloseArgs(branch="feature", force=True, force_delete=False))
-        assert calls == [{"branch": "feature", "force": True, "force_delete": False}]

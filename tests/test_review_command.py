@@ -701,6 +701,40 @@ def test_revise_once_dry_run_prints_configuration_and_command(
     assert "dry-run: command [agent]:" in captured.out
 
 
+def test_revise_once_runs_prepared_prompt_when_dry_run_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Line 121->123: dry_run disabled branch in revise_once.
+
+    When dry_run is NOT enabled, revise_once does not print any dry-run
+    configuration and delegates directly to run_prepared_prompt.
+    """
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+
+    run_called = [False]
+
+    def fake_run_prepared_prompt(
+        prepared: object,
+        *,
+        stdout_callback: object = None,
+        stderr_callback: object = None,
+    ) -> str:
+        run_called[0] = True
+        return "agent output"
+
+    monkeypatch.setattr("agm.commands.revise.run_prepared_prompt", fake_run_prepared_prompt)
+
+    # Ensure dry_run is disabled (it should be by default, but be explicit)
+    assert not dry_run.enabled()
+    output = revise_mod.revise_once(_revise_args("review.md"))
+
+    assert run_called[0] is True
+    assert output == "agent output"
+
+
 def test_revise_stream_callbacks_write_non_empty_chunks(capsys: pytest.CaptureFixture[str]) -> None:
     revise_mod.write_stdout("out")
     revise_mod.write_stderr("err")

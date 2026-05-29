@@ -1208,3 +1208,59 @@ class TestRunSubprocessFinalDecoderFlush:
             capture_output=True,
         )
         assert "flushed" in result.stdout
+
+    def test_final_flush_empty_no_capture_with_callback(self) -> None:
+        """When final decoder.decode(b'', final=True) returns empty string,
+        the 'if not text: continue' branch is taken.  Also exercises the
+        capture_output=False path inside the final-flush loop (the
+        'if capture_output:' branch is not taken)."""
+        chunks: list[str] = []
+        # Clean ASCII: decoder has no pending bytes, so final flush yields ''
+        # and the continue branch fires.
+        script = "import sys; sys.stdout.buffer.write(b'clean'); sys.stdout.flush()"
+        run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=False,
+            stdout_callback=lambda text: chunks.append(text),
+        )
+        # Normal chunk delivers the data; final flush produces nothing extra
+        assert "clean" in "".join(chunks)
+
+    def test_final_flush_no_capture_with_nonempty_text(self) -> None:
+        """When final decoder flush yields text with capture_output=False,
+        the branch from line 248 to 250 is exercised (if capture_output is
+        False, skip stream_data append and go to callback lookup)."""
+        chunks: list[str] = []
+        # Write just the first byte of a 2-byte UTF-8 character (0xc3) and exit.
+        # The streaming decoder buffers it; final flush produces the replacement.
+        script = (
+            "import sys; "
+            "sys.stdout.buffer.write(b'\\xc3'); "
+            "sys.stdout.flush()"
+        )
+        run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=False,
+            stdout_callback=lambda text: chunks.append(text),
+        )
+        # The final flush emits a replacement char via callback
+        assert any("\ufffd" in c for c in chunks)
+
+    def test_final_flush_captured_with_no_callback(self) -> None:
+        """When final decoder flush yields text on a stream with no callback,
+        the branch from line 251 to 244 is exercised (if callback is None,
+        loop continues without calling callback)."""
+        # Write partial UTF-8 to stderr and exit.  capture_output=True creates
+        # both pipes.  stderr_callback is None, so the final-flush loop visits
+        # stderr with a None callback and continues to the next decoder entry.
+        script = (
+            "import sys; "
+            "sys.stderr.buffer.write(b'\\xc3'); "
+            "sys.stderr.flush()"
+        )
+        result = run_subprocess(
+            [sys.executable, "-c", script],
+            capture_output=True,
+        )
+        # stderr final flush emits replacement char into captured output
+        assert "\ufffd" in result.stderr

@@ -1596,6 +1596,14 @@ class TestCommandPathFromContext:
         result = cli._command_path_from_context(leaf)
         assert result == ["worktree", "new"]
 
+    def test_skips_context_with_none_info_name(self) -> None:
+        root = click.Context(click.Command("agm"))
+        root.parent = None
+        sub = click.Context(click.Command("worktree"), parent=root, info_name=None)
+        leaf = click.Context(click.Command("new"), parent=sub, info_name="new")
+        result = cli._command_path_from_context(leaf)
+        assert result == ["new"]
+
 
 class TestPrintContextHelp:
     def test_does_nothing_when_value_false(self) -> None:

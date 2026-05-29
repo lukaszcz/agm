@@ -831,6 +831,85 @@ class TestRunEmbeddedLayout:
 
 
 # ---------------------------------------------------------------------------
+# configure_project_dir – branch coverage gaps
+# ---------------------------------------------------------------------------
+
+
+class TestConfigureProjectDirBranchCoverage:
+    def test_workspace_non_git_repo_does_not_add_agent_files_gitignore(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 119->121: workspace layout where repo_dir is NOT a git repo.
+
+        When the repo directory is not a git repo, the .gitignore for
+        .agent-files should NOT be written.
+        """
+        monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
+        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
+
+        project_dir = tmp_path / "proj"
+        configure_project_dir(project_dir, embedded=False)
+
+        # No .gitignore should exist in the repo directory
+        assert not (project_dir / "repo" / ".gitignore").exists()
+
+    def test_no_git_init_skips_git_repo_creation_for_both_config_and_notes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 137->exit: no_git_init=True causes skip_config_git=True.
+
+        When no_git_init is True, neither the config git repo nor the notes
+        git repo is initialised, and commit_config_dir_changes is not called.
+        """
+        git_init_called = [False]
+        commit_called = [False]
+
+        def fake_require_success(cmd: list[str], **_kw: object) -> None:
+            if "init" in cmd:
+                git_init_called[0] = True
+
+        monkeypatch.setattr(init_module, "require_success", fake_require_success)
+        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
+        monkeypatch.setattr(
+            init_module,
+            "commit_config_dir_changes",
+            lambda *_a, **_kw: commit_called.__setitem__(0, True),
+        )
+
+        project_dir = tmp_path / "proj"
+        configure_project_dir(project_dir, embedded=False, no_git_init=True)
+
+        assert not git_init_called[0], "git init should not be called with no_git_init=True"
+        assert not commit_called[0], "commit should not be called with no_git_init=True"
+
+    def test_no_notes_git_skips_notes_git_but_not_config_git(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 121->123: no_notes_git=True with no_git_init=False.
+
+        When no_notes_git is True but no_git_init is False, the config git
+        repo IS initialised but the notes git repo is skipped.
+        """
+        init_targets: list[str] = []
+
+        def fake_require_success(cmd: list[str], **_kw: object) -> None:
+            if "init" in cmd:
+                # Record the directory passed to git init
+                init_targets.append(cmd[-1])
+
+        monkeypatch.setattr(init_module, "require_success", fake_require_success)
+        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
+
+        project_dir = tmp_path / "proj"
+        configure_project_dir(project_dir, embedded=False, no_notes_git=True)
+
+        config_dir = str(project_dir / "config")
+        notes_dir = str(project_dir / "notes")
+        assert config_dir in init_targets, "config git repo should be initialised"
+        assert notes_dir not in init_targets, "notes git repo should be skipped"
+
+
+# ---------------------------------------------------------------------------
 # integration: real git init (workspace layout)
 # ---------------------------------------------------------------------------
 

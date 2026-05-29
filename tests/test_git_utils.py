@@ -657,6 +657,22 @@ class TestWorktreeList:
         result = worktree_list(tmp_path)
         assert result == []
 
+    def test_blank_line_before_any_worktree_entry_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A blank line encountered before a 'worktree' line (path is None)
+        must not append a spurious WorktreeInfo entry."""
+        # Leading blank line followed by a real worktree block
+        porcelain = "\nworktree /repo\nbranch refs/heads/main\n\n"
+        monkeypatch.setattr(
+            "agm.vcs.git.require_capture",
+            lambda cmd, **kwargs: porcelain,
+        )
+        result = worktree_list(tmp_path)
+        # Only one entry — the leading blank did not produce a spurious entry
+        assert len(result) == 1
+        assert result[0] == WorktreeInfo(path=Path("/repo"), branch="main")
+
     def test_passes_porcelain_flag(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

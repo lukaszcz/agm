@@ -1894,3 +1894,40 @@ def test_project_name_for_embedded_project(
     subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
     assert project_name(agm_dir) == "myproj"
+
+
+def test_copy_config_copies_dot_env_directly_when_branch_given(tmp_path: Path) -> None:
+    """When a branch is given and config_dir/.env exists, it is copied directly
+    to the target (the 'if (config_dir / ".env").exists():' branch)."""
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    branch_config_dir = config_dir / "feat"
+    branch_config_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "checkout"
+    target.mkdir()
+
+    # Place a .env in config_dir (not in branch_config_dir)
+    (config_dir / ".env").write_text("DIRECT_KEY=direct\n", encoding="utf-8")
+
+    copy_config(project_dir=project, target=target, branch="feat", cwd=None)
+
+    # The .env must have been copied directly into target
+    assert (target / ".env").read_text(encoding="utf-8") == "DIRECT_KEY=direct\n"
+
+
+def test_copy_config_skips_branch_dir_when_not_a_dir(tmp_path: Path) -> None:
+    """When branch_config_dir is not a directory, the 'if branch_config_dir.is_dir()'
+    branch on line 422 is False and we skip to _merge_config_dotenv_files."""
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    config_dir.mkdir(parents=True)
+    (project / "repo").mkdir()
+    target = tmp_path / "checkout"
+    target.mkdir()
+
+    # branch_config_dir ("config/feat") does NOT exist
+    copy_config(project_dir=project, target=target, branch="feat", cwd=None)
+
+    # No crash, and target has no copied branch files (only possibly merged env)
+    assert not (target / "feat").exists()

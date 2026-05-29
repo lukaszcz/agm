@@ -432,6 +432,71 @@ class TestEnsureWorktree:
         # create should be False because branch already exists
         assert add_calls[0]["create"] is False
 
+    def test_reuse_existing_branch_keeps_create_when_branch_not_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When reuse_existing_branch=True but the branch does not exist
+        locally or remotely, create_branch stays True."""
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        project_dir.mkdir()
+        repo_dir.mkdir()
+
+        add_calls = self._setup_mocks(monkeypatch, project_dir, repo_dir)
+
+        # Branch does not exist anywhere
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "local_branch_exists",
+            lambda p, b, env=None: False,
+        )
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "remote_branch_exists",
+            lambda p, b, env=None: False,
+        )
+
+        worktree_mod.ensure_worktree(
+            new_branch="brand-new",
+            worktrees_dir=None,
+            branch=None,
+            reuse_existing_branch=True,
+            cwd=project_dir,
+        )
+
+        assert len(add_calls) == 1
+        # Branch didn't exist so create_branch was NOT flipped to False
+        assert add_calls[0]["create"] is True
+
+    def test_skips_non_matching_worktrees_in_existing_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When existing_worktrees contains entries that don't match the target,
+        the for-loop at line 114 continues (line 115->114 False branch)."""
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        other_path = project_dir / "worktrees" / "other"
+        project_dir.mkdir()
+        repo_dir.mkdir()
+        other_path.mkdir(parents=True)
+
+        # Provide an existing worktree that does NOT match the target branch+path
+        non_matching = WorktreeInfo(path=other_path, branch="other")
+        add_calls = self._setup_mocks(
+            monkeypatch, project_dir, repo_dir, existing_worktrees=[non_matching]
+        )
+
+        worktree_mod.ensure_worktree(
+            new_branch="brand-new",
+            worktrees_dir=None,
+            branch=None,
+            cwd=project_dir,
+        )
+
+        assert len(add_calls) == 1
+        assert add_calls[0]["create"] is True
+        assert add_calls[0]["branch"] == "brand-new"
+
     def test_passes_start_point_to_worktree_add(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -593,6 +658,37 @@ class TestRemoveWorktree:
 
         with pytest.raises(SystemExit):
             worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="nonexistent")
+
+    def test_exits_when_worktree_list_has_entries_but_no_branch_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The worktree loop iterates over entries but finds no match;
+        worktree_path stays None and the function exits."""
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        other_path = project_dir / "worktrees" / "other"
+        project_dir.mkdir()
+        repo_dir.mkdir()
+        other_path.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
+        )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
+        # List has one entry, but it's for "other", not "missing"
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_list",
+            lambda p, env=None: [WorktreeInfo(path=other_path, branch="other")],
+        )
+        monkeypatch.setattr(
+            worktree_mod,
+            "require_success",
+            lambda cmd, env=None: None,
+        )
+
+        with pytest.raises(SystemExit):
+            worktree_mod.remove_worktree(repo_dir=repo_dir, force=False, branch="missing")
 
     def test_exits_when_branch_is_main_checkout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -625,6 +625,43 @@ class TestPrepareRuntime:
         assert runtime.resolved_prompt is not None
         cleanup_runtime(runtime)
 
+    def test_dry_run_skips_bootstrap_prompt_execution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 157->165: dry_run mode skips run_prompt_command for bootstrap.
+
+        When dry_run is enabled, the bootstrap prompt is prepared (so it
+        appears in the dry-run output) but run_prompt_command is NOT called.
+        """
+        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        # No progress file → bootstrap prompt path is taken
+        run_calls: list[list[str]] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> str:
+            run_calls.append(command)
+            return ""
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+
+        args = _make_loop_args(no_log=True, no_selector=True, runner="fake-runner")
+        runtime = prepare_runtime(args)
+
+        # Bootstrap prompt should be prepared but not executed
+        assert runtime.bootstrap_prompt is not None
+        assert run_calls == [], "run_prompt_command must not be called in dry-run mode"
+        cleanup_runtime(runtime)
+
 
 # ===========================================================================
 # execute_single_step
@@ -1144,6 +1181,29 @@ class TestStepRun:
             run(args)
         assert cleanup_called[0] is True
 
+    def test_cleanup_not_called_when_prepare_runtime_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 416->exit: finally block when runtime is None.
+
+        When prepare_runtime raises, runtime stays None and cleanup_runtime
+        must NOT be called.
+        """
+        monkeypatch.setattr(
+            "agm.commands.loop.step.prepare_runtime",
+            lambda _args: (_ for _ in ()).throw(RuntimeError("setup failed")),
+        )
+        cleanup_called = [False]
+        monkeypatch.setattr(
+            "agm.commands.loop.step.cleanup_runtime",
+            lambda r: cleanup_called.__setitem__(0, True),
+        )
+
+        args = _make_loop_args()
+        with pytest.raises(RuntimeError, match="setup failed"):
+            run(args)
+        assert cleanup_called[0] is False
+
 
 # ===========================================================================
 # loop.select — _dry_run_prompt_text
@@ -1499,6 +1559,30 @@ class TestLoopRun:
         args = _make_loop_args()
         loop_run(args)
         assert call_count[0] == 1
+
+    def test_cleanup_not_called_when_prepare_runtime_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Line 26->exit: finally block when runtime is None.
+
+        When prepare_runtime raises before returning, runtime stays None and
+        cleanup_runtime must NOT be called.
+        """
+        monkeypatch.setattr(
+            "agm.commands.loop.run.step_command.prepare_runtime",
+            lambda _args: (_ for _ in ()).throw(RuntimeError("prepare failed")),
+        )
+        cleanup_called = [False]
+        monkeypatch.setattr(
+            "agm.commands.loop.run.step_command.cleanup_runtime",
+            lambda r: cleanup_called.__setitem__(0, True),
+        )
+
+        args = _make_loop_args()
+        with pytest.raises(RuntimeError, match="prepare failed"):
+            loop_run(args)
+        assert cleanup_called[0] is False
+
 
 class TestPrintDryRunFull:
     def test_print_dry_run_with_selector_invocation(

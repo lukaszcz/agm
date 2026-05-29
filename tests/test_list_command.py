@@ -500,6 +500,50 @@ class TestBranchSortKey:
         assert list_cmd._branch_sort_key(wt) == ""
 
 
+class TestDetachedWorktree:
+    """Branch worktree with branch=None is displayed as (detached)."""
+
+    def test_detached_worktree_shows_detached_label(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        detached_path = project_dir / ".agm" / "worktrees" / "detached"
+        repo_dir.mkdir(parents=True)
+        detached_path.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
+        )
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(
+            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
+        )
+        # Branch worktree listed before main repo to exercise the
+        # line-44 False branch (wt.path != repo_dir).
+        monkeypatch.setattr(
+            list_cmd.git_helpers,
+            "worktree_list",
+            lambda p, env=None: [
+                WorktreeInfo(path=detached_path, branch=None),
+                WorktreeInfo(path=repo_dir, branch="main"),
+            ],
+        )
+        monkeypatch.setattr(
+            list_cmd, "current_checkout", lambda pd, cwd=None, env=None: None
+        )
+
+        list_cmd.list_worktrees()
+
+        captured = capsys.readouterr()
+        lines = [line for line in captured.out.splitlines() if line]
+        assert len(lines) == 2
+        assert "(detached)" in lines[1]
+
+
 class TestListCommandViaCli:
     """Cover lines 1032-1034: list_cmd function body."""
 

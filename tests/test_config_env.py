@@ -31,6 +31,15 @@ def test_shell_env_delta_unsets_removed_values() -> None:
     assert statements == ["unset REMOVED"]
 
 
+def test_shell_env_delta_skips_unset_for_unsafe_removed_name() -> None:
+    statements = shell_env_delta(
+        before={"BAD-NAME": "old", "GOOD": "keep"},
+        after={"GOOD": "keep"},
+    )
+
+    assert statements == []
+
+
 def test_shell_env_delta_skips_names_that_shell_cannot_assign() -> None:
     statements = shell_env_delta(
         before={"BAD-NAME": "old"},

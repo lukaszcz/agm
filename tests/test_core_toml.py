@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import tomlkit
+from tomlkit.exceptions import KeyAlreadyPresent
 from tomlkit.items import Table
 
 from agm.core.toml import (
@@ -109,6 +111,16 @@ class TestGetOrCreateTable:
         table = _get_or_create_table(doc, "deps")
         assert isinstance(table, Table)
         assert "deps" in doc
+
+    def test_raises_when_existing_value_is_not_a_table(self) -> None:
+        """When table_name exists but holds a non-Table value, the isinstance
+        check fails and _get_or_create_table attempts doc.add with the same
+        key, which tomlkit rejects with KeyAlreadyPresent."""
+        doc = tomlkit.document()
+        # Insert a plain string under the key that will be queried as a table
+        doc.add("deps", "not-a-table")
+        with pytest.raises(KeyAlreadyPresent):
+            _get_or_create_table(doc, "deps")
 
 
 class TestSetTomlTableValue:

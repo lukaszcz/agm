@@ -209,6 +209,14 @@ class TestListAllDepCheckouts:
         result = dep_list_cmd._list_all_dep_checkouts(deps_dir)
         assert result == {"mylib": [("sub/deep", nested)]}
 
+    def test_dep_dir_with_no_git_checkouts_is_excluded(self, tmp_path: Path) -> None:
+        deps_dir = tmp_path / "deps"
+        mylib = deps_dir / "mylib"
+        (mylib / "notgit").mkdir(parents=True)  # directory but no git repo inside
+
+        result = dep_list_cmd._list_all_dep_checkouts(deps_dir)
+        assert result == {}
+
 
 # ---------------------------------------------------------------------------
 # list_deps — current checkout mode (no --all)

@@ -786,6 +786,53 @@ class TestCompleteDepTarget:
         assert completion.complete_dep_target("") == []
 
 
+class TestBranchCandidatesDetachedHead:
+    def test_worktree_with_none_branch_is_skipped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """WorktreeInfo with branch=None (detached HEAD) is not added to candidates."""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        monkeypatch.setattr(git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(
+            git_helpers,
+            "worktree_list",
+            lambda p, env=None: [
+                git_helpers.WorktreeInfo(path=tmp_path / "worktrees" / "detached", branch=None),
+            ],
+        )
+        monkeypatch.setattr(
+            git_helpers, "fetch_output", lambda args, cwd=None, env=None: (1, "", "")
+        )
+        result = completion._branch_candidates(repo_dir)
+        # Only "main" from current_branch; the detached worktree contributes nothing
+        assert result == {"main"}
+
+
+class TestCompleteRunCommandNonExecutable:
+    def test_skips_non_executable_file_in_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Files that are not executable are not suggested as run commands."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        # Create a non-executable file
+        non_exec = bin_dir / "notool"
+        non_exec.write_text("#!/bin/sh\n")
+        non_exec.chmod(0o644)  # readable but not executable
+        # Create an executable file as a control
+        exec_file = bin_dir / "mytool"
+        exec_file.write_text("#!/bin/sh\n")
+        exec_file.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bin_dir))
+        monkeypatch.chdir(tmp_path)
+
+        result = completion.complete_run_command(_make_ctx(), "")
+
+        assert "mytool" in result
+        assert "notool" not in result
+
+
 class TestCompleteRunCommand:
     def test_handles_system_exit_in_proj_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

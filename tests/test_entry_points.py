@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -264,9 +265,9 @@ class TestConfigEnvRun:
 
 class TestDepNewDryRun:
     @pytest.fixture(autouse=True)
-    def reset_dry_run(self) -> None:
+    def reset_dry_run(self) -> Generator[None, None, None]:
         original = dry_run_module.enabled()
-        yield  # type: ignore[misc]
+        yield
         dry_run_module.set_enabled(original)
 
     def test_dry_run_propagates_system_exit_without_cleanup(

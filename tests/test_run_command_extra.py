@@ -137,17 +137,18 @@ class TestRunDryRun:
         assert "echo" in out
 
     def test_dry_run_with_sandbox_calls_srt_and_returns(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         self._enable_dry_run()
         self._setup_env(tmp_path, monkeypatch)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
-        srt_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            run_module.srt, "run_sandboxed", lambda **kw: srt_calls.append(kw)
-        )
+        monkeypatch.setattr(run_module.srt.shutil, "which", lambda *a, **kw: "/bin/srt")
+
         run_module.run(
             RunArgs(
                 run_command=["echo", "hi"],
@@ -160,10 +161,16 @@ class TestRunDryRun:
                 settings_file=None,
             )
         )
-        assert len(srt_calls) == 1
+
+        out = capsys.readouterr().out
+        assert "dry-run: sandbox configuration" in out
+        assert "srt --settings '<dry-run-settings>' -- echo hi" in out
 
     def test_dry_run_with_proj_dir_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         self._enable_dry_run()
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin", "PROJ_DIR": str(tmp_path)}
@@ -173,10 +180,8 @@ class TestRunDryRun:
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
-        srt_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            run_module.srt, "run_sandboxed", lambda **kw: srt_calls.append(kw)
-        )
+        monkeypatch.setattr(run_module.srt.shutil, "which", lambda *a, **kw: "/bin/srt")
+
         run_module.run(
             RunArgs(
                 run_command=["echo", "hi"],
@@ -189,8 +194,10 @@ class TestRunDryRun:
                 settings_file=None,
             )
         )
-        assert len(srt_calls) == 1
-        assert srt_calls[0]["proj_dir"] == tmp_path
+
+        out = capsys.readouterr().out
+        assert f"patch proj dir path: {tmp_path}" in out
+        assert "srt --settings '<dry-run-settings>' -- echo hi" in out
 
     def test_dry_run_no_sandbox_with_memory_limits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

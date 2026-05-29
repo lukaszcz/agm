@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import stat
+import subprocess
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -17,6 +18,7 @@ import agm.commands.tmux.layout as tmux_layout_cmd
 import agm.commands.tmux.open as tmux_open_cmd
 import agm.commands.worktree.new as worktree_new_cmd
 import agm.commands.worktree.remove as worktree_remove_cmd
+import agm.tmux.layout as tmux_layout
 from agm.commands.args import (
     ConfigCopyArgs,
     ConfigEnvArgs,
@@ -35,17 +37,16 @@ from agm.core import dry_run as dry_run_module
 
 
 class TestTmuxCloseRun:
-    def test_delegates_to_close_tmux_session(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_closes_named_session_in_dry_run(
+        self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            tmux_close_cmd,
-            "close_tmux_session",
-            lambda **kw: calls.append(kw),
-        )
+        dry_run_module.set_enabled(True)
+
         tmux_close_cmd.run(TmuxCloseArgs(session_name="mysession"))
-        assert calls == [{"session_name": "mysession"}]
+
+        out = capsys.readouterr().out
+        assert "tmux kill-session -t mysession" in out
+        assert "Closed session mysession" in out
 
 
 # ---------------------------------------------------------------------------
@@ -54,20 +55,19 @@ class TestTmuxCloseRun:
 
 
 class TestTmuxOpenRun:
-    def test_delegates_to_create_tmux_session(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_opens_detached_session_in_dry_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            tmux_open_cmd,
-            "create_tmux_session",
-            lambda **kw: calls.append(kw),
-        )
+        dry_run_module.set_enabled(True)
+        monkeypatch.chdir(tmp_path)
+
         tmux_open_cmd.run(TmuxOpenArgs(detach=True, pane_count="4", session_name="s"))
-        assert len(calls) == 1
-        assert calls[0]["detach"] is True
-        assert calls[0]["pane_count"] == "4"
-        assert calls[0]["session_name"] == "s"
+
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert "-s s" in out
+        assert out.count("tmux split-window") == 3
+        assert "Detached tmux session s created" in out
 
 
 # ---------------------------------------------------------------------------
@@ -76,28 +76,26 @@ class TestTmuxOpenRun:
 
 
 class TestTmuxLayoutRun:
-    def test_delegates_to_apply_layout(
+    def test_applies_layout_to_resolved_window(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        resolve_calls: list[Any] = []
-        apply_calls: list[dict[str, Any]] = []
+        commands: list[list[str]] = []
 
-        monkeypatch.setattr(
-            tmux_layout_cmd,
-            "resolve_window_layout_target",
-            lambda window_id: (resolve_calls.append(window_id), ("@1", 200, 50))[1],
-        )
-        monkeypatch.setattr(
-            tmux_layout_cmd,
-            "apply_layout",
-            lambda **kw: apply_calls.append(kw),
-        )
+        def fake_require_capture(cmd: list[str]) -> str:
+            if "#{window_width}" in cmd:
+                return "200\n"
+            if "#{window_height}" in cmd:
+                return "50\n"
+            return "@1\n"
+
+        monkeypatch.setattr(tmux_layout, "require_capture", fake_require_capture)
+        monkeypatch.setattr(tmux_layout, "require_success", lambda cmd: commands.append(cmd))
+
         tmux_layout_cmd.run(TmuxLayoutArgs(pane_count="4", window_id="@1"))
-        assert len(apply_calls) == 1
-        assert apply_calls[0]["pane_count"] == 4
-        assert apply_calls[0]["window_id"] == "@1"
-        assert apply_calls[0]["width"] == 200
-        assert apply_calls[0]["height"] == 50
+
+        assert len(commands) == 1
+        assert commands[0][:4] == ["tmux", "select-layout", "-t", "@1"]
+        assert "200x50" in commands[0][-1]
 
 
 # ---------------------------------------------------------------------------
@@ -106,28 +104,23 @@ class TestTmuxLayoutRun:
 
 
 class TestWorktreeNewRun:
-    def test_delegates_to_ensure_worktree(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_creates_git_worktree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
     ) -> None:
-        calls: list[dict[str, Any]] = []
-        fake_worktree_path = tmp_path / "worktrees" / "feature"
-        monkeypatch.setattr(
-            worktree_new_cmd,
-            "ensure_worktree",
-            lambda **kw: (calls.append(kw), fake_worktree_path)[1],
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
+        (repo / "README.md").write_text("main\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+        monkeypatch.chdir(repo)
+
+        worktrees_dir = tmp_path / "external-worktrees"
+        worktree_new_cmd.run(
+            WorktreeNewArgs(branch="feature", worktrees_dir=str(worktrees_dir))
         )
-        monkeypatch.setattr(
-            worktree_new_cmd, "discover_current_project_dir", lambda *a, **kw: None
-        )
-        monkeypatch.setattr(
-            worktree_new_cmd, "commit_config_dir_changes", lambda *a, **kw: None
-        )
-        worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=None))
-        assert len(calls) == 1
-        assert calls[0]["new_branch"] == "feature"
-        assert calls[0]["branch"] is None
-        assert calls[0]["existing_ok"] is False
-        assert calls[0]["reuse_existing_branch"] is True
+
+        assert (worktrees_dir / "feature" / "README.md").is_file()
 
     def test_commits_config_when_project_dir_found(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -144,7 +137,7 @@ class TestWorktreeNewRun:
             "discover_current_project_dir",
             lambda *a, **kw: fake_project_dir,
         )
-        commit_calls: list[dict[str, Any]] = []
+        commit_calls: list[dict[str, object]] = []
         monkeypatch.setattr(
             worktree_new_cmd,
             "commit_config_dir_changes",
@@ -158,6 +151,25 @@ class TestWorktreeNewRun:
         worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=None))
         assert len(commit_calls) == 1
 
+    def test_skips_config_commit_outside_project(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            worktree_new_cmd,
+            "ensure_worktree",
+            lambda **kw: tmp_path / "standalone-worktree",
+        )
+        monkeypatch.setattr(
+            worktree_new_cmd, "discover_current_project_dir", lambda *a, **kw: None
+        )
+
+        def fail_commit(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("commit should not run outside an AGM project")
+
+        monkeypatch.setattr(worktree_new_cmd, "commit_config_dir_changes", fail_commit)
+
+        worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=None))
+
 
 # ---------------------------------------------------------------------------
 # agm.commands.worktree.remove
@@ -165,22 +177,36 @@ class TestWorktreeNewRun:
 
 
 class TestWorktreeRemoveRun:
-    def test_delegates_to_remove_worktree(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_removes_git_worktree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
     ) -> None:
-        calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            worktree_remove_cmd,
-            "remove_worktree",
-            lambda **kw: calls.append(kw),
+        repo = tmp_path / "repo"
+        worktree = tmp_path / "worktrees" / "feature"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
+        (repo / "README.md").write_text("main\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(worktree)],
+            cwd=repo,
+            env=env,
+            check=True,
         )
-        monkeypatch.setattr(
-            worktree_remove_cmd.git_helpers,
-            "checkout_root",
-            lambda cwd=None: Path("/tmp/repo"),
-        )
+        monkeypatch.chdir(repo)
+
         worktree_remove_cmd.run(WorktreeRemoveArgs(force=True, branch="feature"))
-        assert calls == [{"repo_dir": Path("/tmp/repo"), "force": True, "branch": "feature"}]
+
+        assert not worktree.exists()
+        branches = subprocess.run(
+            ["git", "branch", "--list", "feature"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert branches.stdout == ""
 
 
 # ---------------------------------------------------------------------------
@@ -189,17 +215,27 @@ class TestWorktreeRemoveRun:
 
 
 class TestSetupRun:
-    def test_delegates_to_run_setup(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_runs_project_setup_script(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
     ) -> None:
-        calls: list[int] = []
-        monkeypatch.setattr(
-            setup_cmd,
-            "run_setup",
-            lambda: calls.append(1),
-        )
+        project = tmp_path / "project"
+        repo = project / "repo"
+        config = project / "config"
+        repo.mkdir(parents=True)
+        config.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
+        (repo / "README.md").write_text("main\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+        marker = tmp_path / "setup-ran"
+        setup_script = config / "setup.sh"
+        setup_script.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+        setup_script.chmod(setup_script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.chdir(project)
+
         setup_cmd.run()
-        assert calls == [1]
+
+        assert marker.is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -208,17 +244,22 @@ class TestSetupRun:
 
 
 class TestConfigCopyRun:
-    def test_delegates_to_copy_config(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_copies_config_to_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
     ) -> None:
-        calls: list[Path] = []
-        monkeypatch.setattr(
-            config_copy_cmd,
-            "copy_config",
-            lambda target: calls.append(target),
-        )
-        config_copy_cmd.run(ConfigCopyArgs(config_command=None, dirname="/some/dir"))
-        assert calls == [Path("/some/dir")]
+        project = tmp_path / "project"
+        repo = project / "repo"
+        target = tmp_path / "target"
+        repo.mkdir(parents=True)
+        (project / "config").mkdir()
+        target.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
+        (project / "config" / ".env").write_text("CONFIG_KEY=value\n", encoding="utf-8")
+        monkeypatch.chdir(project)
+
+        config_copy_cmd.run(ConfigCopyArgs(config_command=None, dirname=str(target)))
+
+        assert (target / ".env").read_text(encoding="utf-8") == "CONFIG_KEY=value\n"
 
 
 # ---------------------------------------------------------------------------

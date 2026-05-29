@@ -229,30 +229,19 @@ class TestTerminateProcess:
 
 
 class TestWaitForProcessGroupExit:
-    def test_polls_until_grace_expires(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import agm.core.process as process_module
-
-        monotonic_values = iter([0.0, 0.01, 0.02])
-        sleep_calls: list[float] = []
-        killpg_calls: list[tuple[int, int]] = []
-
-        def fake_monotonic() -> float:
-            return next(monotonic_values)
-
-        def fake_killpg(pgid: int, sig: int) -> None:
-            killpg_calls.append((pgid, sig))
-
-        def fake_sleep(seconds: float) -> None:
-            sleep_calls.append(seconds)
-
-        monkeypatch.setattr(process_module.time, "monotonic", fake_monotonic)
-        monkeypatch.setattr(process_module.os, "killpg", fake_killpg)
-        monkeypatch.setattr(process_module.time, "sleep", fake_sleep)
-
-        _wait_for_process_group_exit(123, grace=0.015)
-
-        assert killpg_calls == [(123, 0)]
-        assert sleep_calls == [0.01]
+    def test_returns_after_grace_when_process_group_still_exists(self) -> None:
+        proc = subprocess.Popen(
+            ["sleep", "30"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        try:
+            _wait_for_process_group_exit(proc.pid, grace=0.02)
+            assert proc.poll() is None
+        finally:
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(timeout=1)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 def test_command_subpackages_match_cli_command_groups() -> None:
+    # Repository guidelines require commands/ subpackages to mirror CLI command groups.
     commands_dir = Path(__file__).resolve().parents[1] / "src" / "agm" / "commands"
     subpackages = {
         path.name

@@ -120,8 +120,8 @@ class TestListWorktrees:
             "worktree_list",
             lambda p, env=None: [
                 WorktreeInfo(path=repo_dir, branch="main"),
-                WorktreeInfo(path=feat_path, branch="feat"),
                 WorktreeInfo(path=fix_path, branch="fix"),
+                WorktreeInfo(path=feat_path, branch="feat"),
             ],
         )
         monkeypatch.setattr(
@@ -473,33 +473,6 @@ class TestRun:
         assert captured.out  # produces output
 
 
-class TestIsCurrent:
-    """Tests for _is_current helper."""
-
-    def test_returns_false_when_current_dir_is_none(self, tmp_path: Path) -> None:
-        assert list_cmd._is_current(tmp_path, None) is False
-
-    def test_returns_true_when_paths_match(self, tmp_path: Path) -> None:
-        assert list_cmd._is_current(tmp_path, tmp_path) is True
-
-    def test_returns_false_when_paths_differ(self, tmp_path: Path) -> None:
-        other = tmp_path / "other"
-        other.mkdir()
-        assert list_cmd._is_current(tmp_path, other) is False
-
-
-class TestBranchSortKey:
-    """Tests for _branch_sort_key helper."""
-
-    def test_returns_branch_name(self, tmp_path: Path) -> None:
-        wt = WorktreeInfo(path=tmp_path, branch="feat")
-        assert list_cmd._branch_sort_key(wt) == "feat"
-
-    def test_returns_empty_string_for_detached(self, tmp_path: Path) -> None:
-        wt = WorktreeInfo(path=tmp_path, branch=None)
-        assert list_cmd._branch_sort_key(wt) == ""
-
-
 class TestDetachedWorktree:
     """Branch worktree with branch=None is displayed as (detached)."""
 
@@ -560,4 +533,3 @@ class TestListCommandViaCli:
         result = _invoke(runner, ["list"])
         assert result.exit_code == 0
         assert len(calls) == 1
-

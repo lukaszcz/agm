@@ -17,9 +17,7 @@ from agm.commands.dep.common import (
 )
 from agm.commands.dep.remove import (
     _linked_worktrees,
-    _parse_target,
     _remove_dep_worktree_by_path,
-    _worktree_at_path,
     _worktree_for_branch,
 )
 from agm.commands.dep.switch import _checkout_name, _existing_checkout_name
@@ -224,94 +222,6 @@ class TestMainDepRepo:
 
 
 # ---------------------------------------------------------------------------
-# agm.commands.dep.remove – _parse_target
-# ---------------------------------------------------------------------------
-
-
-class TestParseTarget:
-    def test_dep_slash_branch(self) -> None:
-        dep, ref = _parse_target("mylib/feature", remove_all=False)
-        assert dep == "mylib"
-        assert ref == "feature"
-
-    def test_dep_slash_branch_with_nested_slash(self) -> None:
-        dep, ref = _parse_target("mylib/feat/x", remove_all=False)
-        assert dep == "mylib"
-        assert ref == "feat/x"
-
-    def test_remove_all_returns_dep_with_none_ref(self) -> None:
-        dep, ref = _parse_target("mylib", remove_all=True)
-        assert dep == "mylib"
-        assert ref is None
-
-    def test_missing_branch_without_all_exits(self) -> None:
-        with pytest.raises(SystemExit):
-            _parse_target("mylib", remove_all=False)
-
-    def test_dep_slash_no_ref_exits(self) -> None:
-        # "mylib/" has sep but no ref
-        with pytest.raises(SystemExit):
-            _parse_target("mylib/", remove_all=False)
-
-    def test_remove_all_with_slash_exits(self) -> None:
-        with pytest.raises(SystemExit):
-            _parse_target("mylib/branch", remove_all=True)
-
-    def test_empty_dep_exits(self) -> None:
-        with pytest.raises(SystemExit):
-            _parse_target("/branch", remove_all=False)
-
-    def test_empty_string_exits(self) -> None:
-        with pytest.raises(SystemExit):
-            _parse_target("", remove_all=False)
-
-
-# ---------------------------------------------------------------------------
-# agm.commands.dep.remove – _worktree_at_path
-# ---------------------------------------------------------------------------
-
-
-class TestWorktreeAtPath:
-    def test_finds_worktree_by_exact_path(self, tmp_path: Path) -> None:
-        p = tmp_path / "wt1"
-        p.mkdir()
-        wt = WorktreeInfo(path=p, branch="main")
-        result = _worktree_at_path([wt], p)
-        assert result is wt
-
-    def test_returns_none_when_no_match(self, tmp_path: Path) -> None:
-        p = tmp_path / "wt1"
-        p.mkdir()
-        other = tmp_path / "wt2"
-        other.mkdir()
-        wt = WorktreeInfo(path=p, branch="main")
-        assert _worktree_at_path([wt], other) is None
-
-    def test_returns_none_for_empty_list(self, tmp_path: Path) -> None:
-        p = tmp_path / "wt1"
-        p.mkdir()
-        assert _worktree_at_path([], p) is None
-
-    def test_finds_worktree_among_multiple(self, tmp_path: Path) -> None:
-        p1 = tmp_path / "wt1"
-        p1.mkdir()
-        p2 = tmp_path / "wt2"
-        p2.mkdir()
-        wt1 = WorktreeInfo(path=p1, branch="feat-a")
-        wt2 = WorktreeInfo(path=p2, branch="feat-b")
-        result = _worktree_at_path([wt1, wt2], p2)
-        assert result is wt2
-
-    def test_returns_first_match_when_duplicates(self, tmp_path: Path) -> None:
-        p = tmp_path / "wt1"
-        p.mkdir()
-        wt_a = WorktreeInfo(path=p, branch="a")
-        wt_b = WorktreeInfo(path=p, branch="b")
-        result = _worktree_at_path([wt_a, wt_b], p)
-        assert result is wt_a
-
-
-# ---------------------------------------------------------------------------
 # agm.commands.dep.remove – _worktree_for_branch
 # ---------------------------------------------------------------------------
 
@@ -497,6 +407,41 @@ class TestDepRemoveRun:
         assert removed == [wt_path]
         assert deleted == ["feature"]
 
+    def test_remove_single_worktree_with_nested_ref(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+
+        wt_path = dep_dir / "feat" / "x"
+        wt_path.mkdir(parents=True)
+        linked_wt = WorktreeInfo(path=wt_path, branch="feat/x")
+
+        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
+        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
+        monkeypatch.setattr(
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
+                WorktreeInfo(path=repo_path, branch="main"),
+                linked_wt,
+            ],
+        )
+
+        removed: list[Path] = []
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
+        )
+        monkeypatch.setattr(
+            dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
+        )
+
+        dep_remove.run(DepRemoveArgs(all=False, target="mylib/feat/x"))
+
+        assert removed == [wt_path]
+        assert deleted == ["feat/x"]
+
     def test_remove_all_removes_linked_worktrees_and_dep_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -570,6 +515,34 @@ class TestDepRemoveRun:
         args = DepRemoveArgs(all=False, target="nonexistent/feature")
         with pytest.raises(SystemExit):
             dep_remove.run(args)
+
+    @pytest.mark.parametrize(
+        ("target", "remove_all", "message"),
+        [
+            ("mylib", False, "expected DEP/BRANCH"),
+            ("mylib/", False, "expected DEP/BRANCH"),
+            ("mylib/branch", True, "--all expects DEP"),
+            ("/branch", False, "invalid dependency target"),
+            ("", False, "invalid dependency target"),
+        ],
+    )
+    def test_invalid_targets_exit_before_project_lookup(
+        self,
+        target: str,
+        remove_all: bool,
+        message: str,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def fail_project_lookup() -> Path:
+            raise AssertionError("invalid targets should fail before project lookup")
+
+        monkeypatch.setattr(dep_remove, "require_current_project_dir", fail_project_lookup)
+
+        with pytest.raises(SystemExit):
+            dep_remove.run(DepRemoveArgs(all=remove_all, target=target))
+
+        assert message in capsys.readouterr().err
 
     def test_remove_repo_ref_exits_when_linked_worktrees_exist(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -669,6 +642,45 @@ class TestDepRemoveRun:
 
         assert removed == [wt_path]
         assert deleted == ["different-branch-name"]
+
+    def test_remove_worktree_matched_by_later_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+
+        first_path = dep_dir / "first"
+        second_path = dep_dir / "second"
+        first_path.mkdir()
+        second_path.mkdir()
+        first_wt = WorktreeInfo(path=first_path, branch="first")
+        second_wt = WorktreeInfo(path=second_path, branch="actual-second-branch")
+
+        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
+        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
+        monkeypatch.setattr(
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
+                WorktreeInfo(path=repo_path, branch="main"),
+                first_wt,
+                second_wt,
+            ],
+        )
+
+        removed: list[Path] = []
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
+        )
+        monkeypatch.setattr(
+            dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
+        )
+
+        dep_remove.run(DepRemoveArgs(all=False, target="mylib/second"))
+
+        assert removed == [second_path]
+        assert deleted == ["actual-second-branch"]
 
 
 # ---------------------------------------------------------------------------

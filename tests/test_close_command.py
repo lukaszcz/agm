@@ -9,24 +9,52 @@ import pytest
 
 import agm.commands.close as close_module
 from agm.commands.args import CloseArgs
-from agm.commands.close import _remove_branch_config, close_session
+from agm.commands.close import close_session
 
 # ===========================================================================
-# _remove_branch_config
+# close_session branch config removal
 # ===========================================================================
 
 
-class TestRemoveBranchConfig:
-    def test_does_nothing_when_branch_config_dir_missing(
+class TestCloseSessionRemovesBranchConfig:
+    def _setup_close_dependencies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, branch: str
+    ) -> tuple[Path, Path]:
+        proj_dir = tmp_path / "proj"
+        repo_dir = proj_dir / "repo"
+        (proj_dir / "config").mkdir(parents=True)
+        repo_dir.mkdir()
+
+        monkeypatch.setattr(
+            close_module, "require_current_project_dir", lambda cwd=None: proj_dir
+        )
+        monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
+        monkeypatch.setattr(
+            close_module,
+            "is_main_checkout_branch",
+            lambda pd, close_branch, repo_branch: False,
+        )
+        monkeypatch.setattr(
+            close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: True
+        )
+        monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
+        monkeypatch.setattr(
+            close_module,
+            "load_worktree_env",
+            lambda pd, config_branch, checkout_dir: {"HOME": str(tmp_path / "home")},
+        )
+        monkeypatch.setattr(
+            close_module, "branch_session_name", lambda pd, close_branch: f"proj/{close_branch}"
+        )
+        monkeypatch.setattr(close_module, "close_tmux_session", lambda **kw: None)
+        return proj_dir, proj_dir / "config" / branch
+
+    def test_missing_branch_config_is_left_uncommitted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        proj_dir = tmp_path / "proj"
-        proj_dir.mkdir()
-        # config dir exists but no branch subdir
-        config_dir = proj_dir / "config"
-        config_dir.mkdir()
-        monkeypatch.setattr(
-            close_module, "project_config_dir", lambda pd: config_dir
+        _, branch_config = self._setup_close_dependencies(
+            tmp_path, monkeypatch, branch="feature"
         )
         commit_calls: list[tuple[Path, str]] = []
         monkeypatch.setattr(
@@ -34,22 +62,19 @@ class TestRemoveBranchConfig:
             "commit_config_dir_changes",
             lambda pd, msg, **kw: commit_calls.append((pd, msg)),
         )
-        # Should not raise and should not call commit (no branch dir to remove)
-        _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
+
+        close_session(branch="feature", cwd=tmp_path)
+
+        assert not branch_config.exists()
         assert commit_calls == []
 
     def test_removes_branch_dir_and_commits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        proj_dir = tmp_path / "proj"
-        config_dir = proj_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir(parents=True)
-
-        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-
-        rmtree_calls: list[Path] = []
-        monkeypatch.setattr(close_module.fs, "rmtree", lambda p: rmtree_calls.append(p))
+        proj_dir, branch_config = self._setup_close_dependencies(
+            tmp_path, monkeypatch, branch="feature"
+        )
+        branch_config.mkdir()
 
         commit_calls: list[tuple[Path, str, list[Path]]] = []
         monkeypatch.setattr(
@@ -58,51 +83,21 @@ class TestRemoveBranchConfig:
             lambda pd, msg, **kw: commit_calls.append((pd, msg, kw.get("add_paths", []))),
         )
 
-        env = {"HOME": "/tmp"}
-        _remove_branch_config(proj_dir=proj_dir, branch="feature", env=env)
+        close_session(branch="feature", cwd=tmp_path)
 
-        assert rmtree_calls == [branch_config]
+        assert not branch_config.exists()
         assert len(commit_calls) == 1
         assert commit_calls[0][0] == proj_dir
         assert "remove config for feature" in commit_calls[0][1]
         assert commit_calls[0][2] == [branch_config]
 
-    def test_removes_file_not_dir(
+    def test_removes_branch_config_file_and_commits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        proj_dir = tmp_path / "proj"
-        config_dir = proj_dir / "config"
-        config_dir.mkdir(parents=True)
-        branch_config_file = config_dir / "feature"
-        branch_config_file.write_text("data")
-
-        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-
-        unlink_calls: list[Path] = []
-        monkeypatch.setattr(close_module.fs, "unlink", lambda p: unlink_calls.append(p))
-
-        commit_calls: list[tuple[Path, str]] = []
-        monkeypatch.setattr(
-            close_module,
-            "commit_config_dir_changes",
-            lambda pd, msg, **kw: commit_calls.append((pd, msg)),
+        _, branch_config = self._setup_close_dependencies(
+            tmp_path, monkeypatch, branch="feature"
         )
-
-        _remove_branch_config(proj_dir=proj_dir, branch="feature", env={})
-
-        assert unlink_calls == [branch_config_file]
-        assert len(commit_calls) == 1
-
-    def test_commits_with_branch_name_in_message(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir = tmp_path / "proj"
-        config_dir = proj_dir / "config"
-        branch_config = config_dir / "my-feature"
-        branch_config.mkdir(parents=True)
-
-        monkeypatch.setattr(close_module, "project_config_dir", lambda pd: config_dir)
-        monkeypatch.setattr(close_module.fs, "rmtree", lambda p: None)
+        branch_config.write_text("data", encoding="utf-8")
 
         commit_calls: list[str] = []
         monkeypatch.setattr(
@@ -111,8 +106,29 @@ class TestRemoveBranchConfig:
             lambda pd, msg, **kw: commit_calls.append(msg),
         )
 
-        _remove_branch_config(proj_dir=proj_dir, branch="my-feature", env={})
+        close_session(branch="feature", cwd=tmp_path)
 
+        assert not branch_config.exists()
+        assert len(commit_calls) == 1
+
+    def test_commit_message_names_removed_branch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, branch_config = self._setup_close_dependencies(
+            tmp_path, monkeypatch, branch="my-feature"
+        )
+        branch_config.mkdir()
+
+        commit_calls: list[str] = []
+        monkeypatch.setattr(
+            close_module,
+            "commit_config_dir_changes",
+            lambda pd, msg, **kw: commit_calls.append(msg),
+        )
+
+        close_session(branch="my-feature", cwd=tmp_path)
+
+        assert not branch_config.exists()
         assert len(commit_calls) == 1
         assert "my-feature" in commit_calls[0]
 

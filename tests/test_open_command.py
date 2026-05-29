@@ -18,6 +18,7 @@ from agm.commands.open import (
     smart_open_session,
     validate_pane_count,
 )
+from agm.core import dry_run
 
 # ===========================================================================
 # validate_pane_count
@@ -543,18 +544,33 @@ class TestSmartOpenSession:
 
 
 class TestOpenRun:
-    def test_run_delegates_to_smart_open_session(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_run_opens_main_branch_in_dry_run(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        calls: list[dict[str, Any]] = []
+        dry_run.set_enabled(True)
+        proj_dir = tmp_path / "proj"
+        repo_dir = proj_dir / "repo"
+        repo_dir.mkdir(parents=True)
+        monkeypatch.setattr(
+            open_module, "require_current_project_dir", lambda cwd=None: proj_dir
+        )
+        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(open_module.git_helpers, "current_branch", lambda rd: "main")
         monkeypatch.setattr(
             open_module,
-            "smart_open_session",
-            lambda **kw: calls.append(kw),
+            "is_main_checkout_branch",
+            lambda pd, branch, repo_branch: True,
         )
+        monkeypatch.setattr(open_module, "load_worktree_env", lambda pd, branch, checkout_dir: {})
+
         open_module.run(
-            OpenArgs(detached=True, pane_count=None, parent=None, branch="feature")
+            OpenArgs(detached=True, pane_count=None, parent=None, branch="main")
         )
-        assert len(calls) == 1
-        assert calls[0]["branch"] == "feature"
-        assert calls[0]["detached"] is True
+
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert f"-c {repo_dir}" in out
+        assert "Detached tmux session proj created" in out

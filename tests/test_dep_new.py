@@ -73,19 +73,38 @@ class TestDepNewRun:
         monkeypatch.setattr(dep_new, "derive_dep_name", lambda url: "mylib")
         monkeypatch.setattr(dep_new, "exists", lambda p: False)
         monkeypatch.setattr(dep_new, "mkdir", lambda p, parents=False, exist_ok=False: None)
+
+        default_branch_calls: list[str] = []
         monkeypatch.setattr(
-            dep_new.git_helpers, "default_branch_from_remote", lambda url: "develop"
+            dep_new.git_helpers,
+            "default_branch_from_remote",
+            lambda url: (default_branch_calls.append(url), "develop")[1],
         )
-        monkeypatch.setattr(dep_new, "require_success", lambda cmd: None)
+
+        require_success_calls: list[list[str]] = []
+        monkeypatch.setattr(
+            dep_new, "require_success", lambda cmd: require_success_calls.append(cmd)
+        )
+
+        update_calls: list[dict[str, Any]] = []
         monkeypatch.setattr(
             dep_new,
             "update_dependency_config",
-            lambda *, project_dir, dep_name, dep_branch, config_branch: None,
+            lambda *, project_dir, dep_name, dep_branch, config_branch: update_calls.append(
+                {"dep_name": dep_name, "dep_branch": dep_branch, "config_branch": config_branch}
+            ),
         )
         monkeypatch.setattr(dep_new, "current_config_branch", lambda pd: None)
 
         # No branch provided — should call default_branch_from_remote
         dep_new.run(DepNewArgs(branch=None, repo_url="https://github.com/org/mylib"))
+
+        assert len(default_branch_calls) == 1
+        assert default_branch_calls[0] == "https://github.com/org/mylib"
+        clone_cmd = require_success_calls[0]
+        assert "--branch" in clone_cmd
+        assert "develop" in clone_cmd
+        assert update_calls[0]["dep_branch"] == "develop"
 
     def test_cleans_up_dep_dir_on_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -56,6 +56,7 @@ class TestConfigCopy:
         calls = make_recorder(monkeypatch, cli.config_copy_command)
         result = invoke(runner, ["config", "copy", "-d", "/some/dir", "target"])
         assert result.exit_code != 0
+        assert "No such option" in result.output
         assert len(calls) == 0
 
     def test_config_copy_rejects_dir_long_option(
@@ -64,11 +65,13 @@ class TestConfigCopy:
         calls = make_recorder(monkeypatch, cli.config_copy_command)
         result = invoke(runner, ["config", "copy", "--dir", "/some/dir", "target"])
         assert result.exit_code != 0
+        assert "No such option" in result.output
         assert len(calls) == 0
 
     def test_config_cp_missing_dirname(self, runner: CliRunner) -> None:
         result = invoke(runner, ["config", "cp"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
     def test_config_env(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.config_env_command)
@@ -113,14 +116,17 @@ class TestWorktreeNew:
     def test_wt_new_missing_branch(self, runner: CliRunner) -> None:
         result = invoke(runner, ["wt", "new"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
     def test_wt_co_is_rejected(self, runner: CliRunner) -> None:
         result = invoke(runner, ["wt", "co", "feat/x"])
         assert result.exit_code != 0
+        assert "No such command" in result.output
 
     def test_worktree_checkout_is_rejected(self, runner: CliRunner) -> None:
         result = invoke(runner, ["worktree", "checkout", "feat/x"])
         assert result.exit_code != 0
+        assert "No such command" in result.output
 
 
 class TestSetup:
@@ -168,6 +174,7 @@ class TestWorktreeRemove:
     def test_wt_rm_missing_branch(self, runner: CliRunner) -> None:
         result = invoke(runner, ["wt", "rm"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
 
 class TestDep:
@@ -254,6 +261,7 @@ class TestDep:
     def test_dep_rm_missing_target(self, runner: CliRunner) -> None:
         result = invoke(runner, ["dep", "rm"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
     def test_dep_missing_subcommand_shows_help(self, runner: CliRunner) -> None:
         result = invoke(runner, ["dep"])
@@ -285,6 +293,7 @@ class TestFetch:
     def test_fetch_rejects_args(self, runner: CliRunner) -> None:
         result = invoke(runner, ["fetch", "extra"])
         assert result.exit_code != 0
+        assert "unexpected extra argument" in result.output
 
 
 class TestPull:
@@ -311,6 +320,7 @@ class TestPull:
     def test_pull_rejects_args(self, runner: CliRunner) -> None:
         result = invoke(runner, ["pull", "extra"])
         assert result.exit_code != 0
+        assert "unexpected extra argument" in result.output
 
 
 class TestReviewReviseRefine:
@@ -356,6 +366,7 @@ class TestReviewReviseRefine:
             ["review", "--no-review-file", "--review-file", "review.md"],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
     def test_review_accepts_config_command(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -371,6 +382,7 @@ class TestReviewReviseRefine:
     def test_review_rejects_prompt_with_prompt_file(self, runner: CliRunner) -> None:
         result = invoke(runner, ["review", "--prompt", "text", "--prompt-file", "file.md"])
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
     def test_review_rejects_extra_prompt_with_extra_prompt_file(
         self, runner: CliRunner
@@ -380,10 +392,12 @@ class TestReviewReviseRefine:
             ["review", "--extra-prompt", "text", "--extra-prompt-file", "file.md"],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
     def test_revise_requires_review_file(self, runner: CliRunner) -> None:
         result = invoke(runner, ["revise"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
     def test_revise_options(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.revise_command, "run")
@@ -436,6 +450,7 @@ class TestReviewReviseRefine:
         result = invoke(runner, ["revise", "--unknown"])
 
         assert result.exit_code != 0
+        assert "No such option" in result.output
         assert "[COMMAND] REVIEW_FILE [REVIEW_FILE]" not in result.output
         assert "COMMAND_OR_REVIEW_FILE" in result.output
 
@@ -504,6 +519,7 @@ class TestReviewReviseRefine:
     def test_refine_rejects_non_positive_max_steps(self, runner: CliRunner) -> None:
         result = invoke(runner, ["refine", "--max-steps", "0"])
         assert result.exit_code != 0
+        assert "must be positive" in result.output
 
     def test_refine_accepts_max_steps_unlimited(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -528,14 +544,17 @@ class TestReviewReviseRefine:
     def test_refine_rejects_no_max_steps_with_max_steps(self, runner: CliRunner) -> None:
         result = invoke(runner, ["refine", "--no-max-steps", "--max-steps", "5"])
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
     def test_refine_rejects_invalid_max_steps_value(self, runner: CliRunner) -> None:
         result = invoke(runner, ["refine", "--max-steps", "abc"])
         assert result.exit_code != 0
+        assert "must be a positive integer" in result.output
 
     def test_refine_rejects_no_log_with_log_file(self, runner: CliRunner) -> None:
         result = invoke(runner, ["refine", "--no-log", "--log-file", "out.log"])
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
     def test_refine_rejects_review_prompt_with_review_prompt_file(
         self, runner: CliRunner
@@ -545,6 +564,7 @@ class TestReviewReviseRefine:
             ["refine", "--review-prompt", "text", "--review-prompt-file", "file.md"],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
     def test_refine_rejects_extra_revise_prompt_with_extra_revise_prompt_file(
         self, runner: CliRunner
@@ -560,6 +580,7 @@ class TestReviewReviseRefine:
             ],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
     def test_refine_save_review_defaults_to_none(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -593,6 +614,7 @@ class TestReviewReviseRefine:
             ],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
 
 class TestDryRun:
@@ -720,6 +742,7 @@ class TestOpen:
     def test_open_missing_target(self, runner: CliRunner) -> None:
         result = invoke(runner, ["open"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
     def test_open_repo(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.open_command)
@@ -815,6 +838,7 @@ class TestClose:
     def test_close_missing_branch(self, runner: CliRunner) -> None:
         result = invoke(runner, ["close"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
     def test_close_D_flag(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.close_command)
@@ -1024,6 +1048,7 @@ class TestLoop:
         calls = make_recorder(monkeypatch, cli.loop_command)
         result = invoke(runner, ["loop", "--selector", "cmd", "--no-selector", "claude"])
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
     def test_loop_with_tasks_dir(
@@ -1172,6 +1197,7 @@ class TestLoop:
         calls = make_recorder(monkeypatch, cli.loop_select_command)
         result = invoke(runner, ["loop", "select", "--selector", "cmd", "--no-selector"])
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
     def test_loop_step_with_positional_command_and_runner_args(
@@ -1238,6 +1264,7 @@ class TestLoop:
             runner, ["loop", "--prompt", "text", "--prompt-file", "file.md", "claude"]
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
     def test_loop_run_with_prompt(
@@ -1288,6 +1315,7 @@ class TestLoop:
             runner, ["loop", "select", "--prompt", "text", "--prompt-file", "file.md"]
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
     def test_loop_with_selector_prompt(
@@ -1330,6 +1358,7 @@ class TestLoop:
             ],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
     def test_loop_run_with_selector_prompt(
@@ -1394,6 +1423,7 @@ class TestLoop:
             ],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
 
@@ -1449,6 +1479,7 @@ class TestTmuxClose:
     def test_tmux_close_missing_name(self, runner: CliRunner) -> None:
         result = invoke(runner, ["tmux", "close"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
 
 class TestTmuxLayout:
@@ -1483,6 +1514,7 @@ class TestTmuxLayout:
     def test_tmux_layout_missing_args(self, runner: CliRunner) -> None:
         result = invoke(runner, ["tmux", "layout"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
 
 class TestHelp:
@@ -1504,6 +1536,7 @@ class TestHelp:
     def test_help_with_unknown(self, runner: CliRunner) -> None:
         result = invoke(runner, ["help", "bogus"])
         assert result.exit_code != 0
+        assert "unknown command" in result.output
 
 
 class TestTopLevel:
@@ -1515,6 +1548,7 @@ class TestTopLevel:
     def test_unknown_command(self, runner: CliRunner) -> None:
         result = invoke(runner, ["bogus"])
         assert result.exit_code != 0
+        assert "No such command" in result.output
 
     def test_show_completion_is_available(self, runner: CliRunner) -> None:
         import unittest.mock
@@ -1796,11 +1830,13 @@ class TestDepSwitchMissingArgs:
         runner = CliRunner()
         result = invoke(runner, ["dep", "switch"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
     def test_dep_switch_missing_branch(self) -> None:
         runner = CliRunner()
         result = invoke(runner, ["dep", "switch", "mylib"])
         assert result.exit_code != 0
+        assert "required" in result.output
 
 
 class TestInitEmbeddedAndWorkspaceMutualExclusion:
@@ -1808,6 +1844,7 @@ class TestInitEmbeddedAndWorkspaceMutualExclusion:
         runner = CliRunner()
         result = invoke(runner, ["init", "--embedded", "--workspace"])
         assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
 
 
 class TestRunWithUnrecognizedFlags:
@@ -1815,6 +1852,7 @@ class TestRunWithUnrecognizedFlags:
         runner = CliRunner()
         result = invoke(runner, ["run", "--unknown-flag"])
         assert result.exit_code != 0
+        assert "unrecognized arguments" in result.output
 
 
 class TestParserHelpers:

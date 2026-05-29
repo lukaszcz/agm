@@ -76,64 +76,110 @@ needs_zsh = pytest.mark.skipif(not HAS_ZSH, reason="zsh is required")
 #     tmux.sh in non-detached mode) issues its own select-layout call
 #     which is then captured in the log.
 #
-# Limitation: when tmux.sh passes a compound command with ';' separators
-# (non-detached path), the mock receives them as a single invocation.  It
-# handles the first subcommand (new-session) and logs everything, but
-# individual embedded subcommands are not executed separately — only the
-# argument list is captured.  This is acceptable because the detached path
-# (the primary test path) makes separate tmux calls.
+# Compound commands: when tmux.sh passes a compound command with ';'
+# separators (non-detached path), the mock receives them as a single
+# invocation.  It splits the argument list on ';' tokens and processes
+# each subcommand individually, so that embedded run-shell commands are
+# executed just like in the detached path.
 _FAKE_TMUX_SCRIPT = r"""#!/bin/bash
 log="${TMUX_LOG:?TMUX_LOG must be set}"
 echo "CMD: $*" >> "$log"
 
-case "$1" in
-  new-session)
-    # With -dP (detach + print), real tmux prints the session name
-    # formatted by -F '#{session_name}'.  We return the -s argument.
-    has_P=false
-    session_name="0"
-    prev=""
-    for arg in "$@"; do
-      case "$arg" in -dP|-Pd|-P) has_P=true ;; esac
-      [[ "$prev" == "-s" ]] && session_name="$arg"
-      prev="$arg"
-    done
-    if $has_P; then echo "$session_name"; fi
-    ;;
-  display-message)
-    # Real tmux expands #{var} in the format argument.
-    # We return the hard-coded value for the requested variable.
-    for arg in "$@"; do
-      case "$arg" in
-        *window_id*)     echo "@0"; break ;;
-        *window_width*)  echo "200"; break ;;
-        *window_height*) echo "50"; break ;;
-      esac
-    done
-    ;;
-  run-shell)
-    # Real tmux executes the argument in a shell.  We do the same so
-    # that tmux-apply-layout.sh can issue its own tmux select-layout.
-    shift
-    eval "$*"
-    ;;
-  send-keys)
-    shift
-    if [[ "${1:-}" == "-t" ]]; then
-      shift 2
-    fi
-    command=""
-    for arg in "$@"; do
-      if [[ "$arg" == "C-m" ]]; then
-        break
+# Split compound commands on ';' tokens and process each subcommand.
+# When tmux.sh passes e.g.  new-session ... \; split-window ... \;
+# run-shell ... \; select-pane ...  the ';' arguments separate distinct
+# tmux subcommands within a single invocation.  We collect each group
+# of arguments between ';' tokens and dispatch them with the same
+# logic used for single-subcommand invocations.
+
+_dispatch() {
+  # $1 is the tmux subcommand, remaining args are its options.
+  case "$1" in
+    new-session)
+      # With -dP (detach + print), real tmux prints the session name
+      # formatted by -F '#{session_name}'.  We return the -s argument.
+      has_P=false
+      session_name="0"
+      prev=""
+      for arg in "$@"; do
+        case "$arg" in -dP|-Pd|-P) has_P=true ;; esac
+        [[ "$prev" == "-s" ]] && session_name="$arg"
+        prev="$arg"
+      done
+      if $has_P; then echo "$session_name"; fi
+      ;;
+    display-message)
+      # Real tmux expands #{var} in the format argument.
+      # We return the hard-coded value for the requested variable.
+      for arg in "$@"; do
+        case "$arg" in
+          *window_id*)     echo "@0"; break ;;
+          *window_width*)  echo "200"; break ;;
+          *window_height*) echo "50"; break ;;
+        esac
+      done
+      ;;
+    run-shell)
+      # Real tmux executes the argument in a shell.  We do the same so
+      # that tmux-apply-layout.sh can issue its own tmux select-layout.
+      shift
+      eval "$*"
+      ;;
+    send-keys)
+      shift
+      if [[ "${1:-}" == "-t" ]]; then
+        shift 2
       fi
-      command="$arg"
-    done
-    if [[ -n "$command" ]]; then
-      ( eval "$command" ) &
-    fi
-    ;;
-esac
+      command=""
+      for arg in "$@"; do
+        if [[ "$arg" == "C-m" ]]; then
+          break
+        fi
+        command="$arg"
+      done
+      if [[ -n "$command" ]]; then
+        ( eval "$command" ) &
+      fi
+      ;;
+    split-window|select-layout|select-pane|switch-client|attach-session|kill-session)
+      # These subcommands only need to be logged; the mock accepts and exits 0.
+      ;;
+  esac
+}
+
+# Use a temp file to safely pass each subcommand group to _dispatch.
+# Writing each group as null-delimited arguments avoids eval-expansion
+# issues with special characters in command arguments.
+_tmpdir="${TMPDIR:-/tmp}"
+_dispatch_tmp="$_tmpdir/fake_tmux_$$"
+
+# Build subcommand groups by splitting on ';' tokens.
+group_idx=0
+arg_idx=0
+for arg in "$@"; do
+  if [[ "$arg" == ";" ]]; then
+    group_idx=$((group_idx + 1))
+    arg_idx=0
+  else
+    printf '%s\0' "$arg" >> "$_dispatch_tmp.$group_idx"
+    arg_idx=$((arg_idx + 1))
+  fi
+done
+
+# Dispatch each subcommand group.
+for i in $(seq 0 $group_idx); do
+  if [[ -f "$_dispatch_tmp.$i" ]]; then
+    # Read null-delimited args back into positional parameters.
+    args=()
+    while IFS= read -r -d '' arg; do
+      args+=("$arg")
+    done < "$_dispatch_tmp.$i"
+    _dispatch "${args[@]}"
+    rm -f "$_dispatch_tmp.$i"
+  fi
+done
+
+rm -f "$_dispatch_tmp".*
 exit 0
 """
 
@@ -6315,9 +6361,18 @@ class TestTmuxOpenSession:
         log = tmux_log.read_text()
         assert "run-shell" in log
         assert "agm.cli tmux layout 4" in log
-        assert "#{window_id}" not in log
-        assert "#{window_width}" not in log
-        assert "#{window_height}" not in log
+        # The non-detached path delegates layout to run-shell rather than
+        # calling display-message directly.  The compound command line
+        # (logged as a single CMD entry with ';' separators) must not
+        # contain display-message as a direct subcommand.
+        compound_lines = [
+            line for line in log.splitlines()
+            if line.startswith("CMD:") and ";" in line
+        ]
+        for line in compound_lines:
+            assert "display-message" not in line, (
+                f"display-message should not appear in compound command: {line}"
+            )
 
     def test_detach_with_custom_pane_count_and_name(
         self, tmp_path: Path, env: dict[str, str]

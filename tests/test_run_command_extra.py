@@ -11,9 +11,6 @@ import pytest
 import agm.commands.run as run_module
 from agm.commands.args import RunArgs
 from agm.commands.run import (
-    _normalize_systemd_limit,
-    _resource_limit_run_context,
-    _systemd_run_prefix,
     normalize_run_command,
 )
 from agm.config.general import RunConfig
@@ -54,87 +51,6 @@ class TestNormalizeRunCommand:
 
     def test_single_double_dash_stripped(self) -> None:
         assert normalize_run_command(["--"]) == []
-
-
-# ===========================================================================
-# _normalize_systemd_limit
-# ===========================================================================
-
-
-class TestNormalizeSystemdLimit:
-    def test_unlimited_maps_to_infinity(self) -> None:
-        assert _normalize_systemd_limit("unlimited") == "infinity"
-
-    def test_unlimited_case_insensitive(self) -> None:
-        assert _normalize_systemd_limit("UNLIMITED") == "infinity"
-        assert _normalize_systemd_limit("Unlimited") == "infinity"
-
-    def test_unlimited_with_whitespace(self) -> None:
-        assert _normalize_systemd_limit(" unlimited ") == "infinity"
-
-    def test_numeric_value_unchanged(self) -> None:
-        assert _normalize_systemd_limit("20G") == "20G"
-        assert _normalize_systemd_limit("0") == "0"
-
-
-# ===========================================================================
-# _systemd_run_prefix
-# ===========================================================================
-
-
-class TestSystemdRunPrefix:
-    def test_prefix_with_memory_and_swap(self) -> None:
-        prefix = _systemd_run_prefix(memory_limit="10G", swap_limit="0")
-        assert "systemd-run" in prefix
-        assert "-p" in prefix
-        assert "MemoryMax=10G" in prefix
-        assert "MemorySwapMax=0" in prefix
-        assert "Delegate=yes" in prefix
-
-    def test_prefix_with_only_memory(self) -> None:
-        prefix = _systemd_run_prefix(memory_limit="5G", swap_limit=None)
-        assert "MemoryMax=5G" in prefix
-        assert not any("MemorySwapMax" in p for p in prefix)
-
-    def test_prefix_with_only_swap(self) -> None:
-        prefix = _systemd_run_prefix(memory_limit=None, swap_limit="2G")
-        assert "MemorySwapMax=2G" in prefix
-        assert not any("MemoryMax" in p for p in prefix)
-
-    def test_prefix_with_neither(self) -> None:
-        prefix = _systemd_run_prefix(memory_limit=None, swap_limit=None)
-        assert "Delegate=yes" in prefix
-        assert not any("MemoryMax" in p for p in prefix)
-
-
-# ===========================================================================
-# _resource_limit_run_context
-# ===========================================================================
-
-
-class TestResourceLimitRunContext:
-    def test_returns_empty_when_no_limits(self) -> None:
-        prefix, cleanup = _resource_limit_run_context({}, None, None)
-        assert prefix == []
-        assert cleanup is None
-
-    def test_exits_when_systemd_run_not_found(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: None)
-        with pytest.raises(SystemExit) as exc_info:
-            _resource_limit_run_context({"PATH": "/usr/bin"}, "10G", None)
-        assert exc_info.value.code == 1
-
-    def test_returns_prefix_and_cleanup_when_systemd_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
-        prefix, cleanup = _resource_limit_run_context({}, "10G", "0")
-        assert isinstance(prefix, list)
-        assert "systemd-run" in prefix
-        assert isinstance(cleanup, list)
-        assert "systemctl" in cleanup[0]
 
 
 # ===========================================================================
@@ -302,6 +218,71 @@ class TestRunDryRun:
         )
         out = capsys.readouterr().out
         assert "echo" in out
+        assert "systemd-run" in out
+        assert "MemoryMax=10G" in out
+        assert "MemorySwapMax" not in out
+        assert "Delegate=yes" in out
+
+    def test_dry_run_no_sandbox_with_swap_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._enable_dry_run()
+        env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
+        (tmp_path / "home").mkdir()
+        monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(
+            run_module, "load_run_config", lambda **_: _make_run_config()
+        )
+        monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
+
+        run_module.run(
+            RunArgs(
+                run_command=["echo", "hi"],
+                no_sandbox=True,
+                no_patch=False,
+                memory=None,
+                swap="2G",
+                no_memory_limit=True,
+                no_swap_limit=False,
+                settings_file=None,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "systemd-run" in out
+        assert "MemorySwapMax=2G" in out
+        assert "MemoryMax" not in out
+
+    def test_dry_run_no_sandbox_normalizes_unlimited_limits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._enable_dry_run()
+        env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
+        (tmp_path / "home").mkdir()
+        monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(
+            run_module, "load_run_config", lambda **_: _make_run_config()
+        )
+        monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
+
+        run_module.run(
+            RunArgs(
+                run_command=["echo", "hi"],
+                no_sandbox=True,
+                no_patch=False,
+                memory=" unlimited ",
+                swap="UNLIMITED",
+                no_memory_limit=False,
+                no_swap_limit=False,
+                settings_file=None,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "MemoryMax=infinity" in out
+        assert "MemorySwapMax=infinity" in out
 
     def test_dry_run_no_sandbox_returns_after_printing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -338,6 +319,38 @@ class TestRunDryRun:
 
 
 class TestRunNoSandboxSwapLimit:
+    def test_no_sandbox_with_limits_exits_when_systemd_run_is_missing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
+        (tmp_path / "home").mkdir()
+        monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(
+            run_module, "load_run_config", lambda **_: _make_run_config()
+        )
+        monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: None)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_module.run(
+                RunArgs(
+                    run_command=["echo", "hi"],
+                    no_sandbox=True,
+                    no_patch=False,
+                    memory="10G",
+                    swap=None,
+                    no_memory_limit=False,
+                    no_swap_limit=True,
+                    settings_file=None,
+                )
+            )
+
+        assert exc_info.value.code == 1
+        assert "systemd-run is not installed" in capsys.readouterr().err
+
     def test_no_sandbox_uses_swap_from_args(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -352,11 +365,13 @@ class TestRunNoSandboxSwapLimit:
         monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
 
         foreground_calls: list[list[str]] = []
+        cleanup_calls: list[list[str] | None] = []
 
         def fake_run_foreground(
             cmd: list[str], **kw: Any
         ) -> int:
             foreground_calls.append(cmd)
+            cleanup_calls.append(kw["interrupt_cleanup_cmd"])
             return 0
 
         monkeypatch.setattr(run_module, "run_foreground", fake_run_foreground)
@@ -378,6 +393,8 @@ class TestRunNoSandboxSwapLimit:
         # The command should contain swap-related systemd args
         assert len(foreground_calls) == 1
         assert "MemorySwapMax=2G" in foreground_calls[0]
+        assert cleanup_calls[0] is not None
+        assert cleanup_calls[0][0:3] == ["systemctl", "--user", "stop"]
 
 
 # ===========================================================================

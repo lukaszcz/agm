@@ -326,7 +326,7 @@ class TestDepNewDryRun:
     def test_cleanup_handles_os_error_silently(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Cover lines 42-43: OSError during rmdir cleanup is silenced."""
+        """OSError during rmdir cleanup is silenced."""
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
 

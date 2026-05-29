@@ -1264,7 +1264,7 @@ class TestRunCommandOutputAssembly:
 
 
 # ---------------------------------------------------------------------------
-# loop/step.py – additional coverage gaps
+# loop/step.py – validate_command
 # ---------------------------------------------------------------------------
 
 
@@ -1280,7 +1280,8 @@ class TestValidateCommandNotInPath:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/common.py – lines 270-271, 301, 306: run_command output assembly
+# ---------------------------------------------------------------------------
+# loop/common.py – run_command output assembly edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -1369,7 +1370,8 @@ class TestRunCommandOutputAssemblyFull:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/common.py – lines 327, 338, 346, 354: selector_result edge cases
+# ---------------------------------------------------------------------------
+# loop/common.py – selector_result edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -1552,7 +1554,8 @@ class TestTasksDirFromConfigRelative:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/common.py – lines 270-271: prepare_select_invocation missing select.md
+# ---------------------------------------------------------------------------
+# loop/common.py – prepare_select_invocation missing select.md
 # ---------------------------------------------------------------------------
 
 
@@ -1597,7 +1600,8 @@ class TestPrepareSelectInvocationMissingDefault:
 
 
 # ---------------------------------------------------------------------------
-# project/layout.py – lines 98, 195: current_project_dir and current_checkout
+# ---------------------------------------------------------------------------
+# project/layout.py – current_project_dir and current_checkout
 # ---------------------------------------------------------------------------
 
 class TestResolveExtraPromptSource:

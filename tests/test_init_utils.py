@@ -831,15 +831,15 @@ class TestRunEmbeddedLayout:
 
 
 # ---------------------------------------------------------------------------
-# configure_project_dir – branch coverage gaps
+# configure_project_dir – alternative paths
 # ---------------------------------------------------------------------------
 
 
-class TestConfigureProjectDirBranchCoverage:
+class TestConfigureProjectDirAlternatives:
     def test_workspace_non_git_repo_does_not_add_agent_files_gitignore(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Line 119->121: workspace layout where repo_dir is NOT a git repo.
+        """Workspace layout where repo_dir is NOT a git repo.
 
         When the repo directory is not a git repo, the .gitignore for
         .agent-files should NOT be written.
@@ -856,7 +856,7 @@ class TestConfigureProjectDirBranchCoverage:
     def test_no_git_init_skips_git_repo_creation_for_both_config_and_notes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Line 137->exit: no_git_init=True causes skip_config_git=True.
+        """no_git_init=True causes skip_config_git=True.
 
         When no_git_init is True, neither the config git repo nor the notes
         git repo is initialised, and commit_config_dir_changes is not called.
@@ -885,7 +885,7 @@ class TestConfigureProjectDirBranchCoverage:
     def test_no_notes_git_skips_notes_git_but_not_config_git(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Line 121->123: no_notes_git=True with no_git_init=False.
+        """no_notes_git=True with no_git_init=False.
 
         When no_notes_git is True but no_git_init is False, the config git
         repo IS initialised but the notes git repo is skipped.

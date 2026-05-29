@@ -545,7 +545,7 @@ class TestDetachedWorktree:
 
 
 class TestListCommandViaCli:
-    """Cover lines 1032-1034: list_cmd function body."""
+    """list_cmd CLI entry point dispatches correctly."""
 
     def test_list_cmd_via_cli(
         self, monkeypatch: pytest.MonkeyPatch

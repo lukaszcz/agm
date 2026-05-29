@@ -628,7 +628,7 @@ class TestPrepareRuntime:
     def test_dry_run_skips_bootstrap_prompt_execution(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Line 157->165: dry_run mode skips run_prompt_command for bootstrap.
+        """dry_run mode skips run_prompt_command for bootstrap.
 
         When dry_run is enabled, the bootstrap prompt is prepared (so it
         appears in the dry-run output) but run_prompt_command is NOT called.
@@ -1184,7 +1184,7 @@ class TestStepRun:
     def test_cleanup_not_called_when_prepare_runtime_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Line 416->exit: finally block when runtime is None.
+        """finally block when runtime is None after prepare_runtime raises.
 
         When prepare_runtime raises, runtime stays None and cleanup_runtime
         must NOT be called.
@@ -1563,7 +1563,7 @@ class TestLoopRun:
     def test_cleanup_not_called_when_prepare_runtime_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Line 26->exit: finally block when runtime is None.
+        """finally block when runtime is None after prepare_runtime raises.
 
         When prepare_runtime raises before returning, runtime stays None and
         cleanup_runtime must NOT be called.
@@ -2292,7 +2292,8 @@ class TestPrintDryRunWithBootstrap:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/step.py – lines 322-323: cleanup_runtime
+# ---------------------------------------------------------------------------
+# commands/loop/step.py – cleanup_runtime
 # ---------------------------------------------------------------------------
 
 
@@ -2326,14 +2327,16 @@ class TestCleanupRuntimeViaStep:
 
 
 # ---------------------------------------------------------------------------
-# project/layout.py – lines 98, 111: current_project_dir git_common_dir path
+# ---------------------------------------------------------------------------
+# project/layout.py – current_project_dir git_common_dir path
 # ---------------------------------------------------------------------------
 
 
 
 
 # ---------------------------------------------------------------------------
-# project/layout.py – lines 195, 203: current_checkout with REPO_DIR env var
+# ---------------------------------------------------------------------------
+# project/layout.py – current_checkout with REPO_DIR env var
 # ---------------------------------------------------------------------------
 
 class TestPrepareRuntimeExtraPromptSource:

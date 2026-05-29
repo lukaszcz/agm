@@ -1168,5 +1168,5 @@ class TestSrtKeyboardInterrupt:
 
 
 # ---------------------------------------------------------------------------
-# completion.py – additional coverage gaps
+# completion.py – edge cases
 # ---------------------------------------------------------------------------

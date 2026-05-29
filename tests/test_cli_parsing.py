@@ -1891,11 +1891,11 @@ class TestHelpTextForPathUnknownMultiElement:
             parser_helpers._help_text_for_path(["nonexistent", "subcommand"])
 
 
-class TestParseLoopSelectArgsMissingBranches:
-    """Cover lines 330, 332-335, 346-349, 376-377 in _parse_loop_select_args."""
+class TestParseLoopSelectArgsMisc:
+    """Miscellaneous _parse_loop_select_args parsing and validation."""
 
     def test_double_dash_stops_parsing(self) -> None:
-        """Line 330: 'break' after '--' separator."""
+        """Double dash separator stops option parsing."""
         args = cli._parse_loop_select_args(
             ["--", "--runner", "val", "cmd"],
             command_path=["loop", "select"],
@@ -1906,7 +1906,7 @@ class TestParseLoopSelectArgsMissingBranches:
         assert args.runner_args == ["--runner", "val", "cmd"]
 
     def test_runner_flag(self) -> None:
-        """Lines 332-335: --runner parsing in _parse_loop_select_args."""
+        """--runner flag sets the runner on the parsed args."""
         args = cli._parse_loop_select_args(
             ["--runner", "my-runner", "cmd"],
             command_path=["loop", "select"],
@@ -1915,7 +1915,7 @@ class TestParseLoopSelectArgsMissingBranches:
         assert args.command_name == "cmd"
 
     def test_tasks_dir_flag(self) -> None:
-        """Lines 346-349: --tasks-dir parsing in _parse_loop_select_args."""
+        """--tasks-dir flag sets the tasks directory on the parsed args."""
         args = cli._parse_loop_select_args(
             ["--tasks-dir", "custom/tasks", "cmd"],
             command_path=["loop", "select"],
@@ -1924,7 +1924,7 @@ class TestParseLoopSelectArgsMissingBranches:
         assert args.command_name == "cmd"
 
     def test_timeout_invalid_format_exits(self) -> None:
-        """Lines 376-377: --timeout with invalid format in _parse_loop_select_args."""
+        """--timeout with an invalid format causes SystemExit."""
         with pytest.raises(SystemExit):
             cli._parse_loop_select_args(
                 ["--timeout", "abc", "cmd"],
@@ -1941,7 +1941,7 @@ class TestParseLoopSelectArgsMissingBranches:
 
 
 class TestConfigCopyCommand:
-    """Cover lines 563-565: the 'config copy' CLI command function."""
+    """The 'config copy' CLI command function dispatches correctly."""
 
     def test_config_copy_via_cli(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -1958,12 +1958,12 @@ class TestConfigCopyCommand:
 
 
 class TestMainEntryPoint:
-    """Cover lines 1017, 1021: app() in main() and __name__ block."""
+    """main() entry point delegates to app()."""
 
     def test_main_calls_app_and_shows_help(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Line 1017: main() calls app() which shows the overview help."""
+        """main() calls app() which shows the overview help."""
         # Monkeypatch sys.argv so app() sees ["agm", "--help"] and exits
         monkeypatch.setattr("sys.argv", ["agm", "--help"])
         with pytest.raises(SystemExit) as exc_info:
@@ -1972,7 +1972,7 @@ class TestMainEntryPoint:
         assert exc_info.value.code == 0
 
     def test_main_module_entry_point(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Line 1021: the `if __name__ == '__main__': main()` block."""
+        """The `if __name__ == '__main__': main()` block delegates to main()."""
         import runpy
         import warnings
 

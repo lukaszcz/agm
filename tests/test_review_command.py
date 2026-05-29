@@ -704,7 +704,7 @@ def test_revise_once_dry_run_prints_configuration_and_command(
 def test_revise_once_runs_prepared_prompt_when_dry_run_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Line 121->123: dry_run disabled branch in revise_once.
+    """dry_run disabled branch in revise_once.
 
     When dry_run is NOT enabled, revise_once does not print any dry-run
     configuration and delegates directly to run_prepared_prompt.

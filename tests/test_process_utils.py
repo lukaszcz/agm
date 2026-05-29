@@ -1088,8 +1088,7 @@ class TestEmptyDecodedTextContinue:
 
 
 class TestFinalDecoderFlush:
-    """Cover lines 220-224: final decoder.decode(b'', final=True) with
-    capture_output and callbacks."""
+    """Final decoder.decode(b'', final=True) with capture_output and callbacks."""
 
     def test_final_flush_captured_with_callback(self) -> None:
         """When capture_output=True and a callback is set, the final flush

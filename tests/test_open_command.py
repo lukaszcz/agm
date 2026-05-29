@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,18 @@ from agm.commands.open import (
     validate_pane_count,
 )
 from agm.core import dry_run
+
+
+def _make_git_project(tmp_path: Path, env: dict[str, str]) -> Path:
+    project = tmp_path / "proj"
+    repo = project / "repo"
+    (project / "config").mkdir(parents=True)
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
+    (repo / "README.md").write_text("main\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
+    return project
 
 # ===========================================================================
 # validate_pane_count
@@ -282,93 +295,42 @@ class TestOpenSession:
 
 
 class TestNewSession:
-    def _setup(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> Path:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        worktrees_path = tmp_path / "worktrees" / "feature"
-
-        monkeypatch.setattr(
-            open_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
-        monkeypatch.setattr(
-            open_module, "branch_path", lambda pd, branch: worktrees_path
-        )
-        monkeypatch.setattr(open_module, "mkdir", lambda p, **kw: None)
-        monkeypatch.setattr(
-            open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
-        )
-        monkeypatch.setattr(
-            open_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir: {"TMUX": ""},
-        )
-        monkeypatch.setattr(
-            open_module, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(open_module, "ensure_worktree", lambda **kw: None)
-        monkeypatch.setattr(
-            open_module, "branch_session_name", lambda pd, branch: f"{pd.name}/{branch}"
-        )
-        monkeypatch.setattr(
-            open_module, "queue_setup_and_focus_session", lambda **kw: None
-        )
-        monkeypatch.setattr(open_module, "parent_config_branch", lambda pd, parent: parent)
-        return proj_dir
-
-    def test_calls_ensure_worktree_with_new_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_plans_new_worktree_and_setup_queue(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        worktree_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module,
-            "ensure_worktree",
-            lambda **kw: worktree_calls.append(kw),
-        )
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+
         new_session(
-            detached=True, pane_count=None, parent=None, branch="feature", cwd=tmp_path
+            detached=True, pane_count=None, parent=None, branch="feature", cwd=project
         )
-        assert len(worktree_calls) == 1
-        assert worktree_calls[0]["new_branch"] == "feature"
-        assert worktree_calls[0]["existing_ok"] is False
-        assert worktree_calls[0]["start_point"] is None
 
-    def test_calls_ensure_worktree_with_parent_start_point(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        out = capsys.readouterr().out
+        assert "dry-run: agm mkdir" in out
+        assert "git -C" in out
+        assert "worktree add -b feature" in out
+        assert "tmux send-keys" in out
+
+    def test_plans_new_worktree_from_parent_start_point(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        worktree_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module,
-            "ensure_worktree",
-            lambda **kw: worktree_calls.append(kw),
-        )
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+
         new_session(
             detached=True, pane_count=None, parent="shallow-parent",
-            branch="feature", cwd=tmp_path,
+            branch="feature", cwd=project,
         )
-        assert len(worktree_calls) == 1
-        assert worktree_calls[0]["start_point"] == "shallow-parent"
-        assert worktree_calls[0]["cwd"] == tmp_path / "proj" / "repo"
 
-    def test_calls_queue_setup(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        setup_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module,
-            "queue_setup_and_focus_session",
-            lambda **kw: setup_calls.append(kw),
-        )
-        new_session(
-            detached=True, pane_count=None, parent=None, branch="feature", cwd=tmp_path
-        )
-        assert len(setup_calls) == 1
-        assert setup_calls[0]["detached"] is True
+        out = capsys.readouterr().out
+        assert "worktree add -b feature" in out
+        assert "shallow-parent" in out
 
 
 # ===========================================================================
@@ -377,56 +339,24 @@ class TestNewSession:
 
 
 class TestCheckoutSession:
-    def _setup(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> Path:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        worktrees_path = tmp_path / "worktrees" / "feature"
-
-        monkeypatch.setattr(
-            open_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
-        monkeypatch.setattr(
-            open_module, "branch_path", lambda pd, branch: worktrees_path
-        )
-        monkeypatch.setattr(open_module, "mkdir", lambda p, **kw: None)
-        monkeypatch.setattr(
-            open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
-        )
-        monkeypatch.setattr(
-            open_module, "load_worktree_env", lambda pd, branch, checkout_dir: {}
-        )
-        monkeypatch.setattr(
-            open_module, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(open_module, "ensure_worktree", lambda **kw: None)
-        monkeypatch.setattr(
-            open_module, "branch_session_name", lambda pd, branch: f"{pd.name}/{branch}"
-        )
-        monkeypatch.setattr(
-            open_module, "queue_setup_and_focus_session", lambda **kw: None
-        )
-        monkeypatch.setattr(open_module, "parent_config_branch", lambda pd, parent: parent)
-        return proj_dir
-
-    def test_calls_ensure_worktree_with_existing_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_plans_checkout_of_existing_branch(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._setup(tmp_path, monkeypatch)
-        worktree_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module, "ensure_worktree", lambda **kw: worktree_calls.append(kw)
-        )
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+
         checkout_session(
-            detached=True, pane_count=None, parent=None, branch="feature", cwd=tmp_path
+            detached=True, pane_count=None, parent=None, branch="feature", cwd=project
         )
-        assert len(worktree_calls) == 1
-        assert worktree_calls[0]["branch"] == "feature"
-        assert worktree_calls[0]["existing_ok"] is True
-        assert worktree_calls[0]["new_branch"] is None
-        assert worktree_calls[0]["cwd"] == tmp_path / "proj" / "repo"
+
+        out = capsys.readouterr().out
+        assert "worktree add" in out
+        assert "-b feature" not in out
+        assert "feature" in out
+        assert "tmux send-keys" in out
 
 
 # ===========================================================================

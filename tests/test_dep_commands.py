@@ -327,15 +327,12 @@ class TestDepRemoveRun:
             dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
         )
 
-        rmtree_calls: list[Path] = []
-        monkeypatch.setattr(dep_remove, "rmtree", lambda p: rmtree_calls.append(p))
-
         args = DepRemoveArgs(all=True, target="mylib")
         dep_remove.run(args)
 
         assert removed == [wt_path]
         assert deleted == ["feat-a"]
-        assert rmtree_calls == [dep_dir]
+        assert not dep_dir.exists()
 
     def test_remove_all_exits_on_detached_worktree(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -438,13 +435,10 @@ class TestDepRemoveRun:
             ]
         )
 
-        rmtree_calls: list[Path] = []
-        monkeypatch.setattr(dep_remove, "rmtree", lambda p: rmtree_calls.append(p))
-
         args = DepRemoveArgs(all=False, target="mylib/repo")
         dep_remove.run(args)
 
-        assert rmtree_calls == [dep_dir]
+        assert not dep_dir.exists()
 
     def test_exits_when_worktree_not_found(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

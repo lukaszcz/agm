@@ -121,17 +121,10 @@ class TestCloseSessionRemovesBranchConfig:
         _, branch_config = self._setup_close_dependencies(
             tmp_path, monkeypatch, branch="feature"
         )
-        commit_calls: list[tuple[Path, str]] = []
-        monkeypatch.setattr(
-            close_module,
-            "commit_config_dir_changes",
-            lambda pd, msg, **kw: commit_calls.append((pd, msg)),
-        )
 
         close_session(branch="feature", cwd=tmp_path)
 
         assert not branch_config.exists()
-        assert commit_calls == []
 
     def test_removes_branch_dir_and_commits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

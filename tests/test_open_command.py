@@ -20,6 +20,7 @@ from agm.commands.open import (
     validate_pane_count,
 )
 from agm.core import dry_run
+from agm.tmux.session import create_tmux_session
 
 
 def _make_git_project(tmp_path: Path, env: dict[str, str]) -> Path:
@@ -193,18 +194,21 @@ class TestOpenSession:
         return proj_dir, repo_dir
 
     def test_opens_main_repo_session_when_branch_is_none(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
+        dry_run.set_enabled(True)
         proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
-        create_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module,
-            "create_tmux_session",
-            lambda **kw: create_calls.append(kw),
-        )
+        monkeypatch.setattr(open_module, "create_tmux_session", create_tmux_session)
+
         open_session(detached=True, pane_count=None, branch=None, cwd=tmp_path)
-        assert len(create_calls) == 1
-        assert create_calls[0]["session_name"] == proj_dir.name
+
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert f"-c {repo_dir}" in out
+        assert f"Detached tmux session {proj_dir.name} created" in out
 
     def test_exits_when_worktree_not_at_expected_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -223,9 +227,14 @@ class TestOpenSession:
         assert exc_info.value.code == 1
 
     def test_opens_branch_session_when_worktree_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
+        dry_run.set_enabled(True)
         proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(open_module, "create_tmux_session", create_tmux_session)
         feat_path = tmp_path / "worktrees" / "feature"
         feat_path.mkdir(parents=True)
         monkeypatch.setattr(
@@ -242,15 +251,13 @@ class TestOpenSession:
         monkeypatch.setattr(
             open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
         )
-        create_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module,
-            "create_tmux_session",
-            lambda **kw: create_calls.append(kw),
-        )
+
         open_session(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
-        assert len(create_calls) == 1
-        assert "feature" in create_calls[0]["session_name"]
+
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert f"-c {feat_path}" in out
+        assert "Detached tmux session proj/feature created" in out
 
     def test_commits_config_with_worktree_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -365,107 +372,80 @@ class TestCheckoutSession:
 
 
 class TestSmartOpenSession:
-    def _base_setup(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> Path:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            open_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            open_module.git_helpers, "current_branch", lambda rd, **kw: "main"
-        )
-        monkeypatch.setattr(open_module.git_helpers, "fetch", lambda rd: None)
-        return proj_dir
-
     def test_opens_main_session_when_main_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._base_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            open_module,
-            "is_main_checkout_branch",
-            lambda pd, branch, repo_branch: True,
-        )
-        open_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module, "open_session", lambda **kw: open_calls.append(kw)
-        )
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+
         smart_open_session(
-            detached=True, pane_count=None, parent=None, branch="main", cwd=tmp_path
+            detached=True, pane_count=None, parent=None, branch="main", cwd=project
         )
-        assert len(open_calls) == 1
-        assert open_calls[0]["branch"] is None
+
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert f"-c {project / 'repo'}" in out
 
     def test_opens_existing_worktree_session(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._base_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            open_module, "is_main_checkout_branch", lambda pd, branch, repo_branch: False
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(project / "worktrees" / "feature")],
+            cwd=project / "repo",
+            env=env,
+            check=True,
         )
-        monkeypatch.setattr(
-            open_module, "has_expected_worktree", lambda pd, branch, **kw: True
-        )
-        open_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module, "open_session", lambda **kw: open_calls.append(kw)
-        )
+
         smart_open_session(
-            detached=True, pane_count=None, parent=None, branch="feature", cwd=tmp_path
+            detached=True, pane_count=None, parent=None, branch="feature", cwd=project
         )
-        assert len(open_calls) == 1
-        assert open_calls[0]["branch"] == "feature"
+
+        out = capsys.readouterr().out
+        assert "tmux new-session -dP" in out
+        assert f"-c {project / 'worktrees' / 'feature'}" in out
 
     def test_checks_out_existing_remote_branch(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._base_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            open_module, "is_main_checkout_branch", lambda pd, branch, repo_branch: False
-        )
-        monkeypatch.setattr(
-            open_module, "has_expected_worktree", lambda pd, branch, **kw: False
-        )
-        monkeypatch.setattr(
-            open_module, "branch_exists", lambda rd, branch, **kw: True
-        )
-        checkout_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module, "checkout_session", lambda **kw: checkout_calls.append(kw)
-        )
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+        subprocess.run(["git", "branch", "remote-feat"], cwd=project / "repo", env=env, check=True)
+
         smart_open_session(
-            detached=True, pane_count=None, parent=None, branch="remote-feat", cwd=tmp_path
+            detached=True, pane_count=None, parent=None, branch="remote-feat", cwd=project
         )
-        assert len(checkout_calls) == 1
-        assert checkout_calls[0]["branch"] == "remote-feat"
+
+        out = capsys.readouterr().out
+        assert "worktree add" in out
+        assert "-b remote-feat" not in out
+        assert "remote-feat" in out
 
     def test_creates_new_session_when_branch_doesnt_exist(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._base_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            open_module, "is_main_checkout_branch", lambda pd, branch, repo_branch: False
-        )
-        monkeypatch.setattr(
-            open_module, "has_expected_worktree", lambda pd, branch, **kw: False
-        )
-        monkeypatch.setattr(
-            open_module, "branch_exists", lambda rd, branch, **kw: False
-        )
-        new_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            open_module, "new_session", lambda **kw: new_calls.append(kw)
-        )
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+
         smart_open_session(
-            detached=True, pane_count=None, parent=None, branch="new-branch", cwd=tmp_path
+            detached=True, pane_count=None, parent=None, branch="new-branch", cwd=project
         )
-        assert len(new_calls) == 1
-        assert new_calls[0]["branch"] == "new-branch"
+
+        out = capsys.readouterr().out
+        assert "worktree add -b new-branch" in out
 
 
 # ===========================================================================

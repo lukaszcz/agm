@@ -1614,6 +1614,22 @@ class TestHelpTextCoverage:
         for cmd, text in _HELP_TEXTS.items():
             assert f"agm {cmd}" in text, f"help text for '{cmd}' doesn't mention 'agm {cmd}'"
 
+    def test_docs_commands_md_mentions_all_cli_commands(self) -> None:
+        import re
+        from pathlib import Path
+
+        from typer.main import get_command
+
+        from agm.cli import app
+
+        cli_commands = set(get_command(app).list_commands(None))
+        doc_text = Path("docs/commands.md").read_text(encoding="utf-8")
+        documented = set(re.findall(r"`agm (\w+)", doc_text))
+        missing = cli_commands - documented
+        assert not missing, (
+            f"docs/commands.md is missing entries for CLI commands: {sorted(missing)}"
+        )
+
 
 class TestCommandPathFromContext:
     def test_returns_empty_for_root_context(self) -> None:

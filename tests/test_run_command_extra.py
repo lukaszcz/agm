@@ -478,8 +478,8 @@ class TestRunNoSandboxLive:
         # instead of always raising SystemExit, making the `return` on line 193 reachable.
         monkeypatch.setattr(run_module, "_run_with_optional_resource_limits", lambda **kw: None)
 
-        # Should return normally (no SystemExit)
-        run_module.run(
+        # Should return normally (no SystemExit) with return value of None
+        result = run_module.run(
             RunArgs(
                 run_command=["echo", "hi"],
                 no_sandbox=True,
@@ -491,6 +491,7 @@ class TestRunNoSandboxLive:
                 settings_file=None,
             )
         )
+        assert result is None
 
     def test_no_sandbox_no_patch_with_proj_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

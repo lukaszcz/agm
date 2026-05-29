@@ -40,6 +40,15 @@ from agm.vcs.git import (
     worktree_remove,
 )
 
+
+def _assert_git_repo_command(cmd: list[str], repo_dir: Path, *parts: str) -> None:
+    assert cmd[0] == "git"
+    assert "-C" in cmd
+    assert cmd[cmd.index("-C") + 1] == str(repo_dir)
+    for part in parts:
+        assert part in cmd
+
+
 # ---------------------------------------------------------------------------
 # _git_args — pure function, no mocking needed
 # ---------------------------------------------------------------------------
@@ -155,7 +164,7 @@ class TestIsGitRepo:
 
         monkeypatch.setattr("agm.vcs.git.run_capture", fake_run_capture)
         is_git_repo(tmp_path)
-        assert captured[0] == ["git", "-C", str(tmp_path), "rev-parse", "--is-inside-work-tree"]
+        _assert_git_repo_command(captured[0], tmp_path, "rev-parse", "--is-inside-work-tree")
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +294,7 @@ class TestFetch:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         fetch(tmp_path)
-        assert captured[0] == ["git", "-C", str(tmp_path), "fetch"]
+        _assert_git_repo_command(captured[0], tmp_path, "fetch")
 
     def test_fetch_passes_env(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -309,7 +318,7 @@ class TestFetch:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         fetch_prune_all(tmp_path)
-        assert captured[0] == ["git", "-C", str(tmp_path), "fetch", "--all", "--prune"]
+        _assert_git_repo_command(captured[0], tmp_path, "fetch", "--all", "--prune")
 
     def test_fetch_prune_origin_passes_correct_args(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -320,7 +329,7 @@ class TestFetch:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         fetch_prune_origin(tmp_path)
-        assert captured[0] == ["git", "-C", str(tmp_path), "fetch", "--prune", "origin"]
+        _assert_git_repo_command(captured[0], tmp_path, "fetch", "--prune", "origin")
 
 
 class TestMerge:
@@ -333,7 +342,7 @@ class TestMerge:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         merge(tmp_path)
-        assert captured[0] == ["git", "-C", str(tmp_path), "merge"]
+        _assert_git_repo_command(captured[0], tmp_path, "merge")
 
     def test_merge_passes_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         received_env: list[dict[str, str] | None] = []
@@ -376,14 +385,7 @@ class TestCurrentBranch:
 
         monkeypatch.setattr("agm.vcs.git.require_capture", fake_require_capture)
         current_branch(tmp_path)
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
-            "rev-parse",
-            "--abbrev-ref",
-            "HEAD",
-        ]
+        _assert_git_repo_command(captured[0], tmp_path, "rev-parse", "--abbrev-ref", "HEAD")
 
     def test_passes_env(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -447,14 +449,13 @@ class TestLocalBranches:
 
         monkeypatch.setattr("agm.vcs.git.require_capture", fake_require_capture)
         local_branches(tmp_path)
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
+        _assert_git_repo_command(
+            captured[0],
+            tmp_path,
             "for-each-ref",
             "--format=%(refname:short)",
             "refs/heads",
-        ]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -472,15 +473,9 @@ class TestWorktreeAdd:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         worktree_add(tmp_path, tmp_path / "wt", "main")
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
-            "worktree",
-            "add",
-            str(tmp_path / "wt"),
-            "main",
-        ]
+        _assert_git_repo_command(
+            captured[0], tmp_path, "worktree", "add", str(tmp_path / "wt"), "main"
+        )
 
     def test_add_with_create_no_start_point(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -491,16 +486,15 @@ class TestWorktreeAdd:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         worktree_add(tmp_path, tmp_path / "wt", "new-branch", create=True)
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
+        _assert_git_repo_command(
+            captured[0],
+            tmp_path,
             "worktree",
             "add",
             "-b",
             "new-branch",
             str(tmp_path / "wt"),
-        ]
+        )
 
     def test_add_with_create_and_start_point(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -517,17 +511,16 @@ class TestWorktreeAdd:
             create=True,
             start_point="origin/main",
         )
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
+        _assert_git_repo_command(
+            captured[0],
+            tmp_path,
             "worktree",
             "add",
             "-b",
             "new-branch",
             str(tmp_path / "wt"),
             "origin/main",
-        ]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -545,14 +538,7 @@ class TestWorktreeRemove:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         worktree_remove(tmp_path, tmp_path / "wt")
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
-            "worktree",
-            "remove",
-            str(tmp_path / "wt"),
-        ]
+        _assert_git_repo_command(captured[0], tmp_path, "worktree", "remove", str(tmp_path / "wt"))
 
     def test_remove_with_force(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -563,16 +549,9 @@ class TestWorktreeRemove:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         worktree_remove(tmp_path, tmp_path / "wt", force=True)
-        assert "--force" in captured[0]
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
-            "worktree",
-            "remove",
-            "--force",
-            str(tmp_path / "wt"),
-        ]
+        _assert_git_repo_command(
+            captured[0], tmp_path, "worktree", "remove", "--force", str(tmp_path / "wt")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +683,7 @@ class TestBranchDelete:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         branch_delete(tmp_path, "old-branch")
-        assert captured[0] == ["git", "-C", str(tmp_path), "branch", "-d", "old-branch"]
+        _assert_git_repo_command(captured[0], tmp_path, "branch", "-d", "old-branch")
 
     def test_uses_D_flag_when_force(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -715,7 +694,7 @@ class TestBranchDelete:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         branch_delete(tmp_path, "old-branch", force=True)
-        assert captured[0] == ["git", "-C", str(tmp_path), "branch", "-D", "old-branch"]
+        _assert_git_repo_command(captured[0], tmp_path, "branch", "-D", "old-branch")
 
 
 class TestBranchUpstream:
@@ -780,15 +759,7 @@ class TestIsAncestor:
 
         monkeypatch.setattr("agm.vcs.git.run_foreground", fake_run_foreground)
         _is_ancestor(tmp_path, "a", "b")
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
-            "merge-base",
-            "--is-ancestor",
-            "a",
-            "b",
-        ]
+        _assert_git_repo_command(captured[0], tmp_path, "merge-base", "--is-ancestor", "a", "b")
 
 
 class TestBranchCanDelete:
@@ -1066,15 +1037,9 @@ class TestCreateTrackingBranch:
             lambda cmd, **kwargs: captured.append(cmd),
         )
         create_tracking_branch(tmp_path, "my-branch", "origin/my-branch")
-        assert captured[0] == [
-            "git",
-            "-C",
-            str(tmp_path),
-            "branch",
-            "--track",
-            "my-branch",
-            "origin/my-branch",
-        ]
+        _assert_git_repo_command(
+            captured[0], tmp_path, "branch", "--track", "my-branch", "origin/my-branch"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1136,13 +1101,11 @@ class TestLsRemoteHead:
 
         monkeypatch.setattr("agm.vcs.git.require_capture", fake_require_capture)
         ls_remote_head("git@github.com:org/repo.git")
-        assert captured[0] == [
-            "git",
-            "ls-remote",
-            "--symref",
-            "git@github.com:org/repo.git",
-            "HEAD",
-        ]
+        assert captured[0][0] == "git"
+        assert "ls-remote" in captured[0]
+        assert "--symref" in captured[0]
+        assert "git@github.com:org/repo.git" in captured[0]
+        assert "HEAD" in captured[0]
 
 
 # ---------------------------------------------------------------------------

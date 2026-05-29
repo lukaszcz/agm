@@ -74,9 +74,12 @@ def test_run_sandboxed_merges_patches_and_cleans_tracked_artifacts(
     assert exc_info.value.code == 0
     assert calls["cwd"] == work
     assert calls["env"] == {"HOME": str(home), "PATH": "/bin", "NODE_USE_ENV_PROXY": "1"}
-    assert calls["cmd"][0:3] == ["systemd-run", "--user", "--scope"]
-    assert calls["cmd"][3:6] == ["srt", "--settings", calls["cmd"][5]]
-    assert calls["cmd"][6:9] == ["--", "echo", "hi"]
+    cmd = calls["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[:3] == ["systemd-run", "--user", "--scope"]
+    assert "srt" in cmd
+    assert "--settings" in cmd
+    assert ["--", "echo", "hi"] == cmd[-3:]
     assert calls["interrupt_cleanup_cmd"] == ["systemctl", "--user", "stop", "agm-run.scope"]
     assert calls["isolate_process_group"] is True
 

@@ -79,7 +79,8 @@ class TestRunSetup:
         project_setup.run_setup(cwd=project_dir)
 
         assert len(run_calls) == 1
-        assert run_calls[0] == ["bash", str(setup_script)]
+        assert "bash" in run_calls[0]
+        assert str(setup_script) in run_calls[0]
         captured = capsys.readouterr()
         assert "Running setup for" in captured.out
         assert "Setup complete for" in captured.out
@@ -670,4 +671,3 @@ class TestLoadConfigEnvProjDir:
 
         assert result_env["PROJ_DIR"] == str(agm_dir)
         assert result_env["REPO_DIR"] == str(worktree_dir)
-

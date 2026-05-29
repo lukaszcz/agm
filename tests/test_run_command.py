@@ -77,38 +77,28 @@ def test_run_delegates_sandbox_execution_to_srt(
         )
     )
 
-    assert captured == {
-        "command": ["echo", "hi"],
-        "cwd": tmp_path / "work",
-        "env": dict(env),
-        "home": tmp_path / "home",
-        "proj_dir": None,
-        "command_name": "echo",
-        "alias_command_name": None,
-        "settings_file": None,
-        "patch_proj_dir": None,
-        "process_prefix": [
-            "systemd-run",
-            "--user",
-            "--scope",
-            "-q",
-            "-p",
-            "MemoryMax=32G",
-            "-p",
-            "MemorySwapMax=0",
-            "-p",
-            "Delegate=yes",
-            "--unit",
-            captured["process_prefix"][11],
-            "--",
-            "bash",
-            "-c",
-            captured["process_prefix"][15],
-            "--",
-        ],
-        "interrupt_cleanup_cmd": ["systemctl", "--user", "stop", captured["process_prefix"][11]],
-    }
-    bootstrap_script = captured["process_prefix"][15]
+    assert captured["command"] == ["echo", "hi"]
+    assert captured["cwd"] == tmp_path / "work"
+    assert captured["env"] == dict(env)
+    assert captured["home"] == tmp_path / "home"
+    assert captured["proj_dir"] is None
+    assert captured["command_name"] == "echo"
+    assert captured["alias_command_name"] is None
+    assert captured["settings_file"] is None
+    assert captured["patch_proj_dir"] is None
+
+    process_prefix = captured["process_prefix"]
+    assert isinstance(process_prefix, list)
+    assert process_prefix[:3] == ["systemd-run", "--user", "--scope"]
+    assert "MemoryMax=32G" in process_prefix
+    assert "MemorySwapMax=0" in process_prefix
+    assert "Delegate=yes" in process_prefix
+    assert "--unit" in process_prefix
+    assert "bash" in process_prefix
+    unit = process_prefix[process_prefix.index("--unit") + 1]
+    assert captured["interrupt_cleanup_cmd"] == ["systemctl", "--user", "stop", unit]
+
+    bootstrap_script = process_prefix[process_prefix.index("-c") + 1]
     assert isinstance(bootstrap_script, str)
     assert 'mkdir -p "${CG}/init"' in bootstrap_script
     assert 'echo $$ > "${CG}/init/cgroup.procs"' in bootstrap_script

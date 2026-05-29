@@ -61,6 +61,7 @@ class TestDepNewRun:
         assert "clone" in clone_cmd
         assert "--branch" in clone_cmd
         assert "main" in clone_cmd
+        assert str(project_dir / "deps" / "mylib" / "main") in clone_cmd
         assert len(update_calls) == 1
         assert update_calls[0]["dep_branch"] == "main"
 

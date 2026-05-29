@@ -106,13 +106,20 @@ class TestTmuxLayoutRun:
 
 class TestWorktreeNewRun:
     def test_delegates_to_ensure_worktree(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         calls: list[dict[str, Any]] = []
+        fake_worktree_path = tmp_path / "worktrees" / "feature"
         monkeypatch.setattr(
             worktree_new_cmd,
             "ensure_worktree",
-            lambda **kw: calls.append(kw),
+            lambda **kw: (calls.append(kw), fake_worktree_path)[1],
+        )
+        monkeypatch.setattr(
+            worktree_new_cmd, "discover_current_project_dir", lambda *a, **kw: None
+        )
+        monkeypatch.setattr(
+            worktree_new_cmd, "commit_config_dir_changes", lambda *a, **kw: None
         )
         worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=None))
         assert len(calls) == 1
@@ -120,6 +127,35 @@ class TestWorktreeNewRun:
         assert calls[0]["branch"] is None
         assert calls[0]["existing_ok"] is False
         assert calls[0]["reuse_existing_branch"] is True
+
+    def test_commits_config_when_project_dir_found(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        fake_worktree_path = tmp_path / "worktrees" / "feature"
+        fake_project_dir = tmp_path / "project"
+        monkeypatch.setattr(
+            worktree_new_cmd,
+            "ensure_worktree",
+            lambda **kw: fake_worktree_path,
+        )
+        monkeypatch.setattr(
+            worktree_new_cmd,
+            "discover_current_project_dir",
+            lambda *a, **kw: fake_project_dir,
+        )
+        commit_calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            worktree_new_cmd,
+            "commit_config_dir_changes",
+            lambda *a, **kw: commit_calls.append({"args": a, "kwargs": kw}),
+        )
+        monkeypatch.setattr(
+            worktree_new_cmd,
+            "project_config_dir",
+            lambda pd: pd / "config",
+        )
+        worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=None))
+        assert len(commit_calls) == 1
 
 
 # ---------------------------------------------------------------------------

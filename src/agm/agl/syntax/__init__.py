@@ -1,0 +1,172 @@
+"""Public API for the AgL AST package (agm.agl.syntax).
+
+This package is the *firewall* between the Lark-aware front-end (lexer +
+parser) and all downstream passes (scope, typecheck, eval).  Nothing in this
+package imports Lark or any other AgL-internal module except ``spans``.
+
+Usage::
+
+    from agm.agl.syntax import Program, LetDecl, VarRef, walk
+"""
+
+from __future__ import annotations
+
+from agm.agl.syntax.nodes import (
+    ELSE,
+    AbortPolicy,
+    AgentCall,
+    BinaryOp,
+    BinOp,
+    BoolLit,
+    CallOptions,
+    CaseExpr,
+    CaseExprBranch,
+    CaseStmt,
+    CaseStmtBranch,
+    CatchClause,
+    Constructor,
+    ConstructorPattern,
+    DecimalLit,
+    DictEntry,
+    DictLit,
+    DoUntil,
+    ElseSentinel,
+    EnumDef,
+    Expr,
+    ExprStmt,
+    FieldAccess,
+    FieldDef,
+    IfBranch,
+    IfStmt,
+    InputDecl,
+    InterpSegment,
+    IntLit,
+    IsTest,
+    LetDecl,
+    ListLit,
+    LiteralPattern,
+    NamedArg,
+    NullLit,
+    ParsePolicy,
+    PassStmt,
+    Pattern,
+    PatternField,
+    PrintStmt,
+    Program,
+    Raise,
+    RecordDef,
+    RetryPolicy,
+    SetStmt,
+    Stmt,
+    StringLit,
+    Template,
+    TemplateSegment,
+    TextSegment,
+    TryCatch,
+    TypeAlias,
+    UnaryNeg,
+    UnaryNot,
+    VarDecl,
+    VariantDef,
+    VarPattern,
+    VarRef,
+    WildcardPattern,
+)
+from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import (
+    BoolT,
+    DecimalT,
+    DictT,
+    IntT,
+    JsonT,
+    ListT,
+    NameT,
+    TextT,
+    TypeExpr,
+)
+from agm.agl.syntax.visitor import Visitor, walk
+
+__all__ = [
+    # spans
+    "SourceSpan",
+    # type exprs
+    "TextT",
+    "JsonT",
+    "BoolT",
+    "IntT",
+    "DecimalT",
+    "NameT",
+    "ListT",
+    "DictT",
+    "TypeExpr",
+    # program
+    "Program",
+    # declarations
+    "RecordDef",
+    "EnumDef",
+    "TypeAlias",
+    "InputDecl",
+    "FieldDef",
+    "VariantDef",
+    # statements
+    "LetDecl",
+    "VarDecl",
+    "SetStmt",
+    "PassStmt",
+    "PrintStmt",
+    "ExprStmt",
+    "DoUntil",
+    "IfStmt",
+    "IfBranch",
+    "CaseStmt",
+    "CaseStmtBranch",
+    "TryCatch",
+    "CatchClause",
+    "Raise",
+    # expressions
+    "VarRef",
+    "FieldAccess",
+    "AgentCall",
+    "Constructor",
+    "NamedArg",
+    "BinaryOp",
+    "BinOp",
+    "UnaryNot",
+    "UnaryNeg",
+    "IsTest",
+    "CaseExpr",
+    "CaseExprBranch",
+    "IntLit",
+    "DecimalLit",
+    "BoolLit",
+    "NullLit",
+    "StringLit",
+    "ListLit",
+    "DictLit",
+    "DictEntry",
+    "Template",
+    "TextSegment",
+    "InterpSegment",
+    # call options
+    "CallOptions",
+    "AbortPolicy",
+    "RetryPolicy",
+    "ParsePolicy",
+    # patterns
+    "WildcardPattern",
+    "LiteralPattern",
+    "VarPattern",
+    "ConstructorPattern",
+    "PatternField",
+    # sentinel
+    "ELSE",
+    "ElseSentinel",
+    # union aliases
+    "Stmt",
+    "Expr",
+    "Pattern",
+    "TemplateSegment",
+    # visitor
+    "Visitor",
+    "walk",
+]

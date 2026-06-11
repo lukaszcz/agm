@@ -377,6 +377,55 @@ Sandbox settings resolution:
 
 - `-w`, `--window WINDOW_ID`: apply the layout to a specific tmux window ID
 
+## AgL workflow DSL
+
+### `agm exec FILE`
+
+Execute an AgL (Agent Language) workflow program.
+
+```text
+agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
+         [--max-iters N] [--runner COMMAND]
+         [--log-file PATH|--no-log]
+         FILE
+```
+
+Options:
+
+- `--input KEY=VALUE`: Provide a host input value (repeatable). Values for `text`-declared
+  inputs are taken verbatim; for other declared types the value is parsed as JSON.
+- `--strict-json`: Require bare JSON output from agents (no recovery).
+- `--no-strict-json`: Use lenient JSON recovery (default).
+- `--max-iters N`: Override the default `do`-loop iteration limit.
+- `--runner COMMAND`: Override the default agent runner command.
+- `--log-file PATH`: Write trace log to PATH.
+- `--no-log`: Disable trace logging.
+
+Exit codes:
+
+| Code | Meaning |
+|------|---------|
+| `0` | The workflow completed successfully |
+| `1` | Pre-execution failure: unreadable file, static lex/parse/scope/typecheck diagnostics, host configuration error, or input validation failure |
+| `2` | The workflow executed but ended with an uncaught AgL exception |
+
+Config (`[exec]` section in `config.toml`):
+
+```toml
+[exec]
+runner = "claude -p"        # default agent runner
+strict_json = false         # lenient JSON recovery is the default
+default_loop_limit = 5      # do[] default iteration bound
+timeout = "30m"             # idle timeout
+
+[exec.agents]
+reviewer = "claude -p"      # per-agent runner commands
+```
+
+`[exec.<command>]` sub-tables provide per-command overrides of the base `[exec]`
+settings. The name `agents` is reserved for the structural `[exec.agents]` map
+and is never treated as a per-command override.
+
 ## Help and aliases
 
 | Alias | Canonical form |

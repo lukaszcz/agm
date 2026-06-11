@@ -9,6 +9,7 @@ description = "Unified CLI for managing worktrees, project dependencies, configu
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.0",
+    "lark>=1.2",
     "plumbum>=1.9.0",
     "python-dotenv>=1.2.2",
     "tomlkit>=0.13.0",

@@ -1346,3 +1346,31 @@ class TestPathCandidatesValueError:
         # Should use absolute path for display
         assert len(result) == 1
         assert result[0] == str(outside / "target.txt")
+
+
+class TestCompleteAglFile:
+    def test_returns_agl_files(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "flow.agl").write_text("")
+        (work / "other.py").write_text("")
+        (work / "subdir").mkdir()
+        monkeypatch.chdir(work)
+        ctx = click.Context(click.Command("test"))
+        result = completion.complete_agl_file(ctx, [], "")
+        assert "flow.agl" in result
+        assert "other.py" not in result
+        assert "subdir/" in result
+
+    def test_returns_empty_on_exception(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            completion,
+            "_path_candidates",
+            lambda incomplete: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        ctx = click.Context(click.Command("test"))
+        result = completion.complete_agl_file(ctx, [], "")
+        assert result == []

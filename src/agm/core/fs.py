@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from agm.core import dry_run
+from agm.core.path import display_path
 
 
 def exists(path: Path) -> bool:
@@ -31,6 +33,20 @@ def read_text(path: Path, *, encoding: str = "utf-8") -> str:
     """Read text from *path*."""
 
     return path.read_text(encoding=encoding)
+
+
+def read_text_arg(path: Path, *, encoding: str = "utf-8") -> str:
+    """Read text from a user-supplied *path* argument.
+
+    On failure, print a friendly ``Error: ...`` message to stderr (using the
+    repo's display-path convention) and raise ``SystemExit(1)``.
+    """
+
+    try:
+        return path.read_text(encoding=encoding)
+    except OSError as exc:
+        print(f"Error: cannot read {display_path(path)}: {exc.strerror}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def stat(path: Path) -> os.stat_result:

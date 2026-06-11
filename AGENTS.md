@@ -13,6 +13,7 @@ Use `uv run` for all Python tooling.
 ## Project Structure
 
 Production code lives in `src/agm/`, organized by area:
+- `agl/` for the AgL agent workflow DSL (lexer, parser, AST, scope, typecheck, eval, runtime),
 - `commands/` for CLI entrypoints and command implementations; directory structure of `commands/` must reflect the CLI command tree exactly, including nested command groups (`config/`, `dep/`, `loop/`, `tmux/`, `worktree/`, etc.),
 - `config/` for loading and resolving general and sandbox configuration,
 - `core/` for environment and process primitives shared across features,

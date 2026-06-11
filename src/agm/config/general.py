@@ -423,6 +423,13 @@ def _optional_bool(table: TomlDict, key: str, *, default: bool = False) -> bool:
     return value if isinstance(value, bool) else default
 
 
+def _optional_positive_int(table: TomlDict, key: str, *, default: int) -> int:
+    value = table.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return default
+
+
 def _select_command_table(
     table: TomlDict,
     *,
@@ -489,6 +496,78 @@ def load_revise_config(
         prompt_file=_optional_str(table, "prompt_file"),
         extra_prompt=_optional_str(table, "extra_prompt"),
         extra_prompt_file=_optional_str(table, "extra_prompt_file"),
+    )
+
+
+@dataclass(frozen=True)
+class ExecConfig:
+    """Resolved exec-command configuration."""
+
+    runner: str | None
+    strict_json: bool
+    default_loop_limit: int
+    timeout: float | None
+    agents: dict[str, str]
+
+
+def load_exec_config(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    command_name: str | None = None,
+) -> ExecConfig:
+    """Load and resolve the ``[exec]`` configuration section.
+
+    Follows the same layering pattern as ``load_loop_config``:
+    - home/.agm/config.toml
+    - project config/config.toml
+    - cwd/.agm/config.toml
+
+    When ``command_name`` is provided, the ``[exec.<command_name>]`` sub-table
+    is merged over the base ``[exec]`` table.  The name ``agents`` is reserved
+    for the structural ``[exec.agents]`` map and is never treated as a
+    per-command override sub-table.
+    """
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    # ``agents`` is a reserved structural sub-table, not a workflow override:
+    # selecting it as a command would merge the agent map in as scalar config.
+    selected_command = None if command_name == "agents" else command_name
+    exec_table = _select_command_table(
+        toml_dict(merged.get("exec")),
+        section_name="exec",
+        command_name=selected_command,
+        require_command=False,
+    )
+
+    resolved_runner = _optional_str(exec_table, "runner")
+    resolved_strict_json = _optional_bool(exec_table, "strict_json")
+    resolved_loop_limit = _optional_positive_int(exec_table, "default_loop_limit", default=5)
+
+    timeout_raw = exec_table.get("timeout")
+    resolved_timeout: float | None = None
+    if (
+        isinstance(timeout_raw, (int, float))
+        and not isinstance(timeout_raw, bool)
+        and timeout_raw > 0
+    ):
+        resolved_timeout = float(timeout_raw)
+    elif isinstance(timeout_raw, str) and timeout_raw.strip():
+        resolved_timeout = parse_timeout(timeout_raw)
+
+    agents_raw = exec_table.get("agents")
+    resolved_agents: dict[str, str] = {}
+    if isinstance(agents_raw, dict):
+        for k, v in agents_raw.items():
+            if isinstance(k, str) and isinstance(v, str) and v.strip():
+                resolved_agents[k] = v
+
+    return ExecConfig(
+        runner=resolved_runner,
+        strict_json=resolved_strict_json,
+        default_loop_limit=resolved_loop_limit,
+        timeout=resolved_timeout,
+        agents=resolved_agents,
     )
 
 

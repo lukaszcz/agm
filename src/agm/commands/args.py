@@ -205,3 +205,14 @@ class TmuxCloseArgs:
 class TmuxLayoutArgs:
     pane_count: str
     window_id: str | None
+
+
+@dataclass(slots=True)
+class ExecArgs:
+    file: str
+    inputs: list[str]
+    strict_json: bool | None
+    max_iters: int | None
+    runner: str | None
+    no_log: bool
+    log_file: str | None

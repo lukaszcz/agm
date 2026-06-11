@@ -303,6 +303,10 @@ agm tmux close my-session
 agm tmux layout 4 --window @1
 ```
 
+### `agm exec`
+
+Execute an AgL (Agent Language) workflow program; see `agm help exec` for options and exit codes.
+
 ## Aliases
 
 - `agm wt` → `agm worktree`

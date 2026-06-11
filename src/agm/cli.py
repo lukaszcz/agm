@@ -16,6 +16,7 @@ import agm.commands.dep.list as dep_list_command
 import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
+import agm.commands.exec as exec_command
 import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
 import agm.commands.list as list_command
@@ -45,6 +46,7 @@ from agm.commands.args import (
     DepNewArgs,
     DepRemoveArgs,
     DepSwitchArgs,
+    ExecArgs,
     InitArgs,
     LoopArgs,
     LoopSelectArgs,
@@ -802,6 +804,68 @@ def setup(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> N
     del _help
     del _dry_run
     setup_command.run()
+
+
+@app.command(name="exec")
+def exec_cmd(
+    file: str | None = typer.Argument(
+        None,
+        metavar="FILE",
+        autocompletion=completion.complete_agl_file,
+    ),
+    inputs: list[str] | None = typer.Option(
+        None,
+        "--input",
+        help="Host input value in KEY=VALUE form (repeatable).",
+    ),
+    strict_json: bool | None = typer.Option(
+        None,
+        "--strict-json/--no-strict-json",
+        help="Require bare JSON output from agents (default: lenient recovery).",
+    ),
+    max_iters: int | None = typer.Option(
+        None,
+        "--max-iters",
+        help="Override the default do-loop iteration limit.",
+    ),
+    runner: str | None = typer.Option(
+        None,
+        "--runner",
+        help="Override the default agent runner command.",
+    ),
+    log_file: str | None = typer.Option(
+        None,
+        "--log-file",
+        help="Write trace log to PATH.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    no_log: bool = typer.Option(
+        False,
+        "--no-log",
+        help="Disable trace logging.",
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    if file is None:
+        exit_with_usage_error(["exec"], "error: the following arguments are required: FILE")
+    if no_log and log_file is not None:
+        exit_with_usage_error(
+            ["exec"], "error: --no-log and --log-file are mutually exclusive"
+        )
+    exec_command.run(
+        ExecArgs(
+            file=file,
+            inputs=list(inputs) if inputs is not None else [],
+            strict_json=strict_json,
+            max_iters=max_iters,
+            runner=runner,
+            no_log=no_log,
+            log_file=log_file,
+        )
+    )
 
 
 @worktree_app.command(name="rm")

@@ -365,6 +365,18 @@ def _configured_command_names(
     }
 
 
+def complete_agl_file(
+    ctx: click.Context, args: list[str], incomplete: str
+) -> list[str]:
+    """Complete ``.agl`` file paths for the ``agm exec FILE`` argument."""
+    del ctx, args
+    try:
+        candidates = _path_candidates(incomplete)
+        return [c for c in candidates if c.endswith(".agl") or c.endswith("/")]
+    except (Exception, SystemExit):
+        return []
+
+
 def complete_revise_command_or_review_file(
     ctx: click.Context, args: list[str], incomplete: str
 ) -> list[str]:

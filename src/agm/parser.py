@@ -470,6 +470,29 @@ _HELP_TEXTS: dict[str, str] = {
         By default only branch names are printed.  With -v/--verbose the
         worktree directory path is shown after each branch name.
     """),
+    "exec": textwrap.dedent("""\
+        agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
+                 [--max-iters N] [--runner COMMAND]
+                 [--log-file PATH|--no-log]
+                 FILE
+
+        Execute an AgL (Agent Language) workflow program from FILE.
+
+        Options:
+          --input KEY=VALUE     Provide a host input value (repeatable).
+          --strict-json         Require bare JSON output from agents (no recovery).
+          --no-strict-json      Use lenient JSON recovery (default).
+          --max-iters N         Override the default do-loop iteration limit.
+          --runner COMMAND      Override the default agent runner command.
+          --log-file PATH       Write trace log to PATH.
+          --no-log              Disable trace logging.
+
+        Exit codes:
+          0  The workflow completed successfully.
+          1  Pre-execution failure: unreadable file, static lex/parse/scope/type
+             diagnostics, host configuration error, or input validation failure.
+          2  The workflow executed but ended with an uncaught AgL exception.
+    """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]
 
@@ -502,6 +525,7 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("review", "Run the review prompt"),
     ("revise", "Run the revision prompt"),
     ("refine", "Run review/revise refinement"),
+    ("exec", "Execute an AgL workflow program"),
     ("run", "Run a command in a sandbox"),
     ("config", "Manage project configuration files"),
     ("list", "List all open worktrees"),

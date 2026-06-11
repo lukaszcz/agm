@@ -1,0 +1,180 @@
+// AgL grammar — M1 subset.
+//
+// Terminals are %declare'd or generated from string literals; the custom
+// AglLexer supplies all token values (remapping lowercase keyword types to
+// uppercase for the Lark parse table).
+// Layout tokens (_NEWLINE, _INDENT, _DEDENT) are filtered from trees by the
+// leading underscore convention.
+//
+// LALR(1) conflict-freeness verified: 0 shift/reduce, 0 reduce/reduce.
+// See tests/test_agl_parser.py for the mandatory conflict-guard regression.
+//
+// Terminal naming: keyword string literals (e.g. "pass") produce uppercase
+// terminal names (e.g. PASS) in Lark's grammar tables.  AglLexer.lex()
+// remaps lowercase scanner output to the uppercase names required here.
+//
+// Type annotation keywords (text, json, bool, int, decimal, list, dict):
+// These are NOT reserved by the scanner.  The grammar accepts them as
+// VAR_NAME tokens; AstBuilder.type_ann() maps the string value to the
+// appropriate TypeExpr node (TextT, JsonT, etc.).
+//
+// M1 statement forms:
+//   closed_stmt  — self-contained; safe anywhere inline
+//   (open_stmt, bar_closed_stmt, and bar_expr are added in M3)
+//
+// M1 implements:
+//   Statements:  input, let, var, set, pass, print, expr_stmt
+//   Expressions: VAR_NAME ref, scalar literals, template strings, agent calls,
+//                parenthesized expr
+//   Type annotations: text, json, bool, int, decimal, TYPE_NAME, list[T], dict[text, T]
+//   Template:    TEMPLATE_START (STRING_FRAGMENT | interp)* TEMPLATE_END
+//   Interp:      INTERP_START expr ("as" VAR_NAME)? INTERP_END
+//   EQ_EQ:       produces AglSyntaxError "Use `=` for equality."
+//
+// Not in M1 (additive additions in M2+):
+//   do_until, if_stmt, case_stmt/expr, try_stmt, raise_stmt
+//   record_def, enum_def, type_alias
+//   Binary/unary operators, field access, is/in/and/or/not
+//   Constructor expressions, list/dict literals, named args
+
+// ---------------------------------------------------------------------------
+// Synthetic tokens (custom lexer — no regex; underscore-prefixed are filtered)
+// ---------------------------------------------------------------------------
+
+%declare _NEWLINE _INDENT _DEDENT
+%declare TEMPLATE_START STRING_FRAGMENT INTERP_START INTERP_END TEMPLATE_END
+
+// ---------------------------------------------------------------------------
+// Identifier / number / operator tokens (%declare — no regex; from custom lexer)
+// ---------------------------------------------------------------------------
+
+%declare VAR_NAME TYPE_NAME
+%declare INT DECIMAL
+%declare EQ EQ_EQ ARROW LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE
+
+// ---------------------------------------------------------------------------
+// Program root
+// ---------------------------------------------------------------------------
+
+start: block_stmts
+
+block_stmts: stmt ((_NEWLINE | SEMICOLON) stmt)* (_NEWLINE | SEMICOLON)?
+
+// ---------------------------------------------------------------------------
+// Statement dispatch
+// ---------------------------------------------------------------------------
+
+// M1: stmt = closed_stmt only.  M3 will change to: ?stmt: closed_stmt | open_stmt
+// open_stmt (if_stmt | case_stmt | try_stmt | do_until) is added in M3.
+?stmt: closed_stmt
+
+closed_stmt: input_decl
+           | let_decl
+           | var_decl
+           | set_stmt
+           | pass_stmt
+           | print_stmt
+           | expr_stmt
+
+// ---------------------------------------------------------------------------
+// Declarations and statements
+// ---------------------------------------------------------------------------
+
+input_decl: "input" VAR_NAME type_ann?
+
+let_decl:   "let"  VAR_NAME type_ann? EQ expr
+var_decl:   "var"  VAR_NAME type_ann? EQ expr
+set_stmt:   "set"  VAR_NAME          EQ expr
+
+pass_stmt:  "pass"
+
+print_stmt: "print" expr
+
+// expr_stmt uses or_expr (not expr) so that statement-level bare case_expr
+// is always case_stmt (M3), not expr_stmt; in M1 or_expr == all exprs.
+expr_stmt: or_expr
+
+// Type annotation: COLON followed by a type_expr.
+type_ann: COLON type_expr
+
+// ---------------------------------------------------------------------------
+// Type expressions
+//
+// Type keywords (text, json, bool, int, decimal, list, dict) are NOT reserved
+// by the scanner; they arrive as VAR_NAME tokens.  TYPE_NAME handles named
+// user types.  The AstBuilder maps VAR_NAME values to the right TypeExpr.
+// "list" and "dict" arrive as VAR_NAME and are distinguished by the rule
+// structure (followed by LSQB ... RSQB).
+// ---------------------------------------------------------------------------
+
+type_expr: VAR_NAME                              -> prim_type_or_name
+         | TYPE_NAME                             -> named_type
+         | VAR_NAME LSQB type_expr RSQB          -> generic_type_1
+         | VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB -> dict_type
+
+// ---------------------------------------------------------------------------
+// Expressions
+// ---------------------------------------------------------------------------
+
+// ?expr — general form; admits bare case_expr (M3+ adds the case_expr branch)
+?expr: or_expr
+
+// Precedence chain (M1: no binary operators; single level collapses to atom).
+// M3 will expand or_expr -> and_expr -> not_expr -> comparison -> additive ->
+// multiplicative -> unary -> access -> atom (one rule at a time, additive).
+?or_expr: atom
+
+// atom: the M1 expression primitives
+?atom: lit_int
+     | lit_decimal
+     | lit_true
+     | lit_false
+     | lit_null
+     | var_ref
+     | agent_call
+     | template
+     | paren_expr
+
+paren_expr: LPAR expr RPAR
+
+lit_int:     INT
+lit_decimal: DECIMAL
+lit_true:    "true"
+lit_false:   "false"
+lit_null:    "null"
+var_ref:     VAR_NAME
+
+// EQ_EQ (==) is not in any grammar rule.  When the lexer emits it, Lark
+// raises UnexpectedToken; the parser error handler checks for EQ_EQ and
+// converts it to a friendly AglSyntaxError: "Use `=` for equality."
+
+// ---------------------------------------------------------------------------
+// Agent call:  VAR_NAME call_options? template
+// ---------------------------------------------------------------------------
+
+agent_call: VAR_NAME call_options? template
+
+// Call options: [option, option, ...]
+call_options: LSQB call_option (COMMA call_option)* COMMA? RSQB
+
+// Call option keys arrive as VAR_NAME (format, strict_json, on_parse_error,
+// abort, retry, text, json are not reserved keywords).  The transformer
+// matches on the token value.
+call_option: VAR_NAME COLON call_option_value -> opt_raw
+
+// call_option_value covers: format names, bool literals, parse policies
+call_option_value: "true"                      -> opt_val_true
+                 | "false"                     -> opt_val_false
+                 | VAR_NAME                    -> opt_val_name
+                 | VAR_NAME LSQB INT RSQB      -> opt_val_name_int
+
+// ---------------------------------------------------------------------------
+// Template string
+// ---------------------------------------------------------------------------
+
+template: TEMPLATE_START template_segment* TEMPLATE_END
+
+template_segment: STRING_FRAGMENT    -> tmpl_text
+                | interp             -> tmpl_interp
+
+interp: INTERP_START expr ("as" VAR_NAME)? INTERP_END

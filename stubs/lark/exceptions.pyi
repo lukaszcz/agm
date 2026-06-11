@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from lark.lexer import Token
 from lark import Tree
+from lark.lexer import Token
 
 class LarkError(Exception): ...
 

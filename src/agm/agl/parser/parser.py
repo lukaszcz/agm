@@ -15,7 +15,13 @@ from __future__ import annotations
 import importlib.resources
 
 from lark import Lark
-from lark.exceptions import UnexpectedCharacters, UnexpectedEOF, UnexpectedToken, VisitError
+from lark.exceptions import (
+    LarkError,
+    UnexpectedCharacters,
+    UnexpectedEOF,
+    UnexpectedToken,
+    VisitError,
+)
 
 import agm.agl.syntax as syntax
 from agm.agl.lexer.errors import LexError
@@ -70,7 +76,10 @@ def parse_program(text: str, *, filename: str = "<agl>") -> syntax.Program:
         raise syntax_error_from_lark(exc, filename=filename) from exc
     except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
         raise syntax_error_from_lark(exc, filename=filename) from exc
-    except Exception as exc:
+    except LarkError as exc:
+        # Any other lark-level error (ParseError, GrammarError, etc.) is a
+        # genuine syntax/parse problem.  Narrowing to LarkError lets internal
+        # bugs (AssertionError and the like) surface instead of being masked.
         raise syntax_error_from_lark(exc, filename=filename) from exc
 
     builder = AstBuilder()

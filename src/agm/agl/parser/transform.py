@@ -285,7 +285,23 @@ class AstBuilder(Transformer):
         raise syntax_error_from_meta(meta, f"Unknown generic type: {head!r}")
 
     def dict_type(self, meta: Meta, args: _Args) -> DictT:
-        """VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB — dict[text, V]."""
+        """VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB — dict[text, V].
+
+        In v1 the key type is always ``text``; any other key is rejected with
+        the key token's span so the diagnostic pinpoints the offending type.
+        """
+        # args: [dict, LSQB, key VAR_NAME, COMMA, type_expr, RSQB].  The key is
+        # the second VAR_NAME token (the first is the "dict" head).
+        var_name_toks = [
+            a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"
+        ]
+        assert len(var_name_toks) >= 2, "dict_type: missing key token"
+        key_tok = var_name_toks[1]
+        if str(key_tok) != "text":
+            raise AglSyntaxError(
+                f"dict keys are always text in v1, got {str(key_tok)!r}.",
+                span=_span_from_token(key_tok),
+            )
         value: TypeExpr = _find_type_expr(args[1:])
         return DictT(value=value, span=_span_from_meta(meta), node_id=self._next_id())
 
@@ -396,8 +412,17 @@ class AstBuilder(Transformer):
         fmt: str | None = None
         strict_json: bool | None = None
         parse_policy: syntax.ParsePolicy | None = None
+        seen: set[str] = set()
 
         for opt in args:
+            if isinstance(opt, (_FormatOpt, _StrictJsonOpt, _ParseErrorOpt)):
+                if opt.key in seen:
+                    # Reject the second occurrence of any option key, pinning the
+                    # error to the duplicate's span (design §4.3).
+                    raise AglSyntaxError(
+                        f"duplicate option {opt.key!r}.", span=opt.span
+                    )
+                seen.add(opt.key)
             if isinstance(opt, _FormatOpt):
                 fmt = opt.value
             elif isinstance(opt, _StrictJsonOpt):
@@ -429,7 +454,7 @@ class AstBuilder(Transformer):
         if key == "format":
             # format: text | json | VAR_NAME  (val_node is str from opt_val_name)
             if isinstance(val_node, _NameOrPolicy) and isinstance(val_node.value, str):
-                return _FormatOpt(val_node.value)
+                return _FormatOpt(val_node.value, span)
             raise AglSyntaxError(
                 f"format expects a format name (e.g. text, json), got {val_node!r}.",
                 span=span,
@@ -437,7 +462,7 @@ class AstBuilder(Transformer):
 
         if key == "strict_json":
             if isinstance(val_node, bool):
-                return _StrictJsonOpt(val_node)
+                return _StrictJsonOpt(val_node, span)
             raise AglSyntaxError(
                 f"strict_json expects true or false, got {val_node!r}.",
                 span=span,
@@ -448,9 +473,9 @@ class AstBuilder(Transformer):
             if isinstance(val_node, _NameOrPolicy) and isinstance(
                 val_node.value, (syntax.AbortPolicy, syntax.RetryPolicy)
             ):
-                return _ParseErrorOpt(val_node.value)
+                return _ParseErrorOpt(val_node.value, span)
             if isinstance(val_node, syntax.RetryPolicy):
-                return _ParseErrorOpt(val_node)
+                return _ParseErrorOpt(val_node, span)
             raise AglSyntaxError(
                 f"on_parse_error expects abort or retry[N], got {val_node!r}.",
                 span=span,
@@ -499,12 +524,22 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def template(self, meta: Meta, args: _Args) -> syntax.Template:
+        """Build a Template from its segment children.
+
+        Invariant: ``segments`` never contains empty ``TextSegment`` nodes.
+        Adjacent interpolations (e.g. ``"${a}${b}"``) and leading/trailing
+        interpolations produce empty text fragments in the token stream; an
+        empty fragment carries no information, so it is normalized away here.
+        Adjacent ``InterpSegment`` nodes are legal.
+        """
         # args: TEMPLATE_START, [segments...], TEMPLATE_END
-        # Filter out the synthetic tokens; keep only template_segment results.
+        # Filter out the synthetic tokens; keep only template_segment results,
+        # dropping empty TextSegments (they carry no information).
         segments: list[syntax.TemplateSegment] = [
             a
             for a in args
             if isinstance(a, (syntax.TextSegment, syntax.InterpSegment))
+            if not (isinstance(a, syntax.TextSegment) and a.text == "")
         ]
         return syntax.Template(
             segments=tuple(segments),
@@ -557,18 +592,27 @@ class AstBuilder(Transformer):
 
 
 class _FormatOpt:
-    def __init__(self, value: str) -> None:
+    key = "format"
+
+    def __init__(self, value: str, span: SourceSpan) -> None:
         self.value = value
+        self.span = span
 
 
 class _StrictJsonOpt:
-    def __init__(self, value: bool) -> None:
+    key = "strict_json"
+
+    def __init__(self, value: bool, span: SourceSpan) -> None:
         self.value = value
+        self.span = span
 
 
 class _ParseErrorOpt:
-    def __init__(self, value: syntax.ParsePolicy) -> None:
+    key = "on_parse_error"
+
+    def __init__(self, value: syntax.ParsePolicy, span: SourceSpan) -> None:
         self.value = value
+        self.span = span
 
 
 # ---------------------------------------------------------------------------

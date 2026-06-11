@@ -26,10 +26,18 @@ class Token(str):
         end_pos: int | None = ...,
     ) -> Token: ...
 
-class LexerState:
+class TextSlice:
     text: str
+    start: int
+    end: int
 
-    def __init__(self, text: str) -> None: ...
+    def __init__(self, text: str, start: int, end: int | None = ...) -> None: ...
+    def is_complete_text(self) -> bool: ...
+
+class LexerState:
+    text: str | TextSlice
+
+    def __init__(self, text: str | TextSlice) -> None: ...
 
 class Lexer:
     def __init__(self, lexer_conf: object) -> None: ...

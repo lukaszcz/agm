@@ -392,6 +392,48 @@ class TestAgentCall:
         assert isinstance(call, AgentCall)
         assert call.options.format == "json"
 
+    def test_duplicate_format_option_rejected(self) -> None:
+        src = 'prompt[format: json, format: text] "hello"'
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "duplicate option 'format'" in str(err)
+        # Span must point at the SECOND (duplicate) occurrence.
+        span = err.source_span
+        dup_col = src.index("format", src.index("format") + 1) + 1
+        assert span.start_line == 1
+        assert span.start_col == dup_col
+
+    def test_duplicate_strict_json_option_rejected(self) -> None:
+        src = 'prompt[strict_json: true, strict_json: false] "hello"'
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "duplicate option 'strict_json'" in str(err)
+        dup_col = src.index("strict_json", src.index("strict_json") + 1) + 1
+        assert err.source_span.start_col == dup_col
+
+    def test_duplicate_on_parse_error_option_rejected(self) -> None:
+        src = 'prompt[on_parse_error: abort, on_parse_error: retry[2]] "hello"'
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "duplicate option 'on_parse_error'" in str(err)
+        dup_col = src.index("on_parse_error", src.index("on_parse_error") + 1) + 1
+        assert err.source_span.start_col == dup_col
+
+    def test_distinct_options_twin_parses(self) -> None:
+        # Accept-twin: distinct option keys parse fine even with three options.
+        stmt = _parse_one(
+            'prompt[format: json, strict_json: true, on_parse_error: abort] "hi"'
+        )
+        assert isinstance(stmt, ExprStmt)
+        call = stmt.expr
+        assert isinstance(call, AgentCall)
+        assert call.options.format == "json"
+        assert call.options.strict_json is True
+        assert isinstance(call.options.parse_policy, AbortPolicy)
+
 
 # ---------------------------------------------------------------------------
 # Template strings
@@ -452,6 +494,47 @@ class TestTemplate:
         text_segs = [s for s in tmpl.segments if isinstance(s, TextSegment)]
         assert any("hello" in s.text for s in text_segs)
         assert any("world" in s.text for s in text_segs)
+
+    def test_adjacent_interps_have_no_text_segments(self) -> None:
+        # "${a}${b}" yields exactly two InterpSegments and no TextSegments:
+        # empty fragments between/around interps carry no information and are
+        # normalized away.
+        stmt = _parse_one('prompt "${a}${b}"')
+        assert isinstance(stmt, ExprStmt)
+        call = stmt.expr
+        assert isinstance(call, AgentCall)
+        segs = call.template.segments
+        assert all(isinstance(s, InterpSegment) for s in segs)
+        assert len(segs) == 2
+        assert isinstance(segs[0], InterpSegment)
+        assert isinstance(segs[1], InterpSegment)
+        assert isinstance(segs[0].expr, VarRef)
+        assert segs[0].expr.name == "a"
+        assert isinstance(segs[1].expr, VarRef)
+        assert segs[1].expr.name == "b"
+
+    def test_leading_text_then_interp(self) -> None:
+        # "x${a}" yields Text("x") followed by an InterpSegment; no empty
+        # trailing TextSegment.
+        stmt = _parse_one('prompt "x${a}"')
+        assert isinstance(stmt, ExprStmt)
+        call = stmt.expr
+        assert isinstance(call, AgentCall)
+        segs = call.template.segments
+        assert len(segs) == 2
+        assert isinstance(segs[0], TextSegment)
+        assert segs[0].text == "x"
+        assert isinstance(segs[1], InterpSegment)
+
+    def test_no_empty_text_segments_in_any_template(self) -> None:
+        # Invariant: a template never contains an empty TextSegment.
+        stmt = _parse_one('prompt "${a} mid ${b}"')
+        assert isinstance(stmt, ExprStmt)
+        call = stmt.expr
+        assert isinstance(call, AgentCall)
+        for s in call.template.segments:
+            if isinstance(s, TextSegment):
+                assert s.text != ""
 
     def test_interp_expr_can_be_let_value(self) -> None:
         # Interpolation can reference any expression
@@ -543,8 +626,7 @@ class TestErrorCases:
     def test_eq_eq_produces_friendly_error(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let x == 1")
-        assert "=" in str(exc_info.value)
-        assert "equality" in str(exc_info.value).lower() or "=" in str(exc_info.value)
+        assert "Use `=` for equality." in str(exc_info.value)
 
     def test_syntax_error_message_for_eq_eq(self) -> None:
         """The == error message must contain the phrase 'Use `=` for equality.'"""
@@ -572,6 +654,16 @@ class TestErrorCases:
     def test_unterminated_template_raises_agl_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
             parse_program('prompt "unterminated')
+
+    @pytest.mark.parametrize(
+        "garbage",
+        [")", "]", "= = =", "let let let", "[[[", "print print"],
+    )
+    def test_garbage_inputs_wrap_into_agl_syntax_error(self, garbage: str) -> None:
+        # No raw lark exception may escape parse_program for malformed input;
+        # every lark error is wrapped into AglSyntaxError.
+        with pytest.raises(AglSyntaxError):
+            parse_program(garbage)
 
     def test_wrong_format_option_raises_agl_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
@@ -655,6 +747,33 @@ class TestTypeAnnotationEdgeCases:
             parse_program('prompt[on_parse_error: foo] "hello"')
         assert "on_parse_error expects" in str(exc_info.value)
 
+    def test_dict_with_text_key_accepted(self) -> None:
+        """dict[text, V] is accepted — text is the only legal key type in v1."""
+        stmt = _parse_one("let x: dict[text, int] = null")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.type_ann, DictT)
+        assert isinstance(stmt.type_ann.value, IntT)
+
+    def test_dict_with_int_key_rejected(self) -> None:
+        """dict[int, V] is rejected; span points at the key token."""
+        src = "let x: dict[int, int] = null"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "dict keys are always text" in str(err)
+        key_col = src.index("int,") + 1
+        assert err.source_span.start_col == key_col
+
+    def test_dict_with_bogus_key_rejected(self) -> None:
+        """dict[bogus, V] is rejected; span points at the key token."""
+        src = "let x: dict[bogus, int] = null"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "dict keys are always text" in str(err)
+        key_col = src.index("bogus") + 1
+        assert err.source_span.start_col == key_col
+
 
 # ---------------------------------------------------------------------------
 # errors.py: direct coverage of all exception conversion paths
@@ -706,16 +825,37 @@ class TestSyntaxErrorFromLark:
 
 
 class TestParserExceptionPaths:
-    def test_generic_parse_exception_is_wrapped(self) -> None:
-        """A generic exception from _PARSER.parse() is wrapped in AglSyntaxError."""
+    def test_lark_error_from_parse_is_wrapped(self) -> None:
+        """A generic LarkError from _PARSER.parse() is wrapped in AglSyntaxError."""
+        from unittest.mock import patch
+
+        from lark.exceptions import LarkError
+
+        import agm.agl.parser.parser as parser_mod
+
+        with patch.object(
+            parser_mod._PARSER, "parse", side_effect=LarkError("boom")
+        ):
+            with pytest.raises(AglSyntaxError) as exc_info:
+                parse_program("let x = 1")
+            assert "boom" in str(exc_info.value)
+
+    def test_non_lark_parse_exception_surfaces(self) -> None:
+        """A non-LarkError from _PARSER.parse() (an internal bug) is NOT masked.
+
+        F6 contract: only lark errors are wrapped into AglSyntaxError; genuine
+        internal bugs such as RuntimeError/AssertionError propagate unchanged so
+        they are not misreported as syntax errors.
+        """
         from unittest.mock import patch
 
         import agm.agl.parser.parser as parser_mod
 
-        with patch.object(parser_mod._PARSER, "parse", side_effect=RuntimeError("boom")):
-            with pytest.raises(AglSyntaxError) as exc_info:
+        with patch.object(
+            parser_mod._PARSER, "parse", side_effect=RuntimeError("internal bug")
+        ):
+            with pytest.raises(RuntimeError, match="internal bug"):
                 parse_program("let x = 1")
-            assert "boom" in str(exc_info.value)
 
     def test_visit_error_with_non_agl_exc_is_wrapped(self) -> None:
         """VisitError wrapping a non-AglSyntaxError is converted."""

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-
 class Item:
     @property
     def value(self) -> object: ...

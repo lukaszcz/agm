@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from tomlkit.items import Item, Table
 
+from tomlkit.items import Item
 
 class TOMLDocument:
     def __contains__(self, key: object) -> bool: ...

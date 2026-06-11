@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from tomlkit.toml_document import TOMLDocument
 from tomlkit.items import Table
-
+from tomlkit.toml_document import TOMLDocument
 
 def load(fp: object) -> TOMLDocument: ...
 def dumps(data: object) -> str: ...

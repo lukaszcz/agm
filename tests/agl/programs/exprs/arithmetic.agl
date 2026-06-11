@@ -1,0 +1,27 @@
+# Arithmetic: + - * /, unary minus, int/decimal mixing, exact decimals,
+# arbitrary precision, text concatenation (design §4.3, §5.1, §5.8).
+input a: int
+input b: int
+input scale: decimal
+
+let sum = a + b
+let diff = a - b
+let product = a * b
+let quotient = a / b
+let neg = -a
+let mixed = a * scale
+let precise = 0.1 + 0.2
+let nested = (a + b) * -(a - b) / 2
+let big = 1000000000000000000000000 * 1000000
+let label = "n=" + "x"
+
+print sum
+print diff
+print product
+print quotient
+print neg
+print mixed
+print precise
+print nested
+print big
+print label

@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "default_limit_high_enough",
+      "runtime": {"default_loop_limit": 5},
+      "expect": {"stdout": "4\n"}
+    },
+    {
+      "name": "default_limit_too_low",
+      "runtime": {"default_loop_limit": 3},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}
+      }
+    },
+    {
+      "name": "condition_true_on_final_allowed_iteration",
+      "runtime": {"default_loop_limit": 4},
+      "expect": {"stdout": "4\n"}
+    }
+  ]
+}

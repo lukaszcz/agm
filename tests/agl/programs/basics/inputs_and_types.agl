@@ -1,0 +1,14 @@
+# Host inputs: untyped defaults to text; typed inputs are JSON-validated (design §9.5).
+input topic
+input rounds: int
+input ratio: decimal
+input flag: bool
+input meta: json
+
+print topic
+print rounds
+print ratio
+print flag
+print meta
+let summary = prompt "Summarize ${topic} in ${rounds} rounds (ratio ${ratio}, flag ${flag})."
+print summary

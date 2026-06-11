@@ -1,0 +1,40 @@
+# Pattern matching: qualified, field shorthand, renamed bindings, nested
+# constructor patterns, literal patterns, variable patterns, wildcard
+# (design §6.1, §10.12).
+enum Shape
+  | Dot
+  | Line(len: int)
+  | Box(w: int, h: int, label: text)
+
+enum Wrapped
+  | Inner(shape: Shape)
+  | Nothing
+
+input code: int
+input who
+
+let shape: Shape = picker "Pick a shape."
+
+case shape of
+  | Shape.Dot => print "dot"
+  | Line(len) => print "line ${len}"
+  | Box(w, h, label) => print "box ${w}x${h} ${label}"
+
+let wrapped: Wrapped = Inner(shape: shape)
+case wrapped of
+  | Inner(shape: Line(len: n)) => print "nested line ${n}"
+  | Inner(shape: inner) => print "nested other"
+  | Nothing => print "nothing"
+
+case code of
+  | 0 => print "zero"
+  | 1 => print "one"
+  | other => print "other ${other}"
+
+case shape of
+  | Box(label: tag) => print "tagged ${tag}"
+  | _ => print "untagged"
+
+case who of
+  | "alice" => print "known"
+  | _ => print "unknown"

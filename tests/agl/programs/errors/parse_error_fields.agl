@@ -1,0 +1,24 @@
+# AgentParseError carries the documented diagnostic fields, usable in follow-up
+# prompts (design §7.9, §8.1, §3.8).
+record Spec
+  name: text
+  level: int
+
+try
+  let s: Spec = builder[on_parse_error: retry[1]] "Build the spec."
+  print s.name
+catch AgentParseError as e =>
+  let advice = critic """
+  Agent ${e.agent} failed for type ${e.target_type} after ${e.attempts} attempts.
+
+  Raw:
+  ${e.raw as raw}
+
+  Errors:
+  ${e.validation_errors}
+
+  Schema:
+  ${e.expected_schema}
+  """
+  print "advised"
+  raise e

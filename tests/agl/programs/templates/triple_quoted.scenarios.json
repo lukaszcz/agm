@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "single_line_body",
+      "inputs": {"body": "payload"},
+      "agents": {"critic": ["c1", "c2"]},
+      "expect": {
+        "stdout": "block sent\nmixed sent\n",
+        "calls": {"critic": 2},
+        "prompts": [
+          {
+            "agent": "critic",
+            "call": 0,
+            "equals": "Header line:\n  keep two spaces\nA \"quoted\" tail."
+          },
+          {"agent": "critic", "call": 1, "contains": ["Wrap:\n", "payload", "\nEnd."]}
+        ]
+      }
+    },
+    {
+      "name": "multiline_indented_body_kept_verbatim",
+      "inputs": {"body": "line1\n      line2 deep"},
+      "agents": {"critic": ["c1", "c2"]},
+      "expect": {
+        "stdout": "block sent\nmixed sent\n",
+        "calls": {"critic": 2},
+        "prompts": [
+          {
+            "agent": "critic",
+            "call": 1,
+            "contains": ["line1\n      line2 deep", "\nEnd."]
+          }
+        ]
+      }
+    }
+  ]
+}

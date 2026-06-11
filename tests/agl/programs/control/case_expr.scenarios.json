@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "top_grade",
+      "inputs": {"bonus": 3},
+      "agents": {"grader": ["{\"$case\": \"Top\"}"]},
+      "expect": {
+        "stdout": "100\n2.5\nperfect\n1\n",
+        "calls": {"grader": 1}
+      }
+    },
+    {
+      "name": "mid_grade_uses_payload_and_bonus",
+      "inputs": {"bonus": 3},
+      "agents": {"grader": ["{\"$case\": \"Mid\", \"score\": 7}"]},
+      "expect": {
+        "stdout": "10\n1\nmid 7\n2\n",
+        "calls": {"grader": 1}
+      }
+    },
+    {
+      "name": "low_grade_zero_bonus",
+      "inputs": {"bonus": 0},
+      "agents": {"grader": ["{\"$case\": \"Low\"}"]},
+      "expect": {
+        "stdout": "0\n1\nlow\n2\n",
+        "calls": {"grader": 1}
+      }
+    }
+  ]
+}

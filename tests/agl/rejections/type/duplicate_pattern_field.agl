@@ -1,0 +1,7 @@
+enum R
+  | Fail(issues: list[text])
+  | Pass
+let r: R = Pass
+case r of
+  | Fail(issues: a, issues: b) => pass
+  | Pass => pass

@@ -1,0 +1,6 @@
+enum S
+  | A
+  | B
+let s: S = A
+var n: int = 0
+do[2] set n = n + 1 until case s of | A => true | B => false

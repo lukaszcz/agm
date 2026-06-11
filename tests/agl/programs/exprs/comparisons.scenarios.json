@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "matching_values_and_widening",
+      "inputs": {"x": 3, "y": 3.0, "word": "kiwi"},
+      "expect": {
+        "stdout": "true\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\n"
+      }
+    },
+    {
+      "name": "diverging_values",
+      "inputs": {"x": 5, "y": 2.5, "word": "zebra"},
+      "expect": {
+        "stdout": "false\ntrue\nfalse\nfalse\ntrue\ntrue\nfalse\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\n"
+      }
+    }
+  ]
+}

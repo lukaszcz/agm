@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    {
+      "name": "done_immediately",
+      "inputs": {"problem": "name the service"},
+      "agents": {
+        "researcher": ["{\"$case\": \"Done\", \"answer\": \"call it iris\"}"],
+        "critic": []
+      },
+      "expect": {
+        "stdout": "call it iris\n",
+        "calls": {"researcher": 1, "critic": 0}
+      }
+    },
+    {
+      "name": "two_critique_rounds",
+      "inputs": {"problem": "name the service"},
+      "agents": {
+        "researcher": [
+          "{\"$case\": \"Continue\", \"message\": \"draft A\"}",
+          "{\"$case\": \"Continue\", \"message\": \"draft B\"}",
+          "{\"$case\": \"Done\", \"answer\": \"final C\"}"
+        ],
+        "critic": [
+          "{\"$case\": \"Continue\", \"message\": \"too vague\"}",
+          "{\"$case\": \"Continue\", \"message\": \"better\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "final C\n",
+        "calls": {"researcher": 3, "critic": 2},
+        "prompts": [
+          {"agent": "critic", "call": 0, "contains": ["draft A"]},
+          {"agent": "researcher", "call": 1, "contains": ["too vague"]},
+          {"agent": "critic", "call": 1, "contains": ["draft B"]}
+        ]
+      }
+    },
+    {
+      "name": "never_done_exhausts",
+      "inputs": {"problem": "name the service"},
+      "agents": {
+        "researcher": {
+          "responses": ["{\"$case\": \"Continue\", \"message\": \"again\"}"],
+          "repeat_last": true
+        },
+        "critic": {
+          "responses": ["{\"$case\": \"Continue\", \"message\": \"meh\"}"],
+          "repeat_last": true
+        }
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"researcher": 7, "critic": 6},
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 6}}
+      }
+    }
+  ]
+}

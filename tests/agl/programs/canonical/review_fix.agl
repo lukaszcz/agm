@@ -1,0 +1,87 @@
+# The canonical example from design §14, verbatim.
+input spec: text
+
+record Issue
+  title: text
+  severity: int
+  description: text
+
+type Issues = list[Issue]
+
+enum Review
+  | Pass
+  | Fail(issues: Issues)
+
+enum FixResult
+  | Complete(output: text)
+  | Changed(output: text)
+  | Blocked(reason: text)
+
+var artifact: text = impl "Implement ${spec}"
+
+try
+  do[5]
+    let review: Review = reviewer[on_parse_error: retry[2]] """
+    Review the artifact for correctness, completeness, and maintainability.
+
+    Artifact:
+    ${artifact}
+    """
+
+    case review of
+      | Pass =>
+          pass
+
+      | Fail(issues) =>
+          let result: FixResult = impl[on_parse_error: retry[2]] """
+          Fix valid issues.
+
+          Issues:
+          ${issues}
+
+          Current artifact:
+          ${artifact}
+          """
+
+          case result of
+            | Complete(output) =>
+                set artifact = output
+            | Changed(output) =>
+                set artifact = output
+            | Blocked(reason) =>
+                let blocker_report = critic "Explain blocker:\n${reason}"
+                raise Abort(message: blocker_report)
+
+  until review is Pass
+
+catch AgentParseError as e =>
+  let diagnostic = critic """
+  An agent failed to return valid structured output.
+
+  Agent:
+  ${e.agent}
+
+  Expected schema:
+  ${e.expected_schema}
+
+  Raw output:
+  ${e.raw as raw}
+
+  Validation errors:
+  ${e.validation_errors}
+  """
+  raise e
+
+catch MaxIterationsExceeded as e =>
+  let summary = critic """
+  The review/fix loop did not converge.
+
+  Last artifact:
+  ${artifact}
+
+  Loop metadata:
+  ${e}
+  """
+  raise e
+
+print artifact

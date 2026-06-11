@@ -1,0 +1,8 @@
+# An empty response is valid for a text target; a typed target then fails parsing
+# and follows the parse policy (plan §9.5). on_parse_error on a text target is a
+# warning only — the program must still run (design §7.10).
+let blank = prompt[on_parse_error: retry[1]] "Say nothing."
+print blank
+print "after"
+let typed: int = prompter "Number, please."
+print typed

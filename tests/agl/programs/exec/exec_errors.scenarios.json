@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "name": "caught_failure_exposes_fields",
+      "inputs": {"mode": "calm"},
+      "expect": {
+        "stdout_contains": [
+          "failed code 3\n",
+          "captured partial",
+          "err oops",
+          "timed false\n",
+          "skip\ntail\n"
+        ]
+      }
+    },
+    {
+      "name": "uncaught_exec_error",
+      "inputs": {"mode": "uncaught"},
+      "expect": {
+        "stdout_contains": ["failed code 3\n", "timed false\n"],
+        "stdout_not_contains": ["skip", "tail"],
+        "raises": {
+          "type": "ExecError",
+          "fields": {"command": "false", "exit_code": 1, "timed_out": false}
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# Parse policies: portable default abort, retry[N] corrective retries, explicit
+# abort, format option, trailing comma in call options (design §2.9, §7.8-7.9).
+enum Review
+  | Pass
+  | Fail(issues: list[text])
+
+let strict_default: Review = reviewer "First review."
+print "first ok"
+
+let with_retry: Review = reviewer[on_parse_error: retry[2]] "Second review."
+print "second ok"
+
+let aborting: Review = reviewer[format: json, on_parse_error: abort,] "Third review."
+print "third ok"

@@ -1,0 +1,79 @@
+{
+  "scenarios": [
+    {
+      "name": "all_valid_first_try",
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Fail\", \"issues\": [\"a\"]}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "first ok\nsecond ok\nthird ok\n",
+        "calls": {"reviewer": 3}
+      }
+    },
+    {
+      "name": "default_policy_aborts_immediately",
+      "agents": {"reviewer": ["utter nonsense"]},
+      "expect": {
+        "stdout": "",
+        "calls": {"reviewer": 1},
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {"agent": "reviewer", "attempts": 1, "target_type": "Review"}
+        }
+      }
+    },
+    {
+      "name": "retry_recovers_on_last_attempt",
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "not json",
+          "{\"$case\": \"Unknown\"}",
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "first ok\nsecond ok\nthird ok\n",
+        "calls": {"reviewer": 5},
+        "prompts": [
+          {"agent": "reviewer", "call": 1, "equals": "Second review."},
+          {"agent": "reviewer", "call": 2, "equals": "Second review."},
+          {"agent": "reviewer", "call": 3, "equals": "Second review."}
+        ]
+      }
+    },
+    {
+      "name": "retries_exhausted",
+      "agents": {
+        "reviewer": ["{\"$case\": \"Pass\"}", "bad 1", "bad 2", "bad 3"]
+      },
+      "expect": {
+        "stdout": "first ok\n",
+        "calls": {"reviewer": 4},
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {"agent": "reviewer", "attempts": 3, "target_type": "Review"}
+        }
+      }
+    },
+    {
+      "name": "explicit_abort_on_third_site",
+      "agents": {
+        "reviewer": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}", "{\"oops\": true}"]
+      },
+      "expect": {
+        "stdout": "first ok\nsecond ok\n",
+        "calls": {"reviewer": 3},
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {"agent": "reviewer", "attempts": 1}
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "scenarios": [
+    {
+      "name": "pass_first_review",
+      "inputs": {"spec": "a CSV parser"},
+      "agents": {
+        "impl": ["v1"],
+        "reviewer": ["{\"$case\": \"Pass\"}"],
+        "critic": []
+      },
+      "expect": {
+        "stdout": "v1\n",
+        "calls": {"impl": 1, "reviewer": 1, "critic": 0},
+        "prompts": [
+          {"agent": "impl", "call": 0, "contains": ["a CSV parser"]},
+          {"agent": "reviewer", "call": 0, "contains": ["Review the artifact", "v1"]}
+        ]
+      }
+    },
+    {
+      "name": "fail_then_complete",
+      "inputs": {"spec": "a CSV parser"},
+      "agents": {
+        "impl": ["v1", "{\"$case\": \"Complete\", \"output\": \"v2\"}"],
+        "reviewer": [
+          "{\"$case\": \"Fail\", \"issues\": [{\"title\": \"No tests\", \"severity\": 3, \"description\": \"Failure paths untested.\"}]}",
+          "{\"$case\": \"Pass\"}"
+        ],
+        "critic": []
+      },
+      "expect": {
+        "stdout": "v2\n",
+        "calls": {"impl": 2, "reviewer": 2, "critic": 0},
+        "prompts": [
+          {"agent": "impl", "call": 1, "contains": ["Fix valid issues.", "No tests", "v1"]},
+          {"agent": "reviewer", "call": 1, "contains": ["v2"]}
+        ]
+      }
+    },
+    {
+      "name": "changed_then_complete_then_pass",
+      "inputs": {"spec": "a CSV parser"},
+      "agents": {
+        "impl": [
+          "v1",
+          "{\"$case\": \"Changed\", \"output\": \"v2\"}",
+          "{\"$case\": \"Complete\", \"output\": \"v3\"}"
+        ],
+        "reviewer": [
+          "{\"$case\": \"Fail\", \"issues\": [{\"title\": \"A\", \"severity\": 1, \"description\": \"a\"}]}",
+          "{\"$case\": \"Fail\", \"issues\": [{\"title\": \"B\", \"severity\": 2, \"description\": \"b\"}]}",
+          "{\"$case\": \"Pass\"}"
+        ],
+        "critic": []
+      },
+      "expect": {
+        "stdout": "v3\n",
+        "calls": {"impl": 3, "reviewer": 3, "critic": 0}
+      }
+    },
+    {
+      "name": "blocked_fix_aborts_with_critic_report",
+      "inputs": {"spec": "a CSV parser"},
+      "agents": {
+        "impl": ["v1", "{\"$case\": \"Blocked\", \"reason\": \"no repository access\"}"],
+        "reviewer": [
+          "{\"$case\": \"Fail\", \"issues\": [{\"title\": \"X\", \"severity\": 5, \"description\": \"x\"}]}"
+        ],
+        "critic": ["The fixer cannot reach the repository."]
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"impl": 2, "reviewer": 1, "critic": 1},
+        "prompts": [
+          {"agent": "critic", "call": 0, "contains": ["Explain blocker:", "no repository access"]}
+        ],
+        "raises": {
+          "type": "Abort",
+          "fields": {"message": "The fixer cannot reach the repository."}
+        }
+      }
+    },
+    {
+      "name": "reviewer_retries_exhausted_diagnosed_and_rethrown",
+      "inputs": {"spec": "a CSV parser"},
+      "agents": {
+        "impl": ["v1"],
+        "reviewer": ["nonsense one", "nonsense two", "nonsense three"],
+        "critic": ["The reviewer keeps replying in prose."]
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"impl": 1, "reviewer": 3, "critic": 1},
+        "prompts": [
+          {
+            "agent": "critic",
+            "call": 0,
+            "contains": ["reviewer", "nonsense three", "Validation errors:"]
+          }
+        ],
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {"agent": "reviewer", "attempts": 3, "target_type": "Review"}
+        }
+      }
+    },
+    {
+      "name": "never_converges_summarized_and_rethrown",
+      "inputs": {"spec": "a CSV parser"},
+      "agents": {
+        "impl": {
+          "responses": ["v1", "{\"$case\": \"Complete\", \"output\": \"vN\"}"],
+          "repeat_last": true
+        },
+        "reviewer": {
+          "responses": [
+            "{\"$case\": \"Fail\", \"issues\": [{\"title\": \"E\", \"severity\": 1, \"description\": \"e\"}]}"
+          ],
+          "repeat_last": true
+        },
+        "critic": ["It never converged."]
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"impl": 6, "reviewer": 5, "critic": 1},
+        "prompts": [
+          {"agent": "critic", "call": 0, "contains": ["did not converge", "vN"]}
+        ],
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 5}}
+      }
+    }
+  ]
+}

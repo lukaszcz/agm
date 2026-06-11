@@ -1,0 +1,22 @@
+# Nested try, rethrow with `raise e`, binderless catch, and an exception that no
+# clause matches propagating out of the program (design §8.2-8.3).
+input mode
+
+try
+  try
+    if mode = "inner" =>
+      raise Abort(message: "from inner")
+    | else =>
+      pass
+    print "inner ok"
+  catch Abort as e =>
+    print "inner saw ${e.message}"
+    raise e
+catch Abort =>
+  print "outer saw abort"
+print "continue"
+
+try
+  raise Abort(message: "fatal ${mode}")
+catch MatchError =>
+  print "wrong handler"

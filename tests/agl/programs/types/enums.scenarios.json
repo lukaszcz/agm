@@ -1,0 +1,61 @@
+{
+  "scenarios": [
+    {
+      "name": "nullary_variant",
+      "inputs": {"fallback": "n/a"},
+      "agents": {"worker": ["{\"$case\": \"Done\"}"]},
+      "expect": {
+        "stdout_contains": [
+          "done\nno work left\n",
+          "\"$case\"",
+          "\"Partial\"",
+          "\"left\"",
+          "\"Failed\"",
+          "\"n/a\""
+        ],
+        "calls": {"worker": 1}
+      }
+    },
+    {
+      "name": "payload_variant_destructured",
+      "inputs": {"fallback": "n/a"},
+      "agents": {"worker": ["{\"$case\": \"Partial\", \"left\": 4}"]},
+      "expect": {
+        "stdout_contains": ["not failed\nremaining 4\n", "\"Partial\""],
+        "calls": {"worker": 1}
+      }
+    },
+    {
+      "name": "multi_field_fatal_branch",
+      "inputs": {"fallback": "n/a"},
+      "agents": {
+        "worker": ["{\"$case\": \"Failed\", \"reason\": \"disk full\", \"fatal\": true}"]
+      },
+      "expect": {
+        "stdout_contains": ["failed\nfatal: disk full\n"],
+        "calls": {"worker": 1}
+      }
+    },
+    {
+      "name": "multi_field_recoverable_branch",
+      "inputs": {"fallback": "manual review"},
+      "agents": {
+        "worker": ["{\"$case\": \"Failed\", \"reason\": \"rate limit\", \"fatal\": false}"]
+      },
+      "expect": {
+        "stdout_contains": ["failed\nretry later: rate limit\n", "\"manual review\""],
+        "calls": {"worker": 1}
+      }
+    },
+    {
+      "name": "unknown_case_tag_is_parse_error",
+      "inputs": {"fallback": "n/a"},
+      "agents": {"worker": ["{\"$case\": \"Exploded\"}"]},
+      "expect": {
+        "stdout": "",
+        "calls": {"worker": 1},
+        "raises": {"type": "AgentParseError", "fields": {"agent": "worker", "attempts": 1}}
+      }
+    }
+  ]
+}

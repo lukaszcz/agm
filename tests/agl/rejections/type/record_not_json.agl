@@ -1,0 +1,3 @@
+record P
+  n: int
+let j: json = P(n: 1)

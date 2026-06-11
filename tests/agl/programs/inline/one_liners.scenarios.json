@@ -1,0 +1,43 @@
+{
+  "scenarios": [
+    {
+      "name": "two_steps_then_done",
+      "agents": {
+        "stepper": ["{\"$case\": \"More\"}", "{\"$case\": \"Done\"}", "{\"$case\": \"Done\"}"]
+      },
+      "expect": {
+        "stdout": "xy\n2\ndouble\ncase inline 2\ntail\n12\nend\n",
+        "calls": {"stepper": 3},
+        "prompts": [
+          {"agent": "stepper", "call": 0, "equals": "Step 1."},
+          {"agent": "stepper", "call": 1, "equals": "Step 2."}
+        ]
+      }
+    },
+    {
+      "name": "done_immediately",
+      "agents": {"stepper": ["{\"$case\": \"Done\"}", "{\"$case\": \"Done\"}"]},
+      "expect": {
+        "stdout": "xy\n1\nsingle\ntail\n11\nend\n",
+        "calls": {"stepper": 2}
+      }
+    },
+    {
+      "name": "final_check_parse_failure_caught_inline",
+      "agents": {"stepper": ["{\"$case\": \"Done\"}", "BROKEN"]},
+      "expect": {
+        "stdout": "xy\n1\nsingle\ntail\n11\ncaught stepper\nend\n",
+        "calls": {"stepper": 2}
+      }
+    },
+    {
+      "name": "inline_loop_exhaustion",
+      "agents": {"stepper": {"responses": ["{\"$case\": \"More\"}"], "repeat_last": true}},
+      "expect": {
+        "stdout": "xy\n",
+        "calls": {"stepper": 5},
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 5}}
+      }
+    }
+  ]
+}

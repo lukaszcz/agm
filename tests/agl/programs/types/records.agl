@@ -1,0 +1,39 @@
+# Records: nested types, multi-line constructors with trailing comma, field access
+# chains, record agent targets (design §5.2, §7.3).
+record Author
+  name: text
+  active: bool
+
+record Issue
+  title: text
+  severity: int
+  weight: decimal
+  tags: list[text]
+  extra: json
+  author: Author
+
+input min_severity: int
+
+let issue = Issue(
+  title: "Missing tests",
+  severity: 3,
+  weight: 0.5,
+  tags: ["tests", "coverage"],
+  extra: {origin: "static", retries: null},
+  author: Author(name: "Ada", active: true),
+)
+
+print issue.title
+print issue.severity
+print issue.weight
+print issue.author.name
+print issue.author.active
+
+let fetched: Issue = tracker "Fetch the top issue."
+print fetched.title
+print fetched.severity
+
+if fetched.severity >= min_severity =>
+  print "escalate"
+| else =>
+  print "ignore"

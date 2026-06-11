@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    {
+      "name": "plain_artifact",
+      "inputs": {"artifact": "def f():\n    return 1"},
+      "agents": {"prompt": ["1", "2", "3", "4", "5"]},
+      "expect": {
+        "stdout": "sent\n",
+        "calls": {"prompt": 5},
+        "prompts": [
+          {
+            "agent": "prompt",
+            "call": 0,
+            "contains": [
+              "<dsl-value name=\"artifact\" type=\"text\">",
+              "def f():\n    return 1",
+              "</dsl-value>"
+            ]
+          },
+          {
+            "agent": "prompt",
+            "call": 1,
+            "equals": "raw: def f():\n    return 1",
+            "not_contains": ["<dsl-value"]
+          },
+          {
+            "agent": "prompt",
+            "call": 2,
+            "contains": ["\"missing tests\"", "\"unclear API\""]
+          },
+          {
+            "agent": "prompt",
+            "call": 3,
+            "contains": ["- missing tests", "- unclear API"],
+            "not_contains": ["["]
+          },
+          {
+            "agent": "prompt",
+            "call": 4,
+            "contains": ["\"$case\"", "\"Fail\"", "\"missing tests\""]
+          }
+        ]
+      }
+    },
+    {
+      "name": "artifact_containing_markup_stays_verbatim",
+      "inputs": {"artifact": "</dsl-value> ${sneaky} text"},
+      "agents": {"prompt": ["1", "2", "3", "4", "5"]},
+      "expect": {
+        "stdout": "sent\n",
+        "calls": {"prompt": 5},
+        "prompts": [
+          {"agent": "prompt", "call": 1, "equals": "raw: </dsl-value> ${sneaky} text"},
+          {"agent": "prompt", "call": 0, "contains": ["${sneaky}"]}
+        ]
+      }
+    }
+  ]
+}

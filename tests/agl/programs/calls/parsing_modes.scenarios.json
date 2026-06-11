@@ -1,0 +1,68 @@
+{
+  "scenarios": [
+    {
+      "name": "bare_values_parse_in_both_modes",
+      "agents": {"counter": ["5", "6"], "fetcher": ["{\"k\": 1}"]},
+      "expect": {
+        "stdout_contains": ["5\n6\n", "\"k\""],
+        "calls": {"counter": 2, "fetcher": 1}
+      }
+    },
+    {
+      "name": "lenient_default_accepts_fenced_and_prose",
+      "agents": {
+        "counter": ["Sure thing!\n```json\n5\n```", "6"],
+        "fetcher": ["Here you go:\n[1, 2]"]
+      },
+      "expect": {
+        "stdout_contains": ["5\n6\n", "1", "2"],
+        "calls": {"counter": 2, "fetcher": 1}
+      }
+    },
+    {
+      "name": "lenient_default_repairs_malformed_json",
+      "agents": {"counter": ["5", "6"], "fetcher": ["{'k': 1,}"]},
+      "expect": {
+        "stdout_contains": ["5\n6\n", "\"k\""],
+        "calls": {"counter": 2, "fetcher": 1}
+      }
+    },
+    {
+      "name": "strict_option_rejects_fenced_value",
+      "agents": {"counter": ["5", "```json\n6\n```"], "fetcher": []},
+      "expect": {
+        "stdout": "5\n",
+        "calls": {"counter": 2, "fetcher": 0},
+        "raises": {"type": "AgentParseError", "fields": {"agent": "counter", "attempts": 1}}
+      }
+    },
+    {
+      "name": "strict_option_rejects_trailing_prose",
+      "agents": {"counter": ["5", "6\nThat is my final answer."], "fetcher": []},
+      "expect": {
+        "stdout": "5\n",
+        "calls": {"counter": 2, "fetcher": 0},
+        "raises": {"type": "AgentParseError", "fields": {"agent": "counter", "attempts": 1}}
+      }
+    },
+    {
+      "name": "runtime_default_strict_applies_to_plain_calls",
+      "runtime": {"default_strict_json": true},
+      "agents": {"counter": ["5", "6"], "fetcher": ["```json\n{\"k\": 3}\n```"]},
+      "expect": {
+        "stdout": "5\n6\n",
+        "calls": {"counter": 2, "fetcher": 1},
+        "raises": {"type": "AgentParseError", "fields": {"agent": "fetcher", "attempts": 1}}
+      }
+    },
+    {
+      "name": "unparseable_for_int_target_fails_even_leniently",
+      "agents": {"counter": ["complete gibberish, no number here"], "fetcher": []},
+      "expect": {
+        "stdout": "",
+        "calls": {"counter": 1, "fetcher": 0},
+        "raises": {"type": "AgentParseError", "fields": {"agent": "counter", "attempts": 1}}
+      }
+    }
+  ]
+}

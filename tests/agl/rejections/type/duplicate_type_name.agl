@@ -1,0 +1,4 @@
+record P
+  n: int
+record P
+  t: text

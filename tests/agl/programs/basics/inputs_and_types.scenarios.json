@@ -1,0 +1,73 @@
+{
+  "scenarios": [
+    {
+      "name": "typical_values",
+      "inputs": {
+        "topic": "unit tests",
+        "rounds": 3,
+        "ratio": 2.5,
+        "flag": true,
+        "meta": {"k": [1, null]}
+      },
+      "agents": {"prompt": ["ok summary"]},
+      "expect": {
+        "stdout_contains": ["unit tests\n", "3\n", "2.5\n", "true\n", "\"k\"", "ok summary\n"],
+        "calls": {"prompt": 1},
+        "prompts": [
+          {
+            "agent": "prompt",
+            "call": 0,
+            "contains": ["unit tests", "in 3 rounds", "(ratio 2.5, flag true)."]
+          }
+        ]
+      }
+    },
+    {
+      "name": "unicode_multiline_and_falsy_values",
+      "inputs": {
+        "topic": "café ✓\nline two",
+        "rounds": 0,
+        "ratio": 0.1,
+        "flag": false,
+        "meta": null
+      },
+      "agents": {"prompt": ["done"]},
+      "expect": {
+        "stdout_contains": ["café ✓\nline two\n", "0\n", "0.1\n", "false\n", "null", "done\n"],
+        "calls": {"prompt": 1},
+        "prompts": [
+          {
+            "agent": "prompt",
+            "call": 0,
+            "contains": ["café ✓\nline two", "in 0 rounds", "(ratio 0.1, flag false)."]
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing_declared_input",
+      "inputs": {"topic": "x", "ratio": 1.5, "flag": true, "meta": {}},
+      "agents": {"prompt": []},
+      "expect": {"host_error": {"message_contains": ["rounds"]}}
+    },
+    {
+      "name": "undeclared_extra_input",
+      "inputs": {
+        "topic": "x",
+        "rounds": 1,
+        "ratio": 1.5,
+        "flag": true,
+        "meta": {},
+        "bogus": "nope"
+      },
+      "agents": {"prompt": []},
+      "expect": {"host_error": {"message_contains": ["bogus"]}}
+    },
+    {
+      "name": "type_invalid_input",
+      "inputs": {"topic": "x", "rounds": "three", "ratio": 1.5, "flag": true, "meta": {}},
+      "agents": {"prompt": []},
+      "expect": {"host_error": {"message_contains": ["rounds"]}}
+    }
+  ]
+}

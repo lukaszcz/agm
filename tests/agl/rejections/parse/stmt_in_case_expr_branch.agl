@@ -1,0 +1,7 @@
+enum S
+  | A
+  | B
+let s: S = A
+let x = case s of
+  | A => let y = 1
+  | B => 2

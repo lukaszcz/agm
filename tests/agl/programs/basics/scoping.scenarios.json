@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "inner_shadow_does_not_escape",
+      "inputs": {"mode": "shadow"},
+      "expect": {"stdout": "branch 2\nafter 1\n3\n"}
+    },
+    {
+      "name": "branch_reads_outer_binding",
+      "inputs": {"mode": "plain"},
+      "expect": {"stdout": "branch kept 1\nafter 1\n3\n"}
+    },
+    {
+      "name": "else_leaves_var_untouched",
+      "inputs": {"mode": "other"},
+      "expect": {"stdout": "\nafter 1\n3\n"}
+    }
+  ]
+}

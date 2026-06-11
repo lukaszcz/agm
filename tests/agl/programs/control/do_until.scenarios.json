@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "converges_first_iteration",
+      "inputs": {"target": 1},
+      "agents": {"oracle": ["hit"]},
+      "expect": {
+        "stdout": "1\n1\n",
+        "calls": {"oracle": 1},
+        "prompts": [{"agent": "oracle", "call": 0, "contains": ["Round 1: have 0 of 1."]}]
+      }
+    },
+    {
+      "name": "converges_third_iteration",
+      "inputs": {"target": 2},
+      "agents": {"oracle": ["miss", "hit", "hit"]},
+      "expect": {
+        "stdout": "3\n2\n",
+        "calls": {"oracle": 3},
+        "prompts": [
+          {"agent": "oracle", "call": 0, "contains": ["Round 1: have 0 of 2."]},
+          {"agent": "oracle", "call": 2, "contains": ["Round 3: have 1 of 2."]}
+        ]
+      }
+    },
+    {
+      "name": "exhausts_bound",
+      "inputs": {"target": 3},
+      "agents": {"oracle": ["miss", "miss", "miss", "hit"]},
+      "expect": {
+        "stdout": "",
+        "calls": {"oracle": 4},
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 4}}
+      }
+    }
+  ]
+}

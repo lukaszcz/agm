@@ -1,0 +1,18 @@
+# do[N]...until: post-test, loop-carried state through outer vars, iteration
+# bindings visible to the condition, MaxIterationsExceeded on exhaustion
+# (design §2.11, §9.3, §11.5).
+input target: int
+
+var hits: int = 0
+var rounds: int = 0
+
+do[4]
+  set rounds = rounds + 1
+  let verdict = oracle "Round ${rounds}: have ${hits} of ${target}."
+  if verdict = "hit" =>
+    set hits = hits + 1
+  | else =>
+    pass
+until hits >= target
+print rounds
+print hits

@@ -1,0 +1,16 @@
+# Inline forms: `;` sequencing, inline do bodies with trailing open statements
+# sealed by until, inline if/case/try/catch (design §2.13, §10.3).
+enum Status
+  | Done
+  | More
+
+let a = "x"; let b = "y"; print a + b
+var n: int = 0
+do[5] set n = n + 1; let s: Status = stepper "Step ${n}." until s is Done
+print n
+if n = 1 => print "single" | n = 2 => print "double" | else => print "many"
+case n of | 1 => pass | _ => print "case inline ${n}"
+do[2] print "tail"; if n > 0 => set n = n + 10 | else => pass until n > 5
+print n
+try let z: Status = stepper "Final check." catch AgentParseError as e => print "caught ${e.agent}"
+print "end"

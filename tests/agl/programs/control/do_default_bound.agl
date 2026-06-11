@@ -1,0 +1,7 @@
+# `do` without a bound uses the runtime default loop limit; it never means
+# unbounded (design §2.11, §4.5).
+var n: int = 0
+do
+  set n = n + 1
+until n >= 4
+print n

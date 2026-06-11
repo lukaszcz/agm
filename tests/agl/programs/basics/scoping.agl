@@ -1,0 +1,24 @@
+# Lexical scoping: branch shadowing, set across scopes, do-loop iteration scope
+# (design §2.14, §9.1-9.3).
+input mode
+
+let x = 1
+var trail: text = ""
+
+if mode = "shadow" =>
+  let x = 2
+  set trail = "branch ${x}"
+| mode = "plain" =>
+  set trail = "branch kept ${x}"
+| else =>
+  pass
+
+print trail
+print "after ${x}"
+
+var counter: int = 0
+do[5]
+  let bump = counter + 1
+  set counter = bump
+until counter >= 3
+print counter

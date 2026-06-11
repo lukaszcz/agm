@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_amount",
+      "inputs": {"n": 5},
+      "expect": {
+        "stdout": "quote=\" backslash=\\ slash=/ tab=\tend\nbell=\b feed=\f\nnewline=\nnext\nreturn=\rdone\nunicode=Aé\ndollar=${not_interp} and $5 and 2\nmix $5 costs $5\n"
+      }
+    },
+    {
+      "name": "negative_amount",
+      "inputs": {"n": -2},
+      "expect": {
+        "stdout": "quote=\" backslash=\\ slash=/ tab=\tend\nbell=\b feed=\f\nnewline=\nnext\nreturn=\rdone\nunicode=Aé\ndollar=${not_interp} and $5 and 2\nmix $-2 costs $-2\n"
+      }
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "scenarios": [
+    {
+      "name": "both_pass_first_round",
+      "inputs": {"spec": "a tool"},
+      "agents": {
+        "impl": ["v1"],
+        "reviewer": ["{\"$case\": \"Pass\"}"],
+        "critic": ["{\"$case\": \"Pass\"}"]
+      },
+      "expect": {
+        "stdout": "final:v1\n",
+        "calls": {"impl": 1, "reviewer": 1, "critic": 1}
+      }
+    },
+    {
+      "name": "correctness_fails_first_round",
+      "inputs": {"spec": "a tool"},
+      "agents": {
+        "impl": ["v1", "v2"],
+        "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"off by one\"]}", "{\"$case\": \"Pass\"}"],
+        "critic": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}"]
+      },
+      "expect": {
+        "stdout": "final:v2\n",
+        "calls": {"impl": 2, "reviewer": 2, "critic": 2},
+        "prompts": [
+          {
+            "agent": "impl",
+            "call": 1,
+            "contains": ["Fix valid issues.", "\"$case\"", "off by one", "v1"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "design_fails_first_round",
+      "inputs": {"spec": "a tool"},
+      "agents": {
+        "impl": ["v1", "v2"],
+        "reviewer": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}"],
+        "critic": ["{\"$case\": \"Fail\", \"issues\": [\"tangled layers\"]}", "{\"$case\": \"Pass\"}"]
+      },
+      "expect": {
+        "stdout": "final:v2\n",
+        "calls": {"impl": 2, "reviewer": 2, "critic": 2},
+        "prompts": [
+          {"agent": "impl", "call": 1, "contains": ["tangled layers"]}
+        ]
+      }
+    },
+    {
+      "name": "both_fail_then_both_pass",
+      "inputs": {"spec": "a tool"},
+      "agents": {
+        "impl": ["v1", "v2"],
+        "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"bug\"]}", "{\"$case\": \"Pass\"}"],
+        "critic": ["{\"$case\": \"Fail\", \"issues\": [\"style\"]}", "{\"$case\": \"Pass\"}"]
+      },
+      "expect": {
+        "stdout": "final:v2\n",
+        "calls": {"impl": 2, "reviewer": 2, "critic": 2}
+      }
+    },
+    {
+      "name": "never_both_pass",
+      "inputs": {"spec": "a tool"},
+      "agents": {
+        "impl": {"responses": ["v1", "fix"], "repeat_last": true},
+        "reviewer": {"responses": ["{\"$case\": \"Pass\"}"], "repeat_last": true},
+        "critic": {
+          "responses": ["{\"$case\": \"Fail\", \"issues\": [\"still tangled\"]}"],
+          "repeat_last": true
+        }
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"impl": 6, "reviewer": 5, "critic": 5},
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 5}}
+      }
+    }
+  ]
+}

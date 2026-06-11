@@ -1,0 +1,18 @@
+# ExecError: nonzero exit raises a catchable exception carrying command,
+# exit_code, stdout, stderr, timed_out (design §4.12, §8.1).
+input mode
+
+try
+  let out = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
+  print out
+catch ExecError as e =>
+  print "failed code ${e.exit_code}"
+  print "captured ${e.stdout as raw}"
+  print "err ${e.stderr as raw}"
+  print "timed ${e.timed_out}"
+
+if mode = "uncaught" =>
+  exec "false"
+| else =>
+  print "skip"
+print "tail"

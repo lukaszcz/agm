@@ -1,0 +1,28 @@
+# Interpolation: expressions inside ${...}, adjacency, nested braces, structured
+# value rendering inside prompts (design §2.12, §10.15).
+record Item
+  name: text
+  qty: int
+
+enum Pick
+  | One(item: Item)
+  | Nothing
+
+input who
+
+let item = Item(name: "bolt", qty: 7)
+let items = ["alpha", "beta"]
+let pick: Pick = One(item: item)
+
+let a = prompt "Hello ${who}, qty ${item.qty}, sum ${1 + 2 * 3}."
+let b = prompt "${who}${item.qty}"
+let c = prompt "data: ${ {kind: "demo", tags: items} }"
+let d = prompt """
+Report for ${who}:
+${item}
+${pick}
+"""
+print a
+print b
+print c
+print d

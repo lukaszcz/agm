@@ -1,0 +1,50 @@
+{
+  "scenarios": [
+    {
+      "name": "no_exception_skips_catches",
+      "inputs": {"mode": "calm"},
+      "agents": {"reviewer": []},
+      "expect": {
+        "stdout": "calm\nbody end\nafter try\n",
+        "calls": {"reviewer": 0}
+      }
+    },
+    {
+      "name": "valid_parse_no_exception",
+      "inputs": {"mode": "parse"},
+      "agents": {"reviewer": ["{\"$case\": \"Pass\"}"]},
+      "expect": {
+        "stdout": "parsed true\nbody end\nafter try\n",
+        "calls": {"reviewer": 1}
+      }
+    },
+    {
+      "name": "parse_error_routes_to_first_clause",
+      "inputs": {"mode": "parse"},
+      "agents": {"reviewer": ["garbage"]},
+      "expect": {
+        "stdout": "parse error from reviewer after 1\nafter try\n",
+        "calls": {"reviewer": 1}
+      }
+    },
+    {
+      "name": "abort_routes_past_parse_clause",
+      "inputs": {"mode": "abort"},
+      "agents": {"reviewer": []},
+      "expect": {
+        "stdout": "abort: stop now\nafter try\n",
+        "calls": {"reviewer": 0}
+      }
+    },
+    {
+      "name": "match_error_falls_to_wildcard",
+      "inputs": {"mode": "match"},
+      "agents": {"reviewer": []},
+      "expect": {
+        "stdout_contains": ["other: ", "after try\n"],
+        "stdout_not_contains": ["body end"],
+        "calls": {"reviewer": 0}
+      }
+    }
+  ]
+}

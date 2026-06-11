@@ -1,0 +1,21 @@
+# The dialogue loop from design §3.6: typed mutable state driven by two agents.
+enum Turn
+  | Continue(message: text)
+  | Done(answer: text)
+
+input problem
+
+var proposal: Turn = researcher[on_parse_error: retry[2]] "Propose a solution for ${problem}."
+var final_answer: text = ""
+
+do[6]
+  case proposal of
+    | Continue(message) =>
+        let critique: Turn = critic[on_parse_error: retry[2]] "Critique this proposal:\n${message}"
+        set proposal = researcher[on_parse_error: retry[2]] "Revise using critique:\n${critique}"
+
+    | Done(answer) =>
+        set final_answer = answer
+
+until proposal is Done
+print final_answer

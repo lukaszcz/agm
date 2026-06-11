@@ -1,0 +1,32 @@
+# The multi-agent refinement loop from design §3.3, finished with exec and print.
+enum Review
+  | Pass
+  | Fail(issues: list[text])
+
+input spec
+
+var artifact: text = impl "Implement ${spec}"
+
+do[5]
+  let code: Review = reviewer[on_parse_error: retry[2]] "Review correctness:\n${artifact}"
+  let design: Review = critic[on_parse_error: retry[2]] "Review design:\n${artifact}"
+
+  if code is Fail or design is Fail =>
+    set artifact = impl """
+    Fix valid issues.
+
+    Correctness review:
+    ${code}
+
+    Design review:
+    ${design}
+
+    Current artifact:
+    ${artifact}
+    """
+  | else =>
+    pass
+until code is Pass and design is Pass
+
+let stamp = exec "printf 'final:%s' ${artifact}"
+print stamp

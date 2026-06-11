@@ -1,0 +1,26 @@
+# Enums: nullary/single/multi-field variants, qualified and unqualified constructors,
+# is / is not, case destructuring (design §5.3, §5.5, §6).
+enum Outcome
+  | Done
+  | Partial(left: int)
+  | Failed(reason: text, fatal: bool)
+
+input fallback
+
+let first: Outcome = worker "Attempt the task."
+
+if first is Done => print "done"
+| first is not Failed => print "not failed"
+| else => print "failed"
+
+case first of
+  | Done => print "no work left"
+  | Partial(left) => print "remaining ${left}"
+  | Failed(reason, fatal) =>
+      if fatal => print "fatal: ${reason}"
+      | else => print "retry later: ${reason}"
+
+let made: Outcome = Partial(left: 2)
+print made
+let qualified = Outcome.Failed(reason: fallback, fatal: false)
+print qualified

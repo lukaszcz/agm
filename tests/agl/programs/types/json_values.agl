@@ -1,0 +1,29 @@
+# json values, null, literal shorthand vs quoted keys, empty literals with
+# annotations, typed agent targets for every built-in (design §5.6-5.8, §2.8).
+input payload: json
+
+let empty_list: list[text] = []
+let empty_map: dict[text, json] = {}
+print empty_list
+print empty_map
+
+let document: json = {
+  "quoted": 1,
+  shorthand: [true, false, null],
+  nested: {inner: ["x", 2.5]},
+}
+print document
+
+let fetched: json = source "Emit a JSON document about ${payload}."
+print fetched
+
+let n: int = source "Emit a count."
+let d: decimal = source "Emit a ratio."
+let flag: bool = source "Emit a flag."
+let names: list[text] = source "Emit names."
+let scores: dict[text, int] = source "Emit scores."
+print n
+print d
+print flag
+print names
+print scores

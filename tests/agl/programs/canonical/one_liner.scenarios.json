@@ -1,0 +1,57 @@
+{
+  "scenarios": [
+    {
+      "name": "pass_first_try",
+      "inputs": {"spec": "a thing"},
+      "agents": {
+        "impl": ["v1"],
+        "reviewer": ["{\"$case\": \"Pass\"}"]
+      },
+      "expect": {"stdout": "v1\n", "calls": {"impl": 1, "reviewer": 1}}
+    },
+    {
+      "name": "one_fix_round",
+      "inputs": {"spec": "a thing"},
+      "agents": {
+        "impl": ["v1", "v2"],
+        "reviewer": [
+          "{\"$case\": \"Fail\", \"issues\": [\"too slow\"]}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "v2\n",
+        "calls": {"impl": 2, "reviewer": 2},
+        "prompts": [
+          {"agent": "impl", "call": 1, "contains": ["too slow", "v1"]},
+          {"agent": "reviewer", "call": 1, "contains": ["v2"]}
+        ]
+      }
+    },
+    {
+      "name": "retry_inside_one_liner",
+      "inputs": {"spec": "a thing"},
+      "agents": {
+        "impl": ["v1"],
+        "reviewer": ["mumble", "{\"$case\": \"Pass\"}"]
+      },
+      "expect": {"stdout": "v1\n", "calls": {"impl": 1, "reviewer": 2}}
+    },
+    {
+      "name": "loop_exhaustion",
+      "inputs": {"spec": "a thing"},
+      "agents": {
+        "impl": {"responses": ["v1", "fix"], "repeat_last": true},
+        "reviewer": {
+          "responses": ["{\"$case\": \"Fail\", \"issues\": [\"x\"]}"],
+          "repeat_last": true
+        }
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"impl": 6, "reviewer": 5},
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 5}}
+      }
+    }
+  ]
+}

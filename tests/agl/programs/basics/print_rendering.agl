@@ -1,0 +1,26 @@
+# print console rendering (design §4.11): text verbatim, scalars as scalar text,
+# structured values as pretty JSON, no boundary markers.
+record Pair
+  name: text
+  score: int
+
+enum Verdict
+  | Good
+  | Bad(reason: text)
+
+input n: int
+
+print "plain text line"
+print "two\nlines"
+print 42
+print -7
+print 2.5
+print true
+print false
+print n
+print ["a", "b"]
+print {alpha: 1, beta: 2}
+print Pair(name: "x", score: 3)
+print Verdict.Bad(reason: "slow")
+let j: json = null
+print j

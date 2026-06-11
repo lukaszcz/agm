@@ -1,0 +1,21 @@
+# Triple-quoted templates: dedent rule (drop one leading/trailing newline, strip
+# minimum common indentation), interpolation holes are never dedented
+# (design §10.1).
+input body
+
+if true =>
+  let block = critic """
+  Header line:
+    keep two spaces
+  A "quoted" tail.
+  """
+  print "block sent"
+| else =>
+  pass
+
+let mixed = critic """
+Wrap:
+${body}
+End.
+"""
+print "mixed sent"

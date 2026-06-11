@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "two_step_refinement",
+      "inputs": {"start": "a sketch"},
+      "agents": {"impl": ["v1", "v2"], "prompt": ["noted"]},
+      "expect": {
+        "stdout": "v1\nv2\n6\ndone\n",
+        "calls": {"impl": 2, "prompt": 1},
+        "prompts": [
+          {"agent": "impl", "call": 0, "contains": ["Start from", "a sketch"]},
+          {"agent": "impl", "call": 1, "contains": ["Refine:", "v1"]},
+          {"agent": "prompt", "call": 0, "contains": ["hello", "1.5", "true"]}
+        ]
+      }
+    },
+    {
+      "name": "responses_flow_between_calls",
+      "inputs": {"start": "an empty file"},
+      "agents": {"impl": ["draft with ${marker} inside", "final"], "prompt": ["ok"]},
+      "expect": {
+        "stdout": "draft with ${marker} inside\nfinal\n6\ndone\n",
+        "calls": {"impl": 2, "prompt": 1},
+        "prompts": [
+          {
+            "agent": "impl",
+            "call": 1,
+            "contains": ["draft with ${marker} inside"]
+          }
+        ]
+      }
+    }
+  ]
+}

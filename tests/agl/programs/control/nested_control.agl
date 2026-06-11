@@ -1,0 +1,33 @@
+# Deeply nested control flow: loop > case > case > if, dedent-routed branch
+# markers, state threading through outer vars (design §2.13, §10.3).
+enum Review
+  | Pass
+  | Fail(issues: list[text])
+
+enum Plan
+  | Retry
+  | GiveUp(why: text)
+
+input spec
+
+var artifact: text = impl "Implement ${spec}"
+var status: text = "working"
+
+do[3]
+  let review: Review = reviewer "Review:\n${artifact}"
+  case review of
+    | Pass =>
+        set status = "accepted"
+    | Fail(issues) =>
+        let plan: Plan = planner "Plan for:\n${issues as bullets}"
+        case plan of
+          | Retry =>
+              set artifact = impl "Fix ${issues} in ${artifact}"
+          | GiveUp(why) =>
+              if why = "hopeless" =>
+                set status = "abandoned"
+              | else =>
+                set status = "deferred: ${why}"
+until status != "working"
+print status
+print artifact

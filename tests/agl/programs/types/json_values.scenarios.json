@@ -1,0 +1,62 @@
+{
+  "scenarios": [
+    {
+      "name": "clean_json_responses",
+      "inputs": {"payload": {"theme": "tests"}},
+      "agents": {
+        "source": [
+          "{\"a\": 1}",
+          "5",
+          "2.75",
+          "true",
+          "[\"x\", \"y\"]",
+          "{\"a\": 1, \"b\": 2}"
+        ]
+      },
+      "expect": {
+        "stdout_contains": [
+          "\"quoted\"",
+          "\"shorthand\"",
+          "\"nested\"",
+          "\"inner\"",
+          "5\n",
+          "2.75\n",
+          "true\n",
+          "\"x\"",
+          "\"y\""
+        ],
+        "calls": {"source": 6},
+        "prompts": [{"agent": "source", "call": 0, "contains": ["\"theme\"", "tests"]}]
+      }
+    },
+    {
+      "name": "lenient_default_extraction_and_null_json",
+      "inputs": {"payload": null},
+      "agents": {
+        "source": [
+          "null",
+          "Here you go:\n```json\n7\n```",
+          "```\n0.5\n```",
+          "The flag is:\nfalse",
+          "Names below.\n```json\n[\"only\"]\n```",
+          "{\"solo\": 3}"
+        ]
+      },
+      "expect": {
+        "stdout_contains": ["null\n", "7\n", "0.5\n", "false\n", "\"only\"", "\"solo\""],
+        "calls": {"source": 6}
+      }
+    },
+    {
+      "name": "wrong_shape_for_list_target",
+      "inputs": {"payload": [1, 2]},
+      "agents": {
+        "source": ["{}", "1", "1.5", "true", "{\"not\": \"a list\"}"]
+      },
+      "expect": {
+        "calls": {"source": 5},
+        "raises": {"type": "AgentParseError", "fields": {"agent": "source", "attempts": 1}}
+      }
+    }
+  ]
+}

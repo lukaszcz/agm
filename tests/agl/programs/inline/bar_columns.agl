@@ -1,0 +1,26 @@
+# Branch-marker layout: same-column and indented `|` branches; an outer `|` at a
+# shallower column closes the nested construct first (design §4.6, plan §3.4).
+input k: int
+
+if k = 1 =>
+  print "one"
+| k = 2 =>
+    print "two indented body"
+| else =>
+  print "other"
+
+case k of
+  | 0 =>
+      print "zero"
+  | _ =>
+      if k > 10 =>
+        print "big"
+      | else =>
+        print "small"
+
+if k > 0 =>
+  case k of
+    | 1 => print "pos one"
+    | _ => print "pos many"
+| else =>
+  print "non-positive"

@@ -1,0 +1,4 @@
+if true =>
+  input late
+| else =>
+  pass

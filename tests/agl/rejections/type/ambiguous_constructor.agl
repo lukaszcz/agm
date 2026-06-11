@@ -1,0 +1,5 @@
+enum Review
+  | Same
+enum TestResult
+  | Same
+let x = Same

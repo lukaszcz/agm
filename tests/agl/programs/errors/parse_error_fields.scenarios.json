@@ -1,0 +1,48 @@
+{
+  "scenarios": [
+    {
+      "name": "valid_spec_no_catch",
+      "agents": {
+        "builder": ["{\"name\": \"core\", \"level\": 2}"],
+        "critic": []
+      },
+      "expect": {
+        "stdout": "core\n",
+        "calls": {"builder": 1, "critic": 0}
+      }
+    },
+    {
+      "name": "exhausted_retries_expose_fields",
+      "agents": {
+        "builder": ["GIBBERISH-ONE", "GIBBERISH-TWO"],
+        "critic": ["take a break"]
+      },
+      "expect": {
+        "stdout": "advised\n",
+        "calls": {"builder": 2, "critic": 1},
+        "prompts": [
+          {
+            "agent": "critic",
+            "call": 0,
+            "contains": ["builder", "Spec", "2 attempts", "GIBBERISH-TWO", "\"name\""]
+          }
+        ],
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {"agent": "builder", "attempts": 2, "target_type": "Spec"}
+        }
+      }
+    },
+    {
+      "name": "missing_field_then_recovered_by_retry",
+      "agents": {
+        "builder": ["{\"name\": \"only name\"}", "{\"name\": \"fixed\", \"level\": 1}"],
+        "critic": []
+      },
+      "expect": {
+        "stdout": "fixed\n",
+        "calls": {"builder": 2, "critic": 0}
+      }
+    }
+  ]
+}

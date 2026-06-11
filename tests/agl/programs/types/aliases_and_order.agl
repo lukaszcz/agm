@@ -1,0 +1,20 @@
+# Type aliases are transparent (design §5.4); type declarations are collected
+# program-wide, so they may appear after their first use (plan §0).
+input verdict: Status
+
+let initial: Status = verdict
+
+if initial is Status.Approved => print "approved input"
+| else => print "not approved"
+
+let next: Status = judge "Re-judge it."
+
+case next of
+  | Approved => print "ok"
+  | Rejected(notes) => print "notes:\n${notes as bullets}"
+
+type Status = Verdict
+
+enum Verdict
+  | Approved
+  | Rejected(notes: list[text])

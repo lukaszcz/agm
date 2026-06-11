@@ -1,0 +1,36 @@
+# Case expressions: single-expression branches, common result type with
+# int -> decimal widening, parenthesized form in bar-safe positions
+# (design §4.8, §5.8, §10.3, §11.8).
+enum Grade
+  | Top
+  | Mid(score: int)
+  | Low
+
+input bonus: int
+
+let grade: Grade = grader "Grade the work."
+
+let points: int = case grade of
+  | Top => 100
+  | Mid(score) => score + bonus
+  | Low => 0
+print points
+
+let width: decimal = case grade of
+  | Top => 2.5
+  | _ => 1
+print width
+
+let note = case grade of
+  | Top => "perfect"
+  | Mid(score) => "mid ${score}"
+  | Low => "low"
+print note
+
+var tries: int = 0
+do[3]
+  set tries = tries + 1
+until (case grade of
+  | Top => true
+  | _ => tries >= 2)
+print tries

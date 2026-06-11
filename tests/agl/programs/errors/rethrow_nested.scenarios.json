@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "name": "inner_raise_is_rethrown_to_outer",
+      "inputs": {"mode": "inner"},
+      "expect": {
+        "stdout": "inner saw from inner\nouter saw abort\ncontinue\n",
+        "raises": {
+          "type": "Abort",
+          "fields": {"message": "fatal inner"}
+        }
+      }
+    },
+    {
+      "name": "quiet_inner_body",
+      "inputs": {"mode": "quiet"},
+      "expect": {
+        "stdout": "inner ok\ncontinue\n",
+        "raises": {
+          "type": "Abort",
+          "fields": {"message": "fatal quiet"}
+        }
+      }
+    }
+  ]
+}

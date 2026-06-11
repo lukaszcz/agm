@@ -36,11 +36,9 @@ The checker raises ``AglTypeError`` on the first error (Q4 first-error abort).
 
 from __future__ import annotations
 
-from typing import cast
-
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.scope.symbols import CallKind, ResolvedProgram
+from agm.agl.scope.symbols import BindingRef, CallKind, ResolvedProgram
 from agm.agl.syntax.nodes import (
     AgentCall,
     BinaryOp,
@@ -57,6 +55,7 @@ from agm.agl.syntax.nodes import (
     DoUntil,
     ElseSentinel,
     EnumDef,
+    Expr,
     ExprStmt,
     FieldAccess,
     FieldDef,
@@ -324,7 +323,7 @@ class _Checker:
         ref = self._resolved.resolution[stmt.node_id]
         # resolve_binding always returns non-None for a VarDecl binding that
         # has been type-checked; the scope pass and sequential ordering guarantee this.
-        target_type = cast(Type, self._env.resolve_binding(ref))
+        target_type = self._require_binding_type(ref)
         val_type = self._check_expr(stmt.value, expected=target_type)
         self._assert_assignable(val_type, target_type, stmt.span)
 
@@ -400,19 +399,18 @@ class _Checker:
     # Expression type inference
     # ------------------------------------------------------------------
 
-    def _check_expr(self, expr: object, *, expected: Type | None) -> Type:
+    def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type:
         """Infer/check the type of *expr*, recording it in ``_node_types``.
 
         ``expected`` carries the outer type context (bidirectional typing).
         Returns the inferred (or confirmed) type.
         """
         typ = self._infer_expr(expr, expected=expected)
-        # _infer_expr succeeds only for the Expr union members, all of which have
-        # an integer node_id attribute.  Record the type unconditionally.
-        self._node_types[cast(int, getattr(expr, "node_id"))] = typ
+        # Every Expr union member exposes an integer ``node_id``; record the type.
+        self._node_types[expr.node_id] = typ
         return typ
 
-    def _infer_expr(self, expr: object, *, expected: Type | None) -> Type:
+    def _infer_expr(self, expr: Expr, *, expected: Type | None) -> Type:
         """Bottom-up inference with optional top-down ``expected`` context."""
         from agm.agl.syntax.nodes import (
             AgentCall,
@@ -488,7 +486,25 @@ class _Checker:
         # The scope pass guarantees every VarRef has a resolution entry.
         ref = self._resolved.resolution[node.node_id]
         # The sequential checker guarantees the binding type has been set.
-        return cast(Type, self._env.resolve_binding(ref))
+        return self._require_binding_type(ref)
+
+    def _require_binding_type(self, ref: BindingRef) -> Type:
+        """Return the resolved type for *ref*, asserting it has been set.
+
+        Every binding referenced from a reachable ``VarRef`` or ``set`` target
+        has its type recorded before the reference is checked: ``let``/``var``/
+        ``input`` set it eagerly, catch binders and *enum* pattern variables set
+        it when their branch is entered, and constructor patterns on non-enum
+        subjects are rejected by ``_bind_pattern_types`` before any body runs.
+        A ``None`` result therefore signals an internal invariant violation
+        rather than a user error.
+        """
+        typ = self._env.resolve_binding(ref)
+        if typ is None:
+            raise AssertionError(
+                f"Binding {ref!r} has no recorded type; checker invariant violated."
+            )
+        return typ
 
     # --- Agent call ---
 
@@ -952,24 +968,30 @@ class _Checker:
             # The Pattern union is WildcardPattern | LiteralPattern | VarPattern |
             # ConstructorPattern.  The first three are handled above, so this is
             # always ConstructorPattern.
-            cp = cast(ConstructorPattern, pattern)
+            assert isinstance(pattern, ConstructorPattern), (
+                f"Unexpected pattern kind: {type(pattern).__name__}"
+            )
+            # Constructor patterns match enum variants (design §6.1). A non-enum
+            # subject can never match a constructor pattern, so it is a static
+            # error — and the resolver has already bound the pattern's field
+            # variables, which would otherwise be left untyped.
+            if not isinstance(subj_type, EnumType):
+                raise AglTypeError(
+                    f"Cannot match constructor pattern '{pattern.name}' against "
+                    f"non-enum type '{subj_type!r}'.",
+                    span=pattern.span,
+                )
             # Look up variant field types and bind each sub-pattern.
-            if isinstance(subj_type, EnumType):
-                variant_name = cp.name
-                vfields = subj_type.variants.get(variant_name, {})
-                for pf in cp.fields:
-                    if pf.name not in vfields:
-                        raise AglTypeError(
-                            f"Variant '{variant_name}' has no field '{pf.name}'.",
-                            span=pf.span,
-                        )
-                    field_type = vfields[pf.name]
-                    self._bind_pattern_types(pf.pattern, field_type, pf)
-                    # Also check for duplicate pattern fields.
-                    # (duplicate detection below in _check_pattern_fields_unique)
-            else:
-                # For non-enum subjects we bind as subj_type (may be refined in M3).
-                pass
+            variant_name = pattern.name
+            vfields = subj_type.variants.get(variant_name, {})
+            for pf in pattern.fields:
+                if pf.name not in vfields:
+                    raise AglTypeError(
+                        f"Variant '{variant_name}' has no field '{pf.name}'.",
+                        span=pf.span,
+                    )
+                field_type = vfields[pf.name]
+                self._bind_pattern_types(pf.pattern, field_type, pf)
 
     # ------------------------------------------------------------------
     # Assignability helpers

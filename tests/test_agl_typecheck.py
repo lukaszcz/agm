@@ -2262,8 +2262,12 @@ class TestCheckerExprsViaAst:
 
     # --- Pattern binding with non-enum subject type (coverage) ---
 
-    def test_constructor_pattern_non_enum_subject(self) -> None:
-        """ConstructorPattern on non-enum subject: binds as subject type (no error in M1)."""
+    def test_constructor_pattern_non_enum_subject_fieldless(self) -> None:
+        """Fieldless ConstructorPattern on a non-enum subject is a static error.
+
+        Patterns match enum variants (design §6.1); a constructor pattern against
+        a non-enum subject (here ``int``) must be rejected.
+        """
         from agm.agl.syntax.nodes import ConstructorPattern
         let_x = _tc_let("x", _tc_intlit(1))
         ctor_p = ConstructorPattern(
@@ -2277,8 +2281,56 @@ class TestCheckerExprsViaAst:
         case_stmt = CaseStmt(
             subject=_tc_varref("x"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
         )
-        r = resolve_and_check(let_x, case_stmt)
-        assert r.resolved.program is not None
+        err = reject_ast(let_x, case_stmt)
+        assert isinstance(err, AglTypeError)
+
+    def test_constructor_pattern_non_enum_subject_with_field_binding(self) -> None:
+        """Field-binding ConstructorPattern on a non-enum subject is rejected.
+
+        Regression for the soundness bug: the resolver binds the pattern field
+        variable ``v``, but the checker previously silently skipped binding a type
+        for non-enum subjects, so a body reading ``v`` got a ``None`` type. The
+        whole branch must instead be rejected with a span-aware type error.
+        """
+        from agm.agl.syntax.nodes import ConstructorPattern, PatternField
+        let_x = _tc_let("x", _tc_intlit(1))
+        pv = VarPattern(name="v", span=_tc_sp(), node_id=_tc_nid())
+        pf = PatternField(name="f", pattern=pv, span=_tc_sp(), node_id=_tc_nid())
+        ctor_p = ConstructorPattern(
+            qualifier=None, name="Cons", fields=(pf,), span=_tc_sp(), node_id=_tc_nid()
+        )
+        branch = CaseStmtBranch(
+            pattern=ctor_p,
+            body=(PrintStmt(value=_tc_varref("v"), span=_tc_sp(), node_id=_tc_nid()),),
+            span=_tc_sp(), node_id=_tc_nid(),
+        )
+        case_stmt = CaseStmt(
+            subject=_tc_varref("x"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
+        )
+        err = reject_ast(let_x, case_stmt)
+        assert isinstance(err, AglTypeError)
+
+    def test_require_binding_type_none_raises_assertion(self) -> None:
+        """Internal invariant: an unset binding type is an AssertionError, not None.
+
+        Directly exercises the ``_require_binding_type`` guard, whose ``None``
+        branch is unreachable through normal checking (every reachable binding
+        has its type recorded first), so it is verified as a unit contract here.
+        """
+        from agm.agl.scope.resolver import resolve
+        from agm.agl.scope.symbols import BindingRef
+        from agm.agl.typecheck.checker import _Checker
+        from agm.agl.typecheck.env import TypeEnvironment
+
+        resolved = resolve(_tc_program())
+        checker = _Checker(
+            env=TypeEnvironment(), resolved=resolved, capabilities=default_capabilities()
+        )
+        ref = BindingRef(
+            name="ghost", mutable=False, decl_span=_tc_sp(), decl_node_id=999999
+        )
+        with pytest.raises(AssertionError):
+            checker._require_binding_type(ref)
 
     def test_constructor_pattern_enum_unknown_field(self) -> None:
         """ConstructorPattern with field not in variant raises AglTypeError."""

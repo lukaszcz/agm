@@ -26,6 +26,7 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
+from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.syntax.nodes import (
     AgentCall,
     BinaryOp,
@@ -71,11 +72,11 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.typecheck.types import (
-    BoolType,
     DecimalType,
+    DictType,
     EnumType,
-    IntType,
     JsonType,
+    ListType,
     RecordType,
     TextType,
     Type,
@@ -180,28 +181,33 @@ class Interpreter:
 
     def _exec_let(self, stmt: LetDecl, scope: Scope) -> None:
         value = self._eval_expr(stmt.value, scope)
-        # Widen int → decimal if annotation says decimal.
-        if stmt.type_ann is not None:
-            target_type = _resolve_type_ann(stmt.type_ann)
-            if target_type is not None:
-                value = _coerce(value, target_type)
-        scope.define(stmt.name, value, mutable=False, decl_span=stmt.span)
+        # The checker records a declared type for every let binding; coerce the
+        # value toward it (int → decimal, element-wise in containers, json
+        # boundary wrapping — design §5.8).
+        target_type = self._binding_type_for(stmt.node_id)
+        scope.define(stmt.name, _coerce(value, target_type), mutable=False, decl_span=stmt.span)
 
     def _exec_var(self, stmt: VarDecl, scope: Scope) -> None:
         value = self._eval_expr(stmt.value, scope)
-        if stmt.type_ann is not None:
-            target_type = _resolve_type_ann(stmt.type_ann)
-            if target_type is not None:
-                value = _coerce(value, target_type)
-        scope.define(stmt.name, value, mutable=True, decl_span=stmt.span)
+        target_type = self._binding_type_for(stmt.node_id)
+        scope.define(stmt.name, _coerce(value, target_type), mutable=True, decl_span=stmt.span)
 
     def _exec_set(self, stmt: SetStmt, scope: Scope) -> None:
         value = self._eval_expr(stmt.value, scope)
-        # Coerce int → decimal if the existing binding holds a DecimalValue.
-        existing = scope.lookup(stmt.target)
-        if existing is not None and isinstance(existing.value, DecimalValue):
-            value = _coerce(value, DecimalType())
-        scope.set_value(stmt.target, value)
+        # Coerce toward the mutable binding's declared type (design §5.8).
+        ref = self._checked.resolved.resolution[stmt.node_id]
+        target_type = self._binding_type_for(ref.decl_node_id)
+        scope.set_value(stmt.target, _coerce(value, target_type))
+
+    def _binding_type_for(self, decl_node_id: int) -> Type:
+        """Return the declared type the checker recorded for a binding node.
+
+        The type checker assigns a declared type to every ``let``/``var``/input
+        binding before evaluation, so this is always present.
+        """
+        target_type = self._type_env.get_binding_type(decl_node_id)
+        assert target_type is not None, "binding type must be recorded by the checker"
+        return target_type
 
     def _exec_print(self, stmt: PrintStmt, scope: Scope) -> None:
         from agm.agl.runtime.render import render_for_console
@@ -484,6 +490,7 @@ class Interpreter:
             effective_strict = self._strict_json
 
         last_raw: str | None = None
+        last_normalized: str | None = None
         last_errors: tuple[ValidationError, ...] = ()
         for attempt in range(max_attempts):
             request = AgentRequest(
@@ -503,20 +510,25 @@ class Interpreter:
                 return result.value
 
             last_raw = raw
+            last_normalized = result.normalized_raw
             last_errors = result.errors
 
         # All attempts exhausted → raise AgentParseError.  Validation errors are
         # threaded as JSON-shaped values (a list of per-error objects) so the
         # exception's ``validation_errors`` field (text-renderable) matches the
-        # exception field schema (design §7.5 / §7.9).
+        # exception field schema (design §7.5 / §7.9).  ``normalized_raw`` carries
+        # the recovered/extracted JSON text when the failure was a schema or
+        # conversion error (F5); it falls back to the raw output when no value
+        # could be recovered at all.
         errors_json: list[object] = [e.to_json_obj() for e in last_errors]
+        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
         raise AglRaise(
             _make_exc_value(
                 "AgentParseError",
                 f"Agent {agent_name!r} failed to produce a valid {contract.target_type!r} "
                 f"after {max_attempts} attempt(s). Last output: {last_raw!r}",
                 raw=TextValue(last_raw or ""),
-                normalized_raw=TextValue(last_raw or ""),
+                normalized_raw=TextValue(normalized_text),
                 agent=TextValue(agent_name),
                 attempts=IntValue(max_attempts),
                 target_type=TextValue(str(contract.target_type)),
@@ -528,64 +540,33 @@ class Interpreter:
 
     def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:
         """Evaluate a record or enum-variant constructor."""
-        # Look up the type in the type environment.
-        env = self._type_env
-
         # Evaluate arguments.
         arg_values: dict[str, Value] = {}
         for arg in expr.args:
             arg_values[arg.name] = self._eval_expr(arg.value, scope)
 
-        # Qualify the name to find the type.
-        if expr.qualifier is not None:
-            # Qualified: EnumType.Variant
-            type_name = expr.qualifier
-            variant_name = expr.name
-        else:
-            # Unqualified: may be a record or an enum variant.
-            type_name, variant_name = self._resolve_constructor_name(expr.name, env)
+        # The checker resolved this constructor's type (records the resolved
+        # nominal type in ``node_types``), already resolving any alias qualifier
+        # transparently (design §5.4) — the interpreter never re-resolves it.
+        typ = self._checked.node_types.get(expr.node_id)
 
         # The type checker validates that the constructor names a known type and
         # that every supplied field is declared, so each ``arg`` field is present
         # in the corresponding record/variant field table.
-        typ = env.get_type(type_name)
         if isinstance(typ, RecordType):
             coerced = {
                 fname: _coerce(fval, typ.fields[fname]) for fname, fval in arg_values.items()
             }
-            return RecordValue(type_name=type_name, fields=coerced)
-        if isinstance(typ, EnumType):
-            variant_fields = typ.variants.get(variant_name, {})
-            coerced2 = {
-                fname: _coerce(fval, variant_fields[fname])
-                for fname, fval in arg_values.items()
-            }
-            return EnumValue(type_name=type_name, variant=variant_name, fields=coerced2)
-
-        # Unreachable: an unknown constructor is a static error.
-        raise RuntimeError(  # pragma: no cover
-            f"Cannot construct value of type {type_name!r}"
-        )
-
-    def _resolve_constructor_name(
-        self, name: str, env: TypeEnvironment
-    ) -> tuple[str, str]:
-        """Resolve an unqualified constructor name to (type_name, variant_name).
-
-        For records the type_name == variant_name (or name).
-        For enum variants we scan all registered enum types.
-        """
-        # First check if it's a direct type name (record constructor).
-        t = env.get_type(name)
-        if t is not None:
-            return (name, name)
-        # Check all enum types for matching variant name.
-        for tname in env.all_declared_type_names():
-            typ = env.get_type(tname)
-            if isinstance(typ, EnumType) and name in typ.variants:
-                return (tname, name)
-        # Unreachable: the type checker rejects unknown constructor names.
-        return (name, name)  # pragma: no cover
+            return RecordValue(type_name=typ.name, fields=coerced)
+        # Otherwise an enum-variant constructor.  The variant is the constructor's
+        # own name (the qualifier, if any, only selects the enum).
+        assert isinstance(typ, EnumType), "constructor type must be record or enum"
+        variant_name = expr.name
+        variant_fields = typ.variants.get(variant_name, {})
+        coerced2 = {
+            fname: _coerce(fval, variant_fields[fname]) for fname, fval in arg_values.items()
+        }
+        return EnumValue(type_name=typ.name, variant=variant_name, fields=coerced2)
 
     def _eval_binary_op(self, expr: BinaryOp, scope: Scope) -> Value:
         op = expr.op
@@ -687,30 +668,51 @@ class Interpreter:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_type_ann(type_ann: object) -> Type | None:
-    """Convert an AST ``TypeExpr`` annotation node to a ``Type`` instance.
-
-    Returns ``None`` for unknown or compound types not needed for M1 coercion.
-    """
-    from agm.agl.syntax.types import BoolT, DecimalT, IntT, JsonT, TextT
-
-    if isinstance(type_ann, TextT):
-        return TextType()
-    if isinstance(type_ann, IntT):
-        return IntType()
-    if isinstance(type_ann, DecimalT):
-        return DecimalType()
-    if isinstance(type_ann, BoolT):
-        return BoolType()
-    if isinstance(type_ann, JsonT):
-        return JsonType()
-    return None
-
-
 def _coerce(value: Value, target: Type) -> Value:
-    """Apply the single implicit coercion: ``int → decimal``."""
+    """Coerce *value* toward its statically-checked *target* type (design §5.8).
+
+    The checker has already proven the value is assignable to *target*; this
+    materializes the implicit coercions in the runtime representation:
+
+    - ``int → decimal`` widening (the single scalar coercion);
+    - ``json`` boundary: a JSON-shaped value bound to a ``json`` slot is stored
+      in the one canonical ``json`` representation — a :class:`JsonValue`
+      wrapping the JSON-shaped object (so ``print``/rendering/equality are
+      consistent regardless of the literal it came from);
+    - element-wise recursion through ``list``/``dict``/record/enum so e.g.
+      ``int`` widens to ``decimal`` and json-wrapping applies inside containers.
+    """
+    if isinstance(target, JsonType):
+        # Already json → leave as-is; otherwise wrap the JSON-shaped object.
+        if isinstance(value, JsonValue):
+            return value
+        return JsonValue(value_to_json_obj(value))
     if isinstance(target, DecimalType) and isinstance(value, IntValue):
         return DecimalValue(decimal.Decimal(value.value))
+    if isinstance(target, ListType) and isinstance(value, ListValue):
+        return ListValue(elements=tuple(_coerce(e, target.elem) for e in value.elements))
+    if isinstance(target, DictType) and isinstance(value, DictValue):
+        return DictValue(
+            entries={k: _coerce(v, target.value) for k, v in value.entries.items()}
+        )
+    if isinstance(target, RecordType) and isinstance(value, RecordValue):
+        return RecordValue(
+            type_name=value.type_name,
+            fields={
+                k: _coerce(v, target.fields[k]) if k in target.fields else v
+                for k, v in value.fields.items()
+            },
+        )
+    if isinstance(target, EnumType) and isinstance(value, EnumValue):
+        variant_fields = target.variants.get(value.variant, {})
+        return EnumValue(
+            type_name=value.type_name,
+            variant=value.variant,
+            fields={
+                k: _coerce(v, variant_fields[k]) if k in variant_fields else v
+                for k, v in value.fields.items()
+            },
+        )
     return value
 
 

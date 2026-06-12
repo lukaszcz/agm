@@ -1,6 +1,10 @@
 """WorkflowRuntime — the public façade for the AgL host runtime.
 
-M1 implementation: full parse → scope → typecheck → eval pipeline.
+Drives the full ``parse → scope → typecheck → host-prep → eval`` pipeline:
+registers agents/codecs/renderers, validates host inputs, materializes output
+contracts, and executes the program (or stops after static checking for
+``agm exec --dry-run``).  Structured outputs use the JSON codec with
+lenient-by-default recovery (design §2.8).
 """
 
 from __future__ import annotations
@@ -155,8 +159,9 @@ class WorkflowRuntime:
         runs the full static pipeline, input validation, and contract
         materialization, then STOPS before executing any statement: a clean
         program returns ``ok=True`` with no bindings and produces no program
-        output; static/input errors still return ``ok=False``.
-        TODO(M2): emit the §10.1 static call-site inventory here.
+        output; static/input errors still return ``ok=False``.  On a clean
+        ``check_only`` run the §10.1 static call-site inventory is populated on
+        ``RunResult.call_sites`` (printed by ``agm exec --dry-run``).
 
         Returns a ``RunResult`` capturing the outcome.
         """

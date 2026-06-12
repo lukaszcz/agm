@@ -426,6 +426,157 @@ class TestNullAssignability:
 
 
 # ---------------------------------------------------------------------------
+# F1: json assignability (is_json_shaped) — design §5.8 rule 3
+# ---------------------------------------------------------------------------
+
+
+class TestJsonAssignability:
+    """``json`` accepts JSON-shaped values; records/enums/exceptions do not."""
+
+    def test_json_shaped_scalars(self) -> None:
+        from agm.agl.typecheck.types import (
+            BoolType,
+            DecimalType,
+            IntType,
+            JsonType,
+            TextType,
+            is_json_shaped,
+        )
+
+        for t in (TextType(), JsonType(), BoolType(), IntType(), DecimalType()):
+            assert is_json_shaped(t)
+
+    def test_json_shaped_containers_recurse(self) -> None:
+        from agm.agl.typecheck.types import (
+            DictType,
+            IntType,
+            ListType,
+            RecordType,
+            is_json_shaped,
+        )
+
+        assert is_json_shaped(ListType(elem=IntType()))
+        assert is_json_shaped(DictType(value=ListType(elem=IntType())))
+        # A list of records is NOT json-shaped.
+        rec = RecordType(name="R", fields={"n": IntType()})
+        assert not is_json_shaped(ListType(elem=rec))
+        assert not is_json_shaped(DictType(value=rec))
+
+    def test_record_enum_exception_not_json_shaped(self) -> None:
+        from agm.agl.typecheck.types import (
+            EnumType,
+            ExceptionType,
+            IntType,
+            RecordType,
+            is_json_shaped,
+        )
+
+        assert not is_json_shaped(RecordType(name="R", fields={"n": IntType()}))
+        assert not is_json_shaped(EnumType(name="E", variants={"V": {}}))
+        assert not is_json_shaped(ExceptionType(name="Abort", fields={}))
+
+    def test_is_assignable_json_accepts_shaped(self) -> None:
+        from agm.agl.typecheck.types import (
+            IntType,
+            JsonType,
+            ListType,
+            is_assignable,
+        )
+
+        assert is_assignable(IntType(), JsonType())
+        assert is_assignable(ListType(elem=IntType()), JsonType())
+
+    def test_is_assignable_json_rejects_record(self) -> None:
+        from agm.agl.typecheck.types import (
+            IntType,
+            JsonType,
+            RecordType,
+            is_assignable,
+        )
+
+        assert not is_assignable(RecordType(name="R", fields={"n": IntType()}), JsonType())
+
+    def test_list_of_json_accepts_bool_and_null(self) -> None:
+        """F2/F1: ``let x: list[json] = [true, null]`` is accepted."""
+        r = parse_resolve_check("let x: list[json] = [true, null]")
+        assert r.resolved.program is not None
+
+    def test_record_value_not_assignable_to_json_via_source(self) -> None:
+        """The ``record_not_json`` rejection keeps passing."""
+        err = reject_type("record P\n  n: int\nlet j: json = P(n: 1)")
+        line, _ = diag(err)
+        assert line == 3
+
+
+# ---------------------------------------------------------------------------
+# F2: list/dict literal expected-type propagation, soundness, and widening
+# ---------------------------------------------------------------------------
+
+
+class TestListDictLiteralChecking:
+    def test_list_decimal_widens_int_elements(self) -> None:
+        """``let x: list[decimal] = [1, 2.5]`` is accepted (int → decimal)."""
+        r = parse_resolve_check("let x: list[decimal] = [1, 2.5]")
+        assert r.resolved.program is not None
+
+    def test_list_json_accepts_mixed_json_shaped(self) -> None:
+        r = parse_resolve_check("let x: list[json] = [true, null]")
+        assert r.resolved.program is not None
+
+    def test_dict_int_rejects_wrong_value(self) -> None:
+        """SOUNDNESS: every entry is checked, not just the first."""
+        err = reject_type('let m: dict[text, int] = {a: 1, b: "oops"}')
+        line, _ = diag(err)
+        assert line == 1
+
+    def test_list_int_rejects_later_text_element(self) -> None:
+        """SOUNDNESS: a later element that mismatches the target is rejected."""
+        err = reject_type('let xs: list[int] = [1, 2, "three"]')
+        line, _ = diag(err)
+        assert line == 1
+
+    def test_unannotated_list_widens_to_decimal(self) -> None:
+        """Without an annotation, ``[1, 2.5]`` infers ``list[decimal]``."""
+        from agm.agl.syntax.nodes import LetDecl
+
+        r = parse_resolve_check("let xs = [1, 2.5]")
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert r.node_types[stmt.value.node_id] == ListType(elem=DecimalType())
+
+    def test_unannotated_decimal_then_int_stays_decimal(self) -> None:
+        """``[2.5, 1]`` keeps ``list[decimal]`` (a later int does not narrow)."""
+        from agm.agl.syntax.nodes import LetDecl
+
+        r = parse_resolve_check("let xs = [2.5, 1]")
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert r.node_types[stmt.value.node_id] == ListType(elem=DecimalType())
+
+    def test_unannotated_mixed_incompatible_rejected(self) -> None:
+        err = reject_type('let xs = [1, "two"]')
+        line, _ = diag(err)
+        assert line == 1
+
+    def test_dict_json_value_propagation(self) -> None:
+        """A json-valued dict accepts heterogeneous JSON-shaped entries."""
+        r = parse_resolve_check('let m: dict[text, json] = {a: 1, b: "two", c: null}')
+        assert r.resolved.program is not None
+
+    def test_json_dict_literal_with_nested_list_and_null(self) -> None:
+        """A ``json`` dict literal accepts nested lists/dicts and null (json_values.agl)."""
+        src = (
+            "let document: json = {\n"
+            '  "quoted": 1,\n'
+            "  shorthand: [true, false, null],\n"
+            '  nested: {inner: ["x", 2.5]},\n'
+            "}"
+        )
+        r = parse_resolve_check(src)
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
 # Rejection: literal type mismatches
 # ---------------------------------------------------------------------------
 
@@ -1171,6 +1322,26 @@ class TestTypeEnvironment:
         with pytest.raises(AglTypeError) as exc:
             env.resolve_type_expr(_tc_name_t("A"))
         assert "cycle" in exc.value.to_diagnostic().message.lower()
+
+    def test_resolve_named_type_unknown_returns_none(self) -> None:
+        from agm.agl.typecheck.env import TypeEnvironment
+        env = TypeEnvironment()
+        assert env.resolve_named_type("Ghost") is None
+
+    def test_resolve_named_type_resolves_enum_through_alias(self) -> None:
+        from agm.agl.typecheck.env import TypeEnvironment
+        env = TypeEnvironment()
+        enum_t = EnumType(name="R", variants={"Pass": {}})
+        env.register_type("R", enum_t)
+        env.register_alias("Status", _tc_name_t("R"))
+        assert env.resolve_named_type("Status") is enum_t
+
+    def test_resolve_named_type_broken_alias_returns_none(self) -> None:
+        """An alias chain that fails to resolve yields None (defensive path)."""
+        from agm.agl.typecheck.env import TypeEnvironment
+        env = TypeEnvironment()
+        env.register_alias("Bad", _tc_name_t("Ghost"))
+        assert env.resolve_named_type("Bad") is None
 
     def test_resolve_type_expr_unknown_name_error(self) -> None:
         from agm.agl.typecheck.env import AglTypeError, TypeEnvironment
@@ -2130,6 +2301,57 @@ class TestCheckerExprsViaAst:
         )
         r = resolve_and_check(enum_def, _tc_let("v", ctor))
         assert isinstance(r.node_types[ctor.node_id], EnumType)
+
+    def test_enum_constructor_alias_qualified(self) -> None:
+        """F3: ``type Status = Review`` then ``Status.Pass`` resolves the alias."""
+        enum_def = EnumDef(
+            name="Review",
+            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
+            span=_tc_sp(), node_id=_tc_nid(),
+        )
+        alias = TypeAlias(
+            name="Status", type_expr=_tc_name_t("Review"), span=_tc_sp(), node_id=_tc_nid()
+        )
+        ctor = Constructor(
+            qualifier="Status", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
+        )
+        r = resolve_and_check(enum_def, alias, _tc_let("v", ctor))
+        resolved = r.node_types[ctor.node_id]
+        # The resolved (recorded) node type is the underlying enum, not the alias.
+        assert isinstance(resolved, EnumType)
+        assert resolved.name == "Review"
+
+    def test_enum_constructor_alias_of_alias_qualified(self) -> None:
+        """F3: a multi-hop alias chain resolves transparently."""
+        enum_def = EnumDef(
+            name="Review",
+            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
+            span=_tc_sp(), node_id=_tc_nid(),
+        )
+        a = TypeAlias(
+            name="A", type_expr=_tc_name_t("Review"), span=_tc_sp(), node_id=_tc_nid()
+        )
+        b = TypeAlias(name="B", type_expr=_tc_name_t("A"), span=_tc_sp(), node_id=_tc_nid())
+        ctor = Constructor(
+            qualifier="B", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
+        )
+        r = resolve_and_check(enum_def, a, b, _tc_let("v", ctor))
+        resolved = r.node_types[ctor.node_id]
+        assert isinstance(resolved, EnumType)
+        assert resolved.name == "Review"
+
+    def test_enum_constructor_non_enum_alias_qualifier_rejected(self) -> None:
+        """F3: an alias of a non-enum type cannot qualify a constructor."""
+        alias = TypeAlias(
+            name="Nums",
+            type_expr=_tc_list_t(_tc_int_t()),
+            span=_tc_sp(), node_id=_tc_nid(),
+        )
+        ctor = Constructor(
+            qualifier="Nums", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
+        )
+        err = reject_ast(alias, _tc_let("v", ctor))
+        assert "Nums" in err.to_diagnostic().message
 
     def test_enum_constructor_qualified_unknown_enum(self) -> None:
         ctor = Constructor(

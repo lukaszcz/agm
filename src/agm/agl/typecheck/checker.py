@@ -1,11 +1,11 @@
-"""Type-checking pass (Component 5) — M1 implementation.
+"""Type-checking pass (Component 5).
 
 ``check(resolved, capabilities)`` performs a bidirectional type pass over the
 ``ResolvedProgram``, using the ``HostCapabilities`` to validate codec and
 renderer names, and returns a ``CheckedProgram``.
 
-M1 rules implemented
----------------------
+Rules implemented
+-----------------
 1.  Type declaration validation: duplicate names, unknown referenced types,
     recursive records/enums, alias cycles, and built-in-name shadowing.
 2.  Binding type inference:
@@ -15,17 +15,19 @@ M1 rules implemented
     - ``input name[: T]`` — defaults to ``text`` when unannotated.
 3.  ``set name = e`` — expected type is the binding's declared type.
 4.  ``print expr`` — accepts any type.
-5.  Agent call target typing (§11.4): from annotation / set-target / else
-    ``text``.  M1 capability check: target type must be in the ``"text"``
-    codec's supported kinds.  Non-text targets are a static error in M1
-    ("no registered codec supports type T").
-6.  ``strict_json`` is valid only when the selected codec is ``"json"``; in
-    M1, using ``strict_json: true`` on a non-JSON codec is always an error.
+5.  Agent-call target typing (§11.4): from annotation / set-target / else
+    ``text``.  The target type's kind must be supported by some registered
+    codec ("no registered codec supports type T" otherwise).
+6.  ``strict_json`` is valid only when the selected codec is ``"json"``.
 7.  Renderer names in interpolation segments must exist in capabilities.
 8.  Agent names: when ``has_fallback_agent`` is ``False`` an unknown name is
     an error.
-9.  Assignability: ``null`` is ``json`` — not assignable to text/int/decimal.
-    Int literals are assignable to ``decimal`` (single coercion).
+9.  Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
+    accepts any JSON-shaped value (scalars and ``list``/``dict`` thereof, but
+    not records/enums/exceptions).  List/dict literals propagate the expected
+    element/value type and assert every element soundly.  Qualified enum
+    constructors, ``is`` tests, and patterns resolve their qualifier
+    alias-transparently (§5.4).
 10. Duplicate call options are already rejected by the AST builder; checked
     here for robustness.
 11. Type declarations: duplicate fields, duplicate variants, duplicate
@@ -35,6 +37,8 @@ The checker raises ``AglTypeError`` on the first error (Q4 first-error abort).
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -908,6 +912,10 @@ class _Checker:
                 f"got '{expr_type!r}'.",
                 span=node.span,
             )
+        # A qualifier (``status is Status.Pass``) is resolved alias-transparently
+        # and must name the same enum as the operand (design §5.4).
+        if node.qualifier is not None:
+            self._check_variant_qualifier(node.qualifier, expr_type, node.span)
         # Check variant membership.
         if node.variant not in expr_type.variants:
             raise AglTypeError(
@@ -915,6 +923,27 @@ class _Checker:
                 span=node.span,
             )
         return BoolType()
+
+    def _check_variant_qualifier(
+        self, qualifier: str, enum_type: EnumType, span: SourceSpan
+    ) -> None:
+        """Validate an alias-transparent enum qualifier (design §5.4).
+
+        ``qualifier`` must resolve (through any alias chain) to ``enum_type``;
+        a non-enum or mismatched qualifier is a static error.
+        """
+        resolved = self._env.resolve_named_type(qualifier)
+        if not isinstance(resolved, EnumType):
+            raise AglTypeError(
+                f"'{qualifier}' is not a known enum type.",
+                span=span,
+            )
+        if resolved.name != enum_type.name:
+            raise AglTypeError(
+                f"Qualifier '{qualifier}' resolves to enum '{resolved.name}', "
+                f"but the value has enum type '{enum_type.name}'.",
+                span=span,
+            )
 
     # --- case expression ---
 
@@ -976,9 +1005,13 @@ class _Checker:
     def _check_constructor(self, node: Constructor, *, expected: Type | None) -> Type:
         # Resolve the constructor.
         if node.qualifier is not None:
-            # Qualified: Enum.Variant
-            enum_type = self._env.get_type(node.qualifier)
-            if enum_type is None or not isinstance(enum_type, EnumType):
+            # Qualified: Enum.Variant — the qualifier is resolved
+            # alias-transparently (design §5.4), so ``Status.Pass`` works when
+            # ``type Status = Review``.  The resolved ``EnumType`` is recorded as
+            # this node's type (via the return value), so the interpreter reads
+            # the resolved enum rather than re-resolving the alias.
+            enum_type = self._env.resolve_named_type(node.qualifier)
+            if not isinstance(enum_type, EnumType):
                 raise AglTypeError(
                     f"'{node.qualifier}' is not a known enum type.",
                     span=node.span,
@@ -1095,34 +1128,59 @@ class _Checker:
 
     # --- List / Dict literals ---
 
+    def _expected_elem_type(self, expected: Type | None) -> Type | None:
+        """The element type a list literal must satisfy under *expected*.
+
+        ``list[T]`` propagates ``T``; ``json`` propagates ``json`` (a JSON list's
+        elements are themselves ``json``).  Any other context gives no
+        expectation (the literal infers its own element type).
+        """
+        if isinstance(expected, ListType):
+            return expected.elem
+        if isinstance(expected, JsonType):
+            return JsonType()
+        return None
+
+    def _expected_value_type(self, expected: Type | None) -> Type | None:
+        """The value type a dict literal must satisfy under *expected*.
+
+        ``dict[text, V]`` propagates ``V``; ``json`` propagates ``json``.
+        """
+        if isinstance(expected, DictType):
+            return expected.value
+        if isinstance(expected, JsonType):
+            return JsonType()
+        return None
+
     def _check_list_lit(self, node: ListLit, *, expected: Type | None) -> Type:
-        # Empty list requires annotation.
+        elem_expected = self._expected_elem_type(expected)
+        # Empty list: needs an expected element type to determine its type.
         if not node.elements:
-            elem_type: Type | None = None
-            if isinstance(expected, ListType):
-                elem_type = expected.elem
-            if elem_type is None:
+            if elem_expected is None:
                 raise AglTypeError(
                     "Empty list literal requires a type annotation "
                     "(e.g. 'let xs: list[text] = []').",
                     span=node.span,
                 )
-            return ListType(elem=elem_type)
-        # Non-empty: infer from first element, check rest.
-        first_type = self._check_expr(node.elements[0], expected=None)
-        for elem in node.elements[1:]:
-            et = self._check_expr(elem, expected=first_type)
-            if not is_assignable(et, first_type) and not is_assignable(first_type, et):
-                raise AglTypeError(
-                    f"List literal elements have inconsistent types: "
-                    f"'{first_type!r}' and '{et!r}'.",
-                    span=node.span,
-                )
-        return ListType(elem=first_type)
+            return ListType(elem=elem_expected)
+        if elem_expected is not None:
+            # Expected-type propagation: every element must satisfy the target
+            # element type (design §5.7/§5.8).
+            for elem in node.elements:
+                et = self._check_expr(elem, expected=elem_expected)
+                self._assert_assignable(et, elem_expected, elem.span)
+            return ListType(elem=elem_expected)
+        # No expectation: unify all elements (int → decimal widening) and assert
+        # every element is assignable to the unified type (soundness).
+        unified = self._unify_elements(
+            node.elements,
+            kind="List",
+            span=node.span,
+        )
+        return ListType(elem=unified)
 
     def _check_dict_lit(self, node: DictLit, *, expected: Type | None) -> Type:
         seen_keys: dict[str, SourceSpan] = {}
-        val_type: Type | None = None
         for entry in node.entries:
             key = entry.key.value
             if key in seen_keys:
@@ -1131,21 +1189,48 @@ class _Checker:
                     span=entry.span,
                 )
             seen_keys[key] = entry.span
-            et = self._check_expr(entry.value, expected=val_type)
-            if val_type is None:
-                val_type = et
-        if val_type is None:
-            # Empty dict.
-            inner: Type | None = None
-            if isinstance(expected, DictType):
-                inner = expected.value
-            if inner is None:
+        val_expected = self._expected_value_type(expected)
+        if not node.entries:
+            if val_expected is None:
                 raise AglTypeError(
                     "Empty dict literal requires a type annotation.",
                     span=node.span,
                 )
-            return DictType(value=inner)
-        return DictType(value=val_type)
+            return DictType(value=val_expected)
+        if val_expected is not None:
+            for entry in node.entries:
+                et = self._check_expr(entry.value, expected=val_expected)
+                self._assert_assignable(et, val_expected, entry.span)
+            return DictType(value=val_expected)
+        unified = self._unify_elements(
+            [entry.value for entry in node.entries],
+            kind="Dict",
+            span=node.span,
+        )
+        return DictType(value=unified)
+
+    def _unify_elements(
+        self, elements: Sequence[Expr], *, kind: str, span: SourceSpan
+    ) -> Type:
+        """Unify literal element types with int → decimal widening.
+
+        Soundness: returns the common type and asserts every element is
+        assignable to it.  ``[1, 2.5]`` unifies to ``decimal``; mixed
+        incompatible element types are a static error.
+        """
+        types = [self._check_expr(e, expected=None) for e in elements]
+        unified = types[0]
+        for t in types[1:]:
+            if is_assignable(unified, t):
+                # ``t`` is the wider type (e.g. int then decimal → decimal).
+                unified = t
+            elif not is_assignable(t, unified):
+                raise AglTypeError(
+                    f"{kind} literal elements have inconsistent types: "
+                    f"'{unified!r}' and '{t!r}'.",
+                    span=span,
+                )
+        return unified
 
     # ------------------------------------------------------------------
     # Pattern binding helpers
@@ -1178,6 +1263,10 @@ class _Checker:
                     f"non-enum type '{subj_type!r}'.",
                     span=pattern.span,
                 )
+            # An alias-qualified pattern (``Status.Pass``) is resolved
+            # alias-transparently and must name the operand's enum (design §5.4).
+            if pattern.qualifier is not None:
+                self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
             # Look up variant field types and bind each sub-pattern.
             variant_name = pattern.name
             vfields = subj_type.variants.get(variant_name, {})

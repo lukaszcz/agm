@@ -216,17 +216,45 @@ Type = (
 # ---------------------------------------------------------------------------
 
 
+def is_json_shaped(value_type: Type) -> bool:
+    """Return ``True`` if ``value_type`` is JSON-shaped (design §5.8 rule 3).
+
+    JSON-shaped types are the values that may inhabit a ``json`` slot:
+    ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
+    ``list``/``dict`` whose element/value types are themselves JSON-shaped.
+    Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
+    ``json`` value they must be rendered explicitly (e.g. ``${review as json}``).
+    """
+    if isinstance(value_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
+        return True
+    if isinstance(value_type, ListType):
+        return is_json_shaped(value_type.elem)
+    if isinstance(value_type, DictType):
+        return is_json_shaped(value_type.value)
+    # RecordType, EnumType, ExceptionType are not JSON-shaped.
+    return False
+
+
 def is_assignable(value_type: Type, target_type: Type) -> bool:
     """Return ``True`` if ``value_type`` is assignable to ``target_type``.
 
-    The only implicit coercion is ``int → decimal`` widening (design §5.8).
+    Implicit coercions (design §5.8):
+
+    1. ``int → decimal`` widening is the only scalar coercion.
+    2. ``json`` accepts any JSON-shaped value (rule 3): ``null``/``json``,
+       ``bool``, ``int``, ``decimal``, ``text``, and ``list``/``dict`` of
+       JSON-shaped types.  Records/enums/exceptions are rejected.
+
     All other assignments require exact structural equality.
     """
     if value_type == target_type:
         return True
-    # Single coercion: int literal (or int-typed expression) can widen to decimal.
+    # Single scalar coercion: int can widen to decimal.
     if isinstance(value_type, IntType) and isinstance(target_type, DecimalType):
         return True
+    # json accepts any JSON-shaped value (records/enums/exceptions excluded).
+    if isinstance(target_type, JsonType):
+        return is_json_shaped(value_type)
     return False
 
 

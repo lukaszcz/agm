@@ -2909,6 +2909,121 @@ class TestConstructorEval:
 
 
 # ---------------------------------------------------------------------------
+# F3: alias-qualified enum constructors and patterns (design §5.4)
+# ---------------------------------------------------------------------------
+
+
+class TestAliasQualifiedConstructors:
+    def test_alias_qualified_construction(self) -> None:
+        """``Status.Pass`` builds the underlying ``Review`` enum value."""
+        from agm.agl.eval.values import EnumValue
+
+        body = (
+            _enum_def("Review", _variant_def("Pass")),
+            _type_alias("Status", tast.NameT(name="Review", span=_sp(), node_id=_nid())),
+            _let("r", _ctor("Pass", qualifier="Status")),
+        )
+        value = _execute(body).snapshot()["r"]
+        assert isinstance(value, EnumValue)
+        # Runtime carries the resolved underlying enum, not the alias name.
+        assert value.type_name == "Review"
+        assert value.variant == "Pass"
+
+    def test_alias_of_alias_construction(self) -> None:
+        """A multi-hop alias chain resolves to the underlying enum."""
+        from agm.agl.eval.values import EnumValue
+
+        body = (
+            _enum_def("Review", _variant_def("Pass")),
+            _type_alias("A", tast.NameT(name="Review", span=_sp(), node_id=_nid())),
+            _type_alias("B", tast.NameT(name="A", span=_sp(), node_id=_nid())),
+            _let("r", _ctor("Pass", qualifier="B")),
+        )
+        value = _execute(body).snapshot()["r"]
+        assert isinstance(value, EnumValue)
+        assert value.type_name == "Review"
+        assert value.variant == "Pass"
+
+    def test_alias_qualified_pattern_matches(self) -> None:
+        """An alias-qualified pattern (``Status.Pass``) matches at runtime."""
+        from agm.agl.eval.values import TextValue
+
+        body = (
+            _enum_def("Review", _variant_def("Pass"), _variant_def("Fail")),
+            _type_alias("Status", tast.NameT(name="Review", span=_sp(), node_id=_nid())),
+            _var("out", _str("none"), type_ann=_ty("text")),
+            _let("r", _ctor("Pass", qualifier="Status")),
+            _case_stmt(
+                _ref("r"),
+                _case_stmt_branch(
+                    _ctor_pat("Pass", qualifier="Status"),
+                    (_set("out", _str("matched")),),
+                ),
+                _case_stmt_branch(_ctor_pat("Fail"), (_set("out", _str("fail")),)),
+            ),
+        )
+        value = _execute(body).snapshot()["out"]
+        assert value == TextValue("matched")
+
+    def test_alias_qualified_is_test_accepted(self) -> None:
+        """An alias-qualified ``is`` test type-checks and evaluates true."""
+        from agm.agl.eval.values import BoolValue
+
+        body = (
+            _enum_def("Review", _variant_def("Pass"), _variant_def("Fail")),
+            _type_alias("Status", tast.NameT(name="Review", span=_sp(), node_id=_nid())),
+            _let("r", _ctor("Pass", qualifier="Status")),
+            _let("b", _is_test(_ref("r"), "Pass", qualifier="Status")),
+        )
+        value = _execute(body).snapshot()["b"]
+        assert value == BoolValue(True)
+
+    def test_wrong_qualifier_is_test_rejected(self) -> None:
+        """An ``is`` test whose qualifier names a different enum is rejected."""
+        from agm.agl.typecheck import AglTypeError
+
+        body = (
+            _enum_def("Review", _variant_def("Pass")),
+            _enum_def("Other", _variant_def("Pass")),
+            _let("r", _ctor("Pass", qualifier="Review")),
+            _let("b", _is_test(_ref("r"), "Pass", qualifier="Other")),
+        )
+        with pytest.raises(AglTypeError):
+            _execute(body)
+
+    def test_wrong_qualifier_pattern_rejected(self) -> None:
+        """A constructor pattern whose qualifier names a different enum is rejected."""
+        from agm.agl.typecheck import AglTypeError
+
+        body = (
+            _enum_def("Review", _variant_def("Pass")),
+            _enum_def("Other", _variant_def("Pass")),
+            _let("r", _ctor("Pass", qualifier="Review")),
+            _case_stmt(
+                _ref("r"),
+                _case_stmt_branch(
+                    _ctor_pat("Pass", qualifier="Other"), (_pass(),)
+                ),
+            ),
+        )
+        with pytest.raises(AglTypeError):
+            _execute(body)
+
+    def test_non_enum_alias_qualifier_in_is_test_rejected(self) -> None:
+        """An ``is`` test qualified by a non-enum alias is rejected."""
+        from agm.agl.typecheck import AglTypeError
+
+        body = (
+            _enum_def("Review", _variant_def("Pass")),
+            _type_alias("Nums", _list_ty(_ty("int"))),
+            _let("r", _ctor("Pass", qualifier="Review")),
+            _let("b", _is_test(_ref("r"), "Pass", qualifier="Nums")),
+        )
+        with pytest.raises(AglTypeError):
+            _execute(body)
+
+
+# ---------------------------------------------------------------------------
 # Coverage: agent call edge cases (fallback contract, strict_json, retries)
 # ---------------------------------------------------------------------------
 
@@ -3092,48 +3207,148 @@ class TestAgentCallEdgeCases:
             interp.execute(Scope(parent=None))
         assert exc_info.value.exc.type_name == "AgentParseError"
 
+    def test_agent_parse_error_normalized_raw_threaded(self) -> None:
+        """F5: AgentParseError.normalized_raw is the recovered text, not the raw.
 
-# ---------------------------------------------------------------------------
-# Coverage: _resolve_type_ann branches (Text, Bool, Json)
-# ---------------------------------------------------------------------------
-
-
-class TestResolveTypeAnn:
-    def test_resolve_type_ann_text(self) -> None:
-        from agm.agl.eval.interpreter import _resolve_type_ann
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import TextT
+        A codec failure that carries a ``normalized_raw`` (the recovered JSON
+        text after fence-stripping) surfaces on the exception's
+        ``normalized_raw`` field, distinct from the raw fenced response.
+        """
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.eval.scope import Scope
+        from agm.agl.eval.values import TextValue
+        from agm.agl.parser import parse_program
+        from agm.agl.runtime.agents import AgentRegistry
+        from agm.agl.runtime.codec import ParseResult, TextCodec
+        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.scope import resolve
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
+        from agm.agl.typecheck import check
         from agm.agl.typecheck.types import TextType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        result = _resolve_type_ann(TextT(span=span, node_id=0))
-        assert isinstance(result, TextType)
+        raw_response = '```json\n{"bad": 1}\n```'
+        recovered = '{"bad": 1}'
 
-    def test_resolve_type_ann_bool(self) -> None:
-        from agm.agl.eval.interpreter import _resolve_type_ann
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import BoolT
-        from agm.agl.typecheck.types import BoolType
+        source = 'let x = prompt[on_parse_error: abort] "hi"'
+        checked = check(
+            resolve(parse_program(source)),
+            HostCapabilities(
+                agent_names=frozenset(),
+                has_fallback_agent=True,
+                codec_kinds={"text": frozenset({"text"})},
+                renderer_names=frozenset({"default"}),
+            ),
+        )
+        let_stmt = checked.resolved.program.body[0]
+        assert isinstance(let_stmt, LetDecl)
+        call_expr = let_stmt.value
+        assert isinstance(call_expr, AgentCall)
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        result = _resolve_type_ann(BoolT(span=span, node_id=0))
-        assert isinstance(result, BoolType)
+        class RecoveringFailCodec(TextCodec):
+            def parse(
+                self, raw: str, target_type: object, *, strict_json: bool = False
+            ) -> ParseResult:
+                return ParseResult.failure(
+                    "schema invalid", normalized_raw=recovered
+                )
 
-    def test_resolve_type_ann_json(self) -> None:
-        from agm.agl.eval.interpreter import _resolve_type_ann
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import JsonT
+        registry = AgentRegistry(named={}, default_agent=lambda req: raw_response)
+        contract = OutputContract(
+            target_type=TextType(),
+            codec=RecoveringFailCodec(),
+            strict_json=None,
+            format_instructions="",
+            json_schema=None,
+        )
+        interp = Interpreter(
+            checked=checked,
+            registry=registry,
+            contracts={call_expr.node_id: contract},
+            type_env=checked.type_env,
+            loop_limit=3,
+            strict_json=False,
+        )
+
+        with pytest.raises(AglRaise) as exc_info:
+            interp.execute(Scope(parent=None))
+        exc = exc_info.value.exc
+        assert exc.type_name == "AgentParseError"
+        assert exc.fields["raw"] == TextValue(raw_response)
+        assert exc.fields["normalized_raw"] == TextValue(recovered)
+        assert exc.fields["normalized_raw"] != exc.fields["raw"]
+
+
+# ---------------------------------------------------------------------------
+# Coverage: _coerce — the §5.8 runtime coercion (int→decimal, json wrapping,
+# element-wise container recursion)
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceToType:
+    """``_coerce`` materializes the §5.8 coercions in the runtime value."""
+
+    def test_int_widens_to_decimal(self) -> None:
+        from agm.agl.eval.interpreter import _coerce
+        from agm.agl.eval.values import DecimalValue, IntValue
+        from agm.agl.typecheck.types import DecimalType
+
+        result = _coerce(IntValue(3), DecimalType())
+        assert result == DecimalValue(decimal.Decimal(3))
+
+    def test_text_unchanged(self) -> None:
+        from agm.agl.eval.interpreter import _coerce
+        from agm.agl.eval.values import TextValue
+        from agm.agl.typecheck.types import TextType
+
+        value = TextValue("hi")
+        assert _coerce(value, TextType()) is value
+
+    def test_json_wraps_scalar(self) -> None:
+        from agm.agl.eval.interpreter import _coerce
+        from agm.agl.eval.values import IntValue, JsonValue
         from agm.agl.typecheck.types import JsonType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        result = _resolve_type_ann(JsonT(span=span, node_id=0))
-        assert isinstance(result, JsonType)
+        result = _coerce(IntValue(5), JsonType())
+        assert result == JsonValue(5)
 
-    def test_resolve_type_ann_unknown_returns_none(self) -> None:
-        from agm.agl.eval.interpreter import _resolve_type_ann
+    def test_json_wraps_list_to_json_obj(self) -> None:
+        from agm.agl.eval.interpreter import _coerce
+        from agm.agl.eval.values import BoolValue, IntValue, JsonValue, ListValue
+        from agm.agl.typecheck.types import JsonType
 
-        result = _resolve_type_ann(object())
-        assert result is None
+        value = ListValue(elements=(IntValue(1), BoolValue(True)))
+        result = _coerce(value, JsonType())
+        assert result == JsonValue([1, True])
+
+    def test_existing_json_passes_through(self) -> None:
+        from agm.agl.eval.interpreter import _coerce
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.typecheck.types import JsonType
+
+        value = JsonValue({"a": 1})
+        assert _coerce(value, JsonType()) is value
+
+    def test_list_widens_elements(self) -> None:
+        from agm.agl.eval.interpreter import _coerce
+        from agm.agl.eval.values import DecimalValue, IntValue, ListValue
+        from agm.agl.typecheck.types import DecimalType, ListType
+
+        value = ListValue(elements=(IntValue(1), IntValue(2)))
+        result = _coerce(value, ListType(elem=DecimalType()))
+        assert result == ListValue(
+            elements=(DecimalValue(decimal.Decimal(1)), DecimalValue(decimal.Decimal(2)))
+        )
+
+    def test_dict_widens_values(self) -> None:
+        from agm.agl.eval.interpreter import _coerce
+        from agm.agl.eval.values import DecimalValue, DictValue, IntValue
+        from agm.agl.typecheck.types import DecimalType, DictType
+
+        value = DictValue(entries={"k": IntValue(7)})
+        result = _coerce(value, DictType(value=DecimalType()))
+        assert result == DictValue(entries={"k": DecimalValue(decimal.Decimal(7))})
 
 
 # ---------------------------------------------------------------------------
@@ -3570,10 +3785,10 @@ class TestTryCatchHandlerNoBinding:
 
 
 class TestLetVarAnnotationNone:
-    """let/var with a list annotation: ``_resolve_type_ann`` returns None.
+    """let/var with a ``list[int]`` annotation: elements need no coercion.
 
-    A ``list`` annotation is not one of the scalar coercion targets, so no
-    coercion is applied and the value passes through unchanged.
+    ``_coerce`` recurses into the list toward ``list[int]``; the ``int``
+    elements are already the target type, so the value passes through equal.
     """
 
     def test_let_with_list_annotation_no_coerce(self) -> None:
@@ -3615,17 +3830,6 @@ class TestRemainingCoverage:
 
         expr = _case_expr(_int(42), _case_expr_branch(_var_pat("n"), _ref("n")))
         assert _eval_value(expr) == IntValue(42)
-
-    def test_resolve_type_ann_int(self) -> None:
-        """_resolve_type_ann returns IntType for IntT annotation."""
-        from agm.agl.eval.interpreter import _resolve_type_ann
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import IntT
-        from agm.agl.typecheck.types import IntType
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        result = _resolve_type_ann(IntT(span=span, node_id=0))
-        assert isinstance(result, IntType)
 
     def test_arith_decimal_subtraction(self) -> None:
         """_arith with decimal-decimal subtraction returns DecimalValue."""

@@ -393,13 +393,17 @@ agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
 Options:
 
 - `--input KEY=VALUE`: Provide a host input value (repeatable). Values for `text`-declared
-  inputs are taken verbatim; for `int`/`decimal`/`bool`/`json` inputs the value is parsed
-  as JSON. Non-scalar declared types (`list`/`dict`/`record`/`enum`) are not yet accepted
-  as inputs (the JSON codec lands in M2).
-- `--strict-json`: Require bare JSON output from agents. Lenient JSON recovery is **not yet
-  active** (lands in M2); strictness is plumbed through but only observable once the JSON
-  codec exists.
-- `--no-strict-json`: Use lenient JSON recovery (default; not yet active, lands in M2).
+  inputs are taken verbatim; for every other declared type (`int`/`decimal`/`bool`/`json`
+  and the structured `list`/`dict`/`record`/`enum` types) the value must be **exactly one
+  bare JSON value**, parsed strictly (no fence stripping or repair) and validated against the
+  declared type's schema. A missing or undeclared input, or one that fails to parse/validate,
+  is a host invocation error reported before any agent runs.
+- `--strict-json`: Require agents to return exactly one bare JSON value (no fences, prose, or
+  repair). Overridable per call site with the `strict_json` call option.
+- `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers exactly
+  one JSON value from chatty output (stripping fences/prose, repairing trivially malformed
+  JSON), then validates it strictly against the schema. The recovered (normalized) value is
+  traced alongside the raw output.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
 - `--runner COMMAND`: Override the default agent runner command (**not yet active**, lands
   in M5).

@@ -13,10 +13,11 @@ Exit-code contract (plan §10.1):
     1  pre-execution failure (unreadable file, static errors, input validation)
     2  program executed but ended with an uncaught AgL exception
 
-M1 scope notes:
-    - ``--strict-json`` controls JSON-codec strictness; lenient recovery is the
-      lands-in-M2 behaviour, so in M1 the flag/config value is plumbed through
-      but only observable once the JSON codec exists.
+Flag notes:
+    - ``--strict-json`` controls JSON-codec strictness: when set, agents must
+      return exactly one bare JSON value; the default is lenient recovery
+      (fence/prose stripping + trivial repair, then strict schema validation).
+      A source-level ``strict_json`` call option overrides this default.
     - ``--runner`` and ``--log-file``/``--no-log`` are accepted but inert until
       the runner-backed default agent and trace logging land in M5.
 """

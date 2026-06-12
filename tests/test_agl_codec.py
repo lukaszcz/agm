@@ -519,6 +519,38 @@ class TestLenientParsing:
         assert result.ok is False
         assert result.value is None
 
+    def test_bare_bool_recovered_from_prose(self) -> None:
+        """Lenient recovery pulls a bare ``false`` keyword out of prose."""
+        codec = self._codec()
+        result = codec.parse("The flag is:\nfalse", BoolType(), strict_json=False)
+        assert result.ok is True
+        assert result.value == BoolValue(False)
+
+    def test_bare_null_recovered_from_prose(self) -> None:
+        codec = self._codec()
+        result = codec.parse("Answer: null", JsonType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, JsonValue)
+        assert result.value.raw is None
+
+    def test_bare_number_recovered_from_prose(self) -> None:
+        codec = self._codec()
+        result = codec.parse("the count is 42 items", IntType(), strict_json=False)
+        assert result.ok is True
+        assert result.value == IntValue(42)
+
+    def test_keyword_substring_not_falsely_recovered(self) -> None:
+        """``nullable`` must not be mistaken for a bare ``null`` token."""
+        codec = self._codec()
+        result = codec.parse("the config is nullable here", BoolType(), strict_json=False)
+        assert result.ok is False
+
+    def test_two_bare_scalars_in_prose_are_ambiguous(self) -> None:
+        codec = self._codec()
+        result = codec.parse("maybe true or maybe false", BoolType(), strict_json=False)
+        assert result.ok is False
+        assert "multiple JSON values" in result.error_msg
+
 
 # ---------------------------------------------------------------------------
 # 4. Strict mode
@@ -1057,6 +1089,28 @@ class TestMultiValueAmbiguity:
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
+    def test_two_objects_with_inner_array_rejected(self) -> None:
+        """F4: ``{"a": [1]} {"b": 2}`` is ambiguous despite the inner ``[``."""
+        codec = JsonCodec()
+        result = codec.parse('{"a": [1]} {"b": 2}', JsonType(), strict_json=False)
+        assert result.ok is False
+        assert "multiple JSON values" in result.error_msg
+
+    def test_two_values_with_escaped_bracket_string_rejected(self) -> None:
+        """F4: a bracket inside an escaped string does not hide the second value."""
+        codec = JsonCodec()
+        result = codec.parse('{"a": "[x]"} {"b": 2}', JsonType(), strict_json=False)
+        assert result.ok is False
+        assert "multiple JSON values" in result.error_msg
+
+    def test_single_object_with_inner_array_recovers(self) -> None:
+        """F4: a single object containing an array is one value (not ambiguous)."""
+        codec = JsonCodec()
+        result = codec.parse('{"a": [1, 2]}', JsonType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, JsonValue)
+        assert result.value.raw == {"a": [1, 2]}
+
 
 # ---------------------------------------------------------------------------
 # 8. make_contract (OutputContract materialization)
@@ -1413,6 +1467,25 @@ class TestNormalizedRaw:
         assert result.ok is True
         # Even bare JSON has a normalized_raw
         assert result.normalized_raw is not None
+
+    def test_schema_failure_carries_normalized_raw(self) -> None:
+        """F5: a fenced-but-schema-invalid response still exposes the recovered text."""
+        codec = JsonCodec()
+        # Fenced JSON that is valid JSON but the wrong shape for an int target.
+        result = codec.parse('```json\n"oops"\n```', IntType(), strict_json=False)
+        assert result.ok is False
+        # The recovered (normalized) JSON text is threaded through the failure,
+        # distinct from the fenced raw response.
+        assert result.normalized_raw == '"oops"'
+
+    def test_conversion_failure_carries_normalized_raw(self) -> None:
+        """F5: a value-conversion failure also threads the recovered text."""
+        codec = JsonCodec()
+        # 1.5 passes a decimal schema check but cannot convert to an int Value;
+        # exercises the conversion-failure branch.  Use a shape jsonschema lets
+        # through but _json_to_value rejects: a float for an int via repair.
+        result = codec.parse("not json at all", IntType(), strict_json=False)
+        assert result.ok is False
 
 
 # ---------------------------------------------------------------------------

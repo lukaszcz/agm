@@ -184,6 +184,23 @@ class TypeEnvironment:
     def get_alias_target_expr(self, name: str) -> object | None:
         return self._alias_targets.get(name)
 
+    def resolve_named_type(self, name: str) -> Type | None:
+        """Resolve a type *name* alias-transparently to a semantic ``Type``.
+
+        Returns the resolved ``Type`` for a record/enum/exception name or an
+        alias chain (multi-hop, alias-of-alias) that bottoms out in a named
+        type; ``None`` if the name is unknown or names a non-nominal alias
+        target (e.g. an alias of ``list[int]``, which has no single name).
+        Used for alias-transparent qualifier resolution in qualified
+        constructors and ``is`` tests (design §5.4).
+        """
+        if name not in self._types and name not in self._alias_targets:
+            return None
+        try:
+            return self._resolve_name_type(name, span=None, _resolving=frozenset())
+        except AglTypeError:
+            return None
+
     # --- Binding type table ---
 
     def set_binding_type(self, node_id: int, typ: Type) -> None:

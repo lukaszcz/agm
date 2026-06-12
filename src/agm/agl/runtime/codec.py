@@ -98,9 +98,18 @@ class ParseResult:
 
     @classmethod
     def failure(
-        cls, msg: str, errors: tuple[ValidationError, ...] = ()
+        cls,
+        msg: str,
+        errors: tuple[ValidationError, ...] = (),
+        normalized_raw: str | None = None,
     ) -> "ParseResult":
-        return cls(ok=False, value=None, error_msg=msg, errors=errors)
+        return cls(
+            ok=False,
+            value=None,
+            error_msg=msg,
+            errors=errors,
+            normalized_raw=normalized_raw,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -193,42 +202,69 @@ def _try_direct_parse(text: str) -> tuple[bool, str]:
 _AMBIGUOUS_MULTI_VALUE = object()
 
 
-def _first_significant_char(text: str) -> str:
-    """Return the first non-whitespace character of *text* (``""`` if blank)."""
-    stripped = text.lstrip()
-    return stripped[0] if stripped else ""
+def _count_top_level_values(candidate: str) -> int:
+    """Count complete top-level JSON values in *candidate* (F4).
 
+    Scans the stripped candidate with :meth:`json.JSONDecoder.raw_decode` in a
+    whitespace-skipping loop.  ``{"a": 1} {"b": 2}`` and ``{"a": [1]} {"b": 2}``
+    both yield ``2`` regardless of which brackets appear; a single value (even a
+    fenced or bracketed one) yields ``1``.  Returns the count, capped once two
+    values are seen (the caller only distinguishes 0 / 1 / 2+).
 
-def _repaired_is_ambiguous_multi_value(candidate: str, repaired: str) -> bool:
-    """Detect ambiguous multi-value output recovered by ``json-repair`` (F3).
-
-    ``json-repair`` collapses several concatenated top-level JSON values (e.g.
-    ``{"a":1} {"b":2}``) into a single JSON *array*.  That is a genuine
-    multi-value response, not a single value, and design §2.8 requires exactly
-    one JSON value.
-
-    We treat the recovery as ambiguous when **all** of:
-
-    1. json-repair produced a top-level array, but
-    2. the candidate's first significant character is not ``[`` (a bare or
-       fenced array legitimately starts with ``[`` and must still parse), and
-    3. the source candidate contains no ``[`` at all — i.e. json-repair
-       *synthesized* the array brackets to wrap several fused values.  This
-       distinguishes ``{"a":1} {"b":2}`` (synthetic wrapper → ambiguous) from
-       prose-wrapped single arrays like ``Here you go:\\n[1, 2]`` (the brackets
-       are already in the source → a single value, recovered normally).
+    Design §2.8 requires exactly one JSON value; 2+ top-level values are
+    ambiguous.  If the candidate is not parseable as a run of JSON values
+    (e.g. trailing prose ``json-repair`` already cleaned up), the count
+    reflects only the leading values it could decode.
     """
-    if _first_significant_char(repaired) != "[":
-        return False
-    if _first_significant_char(candidate) == "[":
-        return False
-    if "[" in candidate:
-        return False
-    try:
-        parsed: object = json.loads(repaired)
-    except json.JSONDecodeError:  # pragma: no cover — repaired is valid JSON
-        return False
-    return isinstance(parsed, list)
+    decoder = json.JSONDecoder()
+    index = 0
+    length = len(candidate)
+    count = 0
+    while index < length:
+        # Skip whitespace between top-level values.  A run of trailing
+        # whitespace makes the next ``raw_decode`` raise, ending the scan.
+        while index < length and candidate[index].isspace():
+            index += 1
+        try:
+            decoded: tuple[object, int] = decoder.raw_decode(candidate, index)
+        except json.JSONDecodeError:
+            break
+        end: int = decoded[1]
+        count += 1
+        if count >= 2:
+            return count
+        index = end
+    return count
+
+
+def _candidate_is_ambiguous_multi_value(candidate: str) -> bool:
+    """Return True if *candidate* contains 2+ complete top-level JSON values (F4)."""
+    return _count_top_level_values(candidate.strip()) >= 2
+
+
+# JSON scalar keywords recoverable from prose (bool / null).
+_SCALAR_KEYWORD_RE = re.compile(r"(?<![A-Za-z0-9_])(true|false|null)(?![A-Za-z0-9_])")
+# JSON numbers recoverable from prose.
+_SCALAR_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.])(-?\d+(?:\.\d+)?)(?![A-Za-z0-9_.])")
+
+
+def _scan_bare_scalar(text: str) -> str | None | object:
+    """Recover a single bare JSON scalar (bool/null/number) embedded in prose.
+
+    Lenient recovery (design §2.8) strips prose around a single JSON value.
+    ``json-repair`` does not pull bare scalars out of prose (e.g.
+    ``"The flag is:\\nfalse"``), so this fallback finds keyword/number tokens
+    via word-boundary-anchored regexes and returns the value's JSON text when
+    **exactly one** is present.  Two or more distinct scalar tokens are
+    ambiguous (``_AMBIGUOUS_MULTI_VALUE``); none yields ``None``.
+    """
+    matches = [m.group(1) for m in _SCALAR_KEYWORD_RE.finditer(text)]
+    matches += [m.group(1) for m in _SCALAR_NUMBER_RE.finditer(text)]
+    if not matches:
+        return None
+    if len(matches) >= 2:
+        return _AMBIGUOUS_MULTI_VALUE
+    return matches[0]
 
 
 def _extract_json_text(raw: str) -> str | None | object:
@@ -266,6 +302,9 @@ def _extract_json_text(raw: str) -> str | None | object:
     fence_match = _FENCE_RE.search(stripped)
     if fence_match:
         candidate: str = fence_match.group(1).strip()
+        # Ambiguity (F4): the fenced candidate holds 2+ top-level JSON values.
+        if _candidate_is_ambiguous_multi_value(candidate):
+            return _AMBIGUOUS_MULTI_VALUE
         # Try direct parse on fenced content first.
         ok2, direct2 = _try_direct_parse(candidate)
         if ok2:
@@ -273,18 +312,20 @@ def _extract_json_text(raw: str) -> str | None | object:
         # Fall back to repair within the fence.
         repaired = json_repair.repair_json(candidate)
         if isinstance(repaired, str) and repaired and repaired not in ('""', "null"):
-            if _repaired_is_ambiguous_multi_value(candidate, repaired):
-                return _AMBIGUOUS_MULTI_VALUE
             return repaired
 
     # Step 2: repair_json on the whole string (handles prose-wrapped).
+    # Ambiguity (F4): the whole response holds 2+ top-level JSON values
+    # (e.g. ``{"a":1} {"b":2}`` or ``{"a":[1]} {"b":2}``).
+    if _candidate_is_ambiguous_multi_value(stripped):
+        return _AMBIGUOUS_MULTI_VALUE
     repaired_full = json_repair.repair_json(stripped)
     if isinstance(repaired_full, str) and repaired_full and repaired_full not in ('""', "null"):
-        if _repaired_is_ambiguous_multi_value(stripped, repaired_full):
-            return _AMBIGUOUS_MULTI_VALUE
         return repaired_full
 
-    return None
+    # Step 3: recover a single bare scalar (bool/null/number) from prose that
+    # ``json-repair`` cannot extract (e.g. ``"The flag is:\nfalse"``).
+    return _scan_bare_scalar(stripped)
 
 
 # ---------------------------------------------------------------------------
@@ -778,18 +819,25 @@ class JsonCodec:
         # Decimal and still fails integer targets.
         normalized_obj = _normalize_integral_decimals(parsed_obj)
 
-        # Schema validation (always strict — design §2.8 rules 3–6).
+        # Schema validation (always strict — design §2.8 rules 3–6).  The
+        # recovered/normalized JSON text is threaded through validation-failure
+        # results so the host can trace it alongside the raw output (design §2.8,
+        # F5) — e.g. ``AgentParseError.normalized_raw``.
         errors = _collect_validation_errors(normalized_obj, target_type, schema)
         if errors:
             summary = "; ".join(e.message for e in errors)
             return ParseResult.failure(
-                f"Schema validation failed: {summary}", errors=errors
+                f"Schema validation failed: {summary}",
+                errors=errors,
+                normalized_raw=json_text,
             )
 
         # Convert to typed Value.
         try:
             value = _json_to_value(normalized_obj, target_type)
         except ValueError as exc:
-            return ParseResult.failure(f"Value conversion failed: {exc}")
+            return ParseResult.failure(
+                f"Value conversion failed: {exc}", normalized_raw=json_text
+            )
 
         return ParseResult.success(value, normalized_raw=json_text)

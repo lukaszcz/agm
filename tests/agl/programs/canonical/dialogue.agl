@@ -14,8 +14,12 @@ do[6]
         let critique: Turn = critic[on_parse_error: retry[2]] "Critique this proposal:\n${message}"
         set proposal = researcher[on_parse_error: retry[2]] "Revise using critique:\n${critique}"
 
-    | Done(answer) =>
-        set final_answer = answer
+    | _ => pass
 
 until proposal is Done
+
+case proposal of
+  | Done(answer) => set final_answer = answer
+  | _ => pass
+
 print final_answer

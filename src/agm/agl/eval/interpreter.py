@@ -9,7 +9,7 @@ Control flow for AgL exceptions uses Python exceptions (``AglRaise``).
 from __future__ import annotations
 
 import decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.scope import Scope
@@ -103,6 +103,8 @@ class Interpreter:
     ``checked``   — the type-checked program with side tables.
     ``registry``  — the host agent registry.
     ``contracts`` — materialized ``OutputContract`` per agent-call node_id.
+    ``type_env`` — the ``TypeEnvironment`` from the checked program, used to
+        resolve record/enum constructors at runtime.
     ``loop_limit`` — default bound for ``do`` loops without an explicit limit.
     ``strict_json`` — default strict-JSON flag for codec operations.
     """
@@ -112,6 +114,7 @@ class Interpreter:
         checked: "CheckedProgram",
         registry: "AgentRegistry",
         contracts: dict[int, "OutputContract"],
+        type_env: "TypeEnvironment",
         *,
         loop_limit: int,
         strict_json: bool,
@@ -119,6 +122,7 @@ class Interpreter:
         self._checked = checked
         self._registry = registry
         self._contracts = contracts
+        self._type_env = type_env
         self._loop_limit = loop_limit
         self._strict_json = strict_json
         # Root scope — populated from inputs before execute() is called.
@@ -169,7 +173,7 @@ class Interpreter:
         elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
             pass  # type declarations: no runtime action
         else:
-            raise RuntimeError(f"Unknown statement type: {type(stmt).__name__}")
+            assert_never(stmt)  # pragma: no cover
 
     def _exec_let(self, stmt: LetDecl, scope: Scope) -> None:
         value = self._eval_expr(stmt.value, scope)
@@ -309,11 +313,7 @@ class Interpreter:
             return self._eval_var_ref(expr, scope)
         if isinstance(expr, FieldAccess):
             return self._eval_field_access(expr, scope)
-        # Compound expressions delegated to helpers
-        return self._eval_expr_compound(expr, scope)
-
-    def _eval_expr_compound(self, expr: Expr, scope: Scope) -> Value:
-        """Evaluate non-literal expressions (templates, calls, operators, …)."""
+        # Compound expressions (templates, calls, operators, …).
         if isinstance(expr, Template):
             return self._eval_template(expr, scope)
         if isinstance(expr, AgentCall):
@@ -334,7 +334,7 @@ class Interpreter:
             return self._eval_list_lit(expr, scope)
         if isinstance(expr, DictLit):
             return self._eval_dict_lit(expr, scope)
-        raise RuntimeError(f"Unknown expression type: {type(expr).__name__}")
+        assert_never(expr)  # pragma: no cover
 
     def _eval_unary_not(self, expr: UnaryNot, scope: Scope) -> BoolValue:
         operand = self._eval_expr(expr.operand, scope)
@@ -410,6 +410,8 @@ class Interpreter:
                 parts.append(
                     render_for_prompt(value, renderer_name=seg.render, var_name=var_name)
                 )
+            else:
+                assert_never(seg)  # pragma: no cover
         return TextValue("".join(parts))
 
     def _eval_agent_call(self, expr: AgentCall, scope: Scope) -> Value:
@@ -527,12 +529,8 @@ class Interpreter:
 
     def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:
         """Evaluate a record or enum-variant constructor."""
-        from agm.agl.typecheck.env import TypeEnvironment
-
         # Look up the type in the type environment.
-        env = self._get_type_env()
-        if not isinstance(env, TypeEnvironment):
-            raise RuntimeError("Constructor evaluation requires an injected TypeEnvironment")
+        env = self._type_env
 
         # Evaluate arguments.
         arg_values: dict[str, Value] = {}
@@ -591,23 +589,19 @@ class Interpreter:
                 return (tname, name)
         return (name, name)
 
-    def _get_type_env(self) -> TypeEnvironment | None:
-        """Retrieve the TypeEnvironment injected by WorkflowRuntime."""
-        return self._type_env
-
     def _eval_binary_op(self, expr: BinaryOp, scope: Scope) -> Value:
         op = expr.op
         left = self._eval_expr(expr.left, scope)
 
-        # Short-circuit for and/or.
-        if op == BinOp.AND:
+        # Short-circuit for and/or (right operand evaluated lazily).
+        if op is BinOp.AND:
             if isinstance(left, BoolValue) and not left.value:
                 return BoolValue(False)
             right = self._eval_expr(expr.right, scope)
             if isinstance(right, BoolValue):
                 return BoolValue(right.value)
             return right
-        if op == BinOp.OR:
+        if op is BinOp.OR:
             if isinstance(left, BoolValue) and left.value:
                 return BoolValue(True)
             right = self._eval_expr(expr.right, scope)
@@ -618,24 +612,29 @@ class Interpreter:
         right = self._eval_expr(expr.right, scope)
 
         # Arithmetic.
-        if op == BinOp.ADD:
+        if op is BinOp.ADD:
             return _add(left, right)
-        if op == BinOp.SUB:
+        if op is BinOp.SUB or op is BinOp.MUL:
             return _arith(left, right, op)
-        if op == BinOp.MUL:
-            return _arith(left, right, op)
-        if op == BinOp.DIV:
+        if op is BinOp.DIV:
             return _div(left, right)
 
         # Comparison.
-        if op in (BinOp.EQ, BinOp.NEQ, BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE):
+        if (
+            op is BinOp.EQ
+            or op is BinOp.NEQ
+            or op is BinOp.LT
+            or op is BinOp.LE
+            or op is BinOp.GT
+            or op is BinOp.GE
+        ):
             return _compare(left, right, op)
 
         # Membership.
-        if op == BinOp.IN:
+        if op is BinOp.IN:
             return _in_op(left, right)
 
-        raise RuntimeError(f"Unknown binary operator: {op}")
+        assert_never(op)  # pragma: no cover
 
     def _eval_is_test(self, expr: IsTest, scope: Scope) -> BoolValue:
         value = self._eval_expr(expr.expr, scope)
@@ -662,12 +661,6 @@ class Interpreter:
                 "Non-exhaustive case expression: no pattern matched",
             )
         )
-
-    # ------------------------------------------------------------------
-    # Type environment injection (set before execute())
-    # ------------------------------------------------------------------
-
-    _type_env: TypeEnvironment | None = None  # Injected by WorkflowRuntime.
 
 
 # ---------------------------------------------------------------------------
@@ -865,7 +858,7 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
         elif isinstance(lit, NullLit):
             pat_val = JsonValue(None)
         else:
-            return False, {}
+            assert_never(lit)  # pragma: no cover
         return value == pat_val, {}
 
     if isinstance(pattern, ConstructorPattern):
@@ -904,7 +897,7 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
 
         return False, {}
 
-    return False, {}
+    assert_never(pattern)  # pragma: no cover
 
 
 def _describe_value(value: Value) -> str:

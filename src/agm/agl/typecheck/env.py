@@ -89,12 +89,19 @@ class CheckedProgram:
         Tuple of warning-severity ``Diagnostic`` records collected during the
         pass.  The checker raises on the first *error*; warnings are
         accumulated and returned here.
+    ``type_env``
+        The complete ``TypeEnvironment`` built during the pass.  It carries the
+        full user-declared type namespace (records, enums, aliases, built-in
+        exceptions) so downstream consumers (the interpreter) can resolve
+        constructors without reconstructing it.  This is the public contract
+        for type-namespace access after checking.
     """
 
     resolved: ResolvedProgram
     node_types: dict[int, Type]
     contract_specs: dict[int, OutputContractSpec]
     warnings: tuple[Diagnostic, ...]
+    type_env: TypeEnvironment
 
 
 # ---------------------------------------------------------------------------

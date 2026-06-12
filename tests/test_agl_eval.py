@@ -1427,20 +1427,12 @@ class TestRuntimeExceptionHandlers:
         assert result.ok is False
         assert "internal crash" in result.diagnostics[0].message
 
-    def test_uncaught_agl_raise_returns_run_error(self) -> None:
-        """An agent that exhausts retries triggers AglRaise → RunResult.error."""
-        # TextCodec always succeeds, so we need a RetryPolicy with 0 retries
-        # and we need to make the codec fail. Let's use monkeypatching.
-        from agm.agl.runtime.codec import ParseResult, TextCodec
+    def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
+        """_exception_value_to_run_error converts every Value kind to JSON shape.
 
-        class FailCodec(TextCodec):
-            def parse(
-                self, raw: str, target_type: object, *, strict_json: bool = False
-            ) -> ParseResult:
-                return ParseResult.failure("always fails")
-
-        # We can't inject a failing codec via the current API, so test
-        # _exception_value_to_run_error directly instead.
+        This is the pure converter used to surface an uncaught AgL exception
+        (e.g. AgentParseError) as a RunError.
+        """
         from agm.agl.eval.values import (
             BoolValue,
             DecimalValue,
@@ -1599,37 +1591,6 @@ class TestRuntimeExceptionHandlers:
 
 class TestInterpreterUnit:
     """Unit tests for interpreter methods that are not reachable via M1 parser."""
-
-    def _make_interpreter(self) -> object:
-        """Create a minimal interpreter instance for unit testing."""
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
-        from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import TypeEnvironment
-
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset({"default", "raw"}),
-        )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = Interpreter(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            loop_limit=5,
-            strict_json=False,
-        )
-        interp._type_env = TypeEnvironment()
-        return interp
 
     def test_make_exc_value_helper(self) -> None:
         from agm.agl.eval.interpreter import _make_exc_value
@@ -1958,38 +1919,6 @@ class TestInterpreterUnit:
         matched, _ = _match_pattern(p, JsonValue(None))
         assert matched
 
-    def test_match_pattern_literal_unknown_type_no_match(self) -> None:
-        """A LiteralPattern with an unrecognised literal type returns not-matched."""
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import LiteralPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-
-        # Fabricate a LiteralPattern with a non-standard literal by building
-        # one from a NullLit but swapping in a sentinel as the literal field.
-        class FakeLit:
-            span = SourceSpan(1, 1, 1, 1, 0, 0)
-            node_id = 0
-
-        # Use object() as a dummy literal that won't be recognized.
-        # LiteralPattern is frozen so we use a workaround with __new__.
-        import dataclasses
-
-        p = dataclasses.replace(
-            LiteralPattern(
-                literal=__import__("agm.agl.syntax.nodes", fromlist=["NullLit"]).NullLit(
-                    span=span, node_id=0
-                ),
-                span=span,
-                node_id=1,
-            )
-        )
-        # Actually test with a standard pattern to ensure we hit the null branch.
-        matched, _ = _match_pattern(p, IntValue(1))
-        assert not matched  # null literal vs IntValue
-
     def test_matches_catch_bare_handler(self) -> None:
         from agm.agl.eval.interpreter import _matches_catch
         from agm.agl.eval.values import ExceptionValue, TextValue
@@ -2058,80 +1987,14 @@ class TestInterpreterUnit:
         assert "Abort" in _describe_value(ExceptionValue(type_name="Abort", fields={}))
         assert "IntValue" in _describe_value(IntValue(1))
 
-    def test_constructor_without_type_env_raises(self) -> None:
-        """_eval_constructor raises if no type environment is injected."""
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
-        from agm.agl.syntax.nodes import Constructor
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck import check
-
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset({"default", "raw"}),
-        )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = Interpreter(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            loop_limit=5,
-            strict_json=False,
-        )
-        # _type_env is None (default)
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        con = Constructor(
-            name="Point",
-            qualifier=None,
-            args=(),
-            span=span,
-            node_id=0,
-        )
-        scope = Scope(parent=None)
-        with pytest.raises(RuntimeError, match="TypeEnvironment"):
-            interp._eval_constructor(con, scope)
-
     def test_field_access_on_non_record_raises(self) -> None:
         """_eval_field_access on a non-record/enum/exception type raises RuntimeError."""
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import IntValue
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
         from agm.agl.syntax.nodes import FieldAccess, VarRef
         from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck import check
 
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset({"default", "raw"}),
-        )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = Interpreter(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            loop_limit=5,
-            strict_json=False,
-        )
+        interp = _make_interp()
         span = SourceSpan(1, 1, 1, 1, 0, 0)
         # Build a FieldAccess node manually; obj evaluates to an IntValue.
         obj_ref = VarRef(name="n", span=span, node_id=0)
@@ -2142,34 +2005,11 @@ class TestInterpreterUnit:
             interp._eval_field_access(fa, scope)
 
     def test_eval_unary_not_non_bool_raises(self) -> None:
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
         from agm.agl.syntax.nodes import IntLit, UnaryNot
         from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck import check
 
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset({"default", "raw"}),
-        )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = Interpreter(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            loop_limit=5,
-            strict_json=False,
-        )
+        interp = _make_interp()
         span = SourceSpan(1, 1, 1, 1, 0, 0)
         operand = IntLit(value=1, span=span, node_id=0)
         not_expr = UnaryNot(operand=operand, span=span, node_id=1)
@@ -2178,34 +2018,11 @@ class TestInterpreterUnit:
             interp._eval_unary_not(not_expr, scope)
 
     def test_eval_unary_neg_non_number_raises(self) -> None:
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
         from agm.agl.syntax.nodes import StringLit, UnaryNeg
         from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck import check
 
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset({"default", "raw"}),
-        )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = Interpreter(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            loop_limit=5,
-            strict_json=False,
-        )
+        interp = _make_interp()
         span = SourceSpan(1, 1, 1, 1, 0, 0)
         operand = StringLit(value="hello", span=span, node_id=0)
         neg_expr = UnaryNeg(operand=operand, span=span, node_id=1)
@@ -2219,11 +2036,11 @@ class TestInterpreterUnit:
 # ---------------------------------------------------------------------------
 
 
-class TestBuildTypeEnv:
-    def test_build_type_env_empty_program(self) -> None:
+class TestCheckedProgramTypeEnv:
+    def test_checked_program_carries_type_env(self) -> None:
+        """check() populates CheckedProgram.type_env with a TypeEnvironment."""
         from agm.agl.capabilities import HostCapabilities
         from agm.agl.parser import parse_program
-        from agm.agl.runtime.runtime import _build_type_env
         from agm.agl.scope import resolve
         from agm.agl.typecheck import check
         from agm.agl.typecheck.env import TypeEnvironment
@@ -2238,8 +2055,7 @@ class TestBuildTypeEnv:
             renderer_names=frozenset(),
         )
         checked = check(resolved, caps)
-        env = _build_type_env(checked)
-        assert isinstance(env, TypeEnvironment)
+        assert isinstance(checked.type_env, TypeEnvironment)
 
 
 class TestRuntimeContractError:
@@ -2293,10 +2109,10 @@ def _make_interp(type_env: object = None) -> object:
         checked=checked,
         registry=registry,
         contracts={},
+        type_env=type_env if type_env is not None else TypeEnvironment(),
         loop_limit=3,
         strict_json=False,
     )
-    interp._type_env = type_env if type_env is not None else TypeEnvironment()
     return interp
 
 
@@ -2533,9 +2349,13 @@ class TestInterpreterM3Stmts:
         checked = check(resolved, caps)
         registry = AgentRegistry(named={}, default_agent=None)
         interp = RaisingInterp(
-            checked=checked, registry=registry, contracts={}, loop_limit=3, strict_json=False
+            checked=checked,
+            registry=registry,
+            contracts={},
+            type_env=TypeEnvironment(),
+            loop_limit=3,
+            strict_json=False,
         )
-        interp._type_env = TypeEnvironment()
 
         handler = CatchClause(
             exc_type="Abort",
@@ -2590,9 +2410,13 @@ class TestInterpreterM3Stmts:
         checked = check(resolved, caps)
         registry = AgentRegistry(named={}, default_agent=None)
         interp = BodyRaisingInterp(
-            checked=checked, registry=registry, contracts={}, loop_limit=3, strict_json=False
+            checked=checked,
+            registry=registry,
+            contracts={},
+            type_env=TypeEnvironment(),
+            loop_limit=3,
+            strict_json=False,
         )
-        interp._type_env = TypeEnvironment()
 
         # Handler only catches "Abort" — NetworkError will be re-raised.
         handler = CatchClause(exc_type="Abort", binding=None, body=(), span=span, node_id=5)
@@ -2651,20 +2475,6 @@ class TestInterpreterM3Stmts:
         scope = Scope(parent=None)
         with pytest.raises(RuntimeError):
             interp._exec_raise(raise_stmt, scope)
-
-    def test_exec_stmt_unknown_type_raises(self) -> None:
-        """_exec_stmt with an unknown AST type raises RuntimeError."""
-        from typing import cast
-
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import Stmt
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        with pytest.raises(RuntimeError, match="Unknown statement type"):
-            interp._exec_stmt(cast(Stmt, object()), scope)
 
     def test_exec_stmt_input_decl_is_noop(self) -> None:
         """InputDecl in _exec_stmt is a no-op at runtime."""
@@ -2843,12 +2653,12 @@ class TestLetVarCoercion:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _eval_expr_compound paths (operators, list, dict)
+# Coverage: _eval_expr paths (operators, list, dict)
 # ---------------------------------------------------------------------------
 
 
 class TestEvalExprCompound:
-    """Unit tests for compound expression types in _eval_expr_compound."""
+    """Unit tests for compound expression types in _eval_expr."""
 
     def test_eval_binary_op_add_int(self) -> None:
         from agm.agl.eval.interpreter import Interpreter
@@ -3055,32 +2865,6 @@ class TestEvalExprCompound:
         assert isinstance(interp, Interpreter)
         result = interp._eval_binary_op(expr, Scope(parent=None))
         assert result == BoolValue(False)
-
-    def test_eval_binary_op_unknown_op_raises(self) -> None:
-        """Unknown binary op raises RuntimeError."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        # Patch the op to something impossible at runtime.
-        expr = BinaryOp(
-            op=BinOp.EQ,  # valid op
-            left=IntLit(value=1, span=span, node_id=1),
-            right=IntLit(value=1, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        # Override with invalid op via dataclasses.replace
-        import dataclasses
-        from typing import cast
-
-        bad_expr = dataclasses.replace(expr, op=cast(BinOp, object()))
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(RuntimeError, match="Unknown binary operator"):
-            interp._eval_binary_op(bad_expr, Scope(parent=None))
 
     def test_eval_is_test_matching_variant(self) -> None:
         from agm.agl.eval.interpreter import Interpreter
@@ -3298,21 +3082,6 @@ class TestEvalExprCompound:
         assert isinstance(interp, Interpreter)
         result = interp._eval_unary_neg(expr, Scope(parent=None))
         assert result == DecimalValue(decimal.Decimal("-2.5"))
-
-    def test_eval_expr_compound_unknown_type_raises(self) -> None:
-        """_eval_expr_compound with an unknown expression type raises RuntimeError."""
-        from typing import cast
-
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import Expr
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        with pytest.raises(RuntimeError, match="Unknown expression type"):
-            interp._eval_expr_compound(cast(Expr, object()), scope)
-
 
 # ---------------------------------------------------------------------------
 # Coverage: field access on RecordValue, EnumValue, ExceptionValue
@@ -3609,10 +3378,10 @@ class TestAgentCallEdgeCases:
             checked=checked,
             registry=registry,
             contracts={},  # No contracts → triggers fallback
+            type_env=TypeEnvironment(),
             loop_limit=3,
             strict_json=False,
         )
-        interp._type_env = TypeEnvironment()
 
         scope = Scope(parent=None)
         opts = CallOptions(format=None, strict_json=None, parse_policy=None, span=span, node_id=1)
@@ -3672,10 +3441,10 @@ class TestAgentCallEdgeCases:
             checked=checked,
             registry=registry,
             contracts={node_id: contract},
+            type_env=TypeEnvironment(),
             loop_limit=3,
             strict_json=False,  # Runtime default is False, contract overrides to True
         )
-        interp._type_env = TypeEnvironment()
 
         scope = Scope(parent=None)
         opts = CallOptions(format=None, strict_json=None, parse_policy=None, span=span, node_id=1)
@@ -3691,7 +3460,13 @@ class TestAgentCallEdgeCases:
         assert isinstance(result, TextValue)
 
     def test_agent_call_retry_policy_exhausts(self) -> None:
-        """Agent call with RetryPolicy and always-failing codec raises AglRaise."""
+        """A retry-policy call whose codec always fails raises AgentParseError.
+
+        Driven through the interpreter's public ``execute`` entry on a real
+        parsed program (``let x = prompt[on_parse_error: retry[1]] "hi"``).  In
+        M1 only the JSON codec (M2) can fail, so this exercises the path with a
+        public, host-supplied failing codec injected via the contract map.
+        """
         from agm.agl.capabilities import HostCapabilities
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.interpreter import Interpreter
@@ -3701,14 +3476,12 @@ class TestAgentCallEdgeCases:
         from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.scope import resolve
-        from agm.agl.syntax.nodes import AgentCall, CallOptions, RetryPolicy, Template, TextSegment
-        from agm.agl.syntax.spans import SourceSpan
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
         from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import TypeEnvironment
         from agm.agl.typecheck.types import TextType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        program = parse_program("pass")
+        source = 'let x = prompt[on_parse_error: retry[1]] "hi"'
+        program = parse_program(source)
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
@@ -3717,6 +3490,12 @@ class TestAgentCallEdgeCases:
             renderer_names=frozenset({"default"}),
         )
         checked = check(resolved, caps)
+
+        # Locate the real AgentCall node so we can key its output contract.
+        let_stmt = checked.resolved.program.body[0]
+        assert isinstance(let_stmt, LetDecl)
+        call_expr = let_stmt.value
+        assert isinstance(call_expr, AgentCall)
 
         class AlwaysFailCodec(TextCodec):
             def parse(
@@ -3727,9 +3506,7 @@ class TestAgentCallEdgeCases:
         def my_fn(req: AgentRequest) -> str:
             return "not-valid"
 
-        # call_kind=None for synthetic node → dispatches to "prompt" (default agent)
         registry = AgentRegistry(named={}, default_agent=my_fn)
-        node_id = 99
         contract = OutputContract(
             target_type=TextType(),
             codec=AlwaysFailCodec(),
@@ -3737,28 +3514,17 @@ class TestAgentCallEdgeCases:
             format_instructions="",
             json_schema=None,
         )
-        retry = RetryPolicy(extra=1, span=span, node_id=100)
         interp = Interpreter(
             checked=checked,
             registry=registry,
-            contracts={node_id: contract},
+            contracts={call_expr.node_id: contract},
+            type_env=checked.type_env,
             loop_limit=3,
             strict_json=False,
         )
-        interp._type_env = TypeEnvironment()
 
-        scope = Scope(parent=None)
-        opts = CallOptions(format=None, strict_json=None, parse_policy=retry, span=span, node_id=1)
-        template = Template(
-            segments=(TextSegment(text="hi", span=span, node_id=2),),
-            span=span,
-            node_id=3,
-        )
-        expr = AgentCall(
-            agent="prompt", options=opts, template=template, span=span, node_id=node_id
-        )
         with pytest.raises(AglRaise) as exc_info:
-            interp._eval_agent_call(expr, scope)
+            interp.execute(Scope(parent=None))
         assert exc_info.value.exc.type_name == "AgentParseError"
 
 
@@ -4010,167 +3776,96 @@ class TestMatchPatternConstructor:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: runtime.py _build_type_env for RecordDef, EnumDef, TypeAlias
+# CheckedProgram.type_env carries the constructor namespace to the interpreter
 # ---------------------------------------------------------------------------
 
 
-class TestBuildTypeEnvWithTypes:
-    """Test _build_type_env with programs that contain type declarations.
+class TestCheckedProgramTypeEnvConstructors:
+    """The constructor namespace flows from check() to the interpreter via
+    ``CheckedProgram.type_env``.
 
-    Since M1 parser can't handle type declarations, we patch the checked
-    program's body to include synthetic AST nodes.
+    The M1 parser cannot yet parse ``record``/constructor syntax, so the program
+    is hand-built from AST nodes, then driven through the *real* resolve + check
+    passes (no fabricated side tables) and evaluated via the interpreter's public
+    ``execute`` entry.  This is the regression test for the bug where the runtime
+    reconstructed an empty type env from expression-only ``node_types``, leaving
+    every constructor unresolvable at runtime.
     """
 
-    def _make_checked_with_body(self, extra_stmts: tuple[object, ...]) -> object:
-        """Build a CheckedProgram whose body includes extra_stmts."""
+    def test_record_constructor_resolves_to_record_value(self) -> None:
         from agm.agl.capabilities import HostCapabilities
-        from agm.agl.parser import parse_program
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.eval.scope import Scope
+        from agm.agl.eval.values import DecimalValue, RecordValue
+        from agm.agl.runtime.agents import AgentRegistry
         from agm.agl.scope import resolve
         from agm.agl.scope.symbols import ResolvedProgram
-        from agm.agl.syntax.nodes import Program
+        from agm.agl.syntax.nodes import (
+            Constructor,
+            FieldDef,
+            IntLit,
+            LetDecl,
+            NamedArg,
+            Program,
+            RecordDef,
+        )
+        from agm.agl.syntax.spans import SourceSpan
+        from agm.agl.syntax.types import DecimalT
         from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import CheckedProgram
 
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
+        span = SourceSpan(1, 1, 1, 1, 0, 0)
+
+        # record Point { x: decimal }
+        record = RecordDef(
+            name="Point",
+            fields=(FieldDef(name="x", type_expr=DecimalT(span=span, node_id=1), span=span,
+                             node_id=2),),
+            span=span,
+            node_id=3,
+        )
+        # let p = Point(x: 1)
+        ctor = Constructor(
+            qualifier=None,
+            name="Point",
+            args=(NamedArg(name="x", value=IntLit(value=1, span=span, node_id=4), span=span,
+                           node_id=5),),
+            span=span,
+            node_id=6,
+        )
+        let_p = LetDecl(name="p", type_ann=None, value=ctor, span=span, node_id=7)
+        program = Program(body=(record, let_p), span=span, node_id=8)
+
+        # Real resolve + check passes — no fabricated side tables.
+        resolved: ResolvedProgram = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
             has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset(),
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default"}),
         )
         checked = check(resolved, caps)
 
-        # Splice extra_stmts into a synthetic resolved program
-        orig_body = checked.resolved.program.body
-        new_program = Program(
-            body=orig_body + extra_stmts,
-            span=program.span,
-            node_id=program.node_id,
+        # The type namespace must include the user record after checking.
+        assert checked.type_env.get_type("Point") is not None
+
+        interp = Interpreter(
+            checked=checked,
+            registry=AgentRegistry(named={}, default_agent=None),
+            contracts={},
+            type_env=checked.type_env,
+            loop_limit=3,
+            strict_json=False,
         )
-        # Build synthetic node_types that includes the fake type node_ids
-        new_node_types = dict(checked.node_types)
-        for stmt in extra_stmts:
-            from agm.agl.typecheck.types import EnumType, IntType, RecordType
-            if hasattr(stmt, "name"):
-                if hasattr(stmt, "fields") and not hasattr(stmt, "variants"):
-                    # RecordDef-like
-                    new_node_types[stmt.node_id] = RecordType(name=stmt.name, fields={})
-                elif hasattr(stmt, "variants"):
-                    # EnumDef-like
-                    new_node_types[stmt.node_id] = EnumType(name=stmt.name, variants={})
-                else:
-                    # TypeAlias-like
-                    new_node_types[stmt.node_id] = IntType()
+        root = Scope(parent=None)
+        interp.execute(root)
 
-        new_resolved = ResolvedProgram(
-            program=new_program,
-            resolution=checked.resolved.resolution,
-            call_kinds=checked.resolved.call_kinds,
-            root_scope=checked.resolved.root_scope,
-        )
-        return CheckedProgram(
-            resolved=new_resolved,
-            node_types=new_node_types,
-            contract_specs=checked.contract_specs,
-            warnings=checked.warnings,
-        )
-
-    def test_build_type_env_with_record_def(self) -> None:
-        from typing import cast
-
-        from agm.agl.runtime.runtime import _build_type_env
-        from agm.agl.syntax.nodes import RecordDef
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        rec = RecordDef(name="Point", fields=(), span=span, node_id=500)
-        checked = cast(CheckedProgram, self._make_checked_with_body((rec,)))
-        env = _build_type_env(checked)
-        assert isinstance(env, TypeEnvironment)
-        # "Point" should be registered
-        assert env.get_type("Point") is not None
-
-    def test_build_type_env_with_enum_def(self) -> None:
-        from typing import cast
-
-        from agm.agl.runtime.runtime import _build_type_env
-        from agm.agl.syntax.nodes import EnumDef
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        enm = EnumDef(name="Status", variants=(), span=span, node_id=501)
-        checked = cast(CheckedProgram, self._make_checked_with_body((enm,)))
-        env = _build_type_env(checked)
-        assert isinstance(env, TypeEnvironment)
-        assert env.get_type("Status") is not None
-
-    def test_build_type_env_with_type_alias(self) -> None:
-        from typing import cast
-
-        from agm.agl.runtime.runtime import _build_type_env
-        from agm.agl.syntax.nodes import TypeAlias
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import IntT
-        from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        alias = TypeAlias(name="Num", type_expr=IntT(span=span, node_id=0), span=span, node_id=502)
-        checked = cast(CheckedProgram, self._make_checked_with_body((alias,)))
-        env = _build_type_env(checked)
-        assert isinstance(env, TypeEnvironment)
-        assert env.get_type("Num") is not None
-
-    def test_build_type_env_skips_node_with_no_type(self) -> None:
-        """When node_types has no entry for a def, it's skipped gracefully."""
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.runtime import _build_type_env
-        from agm.agl.scope import resolve
-        from agm.agl.scope.symbols import ResolvedProgram
-        from agm.agl.syntax.nodes import Program, RecordDef
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset(),
-        )
-        checked = check(resolved, caps)
-
-        rec = RecordDef(name="Ghost", fields=(), span=span, node_id=999)
-        new_program = Program(
-            body=checked.resolved.program.body + (rec,),
-            span=program.span,
-            node_id=program.node_id,
-        )
-        # node_types does NOT include node_id=999
-        new_resolved = ResolvedProgram(
-            program=new_program,
-            resolution=checked.resolved.resolution,
-            call_kinds=checked.resolved.call_kinds,
-            root_scope=checked.resolved.root_scope,
-        )
-        new_checked = CheckedProgram(
-            resolved=new_resolved,
-            node_types=dict(checked.node_types),  # no 999 key
-            contract_specs=checked.contract_specs,
-            warnings=checked.warnings,
-        )
-        env = _build_type_env(new_checked)
-        assert isinstance(env, TypeEnvironment)
-        # "Ghost" should NOT be registered (no node_type entry)
-        assert env.get_type("Ghost") is None
+        binding = root.lookup("p")
+        assert binding is not None
+        value = binding.value
+        assert isinstance(value, RecordValue)
+        assert value.type_name == "Point"
+        # int arg coerces to the decimal field type.
+        assert value.fields["x"] == DecimalValue(decimal.Decimal(1))
 
 
 # ---------------------------------------------------------------------------
@@ -4329,7 +4024,7 @@ class TestEvalExprDispatch:
         assert result == IntValue(9)
 
     def test_eval_expr_dispatches_template(self) -> None:
-        """_eval_expr dispatches compound expressions via _eval_expr_compound."""
+        """_eval_expr dispatches compound expressions via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import TextValue
@@ -4348,7 +4043,7 @@ class TestEvalExprDispatch:
         assert result == TextValue("hello")
 
     def test_eval_expr_dispatches_list_lit(self) -> None:
-        """_eval_expr dispatches ListLit via _eval_expr_compound."""
+        """_eval_expr dispatches ListLit via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import ListValue
@@ -4363,7 +4058,7 @@ class TestEvalExprDispatch:
         assert isinstance(result, ListValue)
 
     def test_eval_expr_dispatches_dict_lit(self) -> None:
-        """_eval_expr dispatches DictLit via _eval_expr_compound."""
+        """_eval_expr dispatches DictLit via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import DictValue
@@ -4383,7 +4078,7 @@ class TestEvalExprDispatch:
         assert isinstance(result, DictValue)
 
     def test_eval_expr_dispatches_unary_not(self) -> None:
-        """_eval_expr dispatches UnaryNot via _eval_expr_compound."""
+        """_eval_expr dispatches UnaryNot via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import BoolValue
@@ -4398,7 +4093,7 @@ class TestEvalExprDispatch:
         assert result == BoolValue(True)
 
     def test_eval_expr_dispatches_unary_neg(self) -> None:
-        """_eval_expr dispatches UnaryNeg via _eval_expr_compound."""
+        """_eval_expr dispatches UnaryNeg via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import IntValue
@@ -4413,7 +4108,7 @@ class TestEvalExprDispatch:
         assert result == IntValue(-3)
 
     def test_eval_expr_dispatches_is_test(self) -> None:
-        """_eval_expr dispatches IsTest via _eval_expr_compound."""
+        """_eval_expr dispatches IsTest via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import BoolValue, EnumValue
@@ -4439,7 +4134,7 @@ class TestEvalExprDispatch:
         assert result == BoolValue(True)
 
     def test_eval_expr_dispatches_case_expr(self) -> None:
-        """_eval_expr dispatches CaseExpr via _eval_expr_compound."""
+        """_eval_expr dispatches CaseExpr via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import IntValue
@@ -4461,7 +4156,7 @@ class TestEvalExprDispatch:
         assert result == IntValue(99)
 
     def test_eval_expr_dispatches_binary_op(self) -> None:
-        """_eval_expr dispatches BinaryOp via _eval_expr_compound."""
+        """_eval_expr dispatches BinaryOp via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import IntValue
@@ -4482,7 +4177,7 @@ class TestEvalExprDispatch:
         assert result == IntValue(5)
 
     def test_eval_expr_dispatches_constructor(self) -> None:
-        """_eval_expr dispatches Constructor via _eval_expr_compound."""
+        """_eval_expr dispatches Constructor via _eval_expr."""
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import EnumValue
@@ -4552,7 +4247,7 @@ class TestAgentCallShellExec:
         from agm.agl.syntax.nodes import AgentCall, CallOptions, Template, TextSegment
         from agm.agl.syntax.spans import SourceSpan
         from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
+        from agm.agl.typecheck.env import CheckedProgram
 
         span = SourceSpan(1, 1, 1, 5, 0, 4)
         source = "pass"
@@ -4581,6 +4276,7 @@ class TestAgentCallShellExec:
             node_types=checked.node_types,
             contract_specs=checked.contract_specs,
             warnings=checked.warnings,
+            type_env=checked.type_env,
         )
 
         registry = AgentRegistry(named={}, default_agent=None)
@@ -4588,10 +4284,10 @@ class TestAgentCallShellExec:
             checked=new_checked,
             registry=registry,
             contracts={},
+            type_env=checked.type_env,
             loop_limit=3,
             strict_json=False,
         )
-        interp._type_env = TypeEnvironment()
 
         opts = CallOptions(format=None, strict_json=None, parse_policy=None, span=span, node_id=1)
         template = Template(
@@ -4775,57 +4471,6 @@ class TestCompareFallback:
 # ---------------------------------------------------------------------------
 
 
-class TestMatchPatternUnknownLit:
-    def test_match_pattern_literal_unknown_lit_type_no_match(self) -> None:
-        """LiteralPattern with an unknown literal type returns (False, {})."""
-
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import LiteralPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-
-        # Build a LiteralPattern then replace its literal with an unknown type.
-        class FakeLit:
-            """A literal type not recognized by _match_pattern."""
-
-        fake_lit = FakeLit()
-        # dataclasses.replace won't work here because LiteralPattern.literal has
-        # a specific type annotation. We need to bypass frozen dataclass via
-        # object.__setattr__.
-
-        # Use a different approach: construct via __new__ + __init__ trick.
-        # Since the dataclass is frozen and we can't use __init__, use
-        # object.__setattr__ on a copy created via __new__.
-        obj = object.__new__(LiteralPattern)
-        object.__setattr__(obj, "literal", fake_lit)
-        object.__setattr__(obj, "span", span)
-        object.__setattr__(obj, "node_id", 2)
-
-        from typing import cast
-
-        from agm.agl.syntax.nodes import Pattern
-
-        matched, _ = _match_pattern(cast(Pattern, obj), IntValue(42))
-        assert not matched
-
-    def test_match_pattern_unknown_pattern_type_no_match(self) -> None:
-        """A completely unknown pattern type returns (False, {})."""
-        from typing import cast
-
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import Pattern
-
-        class UnknownPattern:
-            pass
-
-        matched, bindings = _match_pattern(cast(Pattern, UnknownPattern()), IntValue(1))
-        assert not matched
-        assert bindings == {}
-
-
 # ---------------------------------------------------------------------------
 # Coverage: _exec_case_stmt with VarPattern binding (line 247)
 # ---------------------------------------------------------------------------
@@ -4901,9 +4546,13 @@ class TestTryCatchHandlerNoBinding:
         checked = check(resolved, caps)
         registry = AgentRegistry(named={}, default_agent=None)
         interp = RaisingInterp(
-            checked=checked, registry=registry, contracts={}, loop_limit=3, strict_json=False
+            checked=checked,
+            registry=registry,
+            contracts={},
+            type_env=TypeEnvironment(),
+            loop_limit=3,
+            strict_json=False,
         )
-        interp._type_env = TypeEnvironment()
 
         # Handler without binding (binding=None) — takes the else path at line 270
         handler = CatchClause(
@@ -5149,58 +4798,6 @@ class TestRemainingCoverage:
         assert isinstance(result, DecimalValue)
         assert result == DecimalValue(decimal.Decimal("1.5"))
 
-    def test_build_type_env_enum_and_alias_skipped_when_no_node_type(self) -> None:
-        """_build_type_env skips EnumDef/TypeAlias when node_types has no entry."""
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.runtime import _build_type_env
-        from agm.agl.scope import resolve
-        from agm.agl.scope.symbols import ResolvedProgram
-        from agm.agl.syntax.nodes import EnumDef, Program, TypeAlias
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import IntT
-        from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(), has_fallback_agent=False,
-            codec_kinds={}, renderer_names=frozenset()
-        )
-        checked = check(resolved, caps)
-
-        # Add EnumDef and TypeAlias nodes not in node_types
-        enm = EnumDef(name="Ghost1", variants=(), span=span, node_id=600)
-        alias = TypeAlias(
-            name="Ghost2", type_expr=IntT(span=span, node_id=0), span=span, node_id=601
-        )
-
-        new_program = Program(
-            body=checked.resolved.program.body + (enm, alias),
-            span=program.span,
-            node_id=program.node_id,
-        )
-        new_resolved = ResolvedProgram(
-            program=new_program,
-            resolution=checked.resolved.resolution,
-            call_kinds=checked.resolved.call_kinds,
-            root_scope=checked.resolved.root_scope,
-        )
-        new_checked = CheckedProgram(
-            resolved=new_resolved,
-            node_types=dict(checked.node_types),  # No entries for 600 or 601
-            contract_specs=checked.contract_specs,
-            warnings=checked.warnings,
-        )
-        env = _build_type_env(new_checked)
-        assert isinstance(env, TypeEnvironment)
-        # Neither Ghost1 nor Ghost2 registered
-        assert env.get_type("Ghost1") is None
-        assert env.get_type("Ghost2") is None
-
     def test_compare_non_ordering_op_on_decimal_returns_false(self) -> None:
         """Passing a non-ordering op to _compare with decimal/decimal falls to line 802."""
         from agm.agl.eval.interpreter import _compare
@@ -5223,32 +4820,3 @@ class TestRemainingCoverage:
         result = _compare(TextValue("a"), TextValue("b"), BinOp.ADD)
         assert result == BoolValue(False)
 
-    def test_template_with_unknown_segment_type_skips(self) -> None:
-        """Template with an unrecognized segment type skips it (404->401 branch)."""
-        from typing import cast
-
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import TextValue
-        from agm.agl.syntax.nodes import Template, TemplateSegment, TextSegment
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-
-        class UnknownSegment:
-            """A fake segment type that is neither TextSegment nor InterpSegment."""
-
-        real_seg = TextSegment(text="hello", span=span, node_id=1)
-        unknown_seg = cast(TemplateSegment, UnknownSegment())
-
-        # Build a template with a TextSegment + unknown segment
-        template = Template(
-            segments=(real_seg, unknown_seg),
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_template(template, Scope(parent=None))
-        # Only the TextSegment contributes; unknown is skipped
-        assert result == TextValue("hello")

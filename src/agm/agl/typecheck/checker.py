@@ -1025,6 +1025,7 @@ class _Checker:
             node_types=self._node_types,
             contract_specs=self._contract_specs,
             warnings=tuple(self._warnings),
+            type_env=self._env,
         )
 
 

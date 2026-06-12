@@ -14,7 +14,6 @@ from agm.agl.diagnostics import Diagnostic
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import ExceptionValue, Value
-    from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
@@ -299,18 +298,14 @@ class WorkflowRuntime:
             nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
         }
 
-        # Build a TypeEnvironment so the interpreter can resolve constructors.
-        type_env = _build_type_env(checked)
-
         interp = Interpreter(
             checked=checked,
             registry=registry,
             contracts=typed_contracts,
+            type_env=checked.type_env,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
         )
-        # Inject the type environment.
-        interp._type_env = type_env
 
         try:
             interp.execute(root_scope)
@@ -498,27 +493,3 @@ def _resolve_annotation(annotation: object) -> object:
         return JsonType()
     # Unknown annotation: default to text
     return TextType()
-
-
-def _build_type_env(checked: "CheckedProgram") -> TypeEnvironment:
-    """Reconstruct a TypeEnvironment from the checked program."""
-    from agm.agl.syntax.nodes import EnumDef, RecordDef, TypeAlias
-    from agm.agl.typecheck.env import TypeEnvironment
-
-    env = TypeEnvironment()
-    # Walk the program body to register types in the right order.
-    for stmt in checked.resolved.program.body:
-        if isinstance(stmt, RecordDef):
-            t = checked.node_types.get(stmt.node_id)
-            if t is not None:
-                env.register_type(stmt.name, t)
-        elif isinstance(stmt, EnumDef):
-            t = checked.node_types.get(stmt.node_id)
-            if t is not None:
-                env.register_type(stmt.name, t)
-        elif isinstance(stmt, TypeAlias):
-            t = checked.node_types.get(stmt.node_id)
-            if t is not None:
-                env.register_type(stmt.name, t)
-
-    return env

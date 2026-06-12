@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl import AglError, SourceSpan, WorkflowRuntime
+from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.runtime import Diagnostic, RunResult
 
 
@@ -211,8 +212,8 @@ class TestInputValidationRuntime:
     def test_no_agent_called_on_input_failure(self) -> None:
         calls: list[str] = []
 
-        def agent(req: object) -> str:
-            calls.append(req.prompt)  # type: ignore[attr-defined]
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
@@ -249,38 +250,38 @@ class TestAgentRequest:
     """AgentRequest contract: .prompt and .agent fields."""
 
     def test_request_prompt_is_rendered_template(self) -> None:
-        received: list[object] = []
+        received: list[AgentRequest] = []
 
-        def agent(req: object) -> str:
+        def agent(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
         rt.run('let x = prompt "Hello world"')
-        assert received[0].prompt == "Hello world"  # type: ignore[attr-defined]
+        assert received[0].prompt == "Hello world"
 
     def test_request_agent_name_for_default(self) -> None:
-        received: list[object] = []
+        received: list[AgentRequest] = []
 
-        def agent(req: object) -> str:
+        def agent(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
         rt.run('let x = prompt "Hi"')
-        assert received[0].agent == "prompt"  # type: ignore[attr-defined]
+        assert received[0].agent == "prompt"
 
     def test_request_agent_name_for_named(self) -> None:
-        received: list[object] = []
+        received: list[AgentRequest] = []
 
-        def reviewer(req: object) -> str:
+        def reviewer(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", reviewer)
         rt.run('let x = reviewer "Review this"')
-        assert received[0].agent == "reviewer"  # type: ignore[attr-defined]
+        assert received[0].agent == "reviewer"
 
 
 class TestDiagnosticType:

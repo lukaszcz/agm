@@ -12,3 +12,4 @@ build/
 .codex
 .agm
 .coverage
+coverage.json

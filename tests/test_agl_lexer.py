@@ -304,6 +304,15 @@ class TestSimpleTemplates:
             tok(r'"\q"')
         assert exc_info.value.span is not None
 
+    def test_unknown_escape_message_renders_escape_plainly(self) -> None:
+        # The bad escape is rendered as ``\q`` (a literal backslash + char),
+        # not as ``\'q'`` (the Python repr of the offending character).
+        with pytest.raises(LexError) as exc_info:
+            tok(r'"\q"')
+        msg = str(exc_info.value)
+        assert r"\q" in msg
+        assert "'q'" not in msg
+
     def test_nested_braces_inside_interpolation(self) -> None:
         # nested { } inside ${ } should not prematurely close the interpolation
         result = tok('"${foo}"')

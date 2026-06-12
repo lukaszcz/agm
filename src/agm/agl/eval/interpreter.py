@@ -654,7 +654,17 @@ class Interpreter:
                 validation_errors=list(last_errors),
                 output_contract=contract,
             )
-            response = self._registry.dispatch(agent_name, request)
+            try:
+                response = self._registry.dispatch(agent_name, request)
+            except AglRaise as exc:
+                # F2: ``AgentRegistry.dispatch`` raises ``AglRaise`` (e.g.
+                # ``AgentCallError``) without a span.  Attach this call site's
+                # span so an uncaught agent-call failure reports its source
+                # location (design §12.6).  Only fill a missing span — never
+                # overwrite a span the raise site already supplied.
+                if exc.span is None:
+                    exc.span = call_span
+                raise
             return response.content, attempt_trace_id
 
         def on_parsed(raw: str, result: "ParseResult") -> None:

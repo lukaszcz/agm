@@ -15,6 +15,7 @@ Covers:
 from __future__ import annotations
 
 import os
+import pathlib
 
 import pytest
 
@@ -235,6 +236,27 @@ class TestInputValidationRuntime:
         assert result.ok is False
         assert result.error is None
 
+    def test_missing_input_reports_declaration_line(self) -> None:
+        """F3: the missing-input diagnostic carries the declaration's line."""
+        rt = WorkflowRuntime()
+        # ``input spec`` is on line 3; the diagnostic must report line 3, not 1.
+        src = "let a = 1\nlet b = 2\ninput spec\nprint spec"
+        result = rt.run(src, inputs={})
+        assert result.ok is False
+        missing = [d for d in result.diagnostics if "spec" in d.message.lower()]
+        assert missing, result.diagnostics
+        assert missing[0].line == 3
+
+    def test_invalid_typed_input_reports_declaration_line(self) -> None:
+        """F3 parity: the type-invalid diagnostic already reports the line."""
+        rt = WorkflowRuntime()
+        src = "let a = 1\nlet b = 2\ninput n: int\nprint n"
+        result = rt.run(src, inputs={"n": "five"})
+        assert result.ok is False
+        bad = [d for d in result.diagnostics if "n" in d.message.lower()]
+        assert bad, result.diagnostics
+        assert bad[0].line == 3
+
 
 class TestEmptyResponse:
     """Exit 0 with empty stdout is a valid empty response (plan §9.5)."""
@@ -284,6 +306,103 @@ class TestAgentRequest:
         rt.register_agent("reviewer", reviewer)
         rt.run('let x = reviewer "Review this"')
         assert received[0].agent == "reviewer"
+
+
+class TestUncaughtAgentCallErrorSpan:
+    """F2: an uncaught AgentCallError carries the agent-call site's location.
+
+    ``AgentRegistry.dispatch`` raises ``AglRaise`` without a span; the
+    interpreter must attach the agent-call node's span so the exit-2 error
+    reports ``at line N`` (design §12.6).
+    """
+
+    def _failing_runtime(self) -> WorkflowRuntime:
+        from agm.agl.runtime.agents import AgentCallHostError
+
+        def failing_agent(req: AgentRequest) -> str:
+            raise AgentCallHostError(
+                cause="spawn_failure",
+                exit_code=None,
+                stderr_tail="boom",
+                elapsed=0.0,
+            )
+
+        return WorkflowRuntime(default_agent=failing_agent)
+
+    def test_dispatch_preserves_existing_span(self) -> None:
+        """A span the raise site already supplied is never overwritten."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.values import ExceptionValue, TextValue
+
+        existing = SourceSpan(
+            start_line=99,
+            start_col=1,
+            end_line=99,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
+        )
+
+        def agent(req: AgentRequest) -> str:
+            exc_val = ExceptionValue(
+                type_name="CustomError",
+                fields={"message": TextValue("boom")},
+            )
+            raise AglRaise(exc_val, span=existing)
+
+        rt = WorkflowRuntime(default_agent=agent)
+        result = rt.run('let a = 1\nlet x = prompt "hi"')
+        assert result.ok is False
+        assert result.error is not None
+        # The agent's own span (line 99) is kept, not replaced by the call site.
+        assert result.error.line == 99
+
+    def test_uncaught_agent_call_error_reports_call_line(self) -> None:
+        rt = self._failing_runtime()
+        # The ``prompt`` call is on line 2.
+        result = rt.run('let a = 1\nlet x = prompt "hi"')
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "AgentCallError"
+        assert result.error.line == 2
+
+    def test_uncaught_agent_call_error_surfaces_at_line_in_message(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        tmp_path: "pathlib.Path",
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End to end: ``agm exec`` prints ``at line N`` to stderr (exit 2)."""
+        import agm.commands.exec as exec_mod
+        from agm.agl.runtime.agents import AgentCallHostError
+        from agm.commands.args import ExecArgs
+        from agm.commands.exec import run as exec_run
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let a = 1\nlet x = prompt "hi"\n')
+
+        def failing_agent(req: object) -> str:
+            raise AgentCallHostError(
+                cause="spawn_failure", exit_code=None, stderr_tail="boom", elapsed=0.0
+            )
+
+        monkeypatch.setattr(
+            exec_mod, "runner_backed_agent_factory", lambda **_: failing_agent
+        )
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_run(args)
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "at line 2" in err
 
 
 class TestDiagnosticType:

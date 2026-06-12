@@ -2892,3 +2892,93 @@ class TestTargetedDiagnostics:
         """Mixed chained comparison rejects with a targeted message (a <= b != c)."""
         source = "let a = 1\nlet b = 2\nlet c = 3\nlet ok = (a <= b != c)"
         self._assert_chained_comparison_message(source)
+
+
+class TestInlineCompoundDiagnostics:
+    """§12.5 item 9 / §4.4: bar-safe inline-form rejections get targeted text.
+
+    A nested ``if`` / ``case`` / ``try`` in an inline (bar-safe) position must
+    not surface the generic "Unexpected token" fallback with a raw Lark
+    ``Token`` repr.  It must produce a targeted, honest message that
+    distinguishes a statement position (write an indented block) from an
+    expression position (parenthesize a ``case`` expression).
+    """
+
+    def _error(self, source: str) -> AglSyntaxError:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+        return exc_info.value
+
+    def test_nested_if_in_inline_branch(self) -> None:
+        """Nested ``if`` in an inline ``=>`` branch body → suite guidance."""
+        err = self._error("if true => if false => pass | else => pass")
+        msg = str(err)
+        assert msg == (
+            "`if` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+        assert "Token(" not in msg
+
+    def test_if_as_inline_catch_body(self) -> None:
+        """``if`` as an inline ``catch`` body → suite guidance."""
+        err = self._error("try pass catch _ => if true => pass | else => pass")
+        assert str(err) == (
+            "`if` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+
+    def test_nested_inline_try(self) -> None:
+        """A nested inline ``try`` → suite guidance."""
+        err = self._error("try try pass catch _ => pass catch _ => pass")
+        assert str(err) == (
+            "`try` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+
+    def test_open_statement_with_if_in_inline_try(self) -> None:
+        """An open statement followed by ``if`` in an inline ``try`` → suite guidance."""
+        src = "try let x = 1; if true => pass | else => pass catch _ => pass"
+        assert str(self._error(src)) == (
+            "`if` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+
+    def test_bare_case_after_until(self) -> None:
+        """A bare ``case`` expression after ``until`` → parenthesize guidance."""
+        src = (
+            "enum S\n  | A\n  | B\nlet s: S = A\nvar n: int = 0\n"
+            "do[2] set n = n + 1 until case s of | A => true | B => false"
+        )
+        err = self._error(src)
+        assert str(err) == (
+            "`case` is not allowed inline here; "
+            "parenthesize the case expression, e.g. `(case x of ...)`."
+        )
+        assert err.source_span.start_line == 6
+
+    def test_if_in_expression_position_suite_guidance(self) -> None:
+        """``if`` where an expression is expected → suite guidance (no expr form)."""
+        err = self._error("let x = if true => 1 | else => 2")
+        assert str(err) == (
+            "`if` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+
+    def test_try_in_expression_position_suite_guidance(self) -> None:
+        """``try`` where an expression is expected → suite guidance (no expr form)."""
+        err = self._error("let x = try 1 catch _ => 2")
+        assert str(err) == (
+            "`try` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+
+    def test_friendly_fallback_renders_token_value(self) -> None:
+        """The generic fallback renders the friendly token value, not a Token repr."""
+        src = (
+            "enum S\n  | A\n  | B\nlet s: S = A\n"
+            "let x = case s of\n  | A => let y = 1\n  | B => 2"
+        )
+        err = self._error(src)
+        msg = str(err)
+        assert msg == "Unexpected 'let'."
+        assert "Token(" not in msg

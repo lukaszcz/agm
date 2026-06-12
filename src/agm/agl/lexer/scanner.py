@@ -313,7 +313,7 @@ class _Scanner:
                 hex_digits += d
             return chr(int(hex_digits, 16))
         span = SourceSpan(esc_line, esc_col, self._line, self._col, esc_offset, self._pos)
-        raise LexError(f"Unknown escape sequence: \\{ch!r}", span=span)
+        raise LexError(f"Unknown escape sequence: \\{ch}", span=span)
 
     # ------------------------------------------------------------------
     # Template sub-scanner

@@ -24,6 +24,35 @@ _EQ_EQ = "EQ_EQ"
 # All comparison operator token types (mirrors tokens.py).
 _CMP_OPS: frozenset[str] = frozenset({"EQ", "NEQ", "LT", "LE", "GT", "GE"})
 
+# Compound forms (``if`` / ``case`` / ``try``) whose statement spelling is only
+# valid in an indented block (a *suite*), never inline after ``=>``, ``until``,
+# or in a ``case`` *expression* branch (design §12.5 item 9, plan §4.4).  When
+# one of these tokens is the unexpected token, the parser was at a position
+# where the grammar's bar-safe inline forms forbid a nested compound statement.
+_INLINE_BLOCKED: frozenset[str] = frozenset({"IF", "CASE", "TRY"})
+
+# Lark terminal names that begin a *statement* (a suite element).  When any of
+# these is in the expected set, the parser was expecting an indented block /
+# statement position — so a blocked compound there should be written as an
+# indented block (a suite), not parenthesized as an expression.  ``_INDENT``
+# itself signals "a suite may begin here".
+_STMT_STARTERS: frozenset[str] = frozenset(
+    {
+        "LET",
+        "VAR",
+        "SET",
+        "PASS",
+        "PRINT",
+        "RAISE",
+        "DO",
+        "INPUT",
+        "ENUM",
+        "RECORD",
+        "TYPE",
+        "_INDENT",
+    }
+)
+
 
 class AglSyntaxError(AglError):
     """A syntax error produced by the parser layer.
@@ -90,6 +119,39 @@ def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
     )
 
 
+def _make_inline_compound_error(
+    keyword: str, span: SourceSpan, *, stmt_context: bool
+) -> AglSyntaxError:
+    """Targeted diagnostic for a compound form blocked inline (design §12.5/§4.4).
+
+    ``if`` / ``case`` / ``try`` may not appear directly in a bar-safe inline
+    position (an inline ``=>`` branch body, an inline ``catch`` body, after
+    ``until``, or as a ``case`` *expression* branch).  ``stmt_context`` selects
+    the honest, actionable guidance:
+
+    - ``True``: a statement was expected here, so the compound must be written
+      as an indented block (a suite).
+    - ``False``: an expression was expected here, so a ``case`` expression must
+      be parenthesized; ``if``/``try`` have no expression form at all.
+    """
+    if stmt_context:
+        guidance = (
+            f"`{keyword}` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+    elif keyword == "case":
+        guidance = (
+            "`case` is not allowed inline here; "
+            "parenthesize the case expression, e.g. `(case x of ...)`."
+        )
+    else:
+        guidance = (
+            f"`{keyword}` is not allowed inline here; "
+            "write it as an indented block instead."
+        )
+    return AglSyntaxError(guidance, span=span)
+
+
 def syntax_error_from_lark(
     exc: Exception,
     *,
@@ -130,8 +192,19 @@ def syntax_error_from_lark(
         # ``a <= b != c``.
         if tok.type in _CMP_OPS and tok.type not in exc.expected:
             return _make_chained_comparison_error(span)
+        # Bar-safe inline-form rejections (design §12.5 item 9, plan §4.4): a
+        # nested ``if`` / ``case`` / ``try`` appears where the grammar's inline
+        # forms forbid it (inline ``=>``/``catch`` body, after ``until``, or a
+        # ``case`` expression branch).  Differentiate "needs a suite" (a
+        # statement position) from "needs parentheses" (an expression position)
+        # by whether the expected set contains any statement starter.
+        if tok.type in _INLINE_BLOCKED:
+            stmt_context = bool(_STMT_STARTERS & set(exc.expected))
+            return _make_inline_compound_error(
+                tok.value, span, stmt_context=stmt_context
+            )
         return AglSyntaxError(
-            f"Unexpected token {tok!r}.",
+            f"Unexpected {tok.value!r}.",
             span=span,
         )
 

@@ -432,6 +432,10 @@ class WorkflowRuntime:
         # annotation here — the checker is the single source of truth and already
         # handles compound types (list/dict/record/enum) correctly.
         declared_inputs: dict[str, AglType] = {}  # name → declared Type
+        # Track each declaration's source line so the "missing declared input"
+        # diagnostic can report the declaration site (parity with the
+        # type-invalid path, which already uses ``stmt.span``).
+        declared_input_lines: dict[str, int] = {}  # name → declaration line
         for stmt in program.body:
             if isinstance(stmt, InputDecl):
                 input_type = checked.type_env.get_binding_type(stmt.node_id)
@@ -441,6 +445,7 @@ class WorkflowRuntime:
                         "checker invariant violated."
                     )
                 declared_inputs[stmt.name] = input_type
+                declared_input_lines[stmt.name] = stmt.span.start_line
 
         # Validate: check for missing and undeclared.
         input_errors: list[Diagnostic] = []
@@ -451,7 +456,7 @@ class WorkflowRuntime:
             input_errors.append(
                 Diagnostic(
                     message=f"Missing declared input: {name!r}",
-                    line=1,
+                    line=declared_input_lines[name],
                 )
             )
         for name in provided_keys - declared_keys:

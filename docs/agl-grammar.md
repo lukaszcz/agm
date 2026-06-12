@@ -32,11 +32,11 @@ tokens are suppressed (implicit continuation).
 
 | Token | Meaning |
 |-------|---------|
-| `TEMPLATE_START` | Opening `` ` `` of a template string |
+| `TEMPLATE_START` | Opening `"` (or `"""`) of a template string |
 | `STRING_FRAGMENT` | Literal text fragment inside a template |
 | `INTERP_START` | `${` — start of an interpolation expression |
 | `INTERP_END` | `}` — end of an interpolation expression |
-| `TEMPLATE_END` | Closing `` ` `` of a template string |
+| `TEMPLATE_END` | Closing `"` (or `"""`) of a template string |
 
 ### Keywords
 

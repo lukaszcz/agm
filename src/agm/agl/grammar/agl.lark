@@ -416,6 +416,7 @@ pattern: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?  -> pat_constru
        | DECIMAL                                 -> pat_lit_decimal
        | "true"                                  -> pat_lit_true
        | "false"                                 -> pat_lit_false
+       | "null"                                  -> pat_lit_null
        | template                                -> pat_lit_str
 
 // Pattern fields: (field_shorthand | field_bind | nested_pattern)+

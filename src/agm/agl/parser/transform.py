@@ -1429,6 +1429,12 @@ class AstBuilder(Transformer):
             literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
         )
 
+    def pat_lit_null(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
+        lit = syntax.NullLit(span=_span_from_meta(meta), node_id=self._next_id())
+        return syntax.LiteralPattern(
+            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
     def pat_lit_str(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         # args: [StringLit | Template] — the template transformer normalises plain strings.
         # A plain string (no interpolation) becomes StringLit; an interpolated string

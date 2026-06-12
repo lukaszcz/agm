@@ -1115,3 +1115,337 @@ class TestScopeViaAstConstruction:
 
 def _make_field(name: str, type_expr: "TypeExpr") -> FieldDef:
     return FieldDef(name=name, type_expr=type_expr, span=_sp(), node_id=_nid())
+
+
+# ---------------------------------------------------------------------------
+# Task 1: type/record/enum declarations rejected outside the program root
+# ---------------------------------------------------------------------------
+
+
+class TestTypeDeclarationNotAtRoot:
+    """Task 1: nested record/enum/type declarations must be rejected at resolver time."""
+
+    # --- record ---
+
+    def test_record_inside_try_body_rejected(self) -> None:
+        err = reject_scope(
+            "try\n"
+            "  record R\n"
+            "    n: int\n"
+            "catch _ =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_record_inside_do_body_rejected(self) -> None:
+        err = reject_scope(
+            "do[2]\n"
+            "  record R\n"
+            "    n: int\n"
+            "until true\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_record_inside_if_branch_rejected(self) -> None:
+        err = reject_scope(
+            "if true =>\n"
+            "  record R\n"
+            "    n: int\n"
+            "| else =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    # --- enum ---
+
+    def test_enum_inside_try_body_rejected(self) -> None:
+        err = reject_scope(
+            "try\n"
+            "  enum E\n"
+            "    | A\n"
+            "    | B\n"
+            "catch _ =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_enum_inside_do_body_rejected(self) -> None:
+        err = reject_scope(
+            "do[2]\n"
+            "  enum E\n"
+            "    | A\n"
+            "until true\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_enum_inside_if_branch_rejected(self) -> None:
+        err = reject_scope(
+            "if true =>\n"
+            "  enum E\n"
+            "    | A\n"
+            "| else =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    # --- type alias ---
+
+    def test_type_alias_inside_try_body_rejected(self) -> None:
+        err = reject_scope(
+            "try\n"
+            "  type T = text\n"
+            "catch _ =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_type_alias_inside_do_body_rejected(self) -> None:
+        err = reject_scope(
+            "do[2]\n"
+            "  type T = int\n"
+            "until true\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_type_alias_inside_if_branch_rejected(self) -> None:
+        err = reject_scope(
+            "if true =>\n"
+            "  type T = bool\n"
+            "| else =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    # --- top-level still accepted ---
+
+    def test_record_at_root_accepted(self) -> None:
+        r = parse_and_resolve("record P\n  n: int\n")
+        assert r.program is not None
+
+    def test_enum_at_root_accepted(self) -> None:
+        r = parse_and_resolve("enum E\n  | A\n  | B\n")
+        assert r.program is not None
+
+    def test_type_alias_at_root_accepted(self) -> None:
+        r = parse_and_resolve("type MyText = text\n")
+        assert r.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: duplicate variable bindings within one pattern rejected
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicatePatternBindings:
+    """Task 2: a name bound twice in one pattern is an error (§9 rule 1)."""
+
+    def test_duplicate_var_pattern_name_in_constructor(self) -> None:
+        # case f of | Fail(reason: x, hint: x) => print x
+        err = reject_scope(
+            "enum Failure\n"
+            "  | Fail(reason: text, hint: text)\n"
+            "let f: Failure = Fail(reason: \"r\", hint: \"h\")\n"
+            "case f of\n"
+            "  | Fail(reason: x, hint: x) => print x\n"
+        )
+        _, msg = diag(err)
+        assert "x" in msg
+
+    def test_duplicate_var_pattern_name_in_constructor_ast(self) -> None:
+        """Direct AST construction: same name bound twice in one ConstructorPattern."""
+        from agm.agl.syntax.nodes import (
+            CaseStmt,
+            CaseStmtBranch,
+            ConstructorPattern,
+            PatternField,
+            VarPattern,
+        )
+
+        let_x = _make_let("x", _make_intlit(1))
+        sub1 = VarPattern(name="dup", span=_sp(5), node_id=_nid())
+        sub2 = VarPattern(name="dup", span=_sp(5), node_id=_nid())
+        pf1 = PatternField(name="a", pattern=sub1, span=_sp(5), node_id=_nid())
+        pf2 = PatternField(name="b", pattern=sub2, span=_sp(5), node_id=_nid())
+        ctor_pat = ConstructorPattern(
+            qualifier=None, name="Pair", fields=(pf1, pf2), span=_sp(5), node_id=_nid()
+        )
+        branch = CaseStmtBranch(
+            pattern=ctor_pat, body=(_make_pass(),), span=_sp(5), node_id=_nid()
+        )
+        case_stmt = CaseStmt(
+            subject=_make_varref("x"), branches=(branch,), span=_sp(5), node_id=_nid()
+        )
+        err = reject_program(let_x, case_stmt)
+        assert "dup" in err.to_diagnostic().message
+
+    def test_unique_var_pattern_names_in_constructor_accepted(self) -> None:
+        """Two different names in a constructor pattern — should pass."""
+        from agm.agl.syntax.nodes import (
+            CaseStmt,
+            CaseStmtBranch,
+            ConstructorPattern,
+            PatternField,
+            VarPattern,
+        )
+
+        let_x = _make_let("x", _make_intlit(1))
+        sub1 = VarPattern(name="a", span=_sp(), node_id=_nid())
+        sub2 = VarPattern(name="b", span=_sp(), node_id=_nid())
+        pf1 = PatternField(name="f1", pattern=sub1, span=_sp(), node_id=_nid())
+        pf2 = PatternField(name="f2", pattern=sub2, span=_sp(), node_id=_nid())
+        ctor_pat = ConstructorPattern(
+            qualifier=None, name="Pair", fields=(pf1, pf2), span=_sp(), node_id=_nid()
+        )
+        branch = CaseStmtBranch(
+            pattern=ctor_pat,
+            body=(_make_print(_make_varref("a")),),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        case_stmt = CaseStmt(
+            subject=_make_varref("x"), branches=(branch,), span=_sp(), node_id=_nid()
+        )
+        r = resolve_program(let_x, case_stmt)
+        assert r.program is not None
+
+    def test_pattern_var_shadows_outer_scope_accepted(self) -> None:
+        """A pattern variable shadowing an outer name is OK (shadowing rule)."""
+        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, VarPattern
+
+        let_x = _make_let("x", _make_intlit(1))
+        let_outer = _make_let("v", _make_intlit(99))
+        # pattern `v` shadows outer `v`
+        pv = VarPattern(name="v", span=_sp(), node_id=_nid())
+        branch = CaseStmtBranch(
+            pattern=pv, body=(_make_print(_make_varref("v")),), span=_sp(), node_id=_nid()
+        )
+        case_stmt = CaseStmt(
+            subject=_make_varref("x"), branches=(branch,), span=_sp(), node_id=_nid()
+        )
+        r = resolve_program(let_outer, let_x, case_stmt)
+        assert r.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 3: prompt/exec reserved as pattern-variable and catch-binder names
+# ---------------------------------------------------------------------------
+
+
+class TestReservedNamesInPatternAndCatch:
+    """Task 3: prompt/exec are reserved; extend check to pattern binders and catch binders."""
+
+    # --- catch binder ---
+
+    def test_exec_as_catch_binder_rejected(self) -> None:
+        err = reject_scope(
+            "try\n"
+            "  pass\n"
+            "catch _ as exec =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 3
+        assert "exec" in msg
+        assert "reserved" in msg.lower() or "contextual" in msg.lower()
+
+    def test_prompt_as_catch_binder_rejected(self) -> None:
+        err = reject_scope(
+            "try\n"
+            "  pass\n"
+            "catch _ as prompt =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 3
+        assert "prompt" in msg
+        assert "reserved" in msg.lower() or "contextual" in msg.lower()
+
+    def test_normal_catch_binder_accepted(self) -> None:
+        r = parse_and_resolve(
+            "try\n"
+            "  pass\n"
+            "catch _ as err =>\n"
+            "  pass\n"
+        )
+        assert r.program is not None
+
+    # --- pattern variable ---
+
+    def test_prompt_as_var_pattern_rejected(self) -> None:
+        # case x of | prompt => pass
+        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, VarPattern
+
+        let_x = _make_let("x", _make_intlit(1))
+        pv = VarPattern(name="prompt", span=_sp(3), node_id=_nid())
+        branch = CaseStmtBranch(
+            pattern=pv, body=(_make_pass(),), span=_sp(3), node_id=_nid()
+        )
+        case_stmt = CaseStmt(
+            subject=_make_varref("x"), branches=(branch,), span=_sp(3), node_id=_nid()
+        )
+        err = reject_program(let_x, case_stmt)
+        msg = err.to_diagnostic().message
+        assert "prompt" in msg
+        assert "reserved" in msg.lower() or "contextual" in msg.lower()
+
+    def test_exec_as_var_pattern_rejected(self) -> None:
+        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, VarPattern
+
+        let_x = _make_let("x", _make_intlit(1))
+        pv = VarPattern(name="exec", span=_sp(3), node_id=_nid())
+        branch = CaseStmtBranch(
+            pattern=pv, body=(_make_pass(),), span=_sp(3), node_id=_nid()
+        )
+        case_stmt = CaseStmt(
+            subject=_make_varref("x"), branches=(branch,), span=_sp(3), node_id=_nid()
+        )
+        err = reject_program(let_x, case_stmt)
+        msg = err.to_diagnostic().message
+        assert "exec" in msg
+        assert "reserved" in msg.lower() or "contextual" in msg.lower()
+
+    # --- pattern field binder ---
+
+    def test_exec_as_pattern_field_binder_rejected(self) -> None:
+        from agm.agl.syntax.nodes import (
+            CaseStmt,
+            CaseStmtBranch,
+            ConstructorPattern,
+            PatternField,
+            VarPattern,
+        )
+
+        let_x = _make_let("x", _make_intlit(1))
+        pv = VarPattern(name="exec", span=_sp(3), node_id=_nid())
+        pf = PatternField(name="field", pattern=pv, span=_sp(3), node_id=_nid())
+        ctor_pat = ConstructorPattern(
+            qualifier=None, name="Ctor", fields=(pf,), span=_sp(3), node_id=_nid()
+        )
+        branch = CaseStmtBranch(
+            pattern=ctor_pat, body=(_make_pass(),), span=_sp(3), node_id=_nid()
+        )
+        case_stmt = CaseStmt(
+            subject=_make_varref("x"), branches=(branch,), span=_sp(3), node_id=_nid()
+        )
+        err = reject_program(let_x, case_stmt)
+        msg = err.to_diagnostic().message
+        assert "exec" in msg
+        assert "reserved" in msg.lower() or "contextual" in msg.lower()

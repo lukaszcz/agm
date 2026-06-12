@@ -6,9 +6,11 @@ building the lexical scope chain and populating three side tables:
 - ``resolution``:  ``VarRef.node_id`` / ``SetStmt.node_id``  →  ``BindingRef``
 - ``call_kinds``:  ``AgentCall.node_id``  →  ``CallKind``
 
-The resolver is structured as a ``Visitor`` subclass so that adding new node
-kinds in M2/M3 is additive: override the new ``visit_*`` method and the
-existing resolution machinery is untouched.
+The resolver walks the AST using explicit ``isinstance`` dispatch in
+``_resolve_stmt`` / ``_resolve_expr``.  Each scope-introducing construct has a
+dedicated ``_resolve_*`` method.  Adding support for a new node kind means
+adding an ``isinstance`` branch in ``_resolve_stmt`` or ``_resolve_expr`` and,
+if the construct introduces a scope, a new ``_resolve_*`` helper method.
 
 Scope rules (design §9, plan §6.2)
 ------------------------------------
@@ -78,7 +80,6 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
 )
-from agm.agl.syntax.visitor import Visitor
 
 # Reserved contextual keyword names that may not be used as variable names.
 _RESERVED_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
@@ -100,10 +101,12 @@ def _immutable_binder_phrase(kind: BinderKind) -> str:
     return _IMMUTABLE_BINDER_PHRASES[kind]
 
 
-class _Resolver(Visitor):
-    """Stateful visitor that builds the scope tree and resolution tables.
+class _Resolver:
+    """Stateful resolver that builds the scope tree and resolution tables.
 
-    Use ``resolve(program)`` — the public function — rather than
+    Uses explicit ``isinstance`` dispatch via ``_resolve_stmt`` /
+    ``_resolve_expr`` and dedicated ``_resolve_*`` methods per scope-introducing
+    construct.  Use ``resolve(program)`` — the public function — rather than
     instantiating this class directly.
     """
 
@@ -189,9 +192,7 @@ class _Resolver(Visitor):
         elif isinstance(stmt, PrintStmt):
             self._resolve_expr(stmt.value)
         elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
-            # Type declarations — resolved in the typecheck pass; ignored here
-            # for scope purposes (type names live in a separate namespace).
-            pass
+            self._resolve_type_decl(stmt)
         elif isinstance(stmt, DoUntil):
             self._resolve_do_until(stmt)
         elif isinstance(stmt, IfStmt):
@@ -267,6 +268,21 @@ class _Resolver(Visitor):
         )
         self._define(stmt.name, ref)
 
+    def _resolve_type_decl(self, stmt: RecordDef | EnumDef | TypeAlias) -> None:
+        """Reject type declarations that appear outside the program root."""
+        if not self._at_root:
+            kind_word = (
+                "record" if isinstance(stmt, RecordDef)
+                else "enum" if isinstance(stmt, EnumDef)
+                else "type"
+            )
+            raise AglScopeError(
+                f"Type declarations are only allowed at the top level of the "
+                f"program, not inside a nested block (found '{kind_word}' here).",
+                span=stmt.span,
+            )
+        # At root: ignored here; the typecheck pass handles type names.
+
     def _resolve_do_until(self, stmt: DoUntil) -> None:
         # Open a fresh iteration scope for the body + condition.
         child = ScopeNode(node_id=stmt.node_id, parent=self._current_scope())
@@ -336,6 +352,7 @@ class _Resolver(Visitor):
         self._at_root = False
         # Bind the catch binder (immutable) if present.
         if clause.binding is not None:
+            self._check_not_reserved(clause.binding, clause.span)
             ref = BindingRef(
                 name=clause.binding,
                 mutable=False,
@@ -354,8 +371,14 @@ class _Resolver(Visitor):
     # ------------------------------------------------------------------
 
     def _bind_pattern_vars(self, pattern: object, scope: ScopeNode) -> None:
-        """Recursively bind variables introduced by *pattern* into *scope*."""
+        """Recursively bind variables introduced by *pattern* into *scope*.
+
+        Raises ``AglScopeError`` if the same name is bound more than once within
+        the pattern (§9 rule 1: redeclaration in the same scope is an error).
+        A pattern variable that shadows an outer-scope name is still legal.
+        """
         if isinstance(pattern, VarPattern):
+            self._check_not_reserved(pattern.name, pattern.span)
             ref = BindingRef(
                 name=pattern.name,
                 mutable=False,
@@ -363,6 +386,13 @@ class _Resolver(Visitor):
                 decl_node_id=pattern.node_id,
                 kind=BinderKind.pattern_binding,
             )
+            # Check for intra-pattern duplicate (same scope, already bound by
+            # an earlier field of this pattern).
+            if pattern.name in scope.bindings:
+                raise AglScopeError(
+                    f"Name '{pattern.name}' is bound more than once in this pattern.",
+                    span=pattern.span,
+                )
             scope.define(pattern.name, ref)
         elif isinstance(pattern, ConstructorPattern):
             for pf in pattern.fields:

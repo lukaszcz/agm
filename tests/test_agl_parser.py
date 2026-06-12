@@ -2848,6 +2848,14 @@ class TestM3CoverageEdgeCases:
         assert isinstance(b.pattern.literal, BoolLit)
         assert b.pattern.literal.value is False
 
+    def test_pat_lit_null(self) -> None:
+        """LiteralPattern with null literal."""
+        src = "case x of\n  | null => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, LiteralPattern)
+        assert isinstance(b.pattern.literal, NullLit)
+
     def test_pat_lit_str_with_interp_rejected(self) -> None:
         """Pattern string literal with interpolation is rejected."""
         src = 'case x of\n  | "${y}" => pass'

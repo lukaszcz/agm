@@ -379,6 +379,10 @@ Sandbox settings resolution:
 
 ## AgL workflow DSL
 
+| Command | Description |
+|---------|-------------|
+| `agm exec [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] FILE` | Execute an AgL workflow program |
+
 ### `agm exec FILE`
 
 Execute an AgL (Agent Language) workflow program.

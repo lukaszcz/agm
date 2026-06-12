@@ -1113,6 +1113,25 @@ class TestConstructorPatternVariantMembership:
         line, msg = diag(err)
         assert line == 3
 
+    def test_null_literal_pattern_json_scrutinee_accepted(self) -> None:
+        """null pattern against a json scrutinee is valid (null has type json)."""
+        r = accept_type("let j: json = null\ncase j of\n  | null => pass\n  | _ => pass\n")
+        assert r.resolved.program is not None
+
+    def test_null_literal_pattern_text_scrutinee_rejected(self) -> None:
+        """null pattern against a text scrutinee is a static error (json vs text)."""
+        err = reject_type('let s = "x"\ncase s of\n  | null => pass\n  | _ => pass\n')
+        line, msg = diag(err)
+        assert line == 3
+        assert "incompatible" in msg
+
+    def test_null_literal_pattern_int_scrutinee_rejected(self) -> None:
+        """null pattern against an int scrutinee is a static error (json vs int)."""
+        err = reject_type("let n = 1\ncase n of\n  | null => pass\n  | _ => pass\n")
+        line, msg = diag(err)
+        assert line == 3
+        assert "incompatible" in msg
+
     def test_phantom_variant_no_longer_suppresses_exhaustiveness(self) -> None:
         """A phantom variant pattern previously counted as covering a variant and
         could suppress the non-exhaustive warning; now it is rejected outright so

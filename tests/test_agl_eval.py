@@ -4884,3 +4884,59 @@ class TestShellExecTemplateInterpolation:
 
         assert result.bindings.get("out") == TextValue("hello world")
 
+
+# ---------------------------------------------------------------------------
+# Source-level null literal pattern (grammar + parser + typecheck + eval)
+# ---------------------------------------------------------------------------
+
+
+class TestNullLiteralPatternSource:
+    """End-to-end tests for ``null`` patterns written in AgL source.
+
+    These tests drive the full pipeline (lexer → grammar → transformer →
+    scope → typecheck → eval) to verify that ``case j of | null => ...`` works
+    when written in source, not just when ASTs are constructed directly.
+    """
+
+    def test_null_pattern_matches_json_null(self) -> None:
+        """``null`` pattern matches when the scrutinee is JSON null."""
+        from agm.agl.eval.values import IntValue
+
+        result = run(
+            "let j: json = null\n"
+            "let r: int = case j of\n"
+            "  | null => 1\n"
+            "  | _ => 0\n"
+        )
+        assert result.ok is True, result.error
+        assert result.bindings.get("r") == IntValue(1)
+
+    def test_null_pattern_fallback_for_non_null_json(self) -> None:
+        """``null`` pattern does NOT match JSON false, 0, or empty string."""
+        from agm.agl.eval.values import IntValue
+
+        for src_val in ("false", "0", '""'):
+            source = (
+                f"let j: json = {src_val}\n"
+                "let r: int = case j of\n"
+                "  | null => 1\n"
+                "  | _ => 0\n"
+            )
+            result = run(source)
+            assert result.ok is True, f"failed for j={src_val}: {result.error}"
+            assert result.bindings.get("r") == IntValue(0), f"null matched {src_val}"
+
+    def test_null_pattern_in_case_stmt(self) -> None:
+        """``null`` pattern works in a case statement (not just case expression)."""
+        from agm.agl.eval.values import IntValue
+
+        result = run(
+            "let j: json = null\n"
+            "var r: int = 0\n"
+            "case j of\n"
+            "  | null => set r = 1\n"
+            "  | _ => set r = 2\n"
+        )
+        assert result.ok is True, result.error
+        assert result.bindings.get("r") == IntValue(1)
+

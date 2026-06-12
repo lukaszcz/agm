@@ -320,6 +320,33 @@ class TestExecCommandEdgePaths:
         captured = capsys.readouterr()
         assert "Error" in captured.err
 
+    def test_non_exhaustive_case_warns_but_exits_0(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """F1: a non-exhaustive enum ``case`` is a warning, not an error.
+
+        The program still runs to completion: exit 0 (``run`` returns ``None``),
+        with the exhaustiveness warning printed to stderr and program output on
+        stdout.
+        """
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text(
+            "enum R\n"
+            "  | Pass\n"
+            "  | Fail\n"
+            "let r: R = Pass\n"
+            "case r of\n"
+            "  | Pass => print \"passed\"\n"
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        # The matched branch ran (no MatchError, since the value is Pass).
+        assert captured.out == "passed\n"
+        # The exhaustiveness warning names the missing variant on stderr.
+        assert "Non-exhaustive" in captured.err
+        assert "Fail" in captured.err
+
 
 class TestExecExitCodeMapping:
     """F13a: the exit-2 (uncaught AgL exception) seam.
@@ -407,7 +434,7 @@ class TestExecCommandWarnings:
             inputs: object = None,
             check_only: bool = False,
         ) -> RunResult:
-            return RunResult(ok=True, diagnostics=[warning], error=None)
+            return RunResult(ok=True, diagnostics=[], error=None, warnings=[warning])
 
         import agm.agl.runtime.runtime as rt_mod
 
@@ -452,7 +479,9 @@ class TestExecCommandWarnings:
             inputs: object = None,
             check_only: bool = False,
         ) -> RunResult:
-            return RunResult(ok=False, diagnostics=[warning, error], error=None)
+            return RunResult(
+                ok=False, diagnostics=[error], error=None, warnings=[warning]
+            )
 
         import agm.agl.runtime.runtime as rt_mod
 

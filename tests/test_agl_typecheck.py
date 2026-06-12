@@ -17,60 +17,27 @@ yet parseable.  Tests for those are deferred and marked with ``pytest.mark.skip`
 
 from __future__ import annotations
 
-import decimal
-
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.syntax.nodes import (
-    ELSE,
     AgentCall,
-    BinaryOp,
-    BinOp,
-    BoolLit,
     CaseExpr,
-    CaseExprBranch,
-    CaseStmt,
-    CaseStmtBranch,
-    CatchClause,
-    Constructor,
-    DecimalLit,
-    DictEntry,
     DictLit,
-    EnumDef,
     Expr,
-    ExprStmt,
-    FieldAccess,
     FieldDef,
-    IfBranch,
-    IfStmt,
     InterpSegment,
     IntLit,
-    IsTest,
     LetDecl,
-    ListLit,
-    NamedArg,
-    NullLit,
-    PassStmt,
-    PrintStmt,
     Program,
-    Raise,
-    RecordDef,
     SetStmt,
     Stmt,
     StringLit,
     Template,
-    TryCatch,
-    TypeAlias,
-    UnaryNeg,
-    UnaryNot,
     VarDecl,
-    VariantDef,
-    VarPattern,
     VarRef,
-    WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
@@ -415,7 +382,6 @@ class TestContractSpecs:
 
     def test_set_target_type_propagated(self) -> None:
         r = parse_resolve_check('var x: text = "a"\nset x = prompt "Q"')
-        from agm.agl.syntax.nodes import SetStmt
 
         set_stmt = r.resolved.program.body[1]
         assert isinstance(set_stmt, SetStmt)
@@ -454,7 +420,6 @@ class TestContractSpecs:
 
     def test_set_record_target_propagated(self) -> None:
         """§6 expected-type propagation: set with record-typed var derives json codec."""
-        from agm.agl.syntax.nodes import SetStmt
         from agm.agl.typecheck.types import RecordType
 
         src = (
@@ -866,6 +831,140 @@ class TestRendererErrors:
         r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x}"')
         assert r.resolved.program is not None
 
+    def test_mixed_kind_dict_literal_in_interpolation_is_json(self) -> None:
+        """checker.py:596 — a mixed-kind dict literal inside ``${ … }`` is checked
+        with ``expected=json``, so heterogeneous value kinds are accepted.
+
+        ``{kind: "demo", tags: items}`` mixes a ``text`` value with a
+        ``list[text]`` value; only the ``json`` expectation (design §5.8 rule 3)
+        lets the dict-literal check accept that, recording the segment as ``json``.
+        """
+        src = (
+            'let items = ["a", "b"]\n'
+            'let t = "payload: ${ {kind: "demo", tags: items} }"\n'
+        )
+        r = parse_resolve_check(src)
+        # The interpolated dict-literal is checked with ``expected=json``, so its
+        # heterogeneous values (text + list[text]) are accepted under the json
+        # rule and the node is typed ``dict[text, json]`` — NOT rejected as an
+        # inconsistent dict.
+        from agm.agl.syntax.nodes import LetDecl
+
+        let_t = r.resolved.program.body[1]
+        assert isinstance(let_t, LetDecl)
+        tmpl = let_t.value
+        assert isinstance(tmpl, Template)
+        seg = next(s for s in tmpl.segments if isinstance(s, InterpSegment))
+        assert isinstance(seg.expr, DictLit)
+        assert r.node_types[seg.expr.node_id] == DictType(value=JsonType())
+
+    def test_mixed_kind_dict_literal_in_interpolation_renders_as_json(self) -> None:
+        """Eval companion: the mixed-kind dict interpolates as JSON text."""
+        from agm.agl.runtime import WorkflowRuntime
+
+        src = (
+            'let items = ["a", "b"]\n'
+            'let t = "payload: ${ {kind: "demo", tags: items} }"\n'
+        )
+        result = WorkflowRuntime().run(src)
+        assert result.ok is True
+        from agm.agl.eval.values import TextValue
+
+        rendered = result.bindings["t"]
+        assert isinstance(rendered, TextValue)
+        # The JSON object is rendered inline (keys preserved); no boundary tags.
+        assert '"kind"' in rendered.value and '"demo"' in rendered.value
+        assert '"tags"' in rendered.value
+        assert "<dsl-value" not in rendered.value
+
+
+# ---------------------------------------------------------------------------
+# F1: enum case exhaustiveness warnings
+# ---------------------------------------------------------------------------
+
+
+_ENUM_PRELUDE = "enum R\n  | Pass\n  | Fail\nlet r: R = Pass\n"
+
+
+def _warnings(checked: CheckedProgram) -> list[tuple[int, str, str]]:
+    """Return (line, message, severity) for each checker warning."""
+    return [(w.line, w.message, w.severity) for w in checked.warnings]
+
+
+class TestExhaustivenessWarnings:
+    """F1: a non-wildcard enum ``case`` missing variants is a *warning*.
+
+    The program still type-checks (no error raised); the warning names the
+    uncovered variants at the case's source line and has severity ``warning``.
+    """
+
+    def test_case_stmt_missing_variant_warns(self) -> None:
+        checked = accept_type(
+            _ENUM_PRELUDE + "case r of\n  | Pass => pass\n"
+        )
+        warns = _warnings(checked)
+        assert len(warns) == 1
+        line, msg, severity = warns[0]
+        assert severity == "warning"
+        # The case statement is on line 5 (after the 4-line prelude).
+        assert line == 5
+        assert "Fail" in msg
+        assert "Pass" not in msg.split("missing")[1]  # Pass is covered, not listed
+
+    def test_case_stmt_wildcard_suppresses_warning(self) -> None:
+        checked = accept_type(
+            _ENUM_PRELUDE + "case r of\n  | Pass => pass\n  | _ => pass\n"
+        )
+        assert _warnings(checked) == []
+
+    def test_case_stmt_bare_var_suppresses_warning(self) -> None:
+        checked = accept_type(
+            _ENUM_PRELUDE + "case r of\n  | Pass => pass\n  | other => pass\n"
+        )
+        assert _warnings(checked) == []
+
+    def test_case_stmt_all_variants_covered_no_warning(self) -> None:
+        checked = accept_type(
+            _ENUM_PRELUDE + "case r of\n  | Pass => pass\n  | Fail => pass\n"
+        )
+        assert _warnings(checked) == []
+
+    def test_non_enum_scrutinee_no_warning(self) -> None:
+        # An int scrutinee has no enumerable variant set, so no exhaustiveness
+        # analysis (and no warning) is performed.
+        checked = accept_type(
+            "let n = 1\ncase n of\n  | 0 => pass\n  | 1 => pass\n"
+        )
+        assert _warnings(checked) == []
+
+    def test_literal_pattern_branch_covers_nothing(self) -> None:
+        # A literal pattern (here a string) can syntactically appear against an
+        # enum scrutinee but never matches a variant, so it contributes no
+        # coverage: ``Fail`` is still reported as missing.
+        checked = accept_type(
+            _ENUM_PRELUDE + 'case r of\n  | Pass => pass\n  | "x" => pass\n'
+        )
+        warns = _warnings(checked)
+        assert len(warns) == 1
+        assert "Fail" in warns[0][1]
+
+    def test_case_expr_missing_variant_warns(self) -> None:
+        checked = accept_type(
+            _ENUM_PRELUDE + "let x = case r of\n  | Pass => 1\n"
+        )
+        warns = _warnings(checked)
+        assert len(warns) == 1
+        line, msg, severity = warns[0]
+        assert severity == "warning"
+        assert line == 5
+        assert "Fail" in msg
+
+    def test_case_expr_wildcard_suppresses_warning(self) -> None:
+        checked = accept_type(
+            _ENUM_PRELUDE + "let x = case r of\n  | Pass => 1\n  | _ => 2\n"
+        )
+        assert _warnings(checked) == []
+
 
 # ---------------------------------------------------------------------------
 # Type declarations (M2+ parser required for record/enum/type; deferred)
@@ -1157,32 +1256,16 @@ def _tc_intlit(v: int = 1) -> IntLit:
     return IntLit(value=v, span=_tc_sp(), node_id=_tc_nid())
 
 
-def _tc_boollit(v: bool = True) -> BoolLit:
-    return BoolLit(value=v, span=_tc_sp(), node_id=_tc_nid())
-
-
-def _tc_declit(v: str = "1.5") -> DecimalLit:
-    return DecimalLit(value=decimal.Decimal(v), span=_tc_sp(), node_id=_tc_nid())
+def _tc_varref(name: str) -> VarRef:
+    return VarRef(name=name, span=_tc_sp(), node_id=_tc_nid())
 
 
 def _tc_strlit(v: str = "hi") -> StringLit:
     return StringLit(value=v, span=_tc_sp(), node_id=_tc_nid())
 
 
-def _tc_nulllit() -> NullLit:
-    return NullLit(span=_tc_sp(), node_id=_tc_nid())
-
-
-def _tc_varref(name: str) -> VarRef:
-    return VarRef(name=name, span=_tc_sp(), node_id=_tc_nid())
-
-
 def _tc_let(name: str, value: Expr, type_ann: TypeExpr | None = None) -> LetDecl:
     return LetDecl(name=name, type_ann=type_ann, value=value, span=_tc_sp(), node_id=_tc_nid())
-
-
-def _tc_var(name: str, value: Expr, type_ann: TypeExpr | None = None) -> VarDecl:
-    return VarDecl(name=name, type_ann=type_ann, value=value, span=_tc_sp(), node_id=_tc_nid())
 
 
 def _tc_program(*stmts: Stmt) -> Program:
@@ -1197,15 +1280,6 @@ def resolve_and_check(
         caps = default_capabilities()
     prog = _tc_program(*stmts)
     return check(resolve(prog), caps)
-
-
-def reject_ast(
-    *stmts: Stmt,
-    caps: HostCapabilities | None = None,
-) -> AglTypeError:
-    with pytest.raises(AglTypeError) as exc_info:
-        resolve_and_check(*stmts, caps=caps)
-    return exc_info.value
 
 
 def _tc_field(name: str, type_expr: TypeExpr) -> FieldDef:
@@ -1615,773 +1689,534 @@ class TestRecursionThroughAlias:
 
 
 # ============================================================
-# checker.py — statement-level paths
+# checker.py — statement-level paths (source-driven, M3-parseable)
 # ============================================================
 
 
-class TestCheckerStatementsViaAst:
-    """Exercise statement dispatching code paths."""
+def _let_value_type(checked: CheckedProgram, index: int) -> object:
+    """Return the recorded type of the value expr of the let/var at *index*."""
+    decl = checked.resolved.program.body[index]
+    assert isinstance(decl, (LetDecl, VarDecl))
+    return checked.node_types[decl.value.node_id]
+
+
+class TestCheckerStatements:
+    """Statement-level type-checking paths, driven through real AgL source.
+
+    Every construct here parses under the M3 grammar; the prior AST-built
+    variants (``TestCheckerStatementsViaAst``) were retired once if/case/do/try
+    and operators all became parseable.
+    """
 
     def test_pass_stmt(self) -> None:
-        stmt = PassStmt(span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(stmt)
+        r = accept_type("pass\n")
         assert r.resolved.program is not None
 
     def test_expr_stmt(self) -> None:
-        stmt = ExprStmt(expr=_tc_intlit(), span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(stmt)
+        r = accept_type("1\n")
         assert r.resolved.program is not None
 
     def test_raise_non_exception_expr(self) -> None:
-        """Raise with any non-Exception expression is not an error (checker only errors on
-        abstract Exception base)."""
-        raise_stmt = Raise(exc=_tc_strlit("oops"), span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(raise_stmt)
+        """Raising a non-Exception expression is not a checker error (the checker
+        only rejects the abstract ``Exception`` base)."""
+        r = accept_type('raise "oops"\n')
         assert r.resolved.program is not None
 
     def test_raise_abstract_base_error(self) -> None:
-        """Raise of the abstract Exception base type should fail.
-        We construct this by catching a wildcard (giving binder abstract Exception type)
-        then re-raising it."""
-        # try: pass; catch _ as e => raise e
-        # The catch-all gives 'e' the abstract ExceptionType("Exception"),
-        # and _check_raise should reject it.
-        raise_stmt = Raise(exc=_tc_varref("e"), span=_tc_sp(), node_id=_tc_nid())
-        clause = CatchClause(
-            exc_type=None, binding="e",
-            body=(raise_stmt,),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        try_stmt = TryCatch(
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            handlers=(clause,), span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(try_stmt)
+        """Re-raising a wildcard-caught binder (abstract ``Exception``) is
+        rejected."""
+        err = reject_type("try\n  pass\ncatch _ as e =>\n  raise e\n")
         assert "Exception" in err.to_diagnostic().message
 
     def test_do_until(self) -> None:
-        from agm.agl.syntax.nodes import DoUntil
-        var_n = VarDecl(
-            name="n", type_ann=None, value=_tc_intlit(0), span=_tc_sp(), node_id=_tc_nid()
-        )
-        do_stmt = DoUntil(
-            limit=5,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            condition=_tc_boollit(True),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        r = resolve_and_check(var_n, do_stmt)
+        r = accept_type("var n: int = 0\ndo[5]\n  pass\nuntil true\n")
         assert r.resolved.program is not None
 
     def test_if_stmt_with_else(self) -> None:
-        branch_if = IfBranch(
-            cond=_tc_boollit(True),
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        branch_else = IfBranch(
-            cond=ELSE,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        if_stmt = IfStmt(branches=(branch_if, branch_else), span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(if_stmt)
+        r = accept_type("if true => pass | else => pass\n")
         assert r.resolved.program is not None
 
     def test_if_stmt_without_else(self) -> None:
-        branch = IfBranch(
-            cond=_tc_boollit(True),
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        if_stmt = IfStmt(branches=(branch,), span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(if_stmt)
+        r = accept_type("if true => pass\n")
         assert r.resolved.program is not None
 
     def test_case_stmt_wildcard(self) -> None:
-        let_x = _tc_let("x", _tc_intlit(1))
-        branch = CaseStmtBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        case_stmt = CaseStmt(
-            subject=_tc_varref("x"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(let_x, case_stmt)
+        r = accept_type("let x = 1\ncase x of\n  | _ => pass\n")
         assert r.resolved.program is not None
 
     def test_case_stmt_var_pattern(self) -> None:
-        enum_def = EnumDef(
-            name="R",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
+        r = accept_type(
+            "enum R\n  | Pass\nlet r: R = Pass\ncase r of\n  | v => pass\n"
         )
-        # Construct R = Pass via constructor
-        ctor = Constructor(qualifier=None, name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid())
-        let_r = _tc_let("r", ctor, type_ann=_tc_name_t("R"))
-        pv = VarPattern(name="v", span=_tc_sp(), node_id=_tc_nid())
-        branch = CaseStmtBranch(
-            pattern=pv,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        case_stmt = CaseStmt(
-            subject=_tc_varref("r"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(enum_def, let_r, case_stmt)
         assert r.resolved.program is not None
 
     def test_case_stmt_literal_pattern(self) -> None:
-        let_x = _tc_let("x", _tc_intlit(1))
-        from agm.agl.syntax.nodes import LiteralPattern
-        branch = CaseStmtBranch(
-            pattern=LiteralPattern(literal=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid()),
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        case_stmt = CaseStmt(
-            subject=_tc_varref("x"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(let_x, case_stmt)
+        r = accept_type("let x = 1\ncase x of\n  | 1 => pass\n  | _ => pass\n")
         assert r.resolved.program is not None
 
     def test_case_stmt_constructor_pattern_enum(self) -> None:
-        from agm.agl.syntax.nodes import ConstructorPattern, PatternField
-        enum_def = EnumDef(
-            name="R",
-            variants=(
-                VariantDef(
-                    name="Fail",
-                    fields=(_tc_field("reason", _tc_text_t()),),
-                    span=_tc_sp(),
-                    node_id=_tc_nid(),
-                ),
-            ),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
+        r = accept_type(
+            "enum R\n  | Fail(reason: text)\n"
+            'let r: R = Fail(reason: "x")\n'
+            "case r of\n  | Fail(reason: msg) => pass\n"
         )
-        ctor = Constructor(
-            qualifier=None,
-            name="Fail",
-            args=(
-                NamedArg(name="reason", value=_tc_strlit("x"), span=_tc_sp(), node_id=_tc_nid()),
-            ),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        let_r = _tc_let("r", ctor, type_ann=_tc_name_t("R"))
-        pv = VarPattern(name="msg", span=_tc_sp(), node_id=_tc_nid())
-        pf = PatternField(name="reason", pattern=pv, span=_tc_sp(), node_id=_tc_nid())
-        ctor_p = ConstructorPattern(
-            qualifier=None, name="Fail", fields=(pf,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        branch = CaseStmtBranch(
-            pattern=ctor_p,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        case_stmt = CaseStmt(
-            subject=_tc_varref("r"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(enum_def, let_r, case_stmt)
         assert r.resolved.program is not None
 
     def test_try_catch_wildcard(self) -> None:
-        clause = CatchClause(
-            exc_type=None, binding=None,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        try_stmt = TryCatch(
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            handlers=(clause,), span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(try_stmt)
+        r = accept_type("try\n  pass\ncatch _ =>\n  pass\n")
         assert r.resolved.program is not None
 
     def test_try_catch_specific_exception(self) -> None:
-        clause = CatchClause(
-            exc_type="AgentCallError", binding="err",
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        try_stmt = TryCatch(
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            handlers=(clause,), span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(try_stmt)
+        r = accept_type("try\n  pass\ncatch AgentCallError as err =>\n  pass\n")
         assert r.resolved.program is not None
 
     def test_try_catch_unknown_exception_type(self) -> None:
-        clause = CatchClause(
-            exc_type="GhostException", binding=None,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        try_stmt = TryCatch(
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            handlers=(clause,), span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(try_stmt)
+        err = reject_type("try\n  pass\ncatch GhostException =>\n  pass\n")
         assert "GhostException" in err.to_diagnostic().message
 
     def test_try_catch_exc_type_is_underscore(self) -> None:
-        """'_' as exc_type is treated as wildcard (same as None)."""
-        clause = CatchClause(
-            exc_type="_", binding="e",
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        try_stmt = TryCatch(
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            handlers=(clause,), span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(try_stmt)
+        """``catch _`` is the wildcard handler (abstract ``Exception`` binder)."""
+        r = accept_type("try\n  pass\ncatch _ as e =>\n  pass\n")
         assert r.resolved.program is not None
 
     def test_record_def_and_enum_def_pass_through(self) -> None:
-        """RecordDef and EnumDef in _check_stmt are pass-through (handled by pre-pass)."""
-        rec = RecordDef(
-            name="Point", fields=(_tc_field("x", _tc_int_t()),), span=_tc_sp(), node_id=_tc_nid()
+        """Type declarations are handled by the pre-pass; ``_check_stmt`` is a
+        pass-through for them."""
+        r = accept_type(
+            "record Point\n  x: int\n"
+            "enum Status\n  | Ok\n"
+            "type PAlias = Point\n"
         )
-        vd = VariantDef(name="Ok", fields=(), span=_tc_sp(), node_id=_tc_nid())
-        enum_def = EnumDef(name="Status", variants=(vd,), span=_tc_sp(), node_id=_tc_nid())
-        alias = TypeAlias(
-            name="PAlias", type_expr=_tc_name_t("Point"), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(rec, enum_def, alias)
         assert r.resolved.program is not None
 
 
 # ============================================================
-# checker.py — expression type inference
+# checker.py — expression type inference (source-driven, M3-parseable)
 # ============================================================
 
 
-class TestCheckerExprsViaAst:
-    """Exercise expression inference and error paths."""
+class TestCheckerExprs:
+    """Expression inference and error paths, driven through real AgL source."""
 
     def test_null_literal_is_json(self) -> None:
-        null_expr = _tc_nulllit()
-        let_stmt = _tc_let("x", null_expr, type_ann=_tc_json_t())
-        r = resolve_and_check(let_stmt)
-        assert r.node_types[null_expr.node_id] == JsonType()
+        r = accept_type("let x: json = null\n")
+        assert _let_value_type(r, 0) == JsonType()
 
     def test_decimal_lit(self) -> None:
-        dec_expr = _tc_declit("3.14")
-        let_stmt = _tc_let("x", dec_expr)
-        r = resolve_and_check(let_stmt)
-        assert r.node_types[dec_expr.node_id] == DecimalType()
+        r = accept_type("let x = 3.14\n")
+        assert _let_value_type(r, 0) == DecimalType()
 
     def test_bool_lit(self) -> None:
-        bool_expr = _tc_boollit(True)
-        let_stmt = _tc_let("x", bool_expr)
-        r = resolve_and_check(let_stmt)
-        assert r.node_types[bool_expr.node_id] == BoolType()
+        r = accept_type("let x = true\n")
+        assert _let_value_type(r, 0) == BoolType()
 
     def test_string_lit(self) -> None:
-        str_expr = _tc_strlit("hello")
-        let_stmt = _tc_let("x", str_expr)
-        r = resolve_and_check(let_stmt)
-        assert r.node_types[str_expr.node_id] == TextType()
+        r = accept_type('let x = "hello"\n')
+        assert _let_value_type(r, 0) == TextType()
 
     def test_unary_not(self) -> None:
-        let_b = _tc_let("b", _tc_boollit(True))
-        expr = UnaryNot(operand=_tc_varref("b"), span=_tc_sp(), node_id=_tc_nid())
-        let_r = _tc_let("r", expr)
-        r = resolve_and_check(let_b, let_r)
-        assert r.node_types[let_r.value.node_id] == BoolType()
+        r = accept_type("let b = true\nlet r = not b\n")
+        assert _let_value_type(r, 1) == BoolType()
 
     def test_unary_neg_int(self) -> None:
-        let_n = _tc_let("n", _tc_intlit(1))
-        expr = UnaryNeg(operand=_tc_varref("n"), span=_tc_sp(), node_id=_tc_nid())
-        let_r = _tc_let("r", expr)
-        r = resolve_and_check(let_n, let_r)
-        assert r.node_types[let_r.value.node_id] == IntType()
+        r = accept_type("let n = 1\nlet r = -n\n")
+        assert _let_value_type(r, 1) == IntType()
 
     def test_unary_neg_decimal(self) -> None:
-        let_n = _tc_let("n", _tc_declit("1.5"))
-        expr = UnaryNeg(operand=_tc_varref("n"), span=_tc_sp(), node_id=_tc_nid())
-        let_r = _tc_let("r", expr)
-        r = resolve_and_check(let_n, let_r)
-        assert r.node_types[let_r.value.node_id] == DecimalType()
+        r = accept_type("let n = 1.5\nlet r = -n\n")
+        assert _let_value_type(r, 1) == DecimalType()
 
     def test_unary_neg_wrong_type(self) -> None:
-        let_s = _tc_let("s", _tc_strlit("x"))
-        expr = UnaryNeg(operand=_tc_varref("s"), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(let_s, _tc_let("r", expr))
+        err = reject_type('let s = "x"\nlet r = -s\n')
         assert "numeric" in err.to_diagnostic().message
 
     def test_binary_add_int_int(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.ADD, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        let_r = _tc_let("r", binop)
-        r = resolve_and_check(let_a, let_b, let_r)
-        assert r.node_types[let_r.value.node_id] == IntType()
+        r = accept_type("let a = 1\nlet b = 2\nlet r = a + b\n")
+        assert _let_value_type(r, 2) == IntType()
 
     def test_binary_add_int_decimal(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_declit("1.5"))
-        binop = BinaryOp(
-            op=BinOp.ADD, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        let_r = _tc_let("r", binop)
-        r = resolve_and_check(let_a, let_b, let_r)
-        assert r.node_types[let_r.value.node_id] == DecimalType()
+        r = accept_type("let a = 1\nlet b = 1.5\nlet r = a + b\n")
+        assert _let_value_type(r, 2) == DecimalType()
 
     def test_binary_add_text_text(self) -> None:
-        let_a = _tc_let("a", _tc_strlit("x"))
-        let_b = _tc_let("b", _tc_strlit("y"))
-        binop = BinaryOp(
-            op=BinOp.ADD, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        let_r = _tc_let("r", binop)
-        r = resolve_and_check(let_a, let_b, let_r)
-        assert r.node_types[let_r.value.node_id] == TextType()
+        r = accept_type('let a = "x"\nlet b = "y"\nlet r = a + b\n')
+        assert _let_value_type(r, 2) == TextType()
 
     def test_binary_add_type_mismatch(self) -> None:
-        let_a = _tc_let("a", _tc_strlit("x"))
-        let_b = _tc_let("b", _tc_intlit(1))
-        binop = BinaryOp(
-            op=BinOp.ADD, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        err = reject_type('let a = "x"\nlet b = 1\nlet r = a + b\n')
         assert "+" in err.to_diagnostic().message
 
     def test_binary_sub(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(5))
-        let_b = _tc_let("b", _tc_intlit(3))
-        binop = BinaryOp(
-            op=BinOp.SUB, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == IntType()
+        r = accept_type("let a = 5\nlet b = 3\nlet r = a - b\n")
+        assert _let_value_type(r, 2) == IntType()
 
     def test_binary_sub_decimal(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(5))
-        let_b = _tc_let("b", _tc_declit("3.0"))
-        binop = BinaryOp(
-            op=BinOp.SUB, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == DecimalType()
+        r = accept_type("let a = 5\nlet b = 3.0\nlet r = a - b\n")
+        assert _let_value_type(r, 2) == DecimalType()
 
     def test_binary_sub_type_mismatch(self) -> None:
-        let_a = _tc_let("a", _tc_strlit("x"))
-        let_b = _tc_let("b", _tc_intlit(1))
-        binop = BinaryOp(
-            op=BinOp.SUB, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        err = reject_type('let a = "x"\nlet b = 1\nlet r = a - b\n')
         assert "-" in err.to_diagnostic().message
 
     def test_binary_mul(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(2))
-        let_b = _tc_let("b", _tc_intlit(3))
-        binop = BinaryOp(
-            op=BinOp.MUL, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == IntType()
+        r = accept_type("let a = 2\nlet b = 3\nlet r = a * b\n")
+        assert _let_value_type(r, 2) == IntType()
 
     def test_binary_div(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(6))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.DIV, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == DecimalType()
+        r = accept_type("let a = 6\nlet b = 2\nlet r = a / b\n")
+        assert _let_value_type(r, 2) == DecimalType()
 
     def test_binary_div_non_numeric_error(self) -> None:
-        let_a = _tc_let("a", _tc_strlit("x"))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.DIV, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        err = reject_type('let a = "x"\nlet b = 2\nlet r = a / b\n')
         assert "/" in err.to_diagnostic().message
 
     def test_binary_and(self) -> None:
-        let_a = _tc_let("a", _tc_boollit(True))
-        let_b = _tc_let("b", _tc_boollit(False))
-        binop = BinaryOp(
-            op=BinOp.AND, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = true\nlet b = false\nlet r = a and b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_or(self) -> None:
-        let_a = _tc_let("a", _tc_boollit(True))
-        let_b = _tc_let("b", _tc_boollit(False))
-        binop = BinaryOp(
-            op=BinOp.OR, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = true\nlet b = false\nlet r = a or b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_and_non_bool_left_error(self) -> None:
-        # F7: 'and'/'or' require bool operands; a non-bool left operand is a
-        # static error with the span on the offending (left) operand.
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_boollit(True))
-        left_ref = _tc_varref("a")
-        binop = BinaryOp(
-            op=BinOp.AND, left=left_ref, right=_tc_varref("b"),
-            span=_tc_sp(line=9), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        """F7: ``and``/``or`` require bool operands; a non-bool left operand is a
+        static error reported at the left operand's line."""
+        err = reject_type("let a = 1\nlet b = true\nlet r = a and b\n")
         d = err.to_diagnostic()
         assert "and" in d.message and "bool" in d.message
-        # Span points at the left operand, not the whole BinaryOp.
-        assert d.line == left_ref.span.start_line
+        assert d.line == 3
 
     def test_binary_or_non_bool_right_error(self) -> None:
-        # F7: a non-bool right operand is reported at the right operand's span.
-        let_a = _tc_let("a", _tc_boollit(True))
-        let_b = _tc_let("b", _tc_intlit(2))
-        right_ref = _tc_varref("b")
-        binop = BinaryOp(
-            op=BinOp.OR, left=_tc_varref("a"), right=right_ref,
-            span=_tc_sp(line=9), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        err = reject_type("let a = true\nlet b = 2\nlet r = a or b\n")
         d = err.to_diagnostic()
         assert "or" in d.message and "bool" in d.message
-        assert d.line == right_ref.span.start_line
+        assert d.line == 3
 
     def test_binary_eq(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.EQ, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = 1\nlet b = 2\nlet r = a = b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_eq_type_mismatch(self) -> None:
-        let_a = _tc_let("a", _tc_strlit("x"))
-        let_b = _tc_let("b", _tc_intlit(1))
-        binop = BinaryOp(
-            op=BinOp.EQ, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        err = reject_type('let a = "x"\nlet b = 1\nlet r = a = b\n')
         assert "same type" in err.to_diagnostic().message
 
     def test_binary_neq(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.NEQ, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = 1\nlet b = 2\nlet r = a != b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_lt(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.LT, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = 1\nlet b = 2\nlet r = a < b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_le(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.LE, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = 1\nlet b = 2\nlet r = a <= b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_gt(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.GT, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = 1\nlet b = 2\nlet r = a > b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_ge(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.GE, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let a = 1\nlet b = 2\nlet r = a >= b\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_ord_bool_error(self) -> None:
-        let_a = _tc_let("a", _tc_boollit(True))
-        let_b = _tc_let("b", _tc_boollit(False))
-        binop = BinaryOp(
-            op=BinOp.LT, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        err = reject_type("let a = true\nlet b = false\nlet r = a < b\n")
         assert "numeric" in err.to_diagnostic().message
 
     def test_binary_in_text_text(self) -> None:
-        let_a = _tc_let("a", _tc_strlit("hi"))
-        let_b = _tc_let("b", _tc_strlit("hi there"))
-        binop = BinaryOp(
-            op=BinOp.IN, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type('let a = "hi"\nlet b = "hi there"\nlet r = a in b\n')
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_in_elem_list(self) -> None:
-        let_lst = _tc_let("lst", ListLit(
-            elements=(_tc_intlit(1), _tc_intlit(2)),
-            span=_tc_sp(), node_id=_tc_nid(),
-        ))
-        let_a = _tc_let("a", _tc_intlit(1))
-        binop = BinaryOp(
-            op=BinOp.IN, left=_tc_varref("a"), right=_tc_varref("lst"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_lst, let_a, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type("let lst = [1, 2]\nlet a = 1\nlet r = a in lst\n")
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_in_text_dict(self) -> None:
-        key = StringLit(value="a", span=_tc_sp(), node_id=_tc_nid())
-        entry = DictEntry(key=key, value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid())
-        let_d = _tc_let("d", DictLit(entries=(entry,), span=_tc_sp(), node_id=_tc_nid()))
-        let_k = _tc_let("k", _tc_strlit("a"))
-        binop = BinaryOp(
-            op=BinOp.IN, left=_tc_varref("k"), right=_tc_varref("d"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(let_d, let_k, _tc_let("r", binop))
-        assert r.node_types[binop.node_id] == BoolType()
+        r = accept_type('let d = {a: 1}\nlet k = "a"\nlet r = k in d\n')
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_binary_in_elem_list_mismatch(self) -> None:
-        let_lst = _tc_let("lst", ListLit(
-            elements=(_tc_intlit(1),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        ))
-        let_a = _tc_let("a", _tc_strlit("x"))
-        binop = BinaryOp(
-            op=BinOp.IN, left=_tc_varref("a"), right=_tc_varref("lst"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_lst, let_a, _tc_let("r", binop))
+        err = reject_type('let lst = [1]\nlet a = "x"\nlet r = a in lst\n')
         assert "in" in err.to_diagnostic().message
 
     def test_binary_in_bad_rhs(self) -> None:
-        let_a = _tc_let("a", _tc_intlit(1))
-        let_b = _tc_let("b", _tc_intlit(2))
-        binop = BinaryOp(
-            op=BinOp.IN, left=_tc_varref("a"), right=_tc_varref("b"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        err = reject_type("let a = 1\nlet b = 2\nlet r = a in b\n")
         assert "in" in err.to_diagnostic().message
 
     def test_is_test_valid(self) -> None:
-        enum_def = EnumDef(
-            name="R",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
+        r = accept_type(
+            "enum R\n  | Pass\nlet r: R = Pass\nlet b = r is Pass\n"
         )
-        ctor = Constructor(qualifier=None, name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid())
-        let_r = _tc_let("r", ctor, type_ann=_tc_name_t("R"))
-        is_expr = IsTest(
-            expr=_tc_varref("r"), qualifier=None, variant="Pass",
-            negated=False, span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(enum_def, let_r, _tc_let("b", is_expr))
-        assert r.node_types[is_expr.node_id] == BoolType()
+        # body = [EnumDef, LetDecl(r), LetDecl(b)]; the is-test is the value of
+        # the let at index 2.
+        assert _let_value_type(r, 2) == BoolType()
 
     def test_is_test_wrong_variant(self) -> None:
-        enum_def = EnumDef(
-            name="R",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
+        err = reject_type(
+            "enum R\n  | Pass\nlet r: R = Pass\nlet b = r is Other\n"
         )
-        ctor = Constructor(qualifier=None, name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid())
-        let_r = _tc_let("r", ctor, type_ann=_tc_name_t("R"))
-        is_expr = IsTest(
-            expr=_tc_varref("r"), qualifier=None, variant="Other",
-            negated=False, span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(enum_def, let_r, _tc_let("b", is_expr))
         assert "Other" in err.to_diagnostic().message
 
     def test_is_test_non_enum_error(self) -> None:
-        let_n = _tc_let("n", _tc_intlit(1))
-        is_expr = IsTest(
-            expr=_tc_varref("n"), qualifier=None, variant="Pass",
-            negated=False, span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(let_n, _tc_let("b", is_expr))
+        err = reject_type("let n = 1\nlet b = n is Pass\n")
         assert "enum" in err.to_diagnostic().message
 
     def test_field_access_record(self) -> None:
-        rec = RecordDef(
-            name="Point",
-            fields=(_tc_field("x", _tc_int_t()),),
-            span=_tc_sp(), node_id=_tc_nid(),
+        r = accept_type(
+            "record Point\n  x: int\nlet p = Point(x: 1)\nlet x = p.x\n"
         )
-        ctor = Constructor(
-            qualifier=None, name="Point",
-            args=(NamedArg(name="x", value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        let_p = _tc_let("p", ctor, type_ann=_tc_name_t("Point"))
-        fa = FieldAccess(obj=_tc_varref("p"), field="x", span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(rec, let_p, _tc_let("x", fa))
-        assert r.node_types[fa.node_id] == IntType()
+        assert _let_value_type(r, 2) == IntType()
 
     def test_field_access_record_unknown_field(self) -> None:
-        rec = RecordDef(
-            name="Point", fields=(_tc_field("x", _tc_int_t()),), span=_tc_sp(), node_id=_tc_nid()
+        err = reject_type(
+            "record Point\n  x: int\nlet p = Point(x: 1)\nlet y = p.y\n"
         )
-        ctor = Constructor(
-            qualifier=None, name="Point",
-            args=(NamedArg(name="x", value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        let_p = _tc_let("p", ctor, type_ann=_tc_name_t("Point"))
-        fa = FieldAccess(obj=_tc_varref("p"), field="y", span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(rec, let_p, _tc_let("x", fa))
         assert "y" in err.to_diagnostic().message
 
     def test_field_access_exception_type(self) -> None:
-        """Field access on caught exception binder reads exception fields."""
-        clause = CatchClause(
-            exc_type="AgentCallError", binding="err",
-            body=(
-                PrintStmt(
-                    value=FieldAccess(
-                        obj=_tc_varref("err"), field="message", span=_tc_sp(), node_id=_tc_nid()
-                    ),
-                    span=_tc_sp(), node_id=_tc_nid(),
-                ),
-            ),
-            span=_tc_sp(), node_id=_tc_nid(),
+        """Field access on a caught exception binder reads exception fields."""
+        r = accept_type(
+            "try\n  pass\ncatch AgentCallError as err =>\n  print err.message\n"
         )
-        try_stmt = TryCatch(
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            handlers=(clause,), span=_tc_sp(), node_id=_tc_nid(),
-        )
-        r = resolve_and_check(try_stmt)
         assert r.resolved.program is not None
 
     def test_field_access_exception_unknown_field(self) -> None:
-        """Field access on caught exception with non-existent field raises."""
-        clause = CatchClause(
-            exc_type="AgentCallError", binding="err",
-            body=(
-                PrintStmt(
-                    value=FieldAccess(
-                        obj=_tc_varref("err"), field="ghost", span=_tc_sp(), node_id=_tc_nid()
-                    ),
-                    span=_tc_sp(), node_id=_tc_nid(),
-                ),
-            ),
-            span=_tc_sp(), node_id=_tc_nid(),
+        err = reject_type(
+            "try\n  pass\ncatch AgentCallError as err =>\n  print err.ghost\n"
         )
-        try_stmt = TryCatch(
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            handlers=(clause,), span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(try_stmt)
         assert "ghost" in err.to_diagnostic().message
 
     def test_field_access_non_record_error(self) -> None:
-        let_n = _tc_let("n", _tc_intlit(1))
-        fa = FieldAccess(obj=_tc_varref("n"), field="x", span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(let_n, _tc_let("r", fa))
+        err = reject_type("let n = 1\nlet r = n.x\n")
         assert "record" in err.to_diagnostic().message
 
     # --- Constructor ---
 
     def test_record_constructor_ok(self) -> None:
-        rec = RecordDef(
-            name="Pt",
-            fields=(_tc_field("x", _tc_int_t()), _tc_field("y", _tc_int_t())),
-            span=_tc_sp(), node_id=_tc_nid(),
+        r = accept_type(
+            "record Pt\n  x: int\n  y: int\nlet p = Pt(x: 1, y: 2)\n"
         )
-        ctor = Constructor(
-            qualifier=None, name="Pt",
-            args=(
-                NamedArg(name="x", value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid()),
-                NamedArg(name="y", value=_tc_intlit(2), span=_tc_sp(), node_id=_tc_nid()),
-            ),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        let_p = _tc_let("p", ctor)
-        r = resolve_and_check(rec, let_p)
-        assert isinstance(r.node_types[ctor.node_id], RecordType)
+        assert isinstance(_let_value_type(r, 1), RecordType)
 
     def test_record_constructor_missing_field(self) -> None:
-        rec = RecordDef(
-            name="Pt",
-            fields=(_tc_field("x", _tc_int_t()), _tc_field("y", _tc_int_t())),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(
-            qualifier=None, name="Pt",
-            args=(NamedArg(name="x", value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(rec, _tc_let("p", ctor))
+        err = reject_type("record Pt\n  x: int\n  y: int\nlet p = Pt(x: 1)\n")
         assert "y" in err.to_diagnostic().message
 
     def test_record_constructor_unknown_field(self) -> None:
-        rec = RecordDef(
-            name="Pt",
-            fields=(_tc_field("x", _tc_int_t()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(
-            qualifier=None, name="Pt",
-            args=(
-                NamedArg(name="x", value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid()),
-                NamedArg(name="z", value=_tc_intlit(2), span=_tc_sp(), node_id=_tc_nid()),
-            ),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(rec, _tc_let("p", ctor))
+        err = reject_type("record Pt\n  x: int\nlet p = Pt(x: 1, z: 2)\n")
         assert "z" in err.to_diagnostic().message
 
+    def test_enum_constructor_qualified(self) -> None:
+        r = accept_type("enum R\n  | Pass\nlet v = R.Pass\n")
+        assert isinstance(_let_value_type(r, 1), EnumType)
+
+    def test_enum_constructor_alias_qualified(self) -> None:
+        """``type Status = Review`` then ``Status.Pass`` resolves the alias."""
+        r = accept_type(
+            "enum Review\n  | Pass\ntype Status = Review\nlet v = Status.Pass\n"
+        )
+        resolved = _let_value_type(r, 2)
+        assert isinstance(resolved, EnumType)
+        assert resolved.name == "Review"
+
+    def test_enum_constructor_alias_of_alias_qualified(self) -> None:
+        r = accept_type(
+            "enum Review\n  | Pass\n"
+            "type A = Review\ntype B = A\nlet v = B.Pass\n"
+        )
+        resolved = _let_value_type(r, 3)
+        assert isinstance(resolved, EnumType)
+        assert resolved.name == "Review"
+
+    def test_enum_constructor_non_enum_alias_qualifier_rejected(self) -> None:
+        err = reject_type("type Nums = list[int]\nlet v = Nums.Pass\n")
+        assert "Nums" in err.to_diagnostic().message
+
+    def test_enum_constructor_qualified_unknown_enum(self) -> None:
+        err = reject_type("let v = Ghost.Pass\n")
+        assert "Ghost" in err.to_diagnostic().message
+
+    def test_enum_constructor_qualified_unknown_variant(self) -> None:
+        err = reject_type("enum R\n  | Pass\nlet v = R.Fail\n")
+        assert "Fail" in err.to_diagnostic().message
+
+    def test_enum_constructor_unqualified_ambiguous(self) -> None:
+        err = reject_type(
+            "enum E1\n  | Both\nenum E2\n  | Both\nlet v = Both\n"
+        )
+        assert "ambiguous" in err.to_diagnostic().message.lower()
+
+    def test_enum_constructor_unqualified_with_expected_type_resolves(self) -> None:
+        r = accept_type(
+            "enum E1\n  | Both\nenum E2\n  | Both\nlet v: E1 = Both\n"
+        )
+        assert isinstance(_let_value_type(r, 2), EnumType)
+
+    def test_enum_constructor_unqualified_unknown(self) -> None:
+        err = reject_type("let v = Ghost\n")
+        assert "Ghost" in err.to_diagnostic().message
+
+    def test_variant_constructor_unknown_field(self) -> None:
+        err = reject_type("enum R\n  | Pass\nlet v = R.Pass(ghost: 1)\n")
+        assert "ghost" in err.to_diagnostic().message
+
+    def test_variant_constructor_missing_field(self) -> None:
+        err = reject_type("enum R\n  | Fail(msg: text)\nlet v = R.Fail()\n")
+        assert "msg" in err.to_diagnostic().message
+
+    # --- List and Dict literals ---
+
+    def test_list_lit_nonempty(self) -> None:
+        r = accept_type("let xs = [1, 2]\n")
+        assert _let_value_type(r, 0) == ListType(elem=IntType())
+
+    def test_list_lit_empty_with_annotation(self) -> None:
+        r = accept_type("let xs: list[int] = []\n")
+        assert _let_value_type(r, 0) == ListType(elem=IntType())
+
+    def test_list_lit_empty_without_annotation_error(self) -> None:
+        err = reject_type("let xs = []\n")
+        assert "annotation" in err.to_diagnostic().message
+
+    def test_list_lit_inconsistent_types(self) -> None:
+        err = reject_type('let xs = [1, "x"]\n')
+        assert "inconsistent" in err.to_diagnostic().message
+
+    def test_dict_lit_nonempty(self) -> None:
+        r = accept_type("let d = {a: 1}\n")
+        assert _let_value_type(r, 0) == DictType(value=IntType())
+
+    def test_dict_lit_empty_with_annotation(self) -> None:
+        r = accept_type("let d: dict[text, int] = {}\n")
+        assert _let_value_type(r, 0) == DictType(value=IntType())
+
+    def test_dict_lit_empty_without_annotation_error(self) -> None:
+        err = reject_type("let d = {}\n")
+        assert "annotation" in err.to_diagnostic().message
+
+    def test_dict_lit_duplicate_key(self) -> None:
+        err = reject_type("let d = {a: 1, a: 2}\n")
+        assert "a" in err.to_diagnostic().message
+
+    def test_dict_lit_two_entries_same_type(self) -> None:
+        r = accept_type("let d = {a: 1, b: 2}\n")
+        assert _let_value_type(r, 0) == DictType(value=IntType())
+
+    # --- Case expression ---
+
+    def test_case_expr_all_same_type(self) -> None:
+        r = accept_type("let x = 1\nlet r = case x of\n  | v => v\n")
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, CaseExpr)
+        assert r.node_types[decl.value.node_id] == IntType()
+
+    def test_case_expr_int_decimal_widening(self) -> None:
+        r = accept_type(
+            "let x = 1\nlet r = case x of\n  | 1 => 1\n  | _ => 1.5\n"
+        )
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, CaseExpr)
+        assert r.node_types[decl.value.node_id] == DecimalType()
+
+    def test_case_expr_type_mismatch(self) -> None:
+        err = reject_type(
+            'let x = 1\nlet r = case x of\n  | 1 => 1\n  | _ => "x"\n'
+        )
+        assert "incompatible" in err.to_diagnostic().message
+
+    def test_case_expr_decimal_then_int(self) -> None:
+        """branch[0]=decimal, branch[1]=int → stays decimal."""
+        r = accept_type(
+            "let x = 1\nlet r = case x of\n  | 1 => 1.5\n  | _ => 1\n"
+        )
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, CaseExpr)
+        assert r.node_types[decl.value.node_id] == DecimalType()
+
+    def test_case_expr_two_same_type_branches(self) -> None:
+        """Two branches of the same type: the second hits the ``continue`` path."""
+        r = accept_type(
+            "let x = 1\nlet r = case x of\n  | 1 => 1\n  | _ => 2\n"
+        )
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, CaseExpr)
+        assert r.node_types[decl.value.node_id] == IntType()
+
+    # --- Template interpolation ---
+
+    def test_interp_segment_with_render(self) -> None:
+        """A template interpolation with a known renderer name type-checks."""
+        r = accept_type('let x = 1\nlet t = "${x as raw}"\n')
+        assert r.resolved.program is not None
+
+    def test_interp_segment_unknown_render(self) -> None:
+        err = reject_type('let x = 1\nlet t = "${x as markdown}"\n')
+        assert "markdown" in err.to_diagnostic().message
+
+    # --- set stmt with annotated var ---
+
+    def test_set_stmt_type_check(self) -> None:
+        r = accept_type("var n: int = 0\nset n = 5\n")
+        assert r.resolved.program is not None
+
+    # --- Pattern binding with non-enum subject type ---
+
+    def test_constructor_pattern_non_enum_subject_fieldless(self) -> None:
+        """A fieldless constructor pattern on a non-enum subject is rejected."""
+        err = reject_type("let x = 1\ncase x of\n  | Pass => pass\n")
+        assert isinstance(err, AglTypeError)
+
+    def test_constructor_pattern_non_enum_subject_with_field_binding(self) -> None:
+        """A field-binding constructor pattern on a non-enum subject is rejected
+        (regression: the bound field var must not be left untyped)."""
+        err = reject_type(
+            "let x = 1\ncase x of\n  | Cons(f: v) => print v\n"
+        )
+        assert isinstance(err, AglTypeError)
+
+    def test_constructor_pattern_enum_unknown_field(self) -> None:
+        err = reject_type(
+            "enum R\n  | Pass\nlet r: R = Pass\n"
+            "case r of\n  | Pass(ghost: v) => pass\n"
+        )
+        assert "ghost" in err.to_diagnostic().message
+
+    def test_enum_constructor_unqualified_single_no_expected(self) -> None:
+        r = accept_type("enum E\n  | Sole\nlet v = Sole\n")
+        assert isinstance(_let_value_type(r, 1), EnumType)
+
+
+# ============================================================
+# checker.py — remaining AST-built tests (genuinely unparseable in M3)
+# ============================================================
+
+
+class TestCheckerViaAstRemaining:
+    """Checker paths not reachable through the M3 grammar.
+
+    Two kinds of construct remain AST-only:
+
+    * An *empty* case expression (``case x of`` with zero branches) — the
+      grammar requires at least one branch, so the no-branch result-type
+      fallbacks can only be reached by building the AST directly.
+    * A constructor call with **duplicate argument names** — the parser
+      (``transform``) rejects these as a syntax error *before* type-checking, so
+      the checker's defensive duplicate-arg detection is unreachable via source
+      and is pinned here as a unit contract.
+
+    Every other former ViaAst test was re-expressed as a source-level test above.
+    """
+
     def test_record_constructor_duplicate_arg(self) -> None:
+        """The checker's record-constructor duplicate-arg guard (defensive: the
+        parser normally rejects duplicates first)."""
+        from agm.agl.syntax.nodes import Constructor, NamedArg, RecordDef
+
         rec = RecordDef(
             name="Pt",
             fields=(_tc_field("x", _tc_int_t()),),
@@ -2395,131 +2230,20 @@ class TestCheckerExprsViaAst:
             ),
             span=_tc_sp(), node_id=_tc_nid(),
         )
-        err = reject_ast(rec, _tc_let("p", ctor))
-        assert "x" in err.to_diagnostic().message
-
-    def test_enum_constructor_qualified(self) -> None:
-        enum_def = EnumDef(
-            name="R",
-            variants=(
-                VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),
-            ),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(
-            qualifier="R", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(enum_def, _tc_let("v", ctor))
-        assert isinstance(r.node_types[ctor.node_id], EnumType)
-
-    def test_enum_constructor_alias_qualified(self) -> None:
-        """F3: ``type Status = Review`` then ``Status.Pass`` resolves the alias."""
-        enum_def = EnumDef(
-            name="Review",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        alias = TypeAlias(
-            name="Status", type_expr=_tc_name_t("Review"), span=_tc_sp(), node_id=_tc_nid()
-        )
-        ctor = Constructor(
-            qualifier="Status", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(enum_def, alias, _tc_let("v", ctor))
-        resolved = r.node_types[ctor.node_id]
-        # The resolved (recorded) node type is the underlying enum, not the alias.
-        assert isinstance(resolved, EnumType)
-        assert resolved.name == "Review"
-
-    def test_enum_constructor_alias_of_alias_qualified(self) -> None:
-        """F3: a multi-hop alias chain resolves transparently."""
-        enum_def = EnumDef(
-            name="Review",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        a = TypeAlias(
-            name="A", type_expr=_tc_name_t("Review"), span=_tc_sp(), node_id=_tc_nid()
-        )
-        b = TypeAlias(name="B", type_expr=_tc_name_t("A"), span=_tc_sp(), node_id=_tc_nid())
-        ctor = Constructor(
-            qualifier="B", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(enum_def, a, b, _tc_let("v", ctor))
-        resolved = r.node_types[ctor.node_id]
-        assert isinstance(resolved, EnumType)
-        assert resolved.name == "Review"
-
-    def test_enum_constructor_non_enum_alias_qualifier_rejected(self) -> None:
-        """F3: an alias of a non-enum type cannot qualify a constructor."""
-        alias = TypeAlias(
-            name="Nums",
-            type_expr=_tc_list_t(_tc_int_t()),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(
-            qualifier="Nums", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(alias, _tc_let("v", ctor))
-        assert "Nums" in err.to_diagnostic().message
-
-    def test_enum_constructor_qualified_unknown_enum(self) -> None:
-        ctor = Constructor(
-            qualifier="Ghost", name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(_tc_let("v", ctor))
-        assert "Ghost" in err.to_diagnostic().message
-
-    def test_enum_constructor_qualified_unknown_variant(self) -> None:
-        enum_def = EnumDef(
-            name="R",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(
-            qualifier="R", name="Fail", args=(), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(enum_def, _tc_let("v", ctor))
-        assert "Fail" in err.to_diagnostic().message
-
-    def test_enum_constructor_unqualified_ambiguous(self) -> None:
-        e1 = EnumDef(
-            name="E1",
-            variants=(VariantDef(name="Both", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        e2 = EnumDef(
-            name="E2",
-            variants=(VariantDef(name="Both", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(qualifier=None, name="Both", args=(), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(e1, e2, _tc_let("v", ctor))
-        assert "ambiguous" in err.to_diagnostic().message.lower()
-
-    def test_enum_constructor_unqualified_with_expected_type_resolves(self) -> None:
-        """When the expected type is an enum, ambiguity resolution picks the right one."""
-        e1 = EnumDef(
-            name="E1",
-            variants=(VariantDef(name="Both", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        e2 = EnumDef(
-            name="E2",
-            variants=(VariantDef(name="Both", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(qualifier=None, name="Both", args=(), span=_tc_sp(), node_id=_tc_nid())
-        let_v = _tc_let("v", ctor, type_ann=_tc_name_t("E1"))
-        r = resolve_and_check(e1, e2, let_v)
-        assert isinstance(r.node_types[ctor.node_id], EnumType)
-
-    def test_enum_constructor_unqualified_unknown(self) -> None:
-        ctor = Constructor(qualifier=None, name="Ghost", args=(), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(_tc_let("v", ctor))
-        assert "Ghost" in err.to_diagnostic().message
+        with pytest.raises(AglTypeError) as exc_info:
+            resolve_and_check(rec, _tc_let("p", ctor))
+        assert "x" in exc_info.value.to_diagnostic().message
 
     def test_variant_constructor_duplicate_arg(self) -> None:
+        """The checker's enum-variant-constructor duplicate-arg guard
+        (defensive: the parser normally rejects duplicates first)."""
+        from agm.agl.syntax.nodes import (
+            Constructor,
+            EnumDef,
+            NamedArg,
+            VariantDef,
+        )
+
         enum_def = EnumDef(
             name="R",
             variants=(
@@ -2539,153 +2263,12 @@ class TestCheckerExprsViaAst:
             ),
             span=_tc_sp(), node_id=_tc_nid(),
         )
-        err = reject_ast(enum_def, _tc_let("v", ctor))
-        assert "msg" in err.to_diagnostic().message
-
-    def test_variant_constructor_unknown_field(self) -> None:
-        enum_def = EnumDef(
-            name="R",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(
-            qualifier="R", name="Pass",
-            args=(NamedArg(name="ghost", value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        err = reject_ast(enum_def, _tc_let("v", ctor))
-        assert "ghost" in err.to_diagnostic().message
-
-    def test_variant_constructor_missing_field(self) -> None:
-        enum_def = EnumDef(
-            name="R",
-            variants=(
-                VariantDef(
-                    name="Fail",
-                    fields=(_tc_field("msg", _tc_text_t()),),
-                    span=_tc_sp(), node_id=_tc_nid(),
-                ),
-            ),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(qualifier="R", name="Fail", args=(), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(enum_def, _tc_let("v", ctor))
-        assert "msg" in err.to_diagnostic().message
-
-    # --- List and Dict literals ---
-
-    def test_list_lit_nonempty(self) -> None:
-        lst_expr = ListLit(
-            elements=(_tc_intlit(1), _tc_intlit(2)), span=_tc_sp(), node_id=_tc_nid()
-        )
-        let_lst = _tc_let("xs", lst_expr)
-        r = resolve_and_check(let_lst)
-        assert r.node_types[lst_expr.node_id] == ListType(elem=IntType())
-
-    def test_list_lit_empty_with_annotation(self) -> None:
-        lst_expr = ListLit(elements=(), span=_tc_sp(), node_id=_tc_nid())
-        let_lst = _tc_let("xs", lst_expr, type_ann=_tc_list_t(_tc_int_t()))
-        r = resolve_and_check(let_lst)
-        assert r.node_types[lst_expr.node_id] == ListType(elem=IntType())
-
-    def test_list_lit_empty_without_annotation_error(self) -> None:
-        let_lst = _tc_let("xs", ListLit(elements=(), span=_tc_sp(), node_id=_tc_nid()))
-        err = reject_ast(let_lst)
-        assert "annotation" in err.to_diagnostic().message
-
-    def test_list_lit_inconsistent_types(self) -> None:
-        let_lst = _tc_let("xs", ListLit(
-            elements=(_tc_intlit(1), _tc_strlit("x")),
-            span=_tc_sp(), node_id=_tc_nid(),
-        ))
-        err = reject_ast(let_lst)
-        assert "inconsistent" in err.to_diagnostic().message
-
-    def test_dict_lit_nonempty(self) -> None:
-        key = StringLit(value="a", span=_tc_sp(), node_id=_tc_nid())
-        entry = DictEntry(key=key, value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid())
-        dict_expr = DictLit(entries=(entry,), span=_tc_sp(), node_id=_tc_nid())
-        let_d = _tc_let("d", dict_expr)
-        r = resolve_and_check(let_d)
-        assert r.node_types[dict_expr.node_id] == DictType(value=IntType())
-
-    def test_dict_lit_empty_with_annotation(self) -> None:
-        from agm.agl.syntax.types import DictT
-        dict_expr = DictLit(entries=(), span=_tc_sp(), node_id=_tc_nid())
-        let_d = _tc_let(
-            "d", dict_expr,
-            type_ann=DictT(value=_tc_int_t(), span=_tc_sp(), node_id=_tc_nid()),
-        )
-        r = resolve_and_check(let_d)
-        assert r.node_types[dict_expr.node_id] == DictType(value=IntType())
-
-    def test_dict_lit_empty_without_annotation_error(self) -> None:
-        let_d = _tc_let("d", DictLit(entries=(), span=_tc_sp(), node_id=_tc_nid()))
-        err = reject_ast(let_d)
-        assert "annotation" in err.to_diagnostic().message
-
-    def test_dict_lit_duplicate_key(self) -> None:
-        key1 = StringLit(value="a", span=_tc_sp(), node_id=_tc_nid())
-        key2 = StringLit(value="a", span=_tc_sp(), node_id=_tc_nid())
-        e1 = DictEntry(key=key1, value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid())
-        e2 = DictEntry(key=key2, value=_tc_intlit(2), span=_tc_sp(), node_id=_tc_nid())
-        let_d = _tc_let("d", DictLit(entries=(e1, e2), span=_tc_sp(), node_id=_tc_nid()))
-        err = reject_ast(let_d)
-        assert "a" in err.to_diagnostic().message
-
-    # --- Case expression ---
-
-    def test_case_expr_all_same_type(self) -> None:
-        let_x = _tc_let("x", _tc_intlit(1))
-        vp = VarPattern(name="v", span=_tc_sp(), node_id=_tc_nid())
-        branch = CaseExprBranch(
-            pattern=vp, body=_tc_varref("v"), span=_tc_sp(), node_id=_tc_nid()
-        )
-        case_expr = CaseExpr(
-            subject=_tc_varref("x"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        let_r = _tc_let("r", case_expr)
-        r = resolve_and_check(let_x, let_r)
-        assert r.node_types[case_expr.node_id] == IntType()
-
-    def test_case_expr_int_decimal_widening(self) -> None:
-        let_x = _tc_let("x", _tc_intlit(1))
-        b1 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_intlit(1),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        b2 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_declit("1.5"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        case_expr = CaseExpr(
-            subject=_tc_varref("x"), branches=(b1, b2), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(let_x, _tc_let("r", case_expr))
-        assert r.node_types[case_expr.node_id] == DecimalType()
-
-    def test_case_expr_type_mismatch(self) -> None:
-        let_x = _tc_let("x", _tc_intlit(1))
-        b1 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_intlit(1),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        b2 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_strlit("x"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        case_expr = CaseExpr(
-            subject=_tc_varref("x"), branches=(b1, b2), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(let_x, _tc_let("r", case_expr))
-        assert "incompatible" in err.to_diagnostic().message
+        with pytest.raises(AglTypeError) as exc_info:
+            resolve_and_check(enum_def, _tc_let("v", ctor))
+        assert "msg" in exc_info.value.to_diagnostic().message
 
     def test_case_expr_no_branches_with_expected(self) -> None:
-        """Empty case expression with expected type yields that type."""
+        """Empty case expression with an expected type yields that type."""
         let_x = _tc_let("x", _tc_intlit(1))
         case_expr = CaseExpr(
             subject=_tc_varref("x"), branches=(), span=_tc_sp(), node_id=_tc_nid()
@@ -2704,112 +2287,8 @@ class TestCheckerExprsViaAst:
         r = resolve_and_check(let_x, let_r)
         assert r.node_types[case_expr.node_id] == TextType()
 
-    def test_case_expr_decimal_then_int(self) -> None:
-        """branch[0]=decimal, branch[1]=int → stays decimal (int assignable to decimal)."""
-        let_x = _tc_let("x", _tc_intlit(1))
-        b1 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_declit("1.5"),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        b2 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_intlit(1),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        case_expr = CaseExpr(
-            subject=_tc_varref("x"), branches=(b1, b2), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(let_x, _tc_let("r", case_expr))
-        assert r.node_types[case_expr.node_id] == DecimalType()
-
-    # --- Template interpolation ---
-
-    def test_interp_segment_with_render(self) -> None:
-        """InterpSegment with a known renderer name passes."""
-        let_x = _tc_let("x", _tc_intlit(1))
-        seg = InterpSegment(
-            expr=_tc_varref("x"),
-            render="raw",
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        tmpl = Template(segments=(seg,), span=_tc_sp(), node_id=_tc_nid())
-        let_t = _tc_let("t", tmpl)
-        r = resolve_and_check(let_x, let_t)
-        assert r.resolved.program is not None
-
-    def test_interp_segment_unknown_render(self) -> None:
-        """InterpSegment with an unknown renderer name raises."""
-        let_x = _tc_let("x", _tc_intlit(1))
-        seg = InterpSegment(
-            expr=_tc_varref("x"),
-            render="markdown",
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        tmpl = Template(segments=(seg,), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(let_x, _tc_let("t", tmpl))
-        assert "markdown" in err.to_diagnostic().message
-
-    # --- set stmt with annotated var ---
-
-    def test_set_stmt_type_check(self) -> None:
-        var_stmt = _tc_var("n", _tc_intlit(0), type_ann=_tc_int_t())
-        set_stmt = SetStmt(target="n", value=_tc_intlit(5), span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(var_stmt, set_stmt)
-        assert r.resolved.program is not None
-
-    # --- Pattern binding with non-enum subject type (coverage) ---
-
-    def test_constructor_pattern_non_enum_subject_fieldless(self) -> None:
-        """Fieldless ConstructorPattern on a non-enum subject is a static error.
-
-        Patterns match enum variants (design §6.1); a constructor pattern against
-        a non-enum subject (here ``int``) must be rejected.
-        """
-        from agm.agl.syntax.nodes import ConstructorPattern
-        let_x = _tc_let("x", _tc_intlit(1))
-        ctor_p = ConstructorPattern(
-            qualifier=None, name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()
-        )
-        branch = CaseStmtBranch(
-            pattern=ctor_p,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        case_stmt = CaseStmt(
-            subject=_tc_varref("x"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(let_x, case_stmt)
-        assert isinstance(err, AglTypeError)
-
-    def test_constructor_pattern_non_enum_subject_with_field_binding(self) -> None:
-        """Field-binding ConstructorPattern on a non-enum subject is rejected.
-
-        Regression for the soundness bug: the resolver binds the pattern field
-        variable ``v``, but the checker previously silently skipped binding a type
-        for non-enum subjects, so a body reading ``v`` got a ``None`` type. The
-        whole branch must instead be rejected with a span-aware type error.
-        """
-        from agm.agl.syntax.nodes import ConstructorPattern, PatternField
-        let_x = _tc_let("x", _tc_intlit(1))
-        pv = VarPattern(name="v", span=_tc_sp(), node_id=_tc_nid())
-        pf = PatternField(name="f", pattern=pv, span=_tc_sp(), node_id=_tc_nid())
-        ctor_p = ConstructorPattern(
-            qualifier=None, name="Cons", fields=(pf,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        branch = CaseStmtBranch(
-            pattern=ctor_p,
-            body=(PrintStmt(value=_tc_varref("v"), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        case_stmt = CaseStmt(
-            subject=_tc_varref("x"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(let_x, case_stmt)
-        assert isinstance(err, AglTypeError)
-
     def test_require_binding_type_none_raises_assertion(self) -> None:
-        """Internal invariant: an unset binding type is an AssertionError, not None.
+        """Internal invariant: an unset binding type is an AssertionError.
 
         Directly exercises the ``_require_binding_type`` guard, whose ``None``
         branch is unreachable through normal checking (every reachable binding
@@ -2829,71 +2308,3 @@ class TestCheckerExprsViaAst:
         )
         with pytest.raises(AssertionError):
             checker._require_binding_type(ref)
-
-    def test_constructor_pattern_enum_unknown_field(self) -> None:
-        """ConstructorPattern with field not in variant raises AglTypeError."""
-        from agm.agl.syntax.nodes import ConstructorPattern, PatternField
-        enum_def = EnumDef(
-            name="R",
-            variants=(VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(qualifier=None, name="Pass", args=(), span=_tc_sp(), node_id=_tc_nid())
-        let_r = _tc_let("r", ctor, type_ann=_tc_name_t("R"))
-        pv = VarPattern(name="v", span=_tc_sp(), node_id=_tc_nid())
-        pf = PatternField(name="ghost", pattern=pv, span=_tc_sp(), node_id=_tc_nid())
-        ctor_p = ConstructorPattern(
-            qualifier=None, name="Pass", fields=(pf,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        branch = CaseStmtBranch(
-            pattern=ctor_p,
-            body=(PassStmt(span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        case_stmt = CaseStmt(
-            subject=_tc_varref("r"), branches=(branch,), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(enum_def, let_r, case_stmt)
-        assert "ghost" in err.to_diagnostic().message
-
-    def test_enum_constructor_unqualified_single_no_expected(self) -> None:
-        """Unqualified constructor with single matching enum and no expected type resolves."""
-        enum_def = EnumDef(
-            name="E",
-            variants=(VariantDef(name="Sole", fields=(), span=_tc_sp(), node_id=_tc_nid()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        ctor = Constructor(qualifier=None, name="Sole", args=(), span=_tc_sp(), node_id=_tc_nid())
-        let_v = _tc_let("v", ctor)
-        r = resolve_and_check(enum_def, let_v)
-        assert isinstance(r.node_types[ctor.node_id], EnumType)
-
-    def test_dict_lit_two_entries_same_type(self) -> None:
-        """Dict literal with two entries uses first entry's type for both."""
-        key1 = StringLit(value="a", span=_tc_sp(), node_id=_tc_nid())
-        key2 = StringLit(value="b", span=_tc_sp(), node_id=_tc_nid())
-        e1 = DictEntry(key=key1, value=_tc_intlit(1), span=_tc_sp(), node_id=_tc_nid())
-        e2 = DictEntry(key=key2, value=_tc_intlit(2), span=_tc_sp(), node_id=_tc_nid())
-        dict_expr = DictLit(entries=(e1, e2), span=_tc_sp(), node_id=_tc_nid())
-        let_d = _tc_let("d", dict_expr)
-        r = resolve_and_check(let_d)
-        assert r.node_types[dict_expr.node_id] == DictType(value=IntType())
-
-    def test_case_expr_two_same_type_branches(self) -> None:
-        """Case expression with two branches of the same type: second hits continue."""
-        let_x = _tc_let("x", _tc_intlit(1))
-        b1 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_intlit(1),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        b2 = CaseExprBranch(
-            pattern=WildcardPattern(span=_tc_sp(), node_id=_tc_nid()),
-            body=_tc_intlit(2),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        case_expr = CaseExpr(
-            subject=_tc_varref("x"), branches=(b1, b2), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(let_x, _tc_let("r", case_expr))
-        assert r.node_types[case_expr.node_id] == IntType()

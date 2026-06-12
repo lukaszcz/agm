@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.render import RendererFn
+    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
 
 
@@ -135,6 +136,10 @@ class Interpreter:
         rendering so registered renderers are actually invoked (F1, M3b).
     ``loop_limit`` — default bound for ``do`` loops without an explicit limit.
     ``strict_json`` — default strict-JSON flag for codec operations.
+    ``source`` — the normalized program source text.  Threaded in so error
+        sites can recover the exact source slice for a node via its span
+        offsets (e.g. ``MaxIterationsExceeded.condition``); general and
+        reusable for any future error context that wants source text.
     """
 
     def __init__(
@@ -147,6 +152,7 @@ class Interpreter:
         *,
         loop_limit: int,
         strict_json: bool,
+        source: str = "",
     ) -> None:
         from agm.agl.runtime.render import builtin_renderers
 
@@ -154,6 +160,10 @@ class Interpreter:
         self._registry = registry
         self._contracts = contracts
         self._type_env = type_env
+        # Span offsets index the *normalized* source (universal newlines; see
+        # the scanner module docstring), so normalize here to match before any
+        # offset-based slicing.
+        self._source = source.replace("\r\n", "\n").replace("\r", "\n")
         # ``WorkflowRuntime.run`` always passes the merged built-in + registered
         # renderer table (F1).  ``None`` (e.g. direct construction in unit tests
         # that exercise only built-in rendering) falls back to the built-ins.
@@ -265,8 +275,10 @@ class Interpreter:
                 parts.append(seg.text)
             elif isinstance(seg, InterpSegment):
                 value = self._eval_expr(seg.expr, scope)
-                if seg.render is None:
-                    # Default: console rendering (no boundary tags).
+                if seg.render in (None, "default"):
+                    # Default (implicit ``None`` or explicit ``as default``):
+                    # console rendering, never boundary tags — those are for
+                    # prompt interpolation only.
                     parts.append(render_for_console(value))
                 else:
                     # Explicit renderer: apply it.  Pass var_name=None because
@@ -286,22 +298,43 @@ class Interpreter:
 
     def _exec_do_until(self, stmt: DoUntil, scope: Scope) -> None:
         limit = stmt.limit if stmt.limit is not None else self._loop_limit
+        last_cond = False
         for iteration in range(limit):
             # Each iteration opens a fresh nested scope.
             iter_scope = Scope(parent=scope)
             for s in stmt.body:
                 self._exec_stmt(s, iter_scope)
             cond = self._eval_expr(stmt.condition, iter_scope)
-            if isinstance(cond, BoolValue) and cond.value:
+            # The checker requires the until-condition to be bool, so this is
+            # always a BoolValue.
+            last_cond = self._require_bool(cond)
+            if last_cond:
                 return
-        # Exhausted without condition becoming true.
+        # Exhausted without condition becoming true.  Populate the §8.1 schema:
+        # ``condition`` is the until-expression's source text (sliced via span
+        # offsets), ``last_condition_value`` is its final evaluation result, and
+        # ``metadata`` is an empty json placeholder until the M4 trace store.
         raise AglRaise(
             _make_exc_value(
                 "MaxIterationsExceeded",
                 f"Loop exhausted after {limit} iterations",
                 limit=IntValue(limit),
+                condition=TextValue(self._source_slice(stmt.condition.span)),
+                last_condition_value=BoolValue(last_cond),
+                metadata=JsonValue(None),
             )
         )
+
+    def _source_slice(self, span: "SourceSpan") -> str:
+        """Return the exact normalized-source text covered by *span*.
+
+        Uses the span's 0-based, end-exclusive character offsets into the
+        normalized source threaded into the interpreter.  Returns ``""`` when no
+        source was provided (e.g. direct construction in unit tests).
+        """
+        if not self._source:
+            return ""
+        return self._source[span.start_offset : span.end_offset]
 
     def _exec_if(self, stmt: IfStmt, scope: Scope) -> None:
         for branch in stmt.branches:

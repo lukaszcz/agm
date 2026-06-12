@@ -86,14 +86,20 @@ class RunResult:
     """Result of a ``WorkflowRuntime.run`` call.
 
     ``ok``
-        ``True`` iff there are no error-severity diagnostics **and** no
-        uncaught AgL exception.  Warning-severity diagnostics (see
-        ``Diagnostic.severity``) may be present while ``ok`` is ``True``.
+        ``True`` iff there are no error-severity ``diagnostics`` **and** no
+        uncaught AgL exception.  ``warnings`` never affect ``ok``.
     ``diagnostics``
-        Pre-execution diagnostics (lex/parse/scope/typecheck/input-validation).
-        Each entry has a ``.message`` (str), a ``.line`` (int, 1-based) and a
-        ``.severity`` (``"error"`` or ``"warning"``).  When ``ok`` is ``True``
-        any entries are warnings only.
+        Pre-execution FAILURES only: error-severity items from
+        lex/parse/scope/typecheck/input-validation.  Each entry has a
+        ``.message`` (str) and a ``.line`` (int, 1-based).  Warnings are a
+        SEPARATE channel and NEVER appear here; on a successful run this list is
+        empty.
+    ``warnings``
+        Advisory warning-severity diagnostics (e.g. non-exhaustive ``case``)
+        surfaced on EVERY path — success, static failure, input-validation
+        failure, and uncaught exception.  Same ``Diagnostic`` type as
+        ``diagnostics`` but with ``.severity == "warning"``.  Reported to the
+        user but never cause the run to fail (never affect ``ok``).
     ``error``
         The uncaught AgL exception, or ``None``.  Set only when the program
         *started* executing but ended with an unhandled exception (exit code 2
@@ -111,6 +117,7 @@ class RunResult:
     ok: bool
     diagnostics: list[Diagnostic]
     error: RunError | None
+    warnings: list[Diagnostic] = field(default_factory=list)
     bindings: dict[str, Value] = field(default_factory=dict)
     call_sites: tuple[CallSiteInfo, ...] = field(default_factory=tuple)
 
@@ -430,7 +437,10 @@ class WorkflowRuntime:
 
         if input_errors:
             return RunResult(
-                ok=False, diagnostics=list(warnings) + input_errors, error=None
+                ok=False,
+                diagnostics=input_errors,
+                error=None,
+                warnings=list(warnings),
             )
 
         # ----------------------------------------------------------------
@@ -453,7 +463,10 @@ class WorkflowRuntime:
 
         if contract_errors:
             return RunResult(
-                ok=False, diagnostics=list(warnings) + contract_errors, error=None
+                ok=False,
+                diagnostics=contract_errors,
+                error=None,
+                warnings=list(warnings),
             )
 
         # ----------------------------------------------------------------
@@ -482,7 +495,10 @@ class WorkflowRuntime:
 
         if input_bind_errors:
             return RunResult(
-                ok=False, diagnostics=list(warnings) + input_bind_errors, error=None
+                ok=False,
+                diagnostics=input_bind_errors,
+                error=None,
+                warnings=list(warnings),
             )
 
         # ----------------------------------------------------------------
@@ -495,8 +511,9 @@ class WorkflowRuntime:
             inventory = _build_call_inventory(checked, contracts)
             return RunResult(
                 ok=True,
-                diagnostics=list(warnings),
+                diagnostics=[],
                 error=None,
+                warnings=list(warnings),
                 bindings={},
                 call_sites=tuple(inventory),
             )
@@ -520,6 +537,7 @@ class WorkflowRuntime:
             renderers=all_renderers,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
+            source=source,
         )
 
         try:
@@ -532,8 +550,9 @@ class WorkflowRuntime:
             error = _exception_value_to_run_error(exc.exc)
             return RunResult(
                 ok=False,
-                diagnostics=list(warnings),
+                diagnostics=[],
                 error=error,
+                warnings=list(warnings),
                 bindings={},
             )
 
@@ -542,8 +561,9 @@ class WorkflowRuntime:
 
         return RunResult(
             ok=True,
-            diagnostics=list(warnings),
+            diagnostics=[],
             error=None,
+            warnings=list(warnings),
             bindings=root_bindings,
         )
 

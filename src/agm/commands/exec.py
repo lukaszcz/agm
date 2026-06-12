@@ -5,8 +5,9 @@ Behaviour: read the ``.agl`` source file (exit 1 if unreadable), load the
 settings, call ``runtime.run`` (or a static-only dry run under ``--dry-run``),
 print diagnostics to stderr, and exit per the exit-code contract.
 
-Warning-severity diagnostics are printed to stderr like errors but never affect
-the exit code; only error-severity diagnostics yield exit 1.
+Warnings (``result.warnings``) and error diagnostics (``result.diagnostics``)
+are two separate channels: warnings are printed to stderr like errors but never
+affect the exit code; only error-severity diagnostics yield exit 1.
 
 Exit-code contract (plan §10.1):
     0  success (or a clean ``--dry-run`` static check)
@@ -63,11 +64,9 @@ def run(args: ExecArgs) -> None:
     # ``Mapping[str, object]``, so no widening copy is needed.
     result = runtime.run(source, inputs=inputs, check_only=dry_run.enabled())
 
-    # Warnings are reported but do not affect the exit code.
-    warnings = [d for d in result.diagnostics if d.severity == "warning"]
-    errors = [d for d in result.diagnostics if d.severity == "error"]
-
-    for diag in warnings:
+    # Warnings live on their own channel and never affect the exit code;
+    # ``result.diagnostics`` holds only error-severity pre-execution failures.
+    for diag in result.warnings:
         print(f"line {diag.line}: {diag.message}", file=sys.stderr)
 
     if result.ok:
@@ -88,7 +87,7 @@ def run(args: ExecArgs) -> None:
 
     # Pre-execution failure: print error diagnostics and exit 1.
     if result.error is None:
-        for diag in errors:
+        for diag in result.diagnostics:
             print(f"line {diag.line}: {diag.message}", file=sys.stderr)
         raise SystemExit(1)
 

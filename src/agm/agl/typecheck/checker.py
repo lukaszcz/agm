@@ -73,6 +73,7 @@ from agm.agl.syntax.nodes import (
     ListLit,
     LiteralPattern,
     NullLit,
+    Pattern,
     PrintStmt,
     Program,
     Raise,
@@ -470,6 +471,9 @@ class _Checker:
         subj_type = self._check_expr(stmt.subject, expected=None)
         for branch in stmt.branches:
             self._check_case_stmt_branch(branch, subj_type)
+        self._warn_non_exhaustive(
+            subj_type, [b.pattern for b in stmt.branches], stmt.span
+        )
 
     def _check_case_stmt_branch(self, branch: CaseStmtBranch, subj_type: Type) -> None:
         self._bind_pattern_types(branch.pattern, subj_type, branch)
@@ -975,6 +979,9 @@ class _Checker:
             self._bind_pattern_types(branch.pattern, subj_type, branch)
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
+        self._warn_non_exhaustive(
+            subj_type, [b.pattern for b in node.branches], node.span
+        )
 
         if not branch_types:
             return expected if expected is not None else TextType()
@@ -1350,6 +1357,44 @@ class _Checker:
                     )
                 field_type = vfields[pf.name]
                 self._bind_pattern_types(pf.pattern, field_type, pf)
+
+    def _warn_non_exhaustive(
+        self, subj_type: Type, patterns: list[Pattern], span: SourceSpan
+    ) -> None:
+        """Emit a warning when an enum ``case`` leaves some variants uncovered.
+
+        Exhaustiveness is a *warning*, not an error (plan Q4): the program still
+        runs (an unmatched value raises ``MatchError`` at runtime).  Only enum
+        scrutinees are analysed — for any other type the set of inhabitants is
+        not enumerable, so no warning is produced.  A wildcard ``_`` or a bare
+        variable pattern covers the entire remainder, so its presence suppresses
+        the warning.  Otherwise the uncovered variants are the enum variants not
+        named by any constructor pattern.
+        """
+        if not isinstance(subj_type, EnumType):
+            return
+        covered: set[str] = set()
+        for pattern in patterns:
+            if isinstance(pattern, (WildcardPattern, VarPattern)):
+                # A catch-all binding covers every remaining variant.
+                return
+            if isinstance(pattern, ConstructorPattern):
+                covered.add(pattern.name)
+            # LiteralPattern cannot match an enum value, so it covers nothing.
+        missing = [name for name in subj_type.variants if name not in covered]
+        if not missing:
+            return
+        self._warnings.append(
+            Diagnostic(
+                message=(
+                    f"Non-exhaustive case on enum '{subj_type.name}': missing "
+                    f"variant(s) {', '.join(missing)}. An unmatched value raises "
+                    f"MatchError at runtime."
+                ),
+                line=span.start_line,
+                severity="warning",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Assignability helpers

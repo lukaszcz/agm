@@ -310,12 +310,13 @@ class TestRunResultType:
         assert result.error is None
 
     def test_run_result_ok_with_only_warnings(self) -> None:
-        # ok may be True even when warning-severity diagnostics are present:
-        # warnings are reported but do not make the run fail.
+        # ok may be True even when warnings are present: warnings live on their
+        # own channel and never appear in ``diagnostics`` (errors-only).
         warning = Diagnostic(message="exhaustiveness", line=4, severity="warning")
-        result = RunResult(ok=True, diagnostics=[warning], error=None)
+        result = RunResult(ok=True, diagnostics=[], error=None, warnings=[warning])
         assert result.ok is True
-        assert result.diagnostics == [warning]
+        assert result.diagnostics == []
+        assert result.warnings == [warning]
         assert result.error is None
 
     def test_run_result_has_bindings(self) -> None:
@@ -653,10 +654,14 @@ class TestWarningsThreadedOnFailurePaths:
         rt = WorkflowRuntime()
         result = rt.run("input msg\nprint msg", inputs={})
         assert result.ok is False
-        messages = [d.message for d in result.diagnostics]
-        # Both the warning and the missing-input error are present.
-        assert any("a checker warning" in m for m in messages)
-        assert any("msg" in m for m in messages)
+        # The warning is threaded onto its own channel even on a failure path.
+        warning_messages = [d.message for d in result.warnings]
+        assert any("a checker warning" in m for m in warning_messages)
+        # The missing-input error lands in diagnostics (errors only).
+        error_messages = [d.message for d in result.diagnostics]
+        assert any("msg" in m for m in error_messages)
+        # Channels stay separate: no warning leaks into diagnostics.
+        assert all(d.severity == "error" for d in result.diagnostics)
 
 
 class TestAgentRegistryDispatch:
@@ -1429,3 +1434,106 @@ class TestRegisteredRendererInvoked:
         # applied to a plain ``${x}``.
         assert "<dsl-value" in received[0].prompt
         assert "NOPE" not in received[0].prompt
+
+
+class TestMaxIterationsExceededSchema:
+    """F2: ``MaxIterationsExceeded`` carries the full §8.1 field schema.
+
+    The interpreter populates ``condition`` (the until-expression's exact source
+    text, recovered via span offsets into the threaded source), the final
+    ``last_condition_value``, and a ``metadata`` json placeholder — alongside the
+    pre-existing ``limit``.  Exercised end-to-end by catching the exception in an
+    AgL program and printing each field.
+    """
+
+    _PROGRAM = (
+        "var n = 0\n"
+        "try\n"
+        "  do[2]\n"
+        "    set n = n + 1\n"
+        "  until n > 10\n"
+        "catch MaxIterationsExceeded as e =>\n"
+        "  print e.limit\n"
+        "  print e.condition\n"
+        "  print e.last_condition_value\n"
+    )
+
+    def test_fields_surface_through_real_source(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run(self._PROGRAM)
+        # The exception is caught, so the run completes successfully.
+        assert result.ok is True
+        assert result.error is None
+        lines = capsys.readouterr().out.splitlines()
+        # limit, condition (exact until-expression source), last_condition_value.
+        assert lines == ["2", "n > 10", "false"]
+
+    def test_metadata_field_is_accessible(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # ``metadata`` is a json placeholder (null until the M4 trace store), but
+        # it is part of the schema and must be readable as a field.
+        rt = WorkflowRuntime()
+        program = (
+            "try\n"
+            "  do[1] pass until false\n"
+            "catch MaxIterationsExceeded as e =>\n"
+            "  print e.metadata\n"
+        )
+        result = rt.run(program)
+        assert result.ok is True
+        assert capsys.readouterr().out.strip() == "null"
+
+    def test_condition_reflects_each_distinct_until_expression(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A different until-expression must yield a different ``condition`` slice,
+        # proving the source text is recovered per-node rather than hard-coded.
+        rt = WorkflowRuntime()
+        program = (
+            "let done = false\n"
+            "try\n"
+            "  do[1] pass until done\n"
+            "catch MaxIterationsExceeded as e =>\n"
+            "  print e.condition\n"
+            "  print e.last_condition_value\n"
+        )
+        result = rt.run(program)
+        assert result.ok is True
+        lines = capsys.readouterr().out.splitlines()
+        assert lines == ["done", "false"]
+
+
+class TestExhaustivenessWarningSurfaces:
+    """F1: a non-exhaustive enum ``case`` warns without failing the run.
+
+    The exhaustiveness diagnostic is a warning, so ``ok`` stays ``True`` and the
+    warning is visible on ``result.warnings`` (never in ``result.diagnostics``)
+    while the program executes.
+    """
+
+    def test_warning_surfaces_and_run_succeeds(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        program = (
+            "enum R\n"
+            "  | Pass\n"
+            "  | Fail\n"
+            "let r: R = Pass\n"
+            "case r of\n"
+            '  | Pass => print "ok"\n'
+        )
+        result = rt.run(program)
+        # Warning, not error: the run still succeeds.
+        assert result.ok is True
+        assert result.error is None
+        # Successful runs carry no error diagnostics; the warning is separate.
+        assert result.diagnostics == []
+        assert len(result.warnings) == 1
+        assert result.warnings[0].severity == "warning"
+        assert "Fail" in result.warnings[0].message
+        # The matched branch executed.
+        assert capsys.readouterr().out == "ok\n"

@@ -582,6 +582,23 @@ class TestTemplates:
         assert v.value == "x: abc"
         assert "<dsl-value" not in v.value
 
+    def test_template_explicit_as_default_no_boundary_markers(self) -> None:
+        """F3: an explicit ``${v as default}`` in a console context renders as
+        plain text, NOT as a ``<dsl-value>`` boundary tag.
+
+        Regression: the console renderer previously only special-cased an
+        *implicit* (``None``) renderer, so ``as default`` routed through the
+        prompt renderer and leaked boundary tags into ``let``/``print`` output.
+        """
+        result = run('let v = "hi"\nlet t = "x: ${v as default}"')
+        assert result.ok
+        from agm.agl.eval.values import TextValue
+
+        v = result.bindings["t"]
+        assert isinstance(v, TextValue)
+        assert v.value == "x: hi"
+        assert "<dsl-value" not in v.value
+
     def test_template_with_bool_interp_raw(self) -> None:
         result = run('let b = true\nlet msg = "${b as raw}"')
         assert result.ok
@@ -2541,6 +2558,25 @@ class TestInterpreterM3Stmts:
         with pytest.raises(AglRaise) as exc_info:
             _execute(body)
         assert exc_info.value.exc.type_name == "MaxIterationsExceeded"
+
+    def test_do_until_exhaustion_populates_schema_fields(self) -> None:
+        """F2: ``MaxIterationsExceeded`` carries limit + last_condition_value.
+
+        With a constant-false condition, ``last_condition_value`` is ``False``
+        and ``limit`` reflects the loop bound.  (Condition source text requires
+        the source-threaded runtime path; here we assert the value fields.)
+        """
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.values import BoolValue, IntValue
+
+        body = (_do_until(_bool(False), (_pass(),), limit=2),)
+        with pytest.raises(AglRaise) as exc_info:
+            _execute(body)
+        fields = exc_info.value.exc.fields
+        assert fields["limit"] == IntValue(2)
+        assert fields["last_condition_value"] == BoolValue(False)
+        assert "metadata" in fields
+        assert "condition" in fields
 
     def test_if_true_branch_executes(self) -> None:
         from agm.agl.eval.values import IntValue

@@ -303,6 +303,9 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "message": TextType(),
             "trace_id": TextType(),
             "limit": IntType(),
+            "condition": TextType(),
+            "last_condition_value": BoolType(),
+            "metadata": JsonType(),
         },
     ),
     "MatchError": ExceptionType(

@@ -115,7 +115,8 @@ class TestProcessCaptureResultDataclass:
 
     def test_is_frozen(self) -> None:
         result = ProcessCaptureResult(
-            returncode=0, stdout="", stderr="", elapsed=0.1, timed_out=False, spawn_error=None
+            returncode=0, stdout="", stderr="", elapsed=0.1, timed_out=False, spawn_error=None,
+            spawn_errno=None,
         )
         with pytest.raises((AttributeError, TypeError)):
             setattr(result, "returncode", 1)
@@ -128,6 +129,7 @@ class TestProcessCaptureResultDataclass:
             elapsed=1.5,
             timed_out=True,
             spawn_error="No such file",
+            spawn_errno=2,
         )
         assert result.returncode == 42
         assert result.stdout == "out"
@@ -135,12 +137,33 @@ class TestProcessCaptureResultDataclass:
         assert result.elapsed == 1.5
         assert result.timed_out is True
         assert result.spawn_error == "No such file"
+        assert result.spawn_errno == 2
 
     def test_spawn_error_none_by_default(self) -> None:
         result = ProcessCaptureResult(
-            returncode=0, stdout="", stderr="", elapsed=0.0, timed_out=False, spawn_error=None
+            returncode=0, stdout="", stderr="", elapsed=0.0, timed_out=False, spawn_error=None,
+            spawn_errno=None,
         )
         assert result.spawn_error is None
+
+    def test_spawn_errno_accessible(self) -> None:
+        result = ProcessCaptureResult(
+            returncode=None,
+            stdout="",
+            stderr="",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error="Permission denied",
+            spawn_errno=13,
+        )
+        assert result.spawn_errno == 13
+
+    def test_spawn_errno_none_when_no_spawn_error(self) -> None:
+        result = ProcessCaptureResult(
+            returncode=0, stdout="", stderr="", elapsed=0.0, timed_out=False, spawn_error=None,
+            spawn_errno=None,
+        )
+        assert result.spawn_errno is None
 
 
 class TestRunCaptureResultZeroExit:

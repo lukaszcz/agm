@@ -1365,11 +1365,44 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
 
 
 class TestRunCaptureSpawnError:
-    """run_capture re-raises FileNotFoundError on spawn failure."""
+    """run_capture re-raises faithful spawn exception types."""
 
     def test_nonexistent_binary_raises_file_not_found(self) -> None:
         with pytest.raises(FileNotFoundError):
             run_capture(["/nonexistent/binary/that/does/not/exist"])
+
+    def test_non_executable_file_raises_permission_error(self, tmp_path: Path) -> None:
+        """A file that exists but is not executable must raise PermissionError."""
+        script = tmp_path / "not_executable.sh"
+        script.write_text("#!/bin/sh\necho hi\n")
+        script.chmod(0o644)  # readable but not executable
+        with pytest.raises(PermissionError):
+            run_capture([str(script)])
+
+    def test_run_capture_result_non_executable_sets_spawn_errno(self, tmp_path: Path) -> None:
+        """run_capture_result never raises; spawn_errno is EACCES for PermissionError."""
+        import errno as errno_mod
+
+        script = tmp_path / "not_executable.sh"
+        script.write_text("#!/bin/sh\necho hi\n")
+        script.chmod(0o644)
+        result = run_capture_result([str(script)])
+        assert result.spawn_error is not None
+        assert result.returncode is None
+        assert result.spawn_errno == errno_mod.EACCES
+
+    def test_run_capture_result_nonexistent_binary_sets_spawn_errno(self) -> None:
+        """run_capture_result sets spawn_errno=ENOENT for a nonexistent binary."""
+        import errno as errno_mod
+
+        result = run_capture_result(["/nonexistent/binary/that/does/not/exist"])
+        assert result.spawn_error is not None
+        assert result.spawn_errno == errno_mod.ENOENT
+
+    def test_run_capture_result_successful_run_has_no_spawn_errno(self) -> None:
+        """spawn_errno is None when the process spawned successfully."""
+        result = run_capture_result([sys.executable, "-c", "pass"])
+        assert result.spawn_errno is None
 
 
 class TestDrainLoopTimeoutSentinel:

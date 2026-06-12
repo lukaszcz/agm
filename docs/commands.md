@@ -385,7 +385,8 @@ Sandbox settings resolution:
 
 ### `agm exec FILE`
 
-Execute an AgL (Agent Language) workflow program.
+Execute an AgL (Agent Language) workflow program. The AgL language is documented in the
+[AgL language reference](agl/reference/index.md).
 
 ```text
 agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]

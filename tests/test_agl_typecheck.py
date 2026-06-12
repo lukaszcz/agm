@@ -21,7 +21,7 @@ import decimal
 
 import pytest
 
-from agm.agl.capabilities import HostCapabilities, default_capabilities
+from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.syntax.nodes import (
@@ -105,6 +105,21 @@ from agm.agl.typecheck.types import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def default_capabilities() -> HostCapabilities:
+    """The M1 host capabilities used as the default for these tests.
+
+    Mirrors the catalog ``WorkflowRuntime.run`` builds when a default/fallback
+    agent is configured (text codec; default/raw/json/bullets renderers).
+    """
+    return HostCapabilities(
+        agent_names=frozenset(),
+        has_fallback_agent=True,
+        has_default_agent=True,
+        codec_kinds={"text": frozenset({"text"})},
+        renderer_names=frozenset({"default", "raw", "json", "bullets"}),
+    )
 
 
 def parse_resolve_check(
@@ -386,9 +401,34 @@ class TestAgentCapabilities:
         r = parse_resolve_check('let x = my_agent "Q"', capabilities=caps)
         assert r.resolved.program is not None
 
-    def test_prompt_always_ok_no_fallback(self) -> None:
-        # prompt is a built-in — not subject to agent-name validation.
-        caps = caps_no_fallback()
+    def test_prompt_rejected_without_default_or_fallback(self) -> None:
+        # F1a: a ``prompt`` call needs a default agent (or a fallback agent).
+        # With neither, it is a static error at the call's span.
+        caps = caps_no_fallback()  # has_default_agent=False, has_fallback_agent=False
+        err = reject_type('let x = prompt "Q"', caps)
+        assert "default agent" in str(err).lower()
+
+    def test_prompt_ok_with_default_agent(self) -> None:
+        # A configured default agent makes ``prompt`` valid even with no fallback.
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_fallback_agent=False,
+            has_default_agent=True,
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default", "raw"}),
+        )
+        r = parse_resolve_check('let x = prompt "Q"', capabilities=caps)
+        assert r.resolved.program is not None
+
+    def test_prompt_ok_with_fallback_agent(self) -> None:
+        # A fallback agent also backs ``prompt``.
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_fallback_agent=True,
+            has_default_agent=False,
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default", "raw"}),
+        )
         r = parse_resolve_check('let x = prompt "Q"', capabilities=caps)
         assert r.resolved.program is not None
 
@@ -699,13 +739,6 @@ class TestWarnings:
 
 
 class TestHostCapabilities:
-    def test_default_capabilities(self) -> None:
-        caps = default_capabilities()
-        assert caps.has_fallback_agent is True
-        assert "text" in caps.codec_kinds
-        assert "default" in caps.renderer_names
-        assert "raw" in caps.renderer_names
-
     def test_capabilities_immutable(self) -> None:
         caps = HostCapabilities(
             agent_names=frozenset({"a"}),
@@ -715,14 +748,6 @@ class TestHostCapabilities:
         )
         assert caps.agent_names == frozenset({"a"})
         assert not caps.has_fallback_agent
-
-    def test_codec_kind_text_supports_text(self) -> None:
-        caps = default_capabilities()
-        assert "text" in caps.codec_kinds["text"]
-
-    def test_no_json_codec_in_defaults(self) -> None:
-        caps = default_capabilities()
-        assert "json" not in caps.codec_kinds
 
 
 # ---------------------------------------------------------------------------

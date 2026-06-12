@@ -517,3 +517,199 @@ class TestWorkflowRuntimeProperties:
     def test_default_strict_json_property_false(self) -> None:
         rt = WorkflowRuntime(default_strict_json=False)
         assert rt.default_strict_json is False
+
+
+class TestNoDefaultAgent:
+    """F1a/F1b: a ``prompt`` call needs a default (or fallback) agent."""
+
+    def test_prompt_without_default_agent_is_static_error(self) -> None:
+        rt = WorkflowRuntime()  # no default agent configured
+        result = rt.run('let x = prompt "hi"')
+        assert result.ok is False
+        assert result.error is None  # static (pre-execution), not an AgL exception
+        assert any("default agent" in d.message.lower() for d in result.diagnostics)
+
+    def test_prompt_with_default_agent_runs(self) -> None:
+        def agent(request: object) -> str:
+            return "answer"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        result = rt.run('let x = prompt "hi"')
+        assert result.ok is True
+        assert result.error is None
+
+
+class TestDryRunCheckOnly:
+    """F2: ``check_only=True`` runs the static pipeline but executes nothing."""
+
+    def test_check_only_printing_program_produces_no_output(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('print "hello"', check_only=True)
+        assert result.ok is True
+        assert result.bindings == {}
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_check_only_static_error_still_fails(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("let x = undefined_name", check_only=True)
+        assert result.ok is False
+
+    def test_check_only_never_invokes_agent(self) -> None:
+        calls: list[object] = []
+
+        def agent(request: object) -> str:
+            calls.append(request)
+            return "should not be called"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        result = rt.run('let x = prompt "hi"', check_only=True)
+        assert result.ok is True
+        # The agent must never be invoked during a dry run.
+        assert calls == []
+
+    def test_check_only_input_validation_still_runs(self) -> None:
+        rt = WorkflowRuntime()
+        # Missing declared input is caught even under check_only.
+        result = rt.run("input msg\nprint msg", inputs={}, check_only=True)
+        assert result.ok is False
+        assert any("msg" in d.message for d in result.diagnostics)
+
+
+class TestDecimalSerialization:
+    """F3/F9: decimals print/round-trip exactly; never via binary float."""
+
+    def test_json_input_with_decimal_prints_exactly(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run(
+            'input data: json\nprint data', inputs={"data": '{"a": 1.5}'}
+        )
+        assert result.ok is True
+        captured = capsys.readouterr()
+        assert "1.5" in captured.out
+        # No binary-float artifacts (e.g. 1.5000000000000002).
+        assert "1.5000" not in captured.out
+
+    def test_decimal_value_prints_exact_text(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('let x = 0.1\nprint x')
+        assert result.ok is True
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "0.1"
+
+    def test_run_error_preserves_decimal_exactness(self) -> None:
+        import decimal
+
+        from agm.agl.eval.values import DecimalValue, ExceptionValue, TextValue
+        from agm.agl.runtime.runtime import _exception_value_to_run_error
+
+        exc = ExceptionValue(
+            type_name="ValidationError",
+            fields={
+                "message": TextValue("bad"),
+                "amount": DecimalValue(decimal.Decimal("0.1")),
+            },
+        )
+        err = _exception_value_to_run_error(exc)
+        assert err.fields["amount"] == decimal.Decimal("0.1")
+        assert isinstance(err.fields["amount"], decimal.Decimal)
+
+
+class TestWarningsThreadedOnFailurePaths:
+    """F14: typecheck warnings survive input-validation failure paths."""
+
+    def test_warning_and_missing_input_both_visible(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M1 produces no checker warnings organically, so inject one through the
+        # CheckedProgram the runtime threads from ``check``.  This exercises the
+        # real failure path (missing input) while a warning is present.
+        import agm.agl.typecheck as tc_mod
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.typecheck.env import CheckedProgram
+
+        real_check = tc_mod.check
+        warning = Diagnostic(message="a checker warning", line=1, severity="warning")
+
+        def check_with_warning(resolved: object, caps: object) -> CheckedProgram:
+            checked = real_check(resolved, caps)
+            return CheckedProgram(
+                resolved=checked.resolved,
+                node_types=checked.node_types,
+                contract_specs=checked.contract_specs,
+                warnings=(*checked.warnings, warning),
+                type_env=checked.type_env,
+            )
+
+        monkeypatch.setattr(tc_mod, "check", check_with_warning)
+
+        rt = WorkflowRuntime()
+        result = rt.run("input msg\nprint msg", inputs={})
+        assert result.ok is False
+        messages = [d.message for d in result.diagnostics]
+        # Both the warning and the missing-input error are present.
+        assert any("a checker warning" in m for m in messages)
+        assert any("msg" in m for m in messages)
+
+
+class TestAgentRegistryDispatch:
+    """F17: dispatch resolves named agents, prompt, and the default fallback."""
+
+    def test_dispatch_named_agent(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentRegistry
+
+        def named(req: AgentRequest) -> str:
+            return f"named:{req.prompt}"
+
+        registry = AgentRegistry(named={"reviewer": named}, default_agent=None)
+        resp = registry.dispatch("reviewer", AgentRequest(agent="reviewer", prompt="hi"))
+        assert resp.content == "named:hi"
+
+    def test_dispatch_prompt_and_unknown_fall_back_to_default(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentRegistry
+
+        def default(req: AgentRequest) -> str:
+            return f"default:{req.agent}"
+
+        registry = AgentRegistry(named={}, default_agent=default)
+        # Both ``prompt`` and an unregistered named agent route to the default.
+        assert registry.dispatch("prompt", AgentRequest(agent="prompt", prompt="q")).content == (
+            "default:prompt"
+        )
+        assert registry.dispatch("other", AgentRequest(agent="other", prompt="q")).content == (
+            "default:other"
+        )
+
+    def test_dispatch_unknown_without_default_raises(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentRegistry
+
+        registry = AgentRegistry(named={}, default_agent=None)
+        with pytest.raises(KeyError, match="No agent registered"):
+            registry.dispatch("ghost", AgentRequest(agent="ghost", prompt="q"))
+
+
+class TestInputBindingInvariant:
+    """The runtime relies on the checker recording every input's binding type."""
+
+    def test_missing_binding_type_is_internal_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.agl.typecheck.env import TypeEnvironment
+
+        # Force the checker invariant to be violated: no recorded binding type.
+        monkeypatch.setattr(
+            TypeEnvironment, "get_binding_type", lambda self, node_id: None
+        )
+
+        rt = WorkflowRuntime()
+        with pytest.raises(AssertionError, match="binding type"):
+            rt.run("input msg\nprint msg", inputs={"msg": "hi"})

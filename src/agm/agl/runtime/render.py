@@ -22,8 +22,8 @@ entry points used by the interpreter.
 
 from __future__ import annotations
 
-import json
-from typing import Callable, assert_never
+from collections.abc import Callable
+from typing import assert_never
 
 from agm.agl.eval.values import (
     BoolValue,
@@ -38,47 +38,16 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
-
-# ---------------------------------------------------------------------------
-# JSON serialization helpers (Value → JSON-compatible object)
-# ---------------------------------------------------------------------------
-
-
-def _value_to_json_obj(value: Value) -> object:
-    """Convert a ``Value`` to a JSON-serializable Python object.
-
-    Used for pretty-JSON rendering of structured values.
-    """
-    if isinstance(value, TextValue):
-        return value.value
-    if isinstance(value, IntValue):
-        return value.value
-    if isinstance(value, DecimalValue):
-        # Decimal → float-like repr; use str for exact representation.
-        return float(value.value)
-    if isinstance(value, BoolValue):
-        return value.value
-    if isinstance(value, JsonValue):
-        return value.raw
-    if isinstance(value, ListValue):
-        return [_value_to_json_obj(e) for e in value.elements]
-    if isinstance(value, DictValue):
-        return {k: _value_to_json_obj(v) for k, v in value.entries.items()}
-    if isinstance(value, RecordValue):
-        return {k: _value_to_json_obj(v) for k, v in value.fields.items()}
-    if isinstance(value, EnumValue):
-        result: dict[str, object] = {"$case": value.variant}
-        result.update({k: _value_to_json_obj(v) for k, v in value.fields.items()})
-        return result
-    if isinstance(value, ExceptionValue):
-        return {k: _value_to_json_obj(v) for k, v in value.fields.items()}
-    assert_never(value)  # pragma: no cover
+from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 
 
 def _pretty_json(value: Value) -> str:
-    """Render *value* as pretty-printed JSON (2-space indent)."""
-    obj = _value_to_json_obj(value)
-    return json.dumps(obj, indent=2, ensure_ascii=False)
+    """Render *value* as pretty-printed JSON (2-space indent).
+
+    Uses the shared exact serializer so ``Decimal`` values are emitted as exact
+    unquoted numeric text (never routed through binary ``float``; design §5.1).
+    """
+    return dumps_exact(value_to_json_obj(value), indent=2)
 
 
 def _scalar_text(value: Value) -> str:
@@ -96,7 +65,7 @@ def _scalar_text(value: Value) -> str:
     if isinstance(value, BoolValue):
         return "true" if value.value else "false"
     if isinstance(value, JsonValue):
-        return json.dumps(value.raw, ensure_ascii=False)
+        return dumps_exact(value.raw, indent=None)
     return _pretty_json(value)
 
 

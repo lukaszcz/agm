@@ -6,20 +6,19 @@ M1 implementation: full parse → scope → typecheck → eval pipeline.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.runtime.agents import AgentFn
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import ExceptionValue, Value
+    from agm.agl.typecheck.types import Type as AglType
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
-
-# Type alias for an agent callable.
-AgentFn = Callable[..., Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,12 +109,25 @@ class WorkflowRuntime:
             )
         self._agents[name] = fn
 
-    def run(self, source: str, *, inputs: Mapping[str, object] | None = None) -> RunResult:
-        """Parse, analyse, and execute an AgL source program.
+    def run(
+        self,
+        source: str,
+        *,
+        inputs: Mapping[str, object] | None = None,
+        check_only: bool = False,
+    ) -> RunResult:
+        """Parse, analyse, and (unless ``check_only``) execute an AgL program.
 
         Pipeline:
             parse → resolve → check (with HostCapabilities) →
             validate inputs → materialize contracts → eval
+
+        When ``check_only`` is ``True`` (``agm exec --dry-run``) the runtime
+        runs the full static pipeline, input validation, and contract
+        materialization, then STOPS before executing any statement: a clean
+        program returns ``ok=True`` with no bindings and produces no program
+        output; static/input errors still return ``ok=False``.
+        TODO(M2): emit the §10.1 static call-site inventory here.
 
         Returns a ``RunResult`` capturing the outcome.
         """
@@ -137,7 +149,11 @@ class WorkflowRuntime:
         capabilities = HostCapabilities(
             agent_names=registry.agent_names,
             has_fallback_agent=registry.has_fallback,
+            has_default_agent=registry.has_default_agent,
             codec_kinds={text_codec.name: frozenset({"text"})},
+            # The renderers/codecs below are exactly those implemented in M1
+            # (see ``render.py`` ``_RENDERERS`` and ``codec.py``).  This catalog
+            # is the single source of truth for host capabilities.
             renderer_names=frozenset({"default", "raw", "json", "bullets"}),
         )
 
@@ -209,12 +225,19 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         from agm.agl.syntax.nodes import InputDecl
 
-        # Build declared input map.
-        declared_inputs: dict[str, object] = {}  # name → declared Type
+        # Build declared input map.  Read the exact binding type recorded by the
+        # checker (keyed by the InputDecl node_id) rather than re-resolving the
+        # annotation here — the checker is the single source of truth and already
+        # handles compound types (list/dict/record/enum) correctly.
+        declared_inputs: dict[str, AglType] = {}  # name → declared Type
         for stmt in program.body:
             if isinstance(stmt, InputDecl):
-                # Resolve the declared type from the annotation AST node.
-                input_type = _resolve_annotation(stmt.annotation)
+                input_type = checked.type_env.get_binding_type(stmt.node_id)
+                if input_type is None:
+                    raise AssertionError(
+                        f"Input {stmt.name!r} has no recorded binding type; "
+                        "checker invariant violated."
+                    )
                 declared_inputs[stmt.name] = input_type
 
         # Validate: check for missing and undeclared.
@@ -238,7 +261,9 @@ class WorkflowRuntime:
             )
 
         if input_errors:
-            return RunResult(ok=False, diagnostics=input_errors, error=None)
+            return RunResult(
+                ok=False, diagnostics=list(warnings) + input_errors, error=None
+            )
 
         # ----------------------------------------------------------------
         # [5] Materialize output contracts (text codec only in M1)
@@ -258,7 +283,9 @@ class WorkflowRuntime:
                 )
 
         if contract_errors:
-            return RunResult(ok=False, diagnostics=contract_errors, error=None)
+            return RunResult(
+                ok=False, diagnostics=list(warnings) + contract_errors, error=None
+            )
 
         # ----------------------------------------------------------------
         # [6] Build root scope from inputs + type-check declarations
@@ -271,7 +298,7 @@ class WorkflowRuntime:
         for stmt in program.body:
             if isinstance(stmt, InputDecl):
                 raw_val = inputs[stmt.name]
-                input_type_obj = declared_inputs.get(stmt.name)
+                input_type_obj = declared_inputs[stmt.name]
                 # Convert/validate the raw value.
                 try:
                     typed_val = _convert_input(stmt.name, raw_val, input_type_obj)
@@ -285,7 +312,23 @@ class WorkflowRuntime:
                 )
 
         if input_bind_errors:
-            return RunResult(ok=False, diagnostics=input_bind_errors, error=None)
+            return RunResult(
+                ok=False, diagnostics=list(warnings) + input_bind_errors, error=None
+            )
+
+        # ----------------------------------------------------------------
+        # [check_only] --dry-run stop: the full static pipeline, input
+        # validation, and contract materialization have all succeeded.  Stop
+        # before executing any statement (no program output, no side effects).
+        # TODO(M2): print the §10.1 static call-site inventory here.
+        # ----------------------------------------------------------------
+        if check_only:
+            return RunResult(
+                ok=True,
+                diagnostics=list(warnings),
+                error=None,
+                bindings={},
+            )
 
         # ----------------------------------------------------------------
         # [7] Build and run the interpreter
@@ -310,21 +353,16 @@ class WorkflowRuntime:
         try:
             interp.execute(root_scope)
         except AglRaise as exc:
-            # Uncaught AgL exception.
+            # Uncaught AgL exception (exit code 2 per the CLI contract).
+            # ONLY the AgL exception carrier is caught here: an unexpected Python
+            # exception is an interpreter bug and must propagate (crash loudly)
+            # rather than masquerade as a user-facing pre-execution diagnostic.
             error = _exception_value_to_run_error(exc.exc)
             return RunResult(
                 ok=False,
                 diagnostics=list(warnings),
                 error=error,
                 bindings={},
-            )
-        except Exception as exc:
-            return RunResult(
-                ok=False,
-                diagnostics=list(warnings) + [
-                    Diagnostic(message=f"Internal interpreter error: {exc}", line=1)
-                ],
-                error=None,
             )
 
         # Successful run: snapshot root bindings.
@@ -353,11 +391,17 @@ class WorkflowRuntime:
 # ---------------------------------------------------------------------------
 
 
-def _convert_input(name: str, raw: object, type_obj: object) -> "Value":
+def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
     """Convert a raw host input value to the declared AgL type.
 
-    For ``text`` inputs the value is taken verbatim (must already be a str).
-    For other types the value is JSON-parsed and type-validated.
+    Scalars are supported in M1:
+    - ``text``: verbatim (the value must already be a ``str``).
+    - ``int``/``decimal``/``bool``/``json``: parsed via stdlib ``json`` with
+      ``parse_float=Decimal`` (design §5.1: no binary floats) and validated.
+
+    Non-scalar declared types (``list``/``dict``/``record``/``enum`` — anything
+    the M1 host cannot parse from JSON into a typed ``Value``) are rejected with
+    a clear pre-execution diagnostic; the JSON codec lands in M2.
     """
     import decimal as _decimal
 
@@ -368,17 +412,32 @@ def _convert_input(name: str, raw: object, type_obj: object) -> "Value":
         JsonValue,
         TextValue,
     )
-    from agm.agl.typecheck.types import BoolType, DecimalType, IntType, JsonType, TextType
+    from agm.agl.typecheck.types import (
+        BoolType,
+        DecimalType,
+        IntType,
+        JsonType,
+        TextType,
+    )
 
     # Text: verbatim.
-    if isinstance(type_obj, TextType) or type_obj is None:
+    if isinstance(type_obj, TextType):
         if not isinstance(raw, str):
             raise ValueError(
                 f"Input {name!r}: expected a text value (str), got {type(raw).__name__}"
             )
         return TextValue(raw)
 
-    # Non-text: parse from JSON if given as a string.
+    # Reject non-scalar declared types: the M1 host has no codec to build a
+    # typed Value from JSON for these.
+    if not isinstance(type_obj, (IntType, DecimalType, BoolType, JsonType)):
+        raise ValueError(
+            f"Input {name!r} has type {type_obj!r}; non-scalar JSON-typed inputs "
+            "land with the json codec (M2). M1 supports only text, int, decimal, "
+            "bool, and json inputs."
+        )
+
+    # Scalar non-text: parse from JSON if given as a string.
     value = raw
     if isinstance(value, str):
         try:
@@ -413,83 +472,19 @@ def _convert_input(name: str, raw: object, type_obj: object) -> "Value":
             f"Input {name!r}: expected a bool, got {type(value).__name__} {value!r}"
         )
 
-    if isinstance(type_obj, JsonType):
-        return JsonValue(value)
-
-    # Fallback: accept anything as JSON.
+    # JsonType: accept any parsed JSON value.
     return JsonValue(value)
 
 
 def _exception_value_to_run_error(exc: "ExceptionValue") -> RunError:
-    """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``."""
-    from agm.agl.eval.values import (
-        BoolValue,
-        DecimalValue,
-        DictValue,
-        EnumValue,
-        ExceptionValue,
-        IntValue,
-        JsonValue,
-        ListValue,
-        RecordValue,
-        TextValue,
-    )
+    """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
-    def _to_json_obj(v: object) -> object:
-        if isinstance(v, TextValue):
-            return v.value
-        if isinstance(v, IntValue):
-            return v.value
-        if isinstance(v, DecimalValue):
-            return float(v.value)
-        if isinstance(v, BoolValue):
-            return v.value
-        if isinstance(v, JsonValue):
-            return v.raw
-        if isinstance(v, ListValue):
-            return [_to_json_obj(e) for e in v.elements]
-        if isinstance(v, DictValue):
-            return {k: _to_json_obj(fv) for k, fv in v.entries.items()}
-        if isinstance(v, RecordValue):
-            return {k: _to_json_obj(fv) for k, fv in v.fields.items()}
-        if isinstance(v, EnumValue):
-            d: dict[str, object] = {"$case": v.variant}
-            d.update({k: _to_json_obj(fv) for k, fv in v.fields.items()})
-            return d
-        if isinstance(v, ExceptionValue):
-            return {k: _to_json_obj(fv) for k, fv in v.fields.items()}
-        return None  # pragma: no cover
-
-    # Handle Value (not object) — need the import here.
-
-    fields: dict[str, object] = {}
-    for k, v in exc.fields.items():
-        fields[k] = _to_json_obj(v)
-
-    return RunError(type_name=exc.type_name, fields=fields)
-
-
-def _resolve_annotation(annotation: object) -> object:
-    """Convert an AST type-annotation node to a ``typecheck.types.Type`` instance.
-
-    Returns the resolved ``Type``, or ``None`` (which maps to ``TextType``) when
-    no annotation is present.  Only scalar types are needed here; compound types
-    (list, dict) are not supported as input in M1.
+    Field values are converted via the shared serializer, which preserves
+    ``Decimal`` exactness (never routed through binary ``float``; design §5.1).
     """
-    from agm.agl.syntax.types import BoolT, DecimalT, IntT, JsonT, TextT
-    from agm.agl.typecheck.types import BoolType, DecimalType, IntType, JsonType, TextType
+    from agm.agl.runtime.serialize import value_to_json_obj
 
-    if annotation is None:
-        return TextType()
-    if isinstance(annotation, TextT):
-        return TextType()
-    if isinstance(annotation, IntT):
-        return IntType()
-    if isinstance(annotation, DecimalT):
-        return DecimalType()
-    if isinstance(annotation, BoolT):
-        return BoolType()
-    if isinstance(annotation, JsonT):
-        return JsonType()
-    # Unknown annotation: default to text
-    return TextType()
+    fields: dict[str, object] = {
+        k: value_to_json_obj(v) for k, v in exc.fields.items()
+    }
+    return RunError(type_name=exc.type_name, fields=fields)

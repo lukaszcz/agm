@@ -12,6 +12,9 @@ Design
 - ``has_fallback_agent``: when ``True`` an implicit fallback handles any
   unregistered agent name, so the checker accepts unknown names.  When
   ``False`` an unrecognised agent name is a static error.
+- ``has_default_agent``: when ``True`` the host has a default agent that backs
+  the built-in ``prompt`` keyword.  When ``False`` (and no fallback agent), a
+  ``prompt`` call is a static error.
 - ``codec_kinds``: mapping from codec name → frozenset of semantic type-kind
   strings the codec supports.  In v1 the only registered codec is ``"text"``
   supporting ``{"text"}``; the ``"json"`` codec (M2) adds
@@ -42,6 +45,10 @@ class HostCapabilities:
     has_fallback_agent:
         When ``True``, any agent name is accepted regardless of whether it
         appears in ``agent_names``.
+    has_default_agent:
+        When ``True``, a default agent backs the built-in ``prompt`` keyword.
+        When ``False`` (and ``has_fallback_agent`` is also ``False``), a
+        ``prompt`` call is a static error.
     codec_kinds:
         Mapping from codec name to the frozenset of semantic type-kind strings
         the codec can handle.  Type-kind strings are the lower-cased class name
@@ -54,22 +61,6 @@ class HostCapabilities:
 
     agent_names: frozenset[str] = field(default_factory=frozenset)
     has_fallback_agent: bool = False
+    has_default_agent: bool = False
     codec_kinds: dict[str, frozenset[str]] = field(default_factory=dict)
     renderer_names: frozenset[str] = field(default_factory=frozenset)
-
-
-def default_capabilities() -> HostCapabilities:
-    """Return the v1 default capabilities (text codec + default/raw renderers).
-
-    This is the baseline used by ``WorkflowRuntime`` when no codecs or
-    renderers have been explicitly registered.  M2 extends this with the JSON
-    codec and additional renderers.
-    """
-    return HostCapabilities(
-        agent_names=frozenset(),
-        has_fallback_agent=True,
-        codec_kinds={
-            "text": frozenset({"text"}),
-        },
-        renderer_names=frozenset({"default", "raw"}),
-    )

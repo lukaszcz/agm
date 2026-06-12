@@ -22,9 +22,11 @@ Usage::
 from __future__ import annotations
 
 from agm.agl.diagnostics import AglError, Diagnostic, SourceSpan
+from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.runtime import RunError, RunResult, WorkflowRuntime
 
 __all__ = [
+    "AgentFn",
     "AglError",
     "Diagnostic",
     "RunError",

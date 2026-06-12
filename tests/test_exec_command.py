@@ -288,7 +288,13 @@ class TestExecCommandEdgePaths:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
             return RunResult(ok=True, diagnostics=[], error=None)
 
         import agm.agl.runtime.runtime as rt_mod
@@ -316,7 +322,13 @@ class TestExecCommandEdgePaths:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
             return RunResult(
                 ok=False,
                 diagnostics=[],
@@ -352,7 +364,13 @@ class TestExecCommandEdgePaths:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
             return RunResult(
                 ok=False,
                 diagnostics=[],
@@ -420,7 +438,13 @@ class TestExecCommandWarnings:
 
         warning = Diagnostic(message="case is non-exhaustive", line=7, severity="warning")
 
-        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
             return RunResult(ok=True, diagnostics=[warning], error=None)
 
         import agm.agl.runtime.runtime as rt_mod
@@ -453,7 +477,13 @@ class TestExecCommandWarnings:
 
         error = Diagnostic(message="type mismatch", line=3)
 
-        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
             return RunResult(ok=False, diagnostics=[error], error=None)
 
         import agm.agl.runtime.runtime as rt_mod
@@ -487,7 +517,13 @@ class TestExecCommandWarnings:
         warning = Diagnostic(message="unused binding", line=2, severity="warning")
         error = Diagnostic(message="unknown name", line=5)
 
-        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
             return RunResult(ok=False, diagnostics=[warning, error], error=None)
 
         import agm.agl.runtime.runtime as rt_mod
@@ -596,7 +632,13 @@ class TestExecCommandM1:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
             return RunResult(
                 ok=False,
                 diagnostics=[],
@@ -620,6 +662,85 @@ class TestExecCommandM1:
             exec_command.run(args)
         assert exc_info.value.code == 2
 
+    def test_prompt_program_exits_1_with_no_default_agent(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """F1b: ``agm exec`` on an agent-calling program with no default agent
+        exits 1 with the static no-default-agent diagnostic and no stdout."""
+        from agm.commands.args import ExecArgs
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let x = prompt "hi"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "default agent" in captured.err.lower()
+
+    def test_dry_run_printing_program_exits_0_no_stdout(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """F2: ``agm exec --dry-run`` runs the static pipeline only — no output."""
+        from agm.commands.args import ExecArgs
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "hello"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None  # exit 0
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_dry_run_static_error_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F2: a static-error program under --dry-run still exits 1."""
+        from agm.commands.args import ExecArgs
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = undefined_name\n")
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+
     def test_static_error_exits_1_not_2(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = undefined_name\n")
@@ -637,6 +758,108 @@ class TestExecCommandM1:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 1  # static error, not AgL exception
+
+
+def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """Patch ``exec.WorkflowRuntime`` with a recording subclass.
+
+    Returns a dict that captures the constructor kwargs the command passed.
+    """
+    from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
+
+    captured: dict[str, object] = {}
+
+    class RecordingRuntime(RealRuntime):
+        def __init__(
+            self,
+            *,
+            default_loop_limit: int = 5,
+            default_strict_json: bool = False,
+            default_agent: object | None = None,
+        ) -> None:
+            captured["default_loop_limit"] = default_loop_limit
+            captured["default_strict_json"] = default_strict_json
+            super().__init__(
+                default_loop_limit=default_loop_limit,
+                default_strict_json=default_strict_json,
+            )
+
+    monkeypatch.setattr(exec_command, "WorkflowRuntime", RecordingRuntime)
+    return captured
+
+
+class TestExecConfigWiring:
+    """F12: [exec] config (strict_json/default_loop_limit) flows into the runtime."""
+
+    def _config_home(self, tmp_path: Path) -> Path:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            "[exec]\nstrict_json = true\ndefault_loop_limit = 9\n"
+        )
+        return home
+
+    def test_config_values_reach_runtime_constructor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.commands.args import ExecArgs
+        from agm.config.context import ConfigContext
+
+        home = self._config_home(tmp_path)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["default_strict_json"] is True
+        assert captured["default_loop_limit"] == 9
+
+    def test_cli_strict_json_overrides_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.commands.args import ExecArgs
+        from agm.config.context import ConfigContext
+
+        home = self._config_home(tmp_path)  # config sets strict_json = true
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=False,  # CLI --no-strict-json overrides config true
+            max_iters=7,  # CLI --max-iters overrides config 9
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["default_strict_json"] is False
+        assert captured["default_loop_limit"] == 7
 
 
 class TestParseKeyValue:

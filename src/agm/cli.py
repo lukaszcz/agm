@@ -821,7 +821,7 @@ def exec_cmd(
     strict_json: bool | None = typer.Option(
         None,
         "--strict-json/--no-strict-json",
-        help="Require bare JSON output from agents (default: lenient recovery).",
+        help="Require bare JSON output from agents (lenient recovery not yet active, lands in M2).",
     ),
     max_iters: int | None = typer.Option(
         None,
@@ -831,18 +831,18 @@ def exec_cmd(
     runner: str | None = typer.Option(
         None,
         "--runner",
-        help="Override the default agent runner command.",
+        help="Override the default agent runner command (not yet active, lands in M5).",
     ),
     log_file: str | None = typer.Option(
         None,
         "--log-file",
-        help="Write trace log to PATH.",
+        help="Write trace log to PATH (not yet active, lands in M5).",
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(
         False,
         "--no-log",
-        help="Disable trace logging.",
+        help="Disable trace logging (not yet active, lands in M5).",
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),

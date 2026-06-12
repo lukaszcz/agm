@@ -1523,71 +1523,104 @@ class TestRenderUnit:
         assert "null" in text
 
     def test_value_to_json_obj_decimal(self) -> None:
+        # F3/F9: Decimal is preserved exactly, never routed through float.
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
         v = DecimalValue(decimal.Decimal("3.14"))
-        result = _value_to_json_obj(v)
-        assert isinstance(result, float)
-        assert abs(float(result) - 3.14) < 0.001
+        result = value_to_json_obj(v)
+        assert isinstance(result, decimal.Decimal)
+        assert result == decimal.Decimal("3.14")
 
     def test_value_to_json_obj_bool(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
-        assert _value_to_json_obj(BoolValue(True)) is True
-        assert _value_to_json_obj(BoolValue(False)) is False
+        assert value_to_json_obj(BoolValue(True)) is True
+        assert value_to_json_obj(BoolValue(False)) is False
 
     def test_value_to_json_obj_json(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
         v = JsonValue({"nested": [1, 2]})
-        result = _value_to_json_obj(v)
+        result = value_to_json_obj(v)
         assert result == {"nested": [1, 2]}
 
     def test_value_to_json_obj_list(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
         v = ListValue(elements=(IntValue(1), IntValue(2)))
-        result = _value_to_json_obj(v)
+        result = value_to_json_obj(v)
         assert result == [1, 2]
 
     def test_value_to_json_obj_dict(self) -> None:
         from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
         v = DictValue(entries={"k": TextValue("v")})
-        result = _value_to_json_obj(v)
+        result = value_to_json_obj(v)
         assert result == {"k": "v"}
 
     def test_value_to_json_obj_record(self) -> None:
         from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
         v = RecordValue(type_name="P", fields={"x": IntValue(5)})
-        result = _value_to_json_obj(v)
+        result = value_to_json_obj(v)
         assert result == {"x": 5}
 
     def test_value_to_json_obj_enum(self) -> None:
         from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
         v = EnumValue(type_name="C", variant="Red", fields={})
-        result = _value_to_json_obj(v)
+        result = value_to_json_obj(v)
         assert result == {"$case": "Red"}
 
     def test_value_to_json_obj_exception(self) -> None:
         from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.runtime.render import _value_to_json_obj
+        from agm.agl.runtime.serialize import value_to_json_obj
 
         v = ExceptionValue(
             type_name="E", fields={"message": TextValue("oops"), "trace_id": TextValue("")}
         )
-        result = _value_to_json_obj(v)
+        result = value_to_json_obj(v)
         assert isinstance(result, dict)
         assert result.get("message") == "oops"
+
+    def test_dumps_exact_decimal_unquoted_exact_text(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        # Decimal emitted as exact unquoted numeric text (no float round trip).
+        assert dumps_exact(decimal.Decimal("1.5"), indent=None) == "1.5"
+        # Trailing-zero significance is preserved (1.50 != 1.5 here).
+        assert dumps_exact(decimal.Decimal("1.50"), indent=None) == "1.50"
+        assert dumps_exact(decimal.Decimal("0.1"), indent=None) == "0.1"
+        # No scientific notation for large/small magnitudes.
+        assert dumps_exact(decimal.Decimal("1E+2"), indent=None) == "100"
+
+    def test_dumps_exact_nested_structure(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        obj = {"a": decimal.Decimal("1.5"), "b": [1, True, None, "x"]}
+        out = dumps_exact(obj, indent=None)
+        assert out == '{"a": 1.5, "b": [1, true, null, "x"]}'
+
+    def test_dumps_exact_pretty_indent(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        out = dumps_exact({"a": [decimal.Decimal("0.1")]}, indent=2)
+        assert out == '{\n  "a": [\n    0.1\n  ]\n}'
+
+    def test_dumps_exact_empty_containers(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        assert dumps_exact([], indent=2) == "[]"
+        assert dumps_exact({}, indent=2) == "{}"
+        assert dumps_exact([], indent=None) == "[]"
+        assert dumps_exact({}, indent=None) == "{}"
 
     def test_render_for_prompt_json_renderer(self) -> None:
         from agm.agl.eval.values import IntValue
@@ -1755,10 +1788,14 @@ class TestRuntimeExceptionHandlers:
         assert result.ok is False
         assert "typecheck crash" in result.diagnostics[0].message
 
-    def test_internal_interpreter_error_returns_diagnostic(
+    def test_internal_interpreter_error_propagates(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Non-AglRaise from interpreter.execute → ok=False diagnostic."""
+        """F1c: an unexpected (non-AglRaise) interpreter error must propagate.
+
+        A Python-level bug must crash loudly rather than masquerade as a
+        user-facing pre-execution diagnostic.
+        """
         from agm.agl.eval.interpreter import Interpreter
 
         def bad_execute(self: Interpreter, root_scope: object) -> None:
@@ -1767,9 +1804,8 @@ class TestRuntimeExceptionHandlers:
         monkeypatch.setattr(Interpreter, "execute", bad_execute)
 
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
-        assert result.ok is False
-        assert "internal crash" in result.diagnostics[0].message
+        with pytest.raises(RuntimeError, match="internal crash"):
+            rt.run("let x = 1")
 
     def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
         """_exception_value_to_run_error converts every Value kind to JSON shape.
@@ -1815,7 +1851,9 @@ class TestRuntimeExceptionHandlers:
         assert isinstance(error, RunError)
         assert error.type_name == "AgentParseError"
         assert error.fields["message"] == "failed"
-        assert isinstance(error.fields["decimal_val"], float)
+        # F3/F9: Decimal is preserved exactly (not converted to float).
+        assert error.fields["decimal_val"] == decimal.Decimal("1.5")
+        assert isinstance(error.fields["decimal_val"], decimal.Decimal)
         assert error.fields["bool_val"] is True
         assert error.fields["json_val"] == {"k": "v"}
         assert error.fields["list_val"] == [1]
@@ -1823,22 +1861,6 @@ class TestRuntimeExceptionHandlers:
         assert error.fields["rec_val"] == {"f": "v"}
         assert error.fields["enum_val"] == {"$case": "V"}
         assert isinstance(error.fields["exc_val"], dict)
-
-    def test_resolve_annotation_all_types(self) -> None:
-        from agm.agl.runtime.runtime import _resolve_annotation
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import BoolT, DecimalT, IntT, JsonT, TextT
-        from agm.agl.typecheck.types import BoolType, DecimalType, IntType, JsonType, TextType
-
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        assert isinstance(_resolve_annotation(None), TextType)
-        assert isinstance(_resolve_annotation(TextT(span=span, node_id=0)), TextType)
-        assert isinstance(_resolve_annotation(IntT(span=span, node_id=0)), IntType)
-        assert isinstance(_resolve_annotation(DecimalT(span=span, node_id=0)), DecimalType)
-        assert isinstance(_resolve_annotation(BoolT(span=span, node_id=0)), BoolType)
-        assert isinstance(_resolve_annotation(JsonT(span=span, node_id=0)), JsonType)
-        # Unknown type falls back to text
-        assert isinstance(_resolve_annotation(object()), TextType)
 
     def test_convert_input_int_from_decimal_string(self) -> None:
         from agm.agl.eval.values import IntValue
@@ -1888,13 +1910,14 @@ class TestRuntimeExceptionHandlers:
         result = _convert_input("meta", [1, 2, 3], JsonType())
         assert result == JsonValue([1, 2, 3])
 
-    def test_convert_input_unknown_type_fallback(self) -> None:
-        from agm.agl.eval.values import JsonValue
+    def test_convert_input_nonscalar_type_rejected(self) -> None:
+        # F4: a non-scalar declared type (list/dict/record/enum) is rejected
+        # with a clear pre-execution diagnostic; the json codec lands in M2.
         from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import ListType, TextType
 
-        # Passing an unknown type_obj uses the fallback JSON path.
-        result = _convert_input("x", [1, 2], object())
-        assert isinstance(result, JsonValue)
+        with pytest.raises(ValueError, match="json codec"):
+            _convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
 
     def test_convert_input_text_non_str_raises(self) -> None:
         from agm.agl.runtime.runtime import _convert_input

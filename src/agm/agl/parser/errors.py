@@ -96,7 +96,7 @@ def syntax_error_from_lark(
         if tok.type == _EQ_EQ:
             return _make_eq_eq_error(span)
         return AglSyntaxError(
-            f"Unexpected token {tok!r} at line {line}, column {col}.",
+            f"Unexpected token {tok!r}.",
             span=span,
         )
 
@@ -113,7 +113,7 @@ def syntax_error_from_lark(
             end_offset=pos + 1,
         )
         return AglSyntaxError(
-            f"Unexpected character at line {line}, column {col}.",
+            "Unexpected character.",
             span=span,
         )
 

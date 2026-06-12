@@ -55,6 +55,11 @@ class AgentRegistry:
         return self._default is not None
 
     @property
+    def has_default_agent(self) -> bool:
+        """True when a default agent backs the built-in ``prompt`` keyword."""
+        return self._default is not None
+
+    @property
     def agent_names(self) -> frozenset[str]:
         """Names of explicitly registered named agents."""
         return frozenset(self._named)
@@ -70,10 +75,9 @@ class AgentRegistry:
         """
         fn: AgentFn | None = self._named.get(name)
         if fn is None:
-            if name == "prompt" and self._default is not None:
-                fn = self._default
-            elif self._default is not None:
-                # Named agent not registered → fall back to default agent.
+            # ``prompt`` and any unregistered named agent both fall back to the
+            # default agent when one is configured.
+            if self._default is not None:
                 fn = self._default
             else:
                 raise KeyError(f"No agent registered for name {name!r}")

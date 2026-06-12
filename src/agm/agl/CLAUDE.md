@@ -44,5 +44,6 @@ side tables live in `ResolvedProgram` (scope pass output) and `CheckedProgram`
 | `agm.commands.exec` | CLI command | `tests/test_exec_command.py` |
 
 The end-to-end acceptance suite lives in `tests/test_agl_e2e.py` and
-`tests/agl/`. It is **red until M5** and is excluded from intermediate milestone
-gates (M0–M4).
+`tests/agl/`. It is **red until M5** and is excluded from the `just test` /
+`just check` gate via `--ignore=tests/test_agl_e2e.py` (see the `test` recipe in
+the `justfile`). M5 removes that ignore once the suite goes green.

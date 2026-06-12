@@ -393,13 +393,21 @@ agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
 Options:
 
 - `--input KEY=VALUE`: Provide a host input value (repeatable). Values for `text`-declared
-  inputs are taken verbatim; for other declared types the value is parsed as JSON.
-- `--strict-json`: Require bare JSON output from agents (no recovery).
-- `--no-strict-json`: Use lenient JSON recovery (default).
+  inputs are taken verbatim; for `int`/`decimal`/`bool`/`json` inputs the value is parsed
+  as JSON. Non-scalar declared types (`list`/`dict`/`record`/`enum`) are not yet accepted
+  as inputs (the JSON codec lands in M2).
+- `--strict-json`: Require bare JSON output from agents. Lenient JSON recovery is **not yet
+  active** (lands in M2); strictness is plumbed through but only observable once the JSON
+  codec exists.
+- `--no-strict-json`: Use lenient JSON recovery (default; not yet active, lands in M2).
 - `--max-iters N`: Override the default `do`-loop iteration limit.
-- `--runner COMMAND`: Override the default agent runner command.
-- `--log-file PATH`: Write trace log to PATH.
-- `--no-log`: Disable trace logging.
+- `--runner COMMAND`: Override the default agent runner command (**not yet active**, lands
+  in M5).
+- `--log-file PATH`: Write trace log to PATH (**not yet active**, lands in M5).
+- `--no-log`: Disable trace logging (**not yet active**, lands in M5).
+- `--dry-run`: Run the full static pipeline, input validation, and contract
+  materialization, then stop before executing any statement (static errors exit 1; a clean
+  check exits 0 with no program output). The static call-site inventory lands in M2.
 
 Exit codes:
 

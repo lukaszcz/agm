@@ -517,6 +517,20 @@ class _Checker:
         else:
             target_type = TextType()
 
+        # Select codec: in M1 the only codec is "text" supporting TextType.
+        # Codec selection and option validation are structural properties of the
+        # call (independent of agent availability), so they are checked before
+        # the agent-capability checks below.
+        codec_name = self._select_codec(target_type, node.span)
+
+        # Validate strict_json: only valid for JSON codec.
+        if node.options.strict_json is not None and codec_name != "json":
+            raise AglTypeError(
+                f"'strict_json' is only valid when the codec is 'json'; "
+                f"the selected codec for this call is '{codec_name}'.",
+                span=node.options.span,
+            )
+
         # Validate agent name against capabilities.
         if kind == CallKind.agent:
             if (
@@ -528,17 +542,15 @@ class _Checker:
                     "and this name is not registered.",
                     span=node.span,
                 )
-
-        # Select codec: in M1 the only codec is "text" supporting TextType.
-        codec_name = self._select_codec(target_type, node.span)
-
-        # Validate strict_json: only valid for JSON codec.
-        if node.options.strict_json is not None and codec_name != "json":
-            raise AglTypeError(
-                f"'strict_json' is only valid when the codec is 'json'; "
-                f"the selected codec for this call is '{codec_name}'.",
-                span=node.options.span,
-            )
+        elif kind == CallKind.default_agent:
+            # A ``prompt`` call needs either a default agent or a fallback agent.
+            if not self._caps.has_default_agent and not self._caps.has_fallback_agent:
+                raise AglTypeError(
+                    "No default agent is configured; the built-in 'prompt' call "
+                    "cannot run. Configure a default agent (the CLI wires the "
+                    "runner-backed default agent in M5).",
+                    span=node.span,
+                )
 
         # Resolve template (renderers validated inside _check_template).
         self._check_template(node.template)

@@ -1,17 +1,24 @@
 """Implementation of the ``agm exec FILE`` command.
 
-M0 behaviour: reads the ``.agl`` source file (exit 1 if unreadable), constructs
-a ``WorkflowRuntime``, calls ``runtime.run``, prints diagnostics to stderr, and
-exits 1 (pre-execution failure per the exit-code contract, since the runtime is
-not yet implemented in M0).
+Behaviour: read the ``.agl`` source file (exit 1 if unreadable), load the
+``[exec]`` configuration, construct a ``WorkflowRuntime`` with the resolved
+settings, call ``runtime.run`` (or a static-only dry run under ``--dry-run``),
+print diagnostics to stderr, and exit per the exit-code contract.
 
 Warning-severity diagnostics are printed to stderr like errors but never affect
 the exit code; only error-severity diagnostics yield exit 1.
 
 Exit-code contract (plan §10.1):
-    0  success
+    0  success (or a clean ``--dry-run`` static check)
     1  pre-execution failure (unreadable file, static errors, input validation)
     2  program executed but ended with an uncaught AgL exception
+
+M1 scope notes:
+    - ``--strict-json`` controls JSON-codec strictness; lenient recovery is the
+      lands-in-M2 behaviour, so in M1 the flag/config value is plumbed through
+      but only observable once the JSON codec exists.
+    - ``--runner`` and ``--log-file``/``--no-log`` are accepted but inert until
+      the runner-backed default agent and trace logging land in M5.
 """
 
 from __future__ import annotations
@@ -21,6 +28,9 @@ from pathlib import Path
 
 from agm.agl import WorkflowRuntime
 from agm.commands.args import ExecArgs
+from agm.config.context import current_config_context
+from agm.config.general import load_exec_config
+from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
 from agm.core.fs import read_text_arg
 
@@ -36,10 +46,12 @@ def run(args: ExecArgs) -> None:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    # Construct the runtime with CLI/config-derived settings.
-    # In M0 the config is not yet wired; flags default to sensible values.
-    strict_json = args.strict_json if args.strict_json is not None else False
-    loop_limit = args.max_iters if args.max_iters is not None else 5
+    # Load [exec] configuration; CLI flags override config values.
+    ctx = current_config_context()
+    config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+
+    strict_json = args.strict_json if args.strict_json is not None else config.strict_json
+    loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
 
     runtime = WorkflowRuntime(
         default_loop_limit=loop_limit,
@@ -48,7 +60,7 @@ def run(args: ExecArgs) -> None:
 
     # ``parse_inputs`` returns ``dict[str, str]``; ``run`` accepts a
     # ``Mapping[str, object]``, so no widening copy is needed.
-    result = runtime.run(source, inputs=inputs)
+    result = runtime.run(source, inputs=inputs, check_only=dry_run.enabled())
 
     # Warnings are reported but do not affect the exit code.
     warnings = [d for d in result.diagnostics if d.severity == "warning"]

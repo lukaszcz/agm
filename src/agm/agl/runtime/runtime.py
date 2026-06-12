@@ -15,10 +15,37 @@ from agm.agl.runtime.agents import AgentFn
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import ExceptionValue, Value
+    from agm.agl.syntax.nodes import AgentCall as AgentCallNode
+    from agm.agl.syntax.nodes import Program as AglProgram
+    from agm.agl.syntax.nodes import Template as TemplateNode
+    from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.types import Type as AglType
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
+
+
+@dataclass(frozen=True, slots=True)
+class CallSiteInfo:
+    """Static summary of one agent-call or exec site (--dry-run inventory).
+
+    ``callee``        Agent or executor name (``"prompt"``, ``"exec"``, or a
+                      registered agent name).
+    ``target_type``   The target type name (e.g. ``"text"``, ``"Review"``).
+    ``codec_name``    Selected codec (``"text"`` or ``"json"``).
+    ``has_schema``    ``True`` when the contract carries a JSON Schema.
+    ``parse_policy``  ``"abort"`` / ``"retry[N]"`` / ``"default"``.
+    ``line``          1-based source line of the call site.
+    ``col``           1-based source column of the call site.
+    """
+
+    callee: str
+    target_type: str
+    codec_name: str
+    has_schema: bool
+    parse_policy: str
+    line: int
+    col: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,12 +81,17 @@ class RunResult:
     ``bindings``
         Root-scope bindings after a successful run (name → Value).  Empty for
         failed runs.
+    ``call_sites``
+        Static call-site inventory populated when ``check_only=True``
+        (``agm exec --dry-run``).  One entry per agent-call/exec site in
+        source order.  Empty for ordinary runs.
     """
 
     ok: bool
     diagnostics: list[Diagnostic]
     error: RunError | None
     bindings: dict[str, Value] = field(default_factory=dict)
+    call_sites: tuple[CallSiteInfo, ...] = field(default_factory=tuple)
 
 
 class WorkflowRuntime:
@@ -327,14 +359,16 @@ class WorkflowRuntime:
         # [check_only] --dry-run stop: the full static pipeline, input
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement (no program output, no side effects).
-        # TODO(M2): print the §10.1 static call-site inventory here.
+        # Build the §10.1 static call-site inventory before returning.
         # ----------------------------------------------------------------
         if check_only:
+            inventory = _build_call_inventory(checked, contracts, program)
             return RunResult(
                 ok=True,
                 diagnostics=list(warnings),
                 error=None,
                 bindings={},
+                call_sites=tuple(inventory),
             )
 
         # ----------------------------------------------------------------
@@ -514,3 +548,156 @@ def _exception_value_to_run_error(exc: "ExceptionValue") -> RunError:
         k: value_to_json_obj(v) for k, v in exc.fields.items()
     }
     return RunError(type_name=exc.type_name, fields=fields)
+
+
+def _collect_agent_calls(program: AglProgram) -> list[AgentCallNode]:
+    """Walk *program* depth-first and return all ``AgentCall`` nodes in source order.
+
+    Only nodes whose ``node_id`` appears in the checked contract-spec table will
+    be included in the inventory; the walk simply collects all candidates.
+    """
+    from agm.agl.syntax.nodes import (
+        AgentCall,
+        BinaryOp,
+        CaseExpr,
+        CaseStmt,
+        Constructor,
+        DictLit,
+        DoUntil,
+        ExprStmt,
+        FieldAccess,
+        IfStmt,
+        IsTest,
+        LetDecl,
+        ListLit,
+        PrintStmt,
+        Program,
+        Raise,
+        SetStmt,
+        Template,
+        TryCatch,
+        UnaryNeg,
+        UnaryNot,
+        VarDecl,
+    )
+
+    result: list[AgentCall] = []
+
+    def _visit_expr(expr: object) -> None:
+        if isinstance(expr, AgentCall):
+            result.append(expr)
+            _visit_template(expr.template)
+        elif isinstance(expr, Template):
+            _visit_template(expr)
+        elif isinstance(expr, BinaryOp):
+            _visit_expr(expr.left)
+            _visit_expr(expr.right)
+        elif isinstance(expr, (UnaryNot, UnaryNeg)):
+            _visit_expr(expr.operand)
+        elif isinstance(expr, IsTest):
+            _visit_expr(expr.expr)
+        elif isinstance(expr, CaseExpr):
+            _visit_expr(expr.subject)
+            for branch in expr.branches:
+                _visit_expr(branch.body)
+        elif isinstance(expr, FieldAccess):
+            _visit_expr(expr.obj)
+        elif isinstance(expr, Constructor):
+            for arg in expr.args:
+                _visit_expr(arg.value)
+        elif isinstance(expr, ListLit):
+            for elem in expr.elements:
+                _visit_expr(elem)
+        elif isinstance(expr, DictLit):
+            for entry in expr.entries:
+                _visit_expr(entry.value)
+
+    def _visit_template(tmpl: TemplateNode) -> None:
+        from agm.agl.syntax.nodes import InterpSegment
+        for seg in tmpl.segments:
+            if isinstance(seg, InterpSegment):
+                _visit_expr(seg.expr)
+
+    def _visit_stmts(stmts: tuple[object, ...]) -> None:
+        for stmt in stmts:
+            _visit_stmt(stmt)
+
+    def _visit_stmt(stmt: object) -> None:
+        if isinstance(stmt, (LetDecl, VarDecl)):
+            _visit_expr(stmt.value)
+        elif isinstance(stmt, SetStmt):
+            _visit_expr(stmt.value)
+        elif isinstance(stmt, PrintStmt):
+            _visit_expr(stmt.value)
+        elif isinstance(stmt, ExprStmt):
+            _visit_expr(stmt.expr)
+        elif isinstance(stmt, Raise):
+            _visit_expr(stmt.exc)
+        elif isinstance(stmt, DoUntil):
+            _visit_stmts(stmt.body)
+            _visit_expr(stmt.condition)
+        elif isinstance(stmt, IfStmt):
+            for branch in stmt.branches:
+                _visit_stmts(branch.body)
+        elif isinstance(stmt, CaseStmt):
+            _visit_expr(stmt.subject)
+            for case_branch in stmt.branches:
+                _visit_stmts(case_branch.body)
+        elif isinstance(stmt, TryCatch):
+            _visit_stmts(stmt.body)
+            for clause in stmt.handlers:
+                _visit_stmts(clause.body)
+        elif isinstance(stmt, Program):
+            _visit_stmts(stmt.body)
+
+    assert isinstance(program, Program)
+    _visit_stmts(program.body)
+    return result
+
+
+def _build_call_inventory(
+    checked: CheckedProgramType,
+    contracts: dict[int, object],
+    program: AglProgram,
+) -> list[CallSiteInfo]:
+    """Build the §10.1 static call-site inventory from the checked program.
+
+    Returns one ``CallSiteInfo`` per agent-call/exec site, in source order.
+    """
+    from agm.agl.runtime.contract import OutputContract
+    from agm.agl.syntax.nodes import AbortPolicy, RetryPolicy
+
+    call_nodes = _collect_agent_calls(program)
+    inventory: list[CallSiteInfo] = []
+
+    for node in call_nodes:
+        spec = checked.contract_specs.get(node.node_id)
+        if spec is None:
+            continue  # not a resolved call site (shouldn't happen after typecheck)
+
+        contract = contracts.get(node.node_id)
+        has_schema = (
+            isinstance(contract, OutputContract) and contract.json_schema is not None
+        )
+
+        policy = node.options.parse_policy
+        if isinstance(policy, AbortPolicy):
+            parse_policy_str = "abort"
+        elif isinstance(policy, RetryPolicy):
+            parse_policy_str = f"retry[{policy.extra}]"
+        else:
+            parse_policy_str = "default"
+
+        inventory.append(
+            CallSiteInfo(
+                callee=node.agent,
+                target_type=repr(spec.target_type),
+                codec_name=spec.codec_name,
+                has_schema=has_schema,
+                parse_policy=parse_policy_str,
+                line=node.span.start_line,
+                col=node.span.start_col,
+            )
+        )
+
+    return inventory

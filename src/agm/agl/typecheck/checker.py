@@ -129,35 +129,62 @@ class _TypeBuilder:
     - Unknown type references inside field/variant definitions.
     - Recursive records or enums (v1: rejected).
     - Alias cycles.
+
+    Implementation uses a two-phase approach so that type declarations are
+    order-independent (design §0 "type-decl ordering"):
+
+    Phase 1  Register all user-declared type names and alias targets.
+             Empty shells (RecordType/EnumType with empty fields/variants)
+             are registered immediately so that forward references within the
+             same program resolve without "Unknown type" false-positives.
+    Phase 2  Resolve every field and variant type, tracking the set of types
+             currently under construction (``_building``) to detect direct or
+             indirect recursion and report a clear diagnostic.
     """
 
     def __init__(self, env: TypeEnvironment) -> None:
         self._env = env
-        # Track user-declared names (excludes built-ins) to detect duplicates.
+        # Track user-declared names → declaration span (excludes built-ins).
         self._declared: dict[str, SourceSpan] = {}
+        # Index of record/enum definitions for on-demand phase-2 building.
+        self._record_defs: dict[str, RecordDef] = {}
+        self._enum_defs: dict[str, EnumDef] = {}
+        # Names currently being resolved in phase 2 (cycle detection).
+        self._building: set[str] = set()
+        # Names that have been fully resolved in phase 2.
+        self._built: set[str] = set()
 
     def collect(self, program: Program) -> None:
         """Scan *program* and populate ``self._env``."""
-        # Pass 1: register all names (forward references permitted between
-        # type declarations, consistent with plan §0 "type-decl ordering").
+        # ----------------------------------------------------------------
+        # Phase 1: Register names and empty shells (order-independent).
+        # ----------------------------------------------------------------
         for stmt in program.body:
             if isinstance(stmt, RecordDef):
                 self._register_name(stmt.name, stmt.span)
+                # Register an empty shell so forward references resolve.
+                self._env.register_type(stmt.name, RecordType(name=stmt.name, fields={}))
+                self._record_defs[stmt.name] = stmt
             elif isinstance(stmt, EnumDef):
                 self._register_name(stmt.name, stmt.span)
+                # Register an empty shell so forward references resolve.
+                self._env.register_type(stmt.name, EnumType(name=stmt.name, variants={}))
+                self._enum_defs[stmt.name] = stmt
             elif isinstance(stmt, TypeAlias):
                 self._register_name(stmt.name, stmt.span)
                 self._env.register_alias(stmt.name, stmt.type_expr)
 
-        # Pass 2: resolve field/variant types and build semantic Type objects.
+        # ----------------------------------------------------------------
+        # Phase 2: Resolve all field/variant types with recursion detection.
+        # ----------------------------------------------------------------
         for stmt in program.body:
             if isinstance(stmt, RecordDef):
-                self._build_record(stmt)
+                self._ensure_built_record(stmt.name)
             elif isinstance(stmt, EnumDef):
-                self._build_enum(stmt)
+                self._ensure_built_enum(stmt.name)
             elif isinstance(stmt, TypeAlias):
                 # Aliases are resolved lazily via TypeEnvironment.resolve_type_expr;
-                # we validate them now to surface cycle/unknown errors early.
+                # validate them now to surface cycle/unknown errors early.
                 self._validate_alias(stmt)
 
     def _register_name(self, name: str, span: SourceSpan) -> None:
@@ -173,6 +200,38 @@ class _TypeBuilder:
             )
         self._declared[name] = span
 
+    def _ensure_built_record(self, name: str) -> None:
+        """Build the record type for *name* if not already built."""
+        if name in self._built:
+            return
+        stmt = self._record_defs[name]
+        if name in self._building:
+            raise AglTypeError(
+                f"Record type '{name}' is directly or indirectly recursive. "
+                "Recursive types are not supported in v1.",
+                span=self._declared[name],
+            )
+        self._building.add(name)
+        self._build_record(stmt)
+        self._building.discard(name)
+        self._built.add(name)
+
+    def _ensure_built_enum(self, name: str) -> None:
+        """Build the enum type for *name* if not already built."""
+        if name in self._built:
+            return
+        stmt = self._enum_defs[name]
+        if name in self._building:
+            raise AglTypeError(
+                f"Enum type '{name}' is directly or indirectly recursive. "
+                "Recursive types are not supported in v1.",
+                span=self._declared[name],
+            )
+        self._building.add(name)
+        self._build_enum(stmt)
+        self._building.discard(name)
+        self._built.add(name)
+
     def _build_record(self, stmt: RecordDef) -> None:
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
@@ -185,11 +244,8 @@ class _TypeBuilder:
             seen_fields[fd.name] = fd.span
             field_type = self._resolve_field_type(fd, stmt.name)
             fields[fd.name] = field_type
-        # Note: recursive records are naturally rejected by _resolve_field_type
-        # raising AglTypeError("Unknown type …") when the self-referencing type
-        # is looked up before it has been fully registered.
-        rec = RecordType(name=stmt.name, fields=fields)
-        self._env.register_type(stmt.name, rec)
+        # Replace the empty shell with the fully-resolved record type.
+        self._env.register_type(stmt.name, RecordType(name=stmt.name, fields=fields))
 
     def _build_enum(self, stmt: EnumDef) -> None:
         variants: dict[str, dict[str, Type]] = {}
@@ -213,23 +269,42 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd, f"{stmt.name}.{vd.name}")
             variants[vd.name] = vfields
-        enum_t = EnumType(name=stmt.name, variants=variants)
-        self._env.register_type(stmt.name, enum_t)
+        # Replace the empty shell with the fully-resolved enum type.
+        self._env.register_type(stmt.name, EnumType(name=stmt.name, variants=variants))
 
     def _resolve_field_type(self, fd: FieldDef, owner: str) -> Type:
-        """Resolve a field's TypeExpr to a semantic Type."""
-        try:
-            return self._env.resolve_type_expr(fd.type_expr, span=fd.span)
-        except AglTypeError as exc:
-            # Re-raise to propagate; already has the right span.
-            raise exc
+        """Resolve a field's TypeExpr to a semantic Type.
+
+        Before resolving, ensure that any user-declared named type referenced
+        by this field has itself been fully built (triggering on-demand
+        topological ordering and cycle detection).
+        """
+        # Determine the named type(s) referenced, and ensure they are built.
+        # We only need to recurse into list/dict wrappers to find the NameT.
+        self._ensure_referenced_type_built(fd.type_expr)
+        return self._env.resolve_type_expr(fd.type_expr, span=fd.span)
+
+    def _ensure_referenced_type_built(self, type_expr: object) -> None:
+        """Recursively ensure that all user-declared types in *type_expr* are built."""
+        from agm.agl.syntax.types import DictT, ListT, NameT
+
+        if isinstance(type_expr, NameT):
+            name = type_expr.name
+            if name in self._record_defs:
+                self._ensure_built_record(name)
+            elif name in self._enum_defs:
+                self._ensure_built_enum(name)
+            # Built-in names (text, int, etc.) and unknown names are handled by
+            # resolve_type_expr; we only handle user declarations here.
+        elif isinstance(type_expr, ListT):
+            self._ensure_referenced_type_built(type_expr.elem)
+        elif isinstance(type_expr, DictT):
+            self._ensure_referenced_type_built(type_expr.value)
+        # Primitive types (TextT, IntT, etc.) have no nested declarations.
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles."""
-        try:
-            self._env.resolve_type_expr(stmt.type_expr, span=stmt.span)
-        except AglTypeError:
-            raise
+        self._env.resolve_type_expr(stmt.type_expr, span=stmt.span)
 
 
 # ---------------------------------------------------------------------------
@@ -527,11 +602,16 @@ class _Checker:
         else:
             target_type = TextType()
 
-        # Select codec: in M1 the only codec is "text" supporting TextType.
-        # Codec selection and option validation are structural properties of the
-        # call (independent of agent availability), so they are checked before
-        # the agent-capability checks below.
-        codec_name = self._select_codec(target_type, node.span)
+        # Select codec: auto-select from capabilities, or honour an explicit
+        # ``format`` option.  Codec selection and option validation are structural
+        # properties of the call (independent of agent availability), so they are
+        # checked before the agent-capability checks below.
+        if node.options.format is not None:
+            codec_name = self._validate_format_option(
+                node.options.format, target_type, node.options.span
+            )
+        else:
+            codec_name = self._select_codec(target_type, node.span)
 
         # Validate strict_json: only valid for JSON codec.
         if node.options.strict_json is not None and codec_name != "json":
@@ -591,6 +671,33 @@ class _Checker:
             f"(Type kind '{kind}' is not handled by any available codec.)",
             span=span,
         )
+
+    def _validate_format_option(
+        self, format_name: str, target_type: Type, span: SourceSpan
+    ) -> str:
+        """Validate an explicit ``format`` call option and return the codec name.
+
+        Checks:
+        1. The named codec is registered in capabilities.
+        2. The codec supports the call's target type.
+
+        Raises ``AglTypeError`` on either violation.
+        """
+        if format_name not in self._caps.codec_kinds:
+            known = sorted(self._caps.codec_kinds)
+            raise AglTypeError(
+                f"Unknown codec '{format_name}' in 'format' option. "
+                f"Known codecs: {known}.",
+                span=span,
+            )
+        supported_kinds = self._caps.codec_kinds[format_name]
+        if target_type.kind not in supported_kinds:
+            raise AglTypeError(
+                f"Codec '{format_name}' does not support target type '{target_type!r}'. "
+                f"(Supported kinds: {sorted(supported_kinds)}.)",
+                span=span,
+            )
+        return format_name
 
     # --- Binary operations ---
 

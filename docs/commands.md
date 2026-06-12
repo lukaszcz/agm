@@ -407,7 +407,19 @@ Options:
 - `--no-log`: Disable trace logging (**not yet active**, lands in M5).
 - `--dry-run`: Run the full static pipeline, input validation, and contract
   materialization, then stop before executing any statement (static errors exit 1; a clean
-  check exits 0 with no program output). The static call-site inventory lands in M2.
+  check exits 0 with no program output).  When the check succeeds and one or more agent-call
+  or `exec` sites exist, the static call-site inventory is printed to stdout:
+
+  ```
+  call-sites:
+    line N: <callee> → <target-type> [<codec>[, schema: yes][, policy: <policy>]]
+  ```
+
+  Each entry shows the 1-based source line, the callee name (`prompt`, `exec`, or a
+  registered agent name), the target type, the selected codec (`text` or `json`), and
+  optionally whether a JSON Schema is attached (`schema: yes`) and the effective
+  parse-failure policy (`abort` or `retry[N]`).  When no agent calls are present, no
+  inventory is printed.
 
 Exit codes:
 

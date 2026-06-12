@@ -70,6 +70,19 @@ def run(args: ExecArgs) -> None:
         print(f"line {diag.line}: {diag.message}", file=sys.stderr)
 
     if result.ok:
+        # Print the static call-site inventory when running under --dry-run.
+        if dry_run.enabled() and result.call_sites:
+            print("call-sites:")
+            for site in result.call_sites:
+                schema_tag = ", schema: yes" if site.has_schema else ""
+                policy_tag = (
+                    f", policy: {site.parse_policy}" if site.parse_policy != "default" else ""
+                )
+                print(
+                    f"  line {site.line}: {site.callee} "
+                    f"→ {site.target_type} "
+                    f"[{site.codec_name}{schema_tag}{policy_tag}]"
+                )
         return
 
     # Pre-execution failure: print error diagnostics and exit 1.

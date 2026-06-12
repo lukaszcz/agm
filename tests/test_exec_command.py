@@ -781,3 +781,284 @@ class TestParseKeyValue:
 
         with pytest.raises(ValueError, match="a"):
             parse_inputs(["a=1", "a=2"])
+
+
+def _exec_args_with_fallback_runtime(
+    agl_file: Path, monkeypatch: pytest.MonkeyPatch, *, inputs: list[str] | None = None
+) -> ExecArgs:
+    """Return ExecArgs for *agl_file* and patch WorkflowRuntime to have a fallback agent.
+
+    In real use the CLI wires the runner-backed default agent (M5); in tests we
+    patch the runtime to avoid the "no default agent" static error on prompt/named-agent calls.
+    """
+    from agm.agl.runtime.agents import AgentFn
+    from agm.agl.runtime.request import AgentRequest, AgentResponse
+    from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
+
+    def stub_agent(req: AgentRequest) -> AgentResponse:
+        return AgentResponse(content="stub")
+
+    class FallbackRuntime(RealRuntime):
+        def __init__(
+            self,
+            *,
+            default_loop_limit: int = 5,
+            default_strict_json: bool = False,
+            default_agent: AgentFn | None = None,
+        ) -> None:
+            super().__init__(
+                default_loop_limit=default_loop_limit,
+                default_strict_json=default_strict_json,
+                default_agent=stub_agent,
+            )
+
+    monkeypatch.setattr(exec_command, "WorkflowRuntime", FallbackRuntime)
+    return _exec_args(agl_file, inputs=inputs)
+
+
+class TestDryRunInventory:
+    """M2: --dry-run prints the §10.1 static call-site inventory."""
+
+    def test_dry_run_inventory_prompt_call(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--dry-run prints one inventory entry per agent call site."""
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let x = prompt "Hello"\n')
+
+        args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
+        assert exec_command.run(args) is None
+        captured = capsys.readouterr()
+        # Should print the call-sites inventory header and one entry.
+        assert "call-sites" in captured.out
+        assert "prompt" in captured.out
+        assert "text" in captured.out
+
+    def test_dry_run_inventory_named_agent(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Named agent call appears in the inventory."""
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let r = reviewer "Review this"\n')
+
+        args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
+        assert exec_command.run(args) is None
+        captured = capsys.readouterr()
+        assert "reviewer" in captured.out
+
+    def test_dry_run_inventory_no_call_sites_empty(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--dry-run with no agent calls produces no call-sites output."""
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "hello"\n')
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        assert "call-sites" not in captured.out
+
+    def test_dry_run_inventory_static_error_exits_1_no_inventory(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Static error under --dry-run exits 1; no inventory is printed."""
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = undefined_name\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "call-sites" not in captured.out
+
+    def test_dry_run_inventory_nothing_executes(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--dry-run: the registered agent stub is never invoked."""
+        from agm.agl.runtime.agents import AgentFn
+        from agm.agl.runtime.request import AgentRequest, AgentResponse
+        from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agent_calls: list[AgentRequest] = []
+
+        def spy_agent(req: AgentRequest) -> AgentResponse:
+            agent_calls.append(req)
+            raise AssertionError("agent should not be invoked in dry-run mode")
+
+        class SpyRuntime(RealRuntime):
+            def __init__(
+                self,
+                *,
+                default_loop_limit: int = 5,
+                default_strict_json: bool = False,
+                default_agent: AgentFn | None = None,
+            ) -> None:
+                super().__init__(
+                    default_loop_limit=default_loop_limit,
+                    default_strict_json=default_strict_json,
+                    default_agent=spy_agent,
+                )
+
+        monkeypatch.setattr(exec_command, "WorkflowRuntime", SpyRuntime)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let x = prompt "Hi"\n')
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        assert agent_calls == []
+
+
+class TestJsonInputsCLI:
+    """M2: --input with structured (record/list/decimal) types via JsonCodec."""
+
+    def test_record_input_parsed_from_json_string(self, tmp_path: Path) -> None:
+        """A record-typed input provided as a JSON string is parsed and usable."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'record Point\n  x: int\n  y: int\n'
+            'input pt: Point\n'
+            'print pt.x\n'
+        )
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=['pt={"x": 1, "y": 2}'],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        import io
+        import sys
+
+        out = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = out
+        try:
+            result = exec_command.run(args)
+        finally:
+            sys.stdout = old_stdout
+        assert result is None
+        assert out.getvalue().strip() == "1"
+
+    def test_decimal_input_parsed_from_json_string(self, tmp_path: Path) -> None:
+        """A decimal-typed input provided as a JSON string is accepted."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'input price: decimal\n'
+            'print price\n'
+        )
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=["price=1.5"],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        import io
+        import sys
+
+        out = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = out
+        try:
+            result = exec_command.run(args)
+        finally:
+            sys.stdout = old_stdout
+        assert result is None
+        assert out.getvalue().strip() == "1.5"
+
+    def test_list_input_parsed_from_json_string(self, tmp_path: Path) -> None:
+        """A list-typed input provided as a JSON array string is accepted."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'input tags: list[text]\n'
+            'print tags\n'
+        )
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=['tags=["a", "b"]'],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        import io
+        import sys
+
+        out = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = out
+        try:
+            result = exec_command.run(args)
+        finally:
+            sys.stdout = old_stdout
+        assert result is None
+        # The output should contain the rendered list.
+        output = out.getvalue().strip()
+        assert output  # non-empty
+
+    def test_record_input_invalid_json_exits_1(self, tmp_path: Path) -> None:
+        """A record-typed input with invalid JSON exits 1."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'record Point\n  x: int\n  y: int\n'
+            'input pt: Point\n'
+            'print pt.x\n'
+        )
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=["pt=not_json"],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1

@@ -713,3 +713,438 @@ class TestInputBindingInvariant:
         rt = WorkflowRuntime()
         with pytest.raises(AssertionError, match="binding type"):
             rt.run("input msg\nprint msg", inputs={"msg": "hi"})
+
+
+class TestCollectAgentCallsWalker:
+    """Unit tests for _collect_agent_calls: covers all AST node type branches.
+
+    The walker must handle every expression and statement variant to support
+    future-syntax constructs (M3/M4/M5) that are not yet parseable.  We build
+    hand-crafted AST programs to exercise every branch.
+    """
+
+    def _sp(self) -> object:
+        from agm.agl.syntax.spans import SourceSpan
+
+        return SourceSpan(
+            start_line=1, start_col=1, end_line=1, end_col=2, start_offset=0, end_offset=1
+        )
+
+    def _nid(self) -> int:
+        import itertools
+
+        if not hasattr(self, "_nid_counter"):
+            self._nid_counter = itertools.count(10000)
+        return next(self._nid_counter)
+
+    def _call_options(self, policy: object = None) -> object:
+        from agm.agl.syntax.nodes import CallOptions
+
+        return CallOptions(
+            format=None, strict_json=None, parse_policy=policy,
+            span=self._sp(), node_id=self._nid(),
+        )
+
+    def _text_segment(self, text: str = "Q") -> object:
+        from agm.agl.syntax.nodes import TextSegment
+
+        return TextSegment(text=text, span=self._sp(), node_id=self._nid())
+
+    def _template(self, *segs: object) -> object:
+        from agm.agl.syntax.nodes import Template
+
+        segments = tuple(segs) if segs else (self._text_segment(),)
+        return Template(segments=segments, span=self._sp(), node_id=self._nid())
+
+    def _agent_call(self, agent: str = "prompt", options: object = None) -> object:
+        from agm.agl.syntax.nodes import AgentCall
+
+        return AgentCall(
+            agent=agent,
+            options=options or self._call_options(),
+            template=self._template(),
+            span=self._sp(),
+            node_id=self._nid(),
+        )
+
+    def _intlit(self) -> object:
+        from agm.agl.syntax.nodes import IntLit
+
+        return IntLit(value=0, span=self._sp(), node_id=self._nid())
+
+    def _program(self, *stmts: object) -> object:
+        from agm.agl.syntax.nodes import Program
+
+        return Program(body=tuple(stmts), span=self._sp(), node_id=self._nid())
+
+    def _wildcard_pattern(self) -> object:
+        from agm.agl.syntax.nodes import WildcardPattern
+
+        return WildcardPattern(span=self._sp(), node_id=self._nid())
+
+    def _collect(self, program: object) -> list[object]:
+        from agm.agl.runtime.runtime import _collect_agent_calls
+
+        return _collect_agent_calls(program)
+
+    def test_template_standalone_expr(self) -> None:
+        """A bare Template expression in a LetDecl is traversed."""
+        from agm.agl.syntax.nodes import LetDecl
+
+        tmpl = self._template()
+        let = LetDecl(name="x", type_ann=None, value=tmpl, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        result = self._collect(prog)
+        assert result == []
+
+    def test_interp_segment_with_nested_agent_call(self) -> None:
+        """An AgentCall nested inside an InterpSegment is collected."""
+        from agm.agl.syntax.nodes import InterpSegment, LetDecl, Template
+
+        inner_call = self._agent_call()
+        seg = InterpSegment(
+            expr=inner_call, render=None, span=self._sp(), node_id=self._nid()
+        )
+        outer_tmpl = Template(segments=(seg,), span=self._sp(), node_id=self._nid())
+        let = LetDecl(
+            name="t", type_ann=None, value=outer_tmpl, span=self._sp(), node_id=self._nid()
+        )
+        prog = self._program(let)
+        result = self._collect(prog)
+        assert len(result) == 1
+        assert result[0] is inner_call
+
+    def test_binary_op_traverses_both_sides(self) -> None:
+        """BinaryOp: both left and right sub-expressions are traversed."""
+        from agm.agl.syntax.nodes import BinaryOp, LetDecl
+
+        call_left = self._agent_call()
+        call_right = self._agent_call()
+        op = BinaryOp(
+            op="==", left=call_left, right=call_right, span=self._sp(), node_id=self._nid()
+        )
+        let = LetDecl(name="r", type_ann=None, value=op, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        result = self._collect(prog)
+        assert len(result) == 2
+
+    def test_unary_not_traverses_operand(self) -> None:
+        """UnaryNot: operand is traversed."""
+        from agm.agl.syntax.nodes import LetDecl, UnaryNot
+
+        call = self._agent_call()
+        expr = UnaryNot(operand=call, span=self._sp(), node_id=self._nid())
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        assert len(self._collect(prog)) == 1
+
+    def test_unary_neg_traverses_operand(self) -> None:
+        """UnaryNeg: operand is traversed."""
+        from agm.agl.syntax.nodes import LetDecl, UnaryNeg
+
+        call = self._agent_call()
+        expr = UnaryNeg(operand=call, span=self._sp(), node_id=self._nid())
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        assert len(self._collect(prog)) == 1
+
+    def test_is_test_traverses_expr(self) -> None:
+        """IsTest: the expression being tested is traversed."""
+        from agm.agl.syntax.nodes import IsTest, LetDecl
+
+        call = self._agent_call()
+        expr = IsTest(
+            expr=call, qualifier=None, variant="V", negated=False,
+            span=self._sp(), node_id=self._nid(),
+        )
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        assert len(self._collect(prog)) == 1
+
+    def test_case_expr_traverses_subject_and_branches(self) -> None:
+        """CaseExpr: subject and each branch body are traversed."""
+        from agm.agl.syntax.nodes import CaseExpr, CaseExprBranch, LetDecl
+
+        call_subj = self._agent_call()
+        call_body = self._agent_call()
+        branch = CaseExprBranch(
+            pattern=self._wildcard_pattern(), body=call_body,
+            span=self._sp(), node_id=self._nid(),
+        )
+        expr = CaseExpr(subject=call_subj, branches=(branch,), span=self._sp(), node_id=self._nid())
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        result = self._collect(prog)
+        assert len(result) == 2
+
+    def test_field_access_traverses_obj(self) -> None:
+        """FieldAccess: the object expression is traversed."""
+        from agm.agl.syntax.nodes import FieldAccess, LetDecl
+
+        call = self._agent_call()
+        expr = FieldAccess(obj=call, field="f", span=self._sp(), node_id=self._nid())
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        assert len(self._collect(prog)) == 1
+
+    def test_constructor_traverses_arg_values(self) -> None:
+        """Constructor: all named argument values are traversed."""
+        from agm.agl.syntax.nodes import Constructor, LetDecl, NamedArg
+
+        call = self._agent_call()
+        arg = NamedArg(name="x", value=call, span=self._sp(), node_id=self._nid())
+        expr = Constructor(
+            qualifier=None, name="P", args=(arg,), span=self._sp(), node_id=self._nid()
+        )
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        assert len(self._collect(prog)) == 1
+
+    def test_list_lit_traverses_elements(self) -> None:
+        """ListLit: all element expressions are traversed."""
+        from agm.agl.syntax.nodes import LetDecl, ListLit
+
+        call = self._agent_call()
+        expr = ListLit(elements=(call,), span=self._sp(), node_id=self._nid())
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        assert len(self._collect(prog)) == 1
+
+    def test_dict_lit_traverses_entry_values(self) -> None:
+        """DictLit: all entry values are traversed."""
+        from agm.agl.syntax.nodes import DictEntry, DictLit, LetDecl
+
+        call = self._agent_call()
+        entry = DictEntry(key="k", value=call, span=self._sp(), node_id=self._nid())
+        expr = DictLit(entries=(entry,), span=self._sp(), node_id=self._nid())
+        let = LetDecl(name="r", type_ann=None, value=expr, span=self._sp(), node_id=self._nid())
+        prog = self._program(let)
+        assert len(self._collect(prog)) == 1
+
+    def test_set_stmt_traverses_value(self) -> None:
+        """SetStmt: the assigned value is traversed."""
+        from agm.agl.syntax.nodes import SetStmt
+
+        call = self._agent_call()
+        stmt = SetStmt(target="x", value=call, span=self._sp(), node_id=self._nid())
+        prog = self._program(stmt)
+        assert len(self._collect(prog)) == 1
+
+    def test_expr_stmt_traverses_expr(self) -> None:
+        """ExprStmt: the expression is traversed."""
+        from agm.agl.syntax.nodes import ExprStmt
+
+        call = self._agent_call()
+        stmt = ExprStmt(expr=call, span=self._sp(), node_id=self._nid())
+        prog = self._program(stmt)
+        assert len(self._collect(prog)) == 1
+
+    def test_raise_traverses_exc_expr(self) -> None:
+        """Raise: the exception expression is traversed."""
+        from agm.agl.syntax.nodes import Raise
+
+        call = self._agent_call()
+        stmt = Raise(exc=call, span=self._sp(), node_id=self._nid())
+        prog = self._program(stmt)
+        assert len(self._collect(prog)) == 1
+
+    def test_do_until_traverses_body_and_condition(self) -> None:
+        """DoUntil: both the loop body and the loop condition are traversed."""
+        from agm.agl.syntax.nodes import DoUntil, ExprStmt
+
+        call_body = self._agent_call()
+        call_cond = self._agent_call()
+        body_stmt = ExprStmt(expr=call_body, span=self._sp(), node_id=self._nid())
+        stmt = DoUntil(
+            limit=None, body=(body_stmt,), condition=call_cond,
+            span=self._sp(), node_id=self._nid(),
+        )
+        prog = self._program(stmt)
+        assert len(self._collect(prog)) == 2
+
+    def test_if_stmt_traverses_branch_bodies(self) -> None:
+        """IfStmt: all branch bodies are traversed."""
+        from agm.agl.syntax.nodes import ExprStmt, IfBranch, IfStmt
+
+        call = self._agent_call()
+        body_stmt = ExprStmt(expr=call, span=self._sp(), node_id=self._nid())
+        branch = IfBranch(
+            cond=self._intlit(), body=(body_stmt,), span=self._sp(), node_id=self._nid()
+        )
+        stmt = IfStmt(branches=(branch,), span=self._sp(), node_id=self._nid())
+        prog = self._program(stmt)
+        assert len(self._collect(prog)) == 1
+
+    def test_case_stmt_traverses_subject_and_branch_bodies(self) -> None:
+        """CaseStmt: the subject expression and all branch bodies are traversed."""
+        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, ExprStmt
+
+        call_subj = self._agent_call()
+        call_body = self._agent_call()
+        body_stmt = ExprStmt(expr=call_body, span=self._sp(), node_id=self._nid())
+        branch = CaseStmtBranch(
+            pattern=self._wildcard_pattern(), body=(body_stmt,),
+            span=self._sp(), node_id=self._nid(),
+        )
+        stmt = CaseStmt(subject=call_subj, branches=(branch,), span=self._sp(), node_id=self._nid())
+        prog = self._program(stmt)
+        assert len(self._collect(prog)) == 2
+
+    def test_try_catch_traverses_body_and_handlers(self) -> None:
+        """TryCatch: both try body and all catch-clause bodies are traversed."""
+        from agm.agl.syntax.nodes import CatchClause, ExprStmt, TryCatch
+
+        call_try = self._agent_call()
+        call_catch = self._agent_call()
+        try_stmt = ExprStmt(expr=call_try, span=self._sp(), node_id=self._nid())
+        catch_stmt = ExprStmt(expr=call_catch, span=self._sp(), node_id=self._nid())
+        clause = CatchClause(
+            exc_type=None, binding=None, body=(catch_stmt,),
+            span=self._sp(), node_id=self._nid(),
+        )
+        stmt = TryCatch(body=(try_stmt,), handlers=(clause,), span=self._sp(), node_id=self._nid())
+        prog = self._program(stmt)
+        assert len(self._collect(prog)) == 2
+
+    def test_nested_program_in_stmts_is_traversed(self) -> None:
+        """Program appearing as a statement (nested) is recursed into."""
+        from agm.agl.syntax.nodes import ExprStmt, Program
+
+        call = self._agent_call()
+        inner_stmt = ExprStmt(expr=call, span=self._sp(), node_id=self._nid())
+        inner_prog = Program(body=(inner_stmt,), span=self._sp(), node_id=self._nid())
+        outer_prog = Program(body=(inner_prog,), span=self._sp(), node_id=self._nid())
+        assert len(self._collect(outer_prog)) == 1
+
+    def test_unrecognized_stmt_type_is_silently_skipped(self) -> None:
+        """Statements of unknown types (e.g. PassStmt) are silently ignored."""
+        from agm.agl.syntax.nodes import PassStmt, Program
+
+        pass_stmt = PassStmt(span=self._sp(), node_id=self._nid())
+        prog = Program(body=(pass_stmt,), span=self._sp(), node_id=self._nid())
+        assert self._collect(prog) == []
+
+    def test_call_inventory_default_policy(self) -> None:
+        """Agent call with no parse_policy shows 'default' in inventory."""
+        from agm.agl.runtime.runtime import WorkflowRuntime as RT
+
+        rt = RT(default_agent=lambda req: req.prompt)
+        src = 'let x = prompt "Q"\n'
+        result = rt.run(src, check_only=True)
+        assert result.ok is True
+        assert len(result.call_sites) == 1
+        assert result.call_sites[0].parse_policy == "default"
+
+    def test_abort_policy_produces_abort_string_in_inventory(self) -> None:
+        """AbortPolicy produces parse_policy='abort' in the call-site inventory."""
+        from agm.agl.runtime.runtime import CallSiteInfo, _build_call_inventory
+        from agm.agl.syntax.nodes import (
+            AbortPolicy,
+            AgentCall,
+            CallOptions,
+            LetDecl,
+            Program,
+            Template,
+            TextSegment,
+        )
+        from agm.agl.typecheck.env import OutputContractSpec
+        from agm.agl.typecheck.types import TextType
+
+        sp = self._sp()
+
+        def nid() -> int:
+            return self._nid()
+
+        call_id = nid()
+        abort = AbortPolicy(span=sp, node_id=nid())
+        opts = CallOptions(
+            format=None, strict_json=None, parse_policy=abort, span=sp, node_id=nid()
+        )
+        seg = TextSegment(text="Q", span=sp, node_id=nid())
+        tmpl = Template(segments=(seg,), span=sp, node_id=nid())
+        call = AgentCall(agent="prompt", options=opts, template=tmpl, span=sp, node_id=call_id)
+        let = LetDecl(name="x", type_ann=None, value=call, span=sp, node_id=nid())
+        prog = Program(body=(let,), span=sp, node_id=nid())
+
+        spec = OutputContractSpec(target_type=TextType(), codec_name="text", strict_json=None)
+
+        class FakeChecked:
+            contract_specs = {call_id: spec}
+
+        inventory = _build_call_inventory(FakeChecked(), {}, prog)
+        assert len(inventory) == 1
+        assert isinstance(inventory[0], CallSiteInfo)
+        assert inventory[0].parse_policy == "abort"
+
+    def test_missing_spec_skips_call_site(self) -> None:
+        """An AgentCall whose node_id is absent from contract_specs is skipped."""
+        from agm.agl.runtime.runtime import _build_call_inventory
+        from agm.agl.syntax.nodes import (
+            AgentCall,
+            CallOptions,
+            LetDecl,
+            Program,
+            Template,
+            TextSegment,
+        )
+
+        sp = self._sp()
+
+        def nid() -> int:
+            return self._nid()
+
+        opts = CallOptions(
+            format=None, strict_json=None, parse_policy=None, span=sp, node_id=nid()
+        )
+        seg = TextSegment(text="Q", span=sp, node_id=nid())
+        tmpl = Template(segments=(seg,), span=sp, node_id=nid())
+        call = AgentCall(agent="prompt", options=opts, template=tmpl, span=sp, node_id=nid())
+        let = LetDecl(name="x", type_ann=None, value=call, span=sp, node_id=nid())
+        prog = Program(body=(let,), span=sp, node_id=nid())
+
+        class FakeChecked:
+            contract_specs: dict[int, object] = {}  # no spec for call
+
+        inventory = _build_call_inventory(FakeChecked(), {}, prog)
+        assert inventory == []
+
+    def test_retry_policy_produces_retry_string_in_inventory(self) -> None:
+        """RetryPolicy produces parse_policy='retry[N]' in the call-site inventory."""
+        from agm.agl.runtime.runtime import CallSiteInfo, _build_call_inventory
+        from agm.agl.syntax.nodes import (
+            AgentCall,
+            CallOptions,
+            LetDecl,
+            Program,
+            RetryPolicy,
+            Template,
+            TextSegment,
+        )
+        from agm.agl.typecheck.env import OutputContractSpec
+        from agm.agl.typecheck.types import TextType
+
+        sp = self._sp()
+
+        def nid() -> int:
+            return self._nid()
+
+        call_id = nid()
+        retry = RetryPolicy(extra=5, span=sp, node_id=nid())
+        opts = CallOptions(
+            format=None, strict_json=None, parse_policy=retry, span=sp, node_id=nid()
+        )
+        seg = TextSegment(text="Q", span=sp, node_id=nid())
+        tmpl = Template(segments=(seg,), span=sp, node_id=nid())
+        call = AgentCall(agent="prompt", options=opts, template=tmpl, span=sp, node_id=call_id)
+        let = LetDecl(name="x", type_ann=None, value=call, span=sp, node_id=nid())
+        prog = Program(body=(let,), span=sp, node_id=nid())
+
+        spec = OutputContractSpec(target_type=TextType(), codec_name="text", strict_json=None)
+
+        class FakeChecked:
+            contract_specs = {call_id: spec}
+
+        inventory = _build_call_inventory(FakeChecked(), {}, prog)
+        assert len(inventory) == 1
+        assert isinstance(inventory[0], CallSiteInfo)
+        assert inventory[0].parse_policy == "retry[5]"

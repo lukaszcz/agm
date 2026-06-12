@@ -142,6 +142,13 @@ def reject_type(
     return exc_info.value
 
 
+def accept_type(
+    source: str, capabilities: HostCapabilities | None = None
+) -> CheckedProgram:
+    """Assert that *source* type-checks without error and return the result."""
+    return parse_resolve_check(source, capabilities)
+
+
 def diag(err: AglTypeError) -> tuple[int, str]:
     """Return (line, message) from an AglTypeError."""
     d = err.to_diagnostic()
@@ -337,6 +344,54 @@ class TestContractSpecs:
         spec = r.contract_specs[set_stmt.value.node_id]
         assert isinstance(spec.target_type, TextType)
 
+    def test_record_annotation_selects_json_codec(self) -> None:
+        """§6 expected-type propagation: let r: Review = prompt derives json codec."""
+        from agm.agl.syntax.nodes import LetDecl
+        from agm.agl.typecheck.types import RecordType
+
+        src = "record Review\n  score: int\n  comment: text\nlet r: Review = prompt \"Q\"\n"
+        r = parse_resolve_check(src, capabilities=caps_with_json_codec())
+        stmt = r.resolved.program.body[1]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        spec = r.contract_specs[stmt.value.node_id]
+        assert spec.codec_name == "json"
+        assert isinstance(spec.target_type, RecordType)
+        assert spec.target_type.name == "Review"
+
+    def test_list_annotation_selects_json_codec(self) -> None:
+        """§6 expected-type propagation: let xs: list[int] = prompt derives json codec."""
+        from agm.agl.syntax.nodes import LetDecl
+        from agm.agl.typecheck.types import ListType
+
+        src = "let xs: list[int] = prompt \"Q\"\n"
+        r = parse_resolve_check(src, capabilities=caps_with_json_codec())
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        spec = r.contract_specs[stmt.value.node_id]
+        assert spec.codec_name == "json"
+        assert isinstance(spec.target_type, ListType)
+
+    def test_set_record_target_propagated(self) -> None:
+        """§6 expected-type propagation: set with record-typed var derives json codec."""
+        from agm.agl.syntax.nodes import SetStmt
+        from agm.agl.typecheck.types import RecordType
+
+        src = (
+            "record Point\n  x: int\n  y: int\n"
+            "var p: Point = Point(x: 0, y: 0)\n"
+            "set p = prompt \"Q\"\n"
+        )
+        r = parse_resolve_check(src, capabilities=caps_with_json_codec())
+        set_stmt = r.resolved.program.body[2]
+        assert isinstance(set_stmt, SetStmt)
+        assert isinstance(set_stmt.value, AgentCall)
+        spec = r.contract_specs[set_stmt.value.node_id]
+        assert spec.codec_name == "json"
+        assert isinstance(spec.target_type, RecordType)
+        assert spec.target_type.name == "Point"
+
 
 # ---------------------------------------------------------------------------
 # Rejection: null not assignable to text/int/decimal
@@ -506,6 +561,60 @@ class TestCodecCapabilities:
 
 
 # ---------------------------------------------------------------------------
+# Format option (M2): explicit codec selection via [format: name]
+# ---------------------------------------------------------------------------
+
+
+class TestFormatOption:
+    def test_format_json_on_record_target_ok(self) -> None:
+        """Explicit format: json with a record target selects the json codec."""
+        caps = caps_with_json_codec()
+        src = 'record P\n  n: int\nlet x: P = prompt[format: json] "Q"\n'
+        r = parse_resolve_check(src, capabilities=caps)
+        stmt = r.resolved.program.body[1]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        spec = r.contract_specs[stmt.value.node_id]
+        assert spec.codec_name == "json"
+
+    def test_format_json_on_int_target_ok(self) -> None:
+        """format: json on an int target is valid (json codec supports int)."""
+        caps = caps_with_json_codec()
+        r = parse_resolve_check(
+            'let n: int = prompt[format: json] "Q"',
+            capabilities=caps,
+        )
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        spec = r.contract_specs[stmt.value.node_id]
+        assert spec.codec_name == "json"
+
+    def test_format_unknown_codec_error(self) -> None:
+        """An unknown codec name in format: is a static error."""
+        caps = caps_with_json_codec()
+        err = reject_type('let x = prompt[format: nope] "Q"', capabilities=caps)
+        line, msg = diag(err)
+        assert line == 1
+        assert "nope" in msg
+
+    def test_format_json_on_text_target_error(self) -> None:
+        """format: json on a text target is invalid (json codec doesn't support text)."""
+        caps = caps_with_json_codec()
+        err = reject_type('let x: text = prompt[format: json] "Q"', capabilities=caps)
+        line, msg = diag(err)
+        assert line == 1
+        assert "json" in msg
+
+    def test_format_overrides_auto_codec_selection(self) -> None:
+        """Explicit format: json on text target overrides auto-selection and must error."""
+        caps = caps_with_json_codec()
+        err = reject_type('let x = prompt[format: json] "Q"', capabilities=caps)
+        # text target + json codec → error (json doesn't handle text)
+        assert isinstance(err, AglTypeError)
+
+
+# ---------------------------------------------------------------------------
 # Rejection: renderer errors
 # ---------------------------------------------------------------------------
 
@@ -534,44 +643,37 @@ class TestRendererErrors:
 
 
 class TestTypeDeclErrors:
-    @pytest.mark.skip(reason="record/enum not parseable in M1 — deferred to M2")
     def test_duplicate_type_name(self) -> None:
         err = reject_type("record P\n  n: int\nrecord P\n  t: text\n")
         line, msg = diag(err)
         assert "P" in msg
 
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_duplicate_record_field(self) -> None:
         err = reject_type("record P\n  n: int\n  n: text\n")
         line, msg = diag(err)
         assert line == 3
 
-    @pytest.mark.skip(reason="enum not parseable in M1 — deferred to M2")
     def test_duplicate_enum_variant(self) -> None:
         err = reject_type("enum E\n  | A\n  | A\n")
         line, msg = diag(err)
         assert line == 3
         assert "A" in msg
 
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_unknown_field_type(self) -> None:
         err = reject_type("record P\n  n: Mystery\n")
         line, msg = diag(err)
         assert line == 2
         assert "Mystery" in msg
 
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_recursive_record(self) -> None:
         err = reject_type("record Node\n  next: Node\n")
         line, msg = diag(err)
         assert "Node" in msg
 
-    @pytest.mark.skip(reason="type alias not parseable in M1 — deferred to M2")
     def test_alias_cycle(self) -> None:
         err = reject_type("type A = B\ntype B = A\n")
         assert isinstance(err, AglTypeError)
 
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_builtin_name_shadow(self) -> None:
         # Cannot redeclare Abort (built-in exception) as a record.
         err = reject_type("record Abort\n  message: text\n")
@@ -586,21 +688,18 @@ class TestTypeDeclErrors:
 
 
 class TestConstructorErrors:
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_ctor_missing_field(self) -> None:
-        err = reject_type("record P\n  n: int\n  t: text\n  let p = P(n: 1)\n")
+        err = reject_type("record P\n  n: int\n  t: text\nlet p = P(n: 1)\n")
         line, msg = diag(err)
         assert line == 4
         assert "t" in msg
 
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_ctor_unknown_field(self) -> None:
-        err = reject_type("record P\n  n: int\n  let p = P(n: 1, extra: 2)\n")
+        err = reject_type("record P\n  n: int\nlet p = P(n: 1, extra: 2)\n")
         line, msg = diag(err)
         assert line == 3
         assert "extra" in msg
 
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_ambiguous_constructor(self) -> None:
         err = reject_type(
             "enum Review\n  | Same\n"
@@ -677,18 +776,15 @@ class TestOperators:
 
 
 class TestContainersDeferred:
-    @pytest.mark.skip(reason="list literals not parseable in M1 — deferred to M2")
     def test_list_literal(self) -> None:
         r = parse_resolve_check('let xs = ["a", "b"]')
         assert r.resolved.program is not None
 
-    @pytest.mark.skip(reason="list literals not parseable in M1 — deferred to M2")
     def test_empty_list_no_annotation(self) -> None:
         err = reject_type("let xs = []")
         line, msg = diag(err)
         assert line == 1
 
-    @pytest.mark.skip(reason="dict literals not parseable in M1 — deferred to M2")
     def test_duplicate_dict_key(self) -> None:
         err = reject_type("let m = {a: 1, a: 2}")
         line, msg = diag(err)
@@ -702,7 +798,6 @@ class TestContainersDeferred:
 
 
 class TestRecordNotJson:
-    @pytest.mark.skip(reason="record not parseable in M1 — deferred to M2")
     def test_record_not_json(self) -> None:
         err = reject_type(
             "record P\n  n: int\n"
@@ -1244,6 +1339,150 @@ class TestTypeBuilderViaAst:
         )
         err = reject_ast(rec)
         assert "Node" in err.to_diagnostic().message
+
+    def test_record_field_of_enum_type_ok(self) -> None:
+        """A record field typed as an enum is fully resolved (exercises _ensure_built_enum)."""
+        from agm.agl.syntax.nodes import VariantDef
+
+        color = EnumDef(
+            name="Color",
+            variants=(
+                VariantDef(name="Red", fields=(), span=_tc_sp(), node_id=_tc_nid()),
+            ),
+            span=_tc_sp(),
+            node_id=_tc_nid(),
+        )
+        rec = RecordDef(
+            name="R",
+            fields=(_tc_field("c", _tc_name_t("Color")),),
+            span=_tc_sp(),
+            node_id=_tc_nid(),
+        )
+        r = resolve_and_check(color, rec)
+        assert r.resolved.program is not None
+
+    def test_record_two_fields_same_enum_type(self) -> None:
+        """Two record fields of the same enum type: second call to _ensure_built_enum is no-op."""
+        from agm.agl.syntax.nodes import VariantDef
+
+        color = EnumDef(
+            name="Color",
+            variants=(
+                VariantDef(name="Red", fields=(), span=_tc_sp(), node_id=_tc_nid()),
+            ),
+            span=_tc_sp(),
+            node_id=_tc_nid(),
+        )
+        rec = RecordDef(
+            name="Pair",
+            fields=(
+                _tc_field("a", _tc_name_t("Color")),
+                _tc_field("b", _tc_name_t("Color")),
+            ),
+            span=_tc_sp(),
+            node_id=_tc_nid(),
+        )
+        r = resolve_and_check(color, rec)
+        assert r.resolved.program is not None
+
+    def test_recursive_enum_error(self) -> None:
+        """An enum variant whose field references the enclosing enum is recursive."""
+        from agm.agl.syntax.nodes import VariantDef
+
+        node_enum = EnumDef(
+            name="Tree",
+            variants=(
+                VariantDef(
+                    name="Branch",
+                    fields=(_tc_field("child", _tc_name_t("Tree")),),
+                    span=_tc_sp(),
+                    node_id=_tc_nid(),
+                ),
+            ),
+            span=_tc_sp(),
+            node_id=_tc_nid(),
+        )
+        err = reject_ast(node_enum)
+        assert isinstance(err, AglTypeError)
+        assert "Tree" in err.to_diagnostic().message
+
+
+# ============================================================
+# TestTypeBuilderViaSource — M2 carry-in constructs via parse_program
+#
+# These tests re-express the AST-level TestTypeBuilderViaAst checks
+# through real parsed source now that the grammar supports records,
+# enums, type aliases, constructors, collections, and field-access.
+# ============================================================
+
+
+class TestTypeBuilderViaSource:
+    """Verify _TypeBuilder on M2 constructs using real parsed source."""
+
+    def test_record_simple_via_source(self) -> None:
+        """A simple record declaration with primitive fields type-checks."""
+        r = accept_type("record Point\n  x: int\n  y: int\n")
+        assert r.resolved.program is not None
+
+    def test_record_list_field_via_source(self) -> None:
+        """A record with a list-typed field type-checks."""
+        r = accept_type("record Bag\n  items: list[int]\n")
+        assert r.resolved.program is not None
+
+    def test_record_forward_reference_via_source(self) -> None:
+        """Forward reference between records declared in any order type-checks."""
+        r = accept_type("record A\n  b: B\nrecord B\n  x: int\n")
+        assert r.resolved.program is not None
+
+    def test_type_alias_simple_via_source(self) -> None:
+        """A simple type alias is accepted."""
+        r = accept_type("type MyText = text\n")
+        assert r.resolved.program is not None
+
+    def test_type_alias_cycle_via_source(self) -> None:
+        """A mutually-recursive type alias cycle is detected."""
+        err = reject_type("type A = B\ntype B = A\n")
+        assert isinstance(err, AglTypeError)
+
+    def test_duplicate_record_name_via_source(self) -> None:
+        """Declaring two records with the same name is an error."""
+        err = reject_type("record P\n  x: int\nrecord P\n  y: int\n")
+        assert "P" in err.to_diagnostic().message
+
+    def test_record_recursive_via_source(self) -> None:
+        """A directly recursive record (field of the same type) is rejected."""
+        err = reject_type("record Node\n  next: Node\n")
+        assert "Node" in err.to_diagnostic().message
+
+    def test_record_indirect_cycle_via_source(self) -> None:
+        """An indirect A->B->A cycle across records is rejected."""
+        err = reject_type("record A\n  b: B\nrecord B\n  a: A\n")
+        assert isinstance(err, AglTypeError)
+
+    def test_constructor_and_field_access_via_source(self) -> None:
+        """A record constructor call followed by field access type-checks."""
+        r = accept_type("record P\n  n: int\nlet x = P(n: 1)\nlet y = x.n\n")
+        assert r.resolved.program is not None
+
+    def test_enum_simple_via_source(self) -> None:
+        """A simple enum type-checks and its variants are registered."""
+        r = accept_type("enum Color | Red | Green\nlet c = Color.Red\n")
+        assert r.resolved.program is not None
+
+    def test_enum_variant_with_fields_via_source(self) -> None:
+        """An enum variant with fields type-checks and is constructible."""
+        r = accept_type("enum Result | Ok | Err(msg: text)\nlet e = Err(msg: \"x\")\n")
+        assert r.resolved.program is not None
+
+    def test_list_collection_via_source(self) -> None:
+        """A list literal type-checks as list[int]."""
+        r = accept_type("let xs = [1, 2, 3]\n")
+        assert r.resolved.program is not None
+
+    def test_dict_collection_via_source(self) -> None:
+        """A dict literal type-checks as dict[json]."""
+        r = accept_type('let d = {"k": 1}\n')
+        assert r.resolved.program is not None
 
 
 # ============================================================

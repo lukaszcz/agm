@@ -861,6 +861,42 @@ class TestExecConfigWiring:
         assert exec_command.run(args) is None
         assert captured["shell_exec_timeout"] == 60.0
 
+    def test_invalid_timeout_config_exits_cleanly(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: "pytest.CaptureFixture[str]",
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "forever"\n')
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(
+                ExecArgs(
+                    file=str(agl_file),
+                    inputs=[],
+                    strict_json=None,
+                    max_iters=None,
+                    runner=None,
+                    no_log=True,
+                    log_file=None,
+                )
+            )
+
+        assert exc_info.value.code == 1
+        assert "Error: invalid exec configuration" in capsys.readouterr().err
+
 
 class TestParseKeyValue:
     """Tests for the general key=value parser helper."""

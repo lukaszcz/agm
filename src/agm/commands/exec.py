@@ -59,7 +59,11 @@ def run(args: ExecArgs) -> None:
 
     # Load [exec] configuration; CLI flags override config values.
     ctx = current_config_context()
-    config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+    try:
+        config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+    except ValueError as exc:
+        print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
     loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit

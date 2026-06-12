@@ -1358,3 +1358,30 @@ class TestCliRunnerIntegration:
             cwd=tmp_path,
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
+
+    def test_enoexec_runner_raises_agent_call_error(self, tmp_path: Path) -> None:
+        """A runner script with exec bit but no shebang (ENOEXEC) maps to
+        AgentCallError cause=spawn_failure — not a raw traceback (exit 2, not crash)."""
+        env = self._base_env()
+
+        # Create a runner that is executable but has no shebang and binary content.
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        runner = bin_dir / "enoexec-runner"
+        runner.write_bytes(b"\x7f\x45\x4c\x46garbage_no_shebang")
+        runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = str(bin_dir) + ":" + env["PATH"]
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let x = prompt "hi"\nprint x\n')
+
+        result = self._run_agm_exec(
+            [str(agl_file), "--runner", "enoexec-runner", "--no-log"],
+            env=env,
+            cwd=tmp_path,
+        )
+        # ENOEXEC → spawn_failure → AgentCallError → exit 2 (not a crash/traceback)
+        assert result.returncode == 2, f"stderr: {result.stderr}"
+        # Must show AgentCallError, not a raw OSError traceback
+        assert "AgentCallError" in result.stderr
+        assert "Traceback" not in result.stderr

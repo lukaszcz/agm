@@ -1179,3 +1179,110 @@ class TestTripleTemplatePositions:
         source = "a\nb"
         nl = next(t for t in tokenize(source) if t.type == "_NEWLINE")
         assert source[nl.start_pos] == "\n"
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: triple-quoted dedent placeholder collision (Task 1)
+# ---------------------------------------------------------------------------
+
+
+class TestTripleDedentPlaceholderCollision:
+    """The in-band placeholder \x00INTERP\x00 must never collide with real string
+    content — a triple-quoted literal whose decoded text contains that exact
+    byte sequence (constructible via \\u0000, \\u0049, etc.) must lex correctly,
+    not crash with an IndexError."""
+
+    def test_null_byte_in_triple_string_no_crash(self) -> None:
+        # \u0000 produces the NUL byte, which is part of the old placeholder.
+        # The string must lex to a single STRING_FRAGMENT containing the NUL.
+        source = '"""\n\\u0000\n"""'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert "".join(frags) == "\x00"
+
+    def test_placeholder_sequence_in_triple_string_no_crash(self) -> None:
+        # Construct the exact old placeholder "\x00INTERP\x00" via escapes:
+        # \u0000 = NUL, then literal "INTERP", then \u0000 again.
+        # This should lex cleanly — not crash with IndexError.
+        source = '"""\n\\u0000INTERP\\u0000\n"""'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert "".join(frags) == "\x00INTERP\x00"
+
+    def test_placeholder_in_triple_string_with_interpolation_no_crash(self) -> None:
+        # Same placeholder embedded alongside a real interpolation.
+        # With the old split-on-sentinel approach this produces too many parts
+        # and crashes on lit_segs[part_idx] — must not crash.
+        source = '"""\n\\u0000INTERP\\u0000 ${x}\n"""'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        interp_starts = [(t, v) for t, v in result if t == "INTERP_START"]
+        # First fragment should contain the placeholder text followed by a space
+        assert frags[0] == "\x00INTERP\x00 "
+        assert len(interp_starts) == 1
+
+    def test_multiple_placeholder_sequences_with_interp_no_crash(self) -> None:
+        # Two placeholder sequences, one interpolation.  The old code split on
+        # "\x00INTERP\x00" and got 3 literal parts for 1 literal segment -> crash.
+        source = '"""\\u0000INTERP\\u0000${x}\\u0000INTERP\\u0000"""'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags[0] == "\x00INTERP\x00"
+        assert frags[1] == "\x00INTERP\x00"
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: Unicode letters in identifiers (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestIdentifierAsciiOnly:
+    """Identifiers must be restricted to ASCII.  Non-ASCII letters that are
+    accepted by str.isalpha()/isalnum() must be rejected with a span-aware
+    LexError, not silently tokenized as VAR_NAME or TYPE_NAME."""
+
+    def test_latin_extended_lowercase_rejected(self) -> None:
+        # é (U+00E9) looks like a letter but must not start a VAR_NAME.
+        with pytest.raises(LexError) as exc_info:
+            tok("é")
+        err = exc_info.value
+        assert err.span is not None
+        assert err.span.start_line == 1
+
+    def test_greek_uppercase_rejected(self) -> None:
+        # Ω (U+03A9) — str.isupper() returns True, old code made it TYPE_NAME.
+        with pytest.raises(LexError) as exc_info:
+            tok("Ω")
+        err = exc_info.value
+        assert err.span is not None
+
+    def test_cjk_character_rejected(self) -> None:
+        # A CJK ideograph: not ASCII, not a valid token start.
+        with pytest.raises(LexError) as exc_info:
+            tok("中")
+        err = exc_info.value
+        assert err.span is not None
+
+    def test_ascii_lowercase_identifier_still_valid(self) -> None:
+        result = tok("foo_bar")
+        assert result == [("VAR_NAME", "foo_bar")]
+
+    def test_ascii_uppercase_identifier_still_valid(self) -> None:
+        result = tok("FooBar")
+        assert result == [("TYPE_NAME", "FooBar")]
+
+    def test_identifier_with_digits_still_valid(self) -> None:
+        result = tok("x1")
+        assert result == [("VAR_NAME", "x1")]
+
+    def test_underscore_only_identifier_still_valid(self) -> None:
+        result = tok("_x")
+        assert result == [("VAR_NAME", "_x")]
+
+    def test_unicode_letter_in_identifier_continuation_rejected(self) -> None:
+        # "aé" — starts with valid ASCII 'a', but continuation 'é' must stop the
+        # token at 'a' and then 'é' triggers a LexError.
+        with pytest.raises(LexError) as exc_info:
+            tok("aé")
+        err = exc_info.value
+        assert err.span is not None

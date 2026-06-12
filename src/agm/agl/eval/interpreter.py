@@ -133,8 +133,6 @@ def _make_match_error(subject: Value, *, trace_id: str = "") -> "ExceptionValue"
     *trace_id* links the exception to its eventual ``exception`` trace record
     (design §8.1 / §12.6); the caller mints it via the trace store.
     """
-    from agm.agl.runtime.serialize import value_to_json_obj
-
     scrutinee_type = _describe_value(subject)
     scrutinee_json = value_to_json_obj(subject)
     return _make_exc_value(
@@ -202,8 +200,6 @@ class Interpreter:
         self._shell_exec_timeout = shell_exec_timeout
         # Trace store: no-op when not provided (no-log mode or direct tests).
         self._trace: "TraceStore" = trace if trace is not None else noop_trace()
-        # Root scope — populated from inputs before execute() is called.
-        self._root_scope: Scope = Scope(parent=None)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -218,7 +214,6 @@ class Interpreter:
 
         May raise ``AglRaise`` for uncaught AgL exceptions.
         """
-        self._root_scope = root_scope
         with decimal.localcontext(_AGL_DECIMAL_CONTEXT):
             for stmt in self._checked.resolved.program.body:
                 self._exec_stmt(stmt, root_scope)
@@ -297,6 +292,31 @@ class Interpreter:
         print(rendered)
         self._trace.print_stmt(rendered=rendered, span=stmt.span)
 
+    def _walk_template(
+        self,
+        expr: Template,
+        scope: Scope,
+        render_seg: "Callable[[Value, InterpSegment], str]",
+    ) -> str:
+        """Walk *expr*'s segments, concatenate text segments verbatim, and
+        render interpolation segments via *render_seg*.
+
+        This is the single segment-walking loop shared by
+        :meth:`_eval_template_for_console`, :meth:`_eval_template`, and
+        :meth:`_eval_template_for_shell`.  Each caller parameterises how an
+        :class:`~agm.agl.syntax.nodes.InterpSegment`'s value is rendered.
+        """
+        parts: list[str] = []
+        for seg in expr.segments:
+            if isinstance(seg, TextSegment):
+                parts.append(seg.text)
+            elif isinstance(seg, InterpSegment):
+                value = self._eval_expr(seg.expr, scope)
+                parts.append(render_seg(value, seg))
+            else:
+                assert_never(seg)  # pragma: no cover
+        return "".join(parts)
+
     def _eval_template_for_console(self, expr: Template, scope: Scope) -> str:
         """Evaluate a template for console (``print``) output.
 
@@ -308,32 +328,23 @@ class Interpreter:
         """
         from agm.agl.runtime.render import render_for_console, render_for_prompt
 
-        parts: list[str] = []
-        for seg in expr.segments:
-            if isinstance(seg, TextSegment):
-                parts.append(seg.text)
-            elif isinstance(seg, InterpSegment):
-                value = self._eval_expr(seg.expr, scope)
-                if seg.render in (None, "default"):
-                    # Default (implicit ``None`` or explicit ``as default``):
-                    # console rendering, never boundary tags — those are for
-                    # prompt interpolation only.
-                    parts.append(render_for_console(value))
-                else:
-                    # Explicit renderer: apply it.  Pass var_name=None because
-                    # console output never carries the boundary-tag ``name=``
-                    # attribute even for the default renderer.
-                    parts.append(
-                        render_for_prompt(
-                            value,
-                            renderer_name=seg.render,
-                            var_name=None,
-                            renderers=self._renderers,
-                        )
-                    )
-            else:
-                assert_never(seg)  # pragma: no cover
-        return "".join(parts)
+        def render_seg(value: Value, seg: InterpSegment) -> str:
+            if seg.render in (None, "default"):
+                # Default (implicit ``None`` or explicit ``as default``):
+                # console rendering, never boundary tags — those are for
+                # prompt interpolation only.
+                return render_for_console(value)
+            # Explicit renderer: apply it.  Pass var_name=None because
+            # console output never carries the boundary-tag ``name=``
+            # attribute even for the default renderer.
+            return render_for_prompt(
+                value,
+                renderer_name=seg.render,
+                var_name=None,
+                renderers=self._renderers,
+            )
+
+        return self._walk_template(expr, scope, render_seg)
 
     def _exec_do_until(self, stmt: DoUntil, scope: Scope) -> None:
         limit = stmt.limit if stmt.limit is not None else self._loop_limit
@@ -547,27 +558,19 @@ class Interpreter:
         """Evaluate a template by rendering each segment and concatenating."""
         from agm.agl.runtime.render import render_for_prompt
 
-        parts: list[str] = []
-        for seg in expr.segments:
-            if isinstance(seg, TextSegment):
-                parts.append(seg.text)
-            elif isinstance(seg, InterpSegment):
-                value = self._eval_expr(seg.expr, scope)
-                # Determine the variable name for the boundary tag.
-                var_name: str | None = None
-                if isinstance(seg.expr, VarRef):
-                    var_name = seg.expr.name
-                parts.append(
-                    render_for_prompt(
-                        value,
-                        renderer_name=seg.render,
-                        var_name=var_name,
-                        renderers=self._renderers,
-                    )
-                )
-            else:
-                assert_never(seg)  # pragma: no cover
-        return TextValue("".join(parts))
+        def render_seg(value: Value, seg: InterpSegment) -> str:
+            # Determine the variable name for the boundary tag.
+            var_name: str | None = None
+            if isinstance(seg.expr, VarRef):
+                var_name = seg.expr.name
+            return render_for_prompt(
+                value,
+                renderer_name=seg.render,
+                var_name=var_name,
+                renderers=self._renderers,
+            )
+
+        return TextValue(self._walk_template(expr, scope, render_seg))
 
     def _eval_agent_call(self, expr: AgentCall, scope: Scope) -> Value:
         """Dispatch an agent call and return the typed result."""
@@ -822,22 +825,14 @@ class Interpreter:
         """
         from agm.agl.runtime.render import render_for_shell
 
-        parts: list[str] = []
-        for seg in expr.segments:
-            if isinstance(seg, TextSegment):
-                parts.append(seg.text)
-            elif isinstance(seg, InterpSegment):
-                value = self._eval_expr(seg.expr, scope)
-                parts.append(
-                    render_for_shell(
-                        value,
-                        renderer_name=seg.render,
-                        renderers=self._renderers,
-                    )
-                )
-            else:
-                assert_never(seg)  # pragma: no cover
-        return "".join(parts)
+        def render_seg(value: Value, seg: InterpSegment) -> str:
+            return render_for_shell(
+                value,
+                renderer_name=seg.render,
+                renderers=self._renderers,
+            )
+
+        return self._walk_template(expr, scope, render_seg)
 
     def _exec_shell_exec(self, expr: AgentCall, scope: Scope) -> Value:
         """Execute an ``exec`` shell call and return the typed result (§11.13).
@@ -906,10 +901,14 @@ class Interpreter:
                     timed_out=result.timed_out,
                     span=exec_span,
                 )
+                if result.timed_out:
+                    message = f"Shell command timed out (idle timeout exceeded): {command!r}"
+                else:
+                    message = f"Shell command exited with code {exit_code}: {command!r}"
                 raise AglRaise(
                     _make_exc_value(
                         "ExecError",
-                        f"Shell command exited with code {exit_code}: {command!r}",
+                        message,
                         trace_id=self._trace.new_event_id(),
                         command=TextValue(command),
                         exit_code=IntValue(exit_code),
@@ -1104,7 +1103,10 @@ class Interpreter:
                         name, val, mutable=False, decl_span=branch.span
                     )
                 return self._eval_expr(branch.body, branch_scope)
-        raise AglRaise(_make_match_error(subject, trace_id=self._trace.new_event_id()))
+        raise AglRaise(
+            _make_match_error(subject, trace_id=self._trace.new_event_id()),
+            span=expr.span,  # F7: thread raise-site span for §12.6 source location
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1216,58 +1218,19 @@ def _to_decimal(value: Value) -> decimal.Decimal:
     raise RuntimeError(f"Not a numeric value: {type(value).__name__}")
 
 
-def _json_eq(left: object, right: object) -> bool:
-    """Compare two JSON-shaped trees with numeric int/decimal equivalence.
-
-    Implements the ``json = json`` semantics of design §5.8/§11.9: JSON numbers
-    compare *numerically* (so ``1`` equals ``1.0`` anywhere inside the tree),
-    but ``bool`` is a distinct JSON kind and never compares equal to a number
-    (avoiding Python's ``True == 1`` conflation).  Containers recurse
-    structurally; ``text`` and ``null`` compare exactly.
-    """
-    # bool first: it must not be conflated with numbers (Python treats bool as a
-    # subclass of int, so ``True == 1`` — guard against that here).
-    if isinstance(left, bool) or isinstance(right, bool):
-        return isinstance(left, bool) and isinstance(right, bool) and left == right
-    if isinstance(left, (int, decimal.Decimal)) and isinstance(
-        right, (int, decimal.Decimal)
-    ):
-        return decimal.Decimal(left) == decimal.Decimal(right)
-    if isinstance(left, list) and isinstance(right, list):
-        return _json_eq_list(left, right)
-    if isinstance(left, dict) and isinstance(right, dict):
-        return _json_eq_dict(left, right)
-    return left == right
-
-
-def _json_eq_list(left: list[object], right: list[object]) -> bool:
-    """Structural element-wise comparison of two JSON arrays."""
-    if len(left) != len(right):
-        return False
-    return all(_json_eq(left[i], right[i]) for i in range(len(left)))
-
-
-def _json_eq_dict(left: dict[object, object], right: dict[object, object]) -> bool:
-    """Structural comparison of two JSON objects (same keys, equal values)."""
-    if left.keys() != right.keys():
-        return False
-    return all(_json_eq(left[k], right[k]) for k in left)
-
-
 def _value_eq(left: Value, right: Value) -> bool:
     """Value equality with int→decimal widening (design §4.3).
 
     The single source of truth for ``=`` comparison and ``in`` membership, so
     ``IntValue(1)`` equals ``DecimalValue(1)`` consistently across both passes.
-    Two ``json`` values compare their wrapped trees with numeric int/decimal
-    equivalence (design §5.8/§11.9).
+    Two ``json`` values compare their wrapped trees via ``JsonValue.__eq__``,
+    which delegates to ``values._json_eq`` for bool-guarded numeric equivalence
+    (design §5.8/§11.9).
     """
     if isinstance(left, IntValue) and isinstance(right, DecimalValue):
         return decimal.Decimal(left.value) == right.value
     if isinstance(left, DecimalValue) and isinstance(right, IntValue):
         return left.value == decimal.Decimal(right.value)
-    if isinstance(left, JsonValue) and isinstance(right, JsonValue):
-        return _json_eq(left.raw, right.raw)
     return left == right
 
 

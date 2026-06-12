@@ -638,3 +638,82 @@ class TestResolveLogFileUnique:
         assert path_b is not None
         # Default behavior: same timestamp → same filename.
         assert path_a == path_b
+
+
+# ===========================================================================
+# Task 3: read_text_arg — UnicodeDecodeError and None strerror handling
+# ===========================================================================
+
+
+class TestReadTextArgUnicodeDecodeError:
+    """read_text_arg must catch UnicodeDecodeError and emit a clean Error message."""
+
+    def test_binary_file_exits_1(self, tmp_path: Path) -> None:
+        """A binary file (not valid UTF-8) causes read_text_arg to exit 1."""
+        from agm.core.fs import read_text_arg
+
+        binary_file = tmp_path / "prog.agl"
+        binary_file.write_bytes(b"\xff\xfe binary garbage \x00\x01\x02")
+        with pytest.raises(SystemExit) as exc_info:
+            read_text_arg(binary_file)
+        assert exc_info.value.code == 1
+
+    def test_binary_file_prints_clean_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The error message mentions the file is not valid UTF-8 text."""
+        from agm.core.fs import read_text_arg
+
+        binary_file = tmp_path / "prog.agl"
+        binary_file.write_bytes(b"\xff\xfe binary garbage \x00\x01\x02")
+        with pytest.raises(SystemExit):
+            read_text_arg(binary_file)
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "UTF-8" in captured.err or "utf-8" in captured.err.lower()
+
+    def test_binary_file_error_names_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The clean error message includes the file name."""
+        from agm.core.fs import read_text_arg
+
+        binary_file = tmp_path / "prog.agl"
+        binary_file.write_bytes(b"\xff\xfe binary garbage \x00\x01\x02")
+        with pytest.raises(SystemExit):
+            read_text_arg(binary_file)
+        captured = capsys.readouterr()
+        assert "prog.agl" in captured.err
+
+
+class TestReadTextArgNoneStrerror:
+    """read_text_arg must not print 'None' when exc.strerror is None."""
+
+    def test_oserror_with_none_strerror_prints_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An OSError with strerror=None must not print 'None' as the message."""
+        import agm.core.fs as fs_mod
+        from agm.core.fs import read_text_arg
+
+        existing_file = tmp_path / "prog.agl"
+        existing_file.write_text("let x = 1\n")
+
+        # Patch Path.read_text at the module level via the pathlib import
+        original_read_text = existing_file.__class__.read_text
+
+        def patched_read_text(self: Path, encoding: str = "utf-8", **_: object) -> str:
+            if self == existing_file:
+                err = OSError("unknown error")
+                err.strerror = None  # type: ignore[assignment]
+                raise err
+            return original_read_text(self, encoding=encoding)
+
+        monkeypatch.setattr(fs_mod.Path, "read_text", patched_read_text)
+
+        with pytest.raises(SystemExit) as exc_info:
+            read_text_arg(existing_file)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        # The error message must not contain bare 'None'
+        assert "None" not in captured.err

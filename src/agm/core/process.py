@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import codecs
-import errno
 import os
 import queue
 import signal
@@ -239,8 +238,19 @@ def _start_process_with_readers(
     stderr_callback: Callable[[str], None] | None,
     isolate_process_group: bool,
     stdin_text: str | None,
-) -> tuple[subprocess.Popen[bytes], list[threading.Thread], queue.Queue[tuple[str, bytes | None]]]:
-    """Spawn the process and start pipe-reader threads; return ``(process, readers, queue)``."""
+) -> tuple[
+    subprocess.Popen[bytes],
+    list[threading.Thread],
+    queue.Queue[tuple[str, bytes | None]],
+    threading.Thread | None,
+]:
+    """Spawn the process and start pipe-reader threads.
+
+    Return ``(process, readers, queue, stdin_writer)`` where ``readers`` contains
+    only the stdout/stderr pipe-reader threads (each posts to *queue*).
+    ``stdin_writer`` is a separate thread that writes *stdin_text* to the process
+    stdin pipe — it does NOT post to *queue* and must be joined separately after
+    draining.  It is ``None`` when *stdin_text* is ``None``."""
     need_stdout_pipe = capture_output or stdout_callback is not None
     need_stderr_pipe = capture_output or stderr_callback is not None
 
@@ -257,9 +267,24 @@ def _start_process_with_readers(
         start_new_session=isolate_process_group,
     )
 
+    stdin_writer: threading.Thread | None = None
     if stdin_text is not None and process.stdin is not None:
-        process.stdin.write(stdin_text.encode())
-        process.stdin.close()
+        stdin_pipe_ref = process.stdin
+
+        def _write_stdin(data: bytes, pipe: IO[bytes]) -> None:
+            try:
+                with pipe:
+                    pipe.write(data)
+            except BrokenPipeError:
+                # Child exited before reading all stdin — normal outcome, not an error.
+                pass
+
+        stdin_writer = threading.Thread(
+            target=_write_stdin,
+            args=(stdin_text.encode(), stdin_pipe_ref),
+            daemon=True,
+        )
+        stdin_writer.start()
 
     readers: list[threading.Thread] = []
     stream_queue: queue.Queue[tuple[str, bytes | None]] = queue.Queue()
@@ -290,7 +315,7 @@ def _start_process_with_readers(
         reader.start()
         readers.append(reader)
 
-    return process, readers, stream_queue
+    return process, readers, stream_queue, stdin_writer
 
 
 def run_subprocess(
@@ -313,7 +338,7 @@ def run_subprocess(
     process tree can be cleaned up.
     """
 
-    process, readers, stream_queue = _start_process_with_readers(
+    process, readers, stream_queue, _stdin_writer = _start_process_with_readers(
         cmd,
         cwd=cwd,
         env=env,
@@ -394,12 +419,13 @@ def run_capture(
 ) -> tuple[int, str, str]:
     """Run a command and capture stdout/stderr.
 
-    This is a compatibility adapter over :func:`run_capture_result`.  On idle-timeout
+    This is a compatibility adapter over :func:`_run_capture_result_impl`.  On idle-timeout
     it prints a diagnostic to stderr and raises ``SystemExit(124)`` — matching the
-    original behaviour.  Spawn errors re-raise as ``FileNotFoundError``/
-    ``PermissionError``.
+    original behaviour.  Spawn errors re-raise the *original* OSError (with
+    ``errno``/``filename`` intact) so callers such as vcs/git.py get faithful exception
+    types: ``FileNotFoundError``, ``PermissionError``, or any other ``OSError`` subclass.
     """
-    result = run_capture_result(
+    result, spawn_exc = _run_capture_result_impl(
         cmd,
         cwd=cwd,
         env=env,
@@ -409,10 +435,8 @@ def run_capture(
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
     )
-    if result.spawn_error is not None:
-        if result.spawn_errno == errno.EACCES:
-            raise PermissionError(result.spawn_error)
-        raise FileNotFoundError(result.spawn_error)
+    if spawn_exc is not None:
+        raise spawn_exc
     if result.timed_out:
         print(
             f"Idle timeout ({idle_timeout}s) exceeded, "
@@ -430,12 +454,12 @@ class ProcessCaptureResult:
 
     Semantics:
     - ``spawn_error`` is set (non-``None``) if and only if the process could not be
-      started (``FileNotFoundError`` or ``PermissionError``); in that case
-      ``returncode`` is ``None`` and both streams are empty.
-    - ``spawn_errno`` mirrors the OS ``errno`` of the spawn exception (e.g. ``ENOENT``
-      for ``FileNotFoundError``, ``EACCES`` for ``PermissionError``) so callers can
-      reconstruct the faithful exception type.  It is ``None`` when there was no spawn
-      error.
+      started (any ``OSError`` at the spawn boundary — ``FileNotFoundError``,
+      ``PermissionError``, ``OSError(ENOEXEC)``, etc.); in that case ``returncode``
+      is ``None`` and both streams are empty.
+    - ``spawn_errno`` mirrors the OS ``errno`` of the spawn exception (e.g. ``ENOENT``,
+      ``EACCES``, ``ENOEXEC``) so callers can identify the cause.  It is ``None`` when
+      there was no spawn error, or when the error was a ``ValueError`` (no OS errno).
     - ``timed_out`` is ``True`` when the idle timeout fired; ``returncode`` then
       reflects the kill exit code (nonzero).
     - In all normal-completion cases ``spawn_error`` is ``None``, ``timed_out`` is
@@ -449,6 +473,109 @@ class ProcessCaptureResult:
     timed_out: bool
     spawn_error: str | None
     spawn_errno: int | None
+
+
+def _run_capture_result_impl(
+    cmd: list[str],
+    *,
+    idle_timeout: float | None = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin_text: str | None = None,
+    isolate_process_group: bool = False,
+    interrupt_cleanup_cmd: list[str] | None = None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
+) -> tuple[ProcessCaptureResult, OSError | None]:
+    """Internal implementation of ``run_capture_result``.
+
+    Returns ``(result, original_spawn_exc)`` so that ``run_capture`` can
+    re-raise the *original* ``OSError`` (with ``errno``/``filename`` intact)
+    rather than reconstructing it from a string.  ``run_capture_result``
+    discards the exception object and returns only the result.
+    """
+    start = time.monotonic()
+
+    try:
+        process, readers, stream_queue, stdin_writer = _start_process_with_readers(
+            cmd,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
+            isolate_process_group=isolate_process_group,
+            stdin_text=stdin_text,
+        )
+    except OSError as exc:
+        # Catches FileNotFoundError (ENOENT), PermissionError (EACCES),
+        # and all other OS-level spawn failures including ENOEXEC, ENOTDIR, etc.
+        elapsed = time.monotonic() - start
+        return (
+            ProcessCaptureResult(
+                returncode=None,
+                stdout="",
+                stderr="",
+                elapsed=elapsed,
+                timed_out=False,
+                spawn_error=str(exc),
+                spawn_errno=exc.errno,
+            ),
+            exc,
+        )
+    except ValueError as exc:
+        # ``subprocess.Popen`` raises a plain ``ValueError`` (no ``errno``)
+        # before the child is launched for malformed arguments — most notably
+        # ``ValueError('embedded null byte')`` when an argv element contains a
+        # NUL.  Map it to the same spawn-failure result as the OS-level spawn
+        # errors so no raw exception escapes; ``spawn_errno`` is ``None`` since
+        # there is no OS error number.
+        elapsed = time.monotonic() - start
+        return (
+            ProcessCaptureResult(
+                returncode=None,
+                stdout="",
+                stderr="",
+                elapsed=elapsed,
+                timed_out=False,
+                spawn_error=str(exc),
+                spawn_errno=None,
+            ),
+            None,
+        )
+
+    stdout, stderr, timed_out = _drain_process_streams(
+        process,
+        readers,
+        stream_queue,
+        capture_output=True,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
+        idle_timeout=idle_timeout,
+        isolate_process_group=isolate_process_group,
+        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        cwd=cwd,
+        env=env,
+    )
+
+    # The stdin writer thread is a daemon, but join it now that the process has
+    # exited so it never lingers beyond this call.
+    if stdin_writer is not None:
+        stdin_writer.join()
+
+    elapsed = time.monotonic() - start
+    return (
+        ProcessCaptureResult(
+            returncode=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            elapsed=elapsed,
+            timed_out=timed_out,
+            spawn_error=None,
+            spawn_errno=None,
+        ),
+        None,
+    )
 
 
 def run_capture_result(
@@ -474,72 +601,18 @@ def run_capture_result(
     *idle_timeout* (seconds), *cwd*, *env*, *stdin_text*, *isolate_process_group*,
     *interrupt_cleanup_cmd*, *stdout_callback*, *stderr_callback*.
     """
-    start = time.monotonic()
-
-    try:
-        process, readers, stream_queue = _start_process_with_readers(
-            cmd,
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            stdout_callback=stdout_callback,
-            stderr_callback=stderr_callback,
-            isolate_process_group=isolate_process_group,
-            stdin_text=stdin_text,
-        )
-    except (FileNotFoundError, PermissionError) as exc:
-        elapsed = time.monotonic() - start
-        return ProcessCaptureResult(
-            returncode=None,
-            stdout="",
-            stderr="",
-            elapsed=elapsed,
-            timed_out=False,
-            spawn_error=str(exc),
-            spawn_errno=exc.errno,
-        )
-    except ValueError as exc:
-        # ``subprocess.Popen`` raises a plain ``ValueError`` (no ``errno``)
-        # before the child is launched for malformed arguments — most notably
-        # ``ValueError('embedded null byte')`` when an argv element contains a
-        # NUL.  Map it to the same spawn-failure result as the OS-level spawn
-        # errors so no raw exception escapes; ``spawn_errno`` is ``None`` since
-        # there is no OS error number.
-        elapsed = time.monotonic() - start
-        return ProcessCaptureResult(
-            returncode=None,
-            stdout="",
-            stderr="",
-            elapsed=elapsed,
-            timed_out=False,
-            spawn_error=str(exc),
-            spawn_errno=None,
-        )
-
-    stdout, stderr, timed_out = _drain_process_streams(
-        process,
-        readers,
-        stream_queue,
-        capture_output=True,
-        stdout_callback=stdout_callback,
-        stderr_callback=stderr_callback,
+    result, _ = _run_capture_result_impl(
+        cmd,
         idle_timeout=idle_timeout,
-        isolate_process_group=isolate_process_group,
-        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         cwd=cwd,
         env=env,
+        stdin_text=stdin_text,
+        isolate_process_group=isolate_process_group,
+        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
     )
-
-    elapsed = time.monotonic() - start
-    return ProcessCaptureResult(
-        returncode=process.returncode,
-        stdout=stdout,
-        stderr=stderr,
-        elapsed=elapsed,
-        timed_out=timed_out,
-        spawn_error=None,
-        spawn_errno=None,
-    )
+    return result
 
 
 def require_success(

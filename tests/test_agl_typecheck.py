@@ -849,12 +849,14 @@ class TestRendererErrors:
         assert r.resolved.program is not None
 
     def test_mixed_kind_dict_literal_in_interpolation_is_json(self) -> None:
-        """checker.py:596 — a mixed-kind dict literal inside ``${ … }`` is checked
-        with ``expected=json``, so heterogeneous value kinds are accepted.
+        """checker.py — a non-empty mixed-kind dict literal inside ``${ … }`` is
+        checked with ``expected=json``, so heterogeneous value kinds are accepted.
 
         ``{kind: "demo", tags: items}`` mixes a ``text`` value with a
-        ``list[text]`` value; only the ``json`` expectation (design §5.8 rule 3)
+        ``list[text]`` value; the ``json`` expectation (design §5.8 rule 3)
         lets the dict-literal check accept that, recording the segment as ``json``.
+        Only NON-EMPTY inline dict/list literals receive this expectation; empty
+        literals and other expression kinds receive ``expected=None``.
         """
         src = (
             'let items = ["a", "b"]\n'
@@ -875,13 +877,17 @@ class TestRendererErrors:
         assert isinstance(seg.expr, DictLit)
         assert r.node_types[seg.expr.node_id] == DictType(value=JsonType())
 
-    def test_mixed_kind_dict_literal_in_interpolation_renders_as_json(self) -> None:
-        """Eval companion: the mixed-kind dict interpolates as JSON text."""
+    def test_annotated_json_dict_in_template_renders_as_json(self) -> None:
+        """Eval companion: a pre-annotated json dict variable interpolates as JSON text.
+        After the expected=None fix, the user must bind mixed-kind dicts to an
+        annotated ``json`` variable first, then interpolate the variable.
+        """
         from agm.agl.runtime import WorkflowRuntime
 
         src = (
             'let items = ["a", "b"]\n'
-            'let t = "payload: ${ {kind: "demo", tags: items} }"\n'
+            'let d: json = {kind: "demo", tags: items}\n'
+            'let t = "payload: ${d}"\n'
         )
         result = WorkflowRuntime().run(src)
         assert result.ok is True
@@ -2838,3 +2844,167 @@ class TestBuiltinExceptionSchemaConformance:
             "try\n  pass\ncatch _ as e =>\n  print e.raw\n"
         )
         assert "raw" in err.to_diagnostic().message
+
+
+# ---------------------------------------------------------------------------
+# Task 1: interpolation template expected-type fix
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateInterpolationExpected:
+    """_check_template must pass expected=None into interpolation expressions.
+
+    Design §11.4: agent-call target type comes from annotation / set-target /
+    else text.  Fabricating expected=json inside ``${...}`` gives agent calls a
+    wrong json contract and causes runtime failures when the agent returns text.
+    Empty literals inside ``${...}`` must emit the standard "needs annotation"
+    diagnostic just like they do at the top level (design §5.6).
+    """
+
+    def test_agent_call_inside_template_gets_text_contract(self) -> None:
+        """An agent call inside ``${...}`` must default to a *text* contract,
+        not a json contract.  The enclosing template provides no json context."""
+        # AgL source: let x = "prefix ${prompt "summarize"}"
+        # Inner agent call has no annotation → target_type must be text.
+        src = 'let x = "prefix ${prompt "summarize"}"\n'
+        r = accept_type(src)
+        # Find the AgentCall node inside the template interpolation.
+        from agm.agl.syntax.nodes import LetDecl, Template
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        tmpl = stmt.value
+        assert isinstance(tmpl, Template)
+        seg = next(s for s in tmpl.segments if isinstance(s, InterpSegment))
+        assert isinstance(seg.expr, AgentCall)
+        spec = r.contract_specs[seg.expr.node_id]
+        # Must be text, not json.
+        assert isinstance(spec.target_type, TextType), (
+            f"Expected TextType target, got {spec.target_type!r}"
+        )
+        assert spec.codec_name == "text"
+
+    def test_case_expr_inside_template_no_json_coercion(self) -> None:
+        """A case expression inside ``${...}`` must not inherit an implicit
+        json expectation.  The branch types should unify normally (text+text →
+        text); they must not be coerced to json."""
+        src = (
+            'let flag = true\n'
+            'let x = "result: ${case flag of | true => "yes" | _ => "no"}"\n'
+        )
+        r = accept_type(src)
+        from agm.agl.syntax.nodes import LetDecl, Template
+        stmt = r.resolved.program.body[1]
+        assert isinstance(stmt, LetDecl)
+        tmpl = stmt.value
+        assert isinstance(tmpl, Template)
+        seg = next(s for s in tmpl.segments if isinstance(s, InterpSegment))
+        assert isinstance(seg.expr, CaseExpr)
+        # The case expression should be typed text, not json.
+        assert r.node_types[seg.expr.node_id] == TextType()
+
+    def test_empty_list_inside_template_rejected(self) -> None:
+        """An empty list literal inside ``${...}`` lacks a genuine expected type
+        and must be rejected with the standard 'annotation required' diagnostic
+        (design §5.6) — not silently accepted as list[json]."""
+        err = reject_type('let x = "${[]}"\n')
+        line, msg = diag(err)
+        assert "annotation" in msg.lower() or "type" in msg.lower()
+
+    def test_nonempty_mixed_kind_dict_in_template_accepted(self) -> None:
+        """A non-empty mixed-kind dict inline literal inside ``${...}`` is still
+        accepted: it receives ``expected=json`` so heterogeneous value kinds
+        (text vs list[text]) pass under design §5.8 rule 3.  This preserves
+        the original motivating use-case for the json expectation."""
+        src = (
+            'let items = ["a", "b"]\n'
+            'let t = "payload: ${ {kind: "demo", tags: items} }"\n'
+        )
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+    def test_homogeneous_dict_in_template_accepted(self) -> None:
+        """A same-type dict literal inside ``${...}`` does NOT need expected=json
+        — it infers its type from its values and is accepted normally."""
+        r = accept_type('let t = "${ {a: 1, b: 2} }"\n')
+        assert r.resolved.program is not None
+
+    def test_annotated_json_var_in_template_accepted(self) -> None:
+        """A pre-annotated json variable inside ``${...}`` is still accepted:
+        the variable lookup returns its declared json type without needing an
+        outer json expectation."""
+        src = (
+            'let items = ["a", "b"]\n'
+            'let d: json = {kind: "demo", tags: items}\n'
+            'let t = "payload: ${d}"\n'
+        )
+        r = accept_type(src, capabilities=caps_with_json_codec())
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: case-expression branch type unification soundness
+# ---------------------------------------------------------------------------
+
+
+class TestCaseExprBranchUnification:
+    """_check_case_expr must reject branches whose types are not the same after
+    int→decimal widening.  Design §11.8: 'there are no other coercions to a
+    common type'.  The previous implementation accepted int|json (via
+    is_assignable in either direction) and typed the result as int, which
+    caused runtime failures when null (json) was bound.
+    """
+
+    def test_int_null_branches_rejected(self) -> None:
+        """Branches int and null (json) have incompatible types — rejected."""
+        err = reject_type(
+            'let s = "a"\n'
+            'let x = case s of\n'
+            '  | "a" => 1\n'
+            '  | _ => null\n'
+        )
+        assert "incompatible" in err.to_diagnostic().message
+
+    def test_null_int_branches_rejected(self) -> None:
+        """null first, then int — same incompatibility regardless of order."""
+        err = reject_type(
+            'let s = "a"\n'
+            'let x = case s of\n'
+            '  | "a" => null\n'
+            '  | _ => 1\n'
+        )
+        assert "incompatible" in err.to_diagnostic().message
+
+    def test_int_decimal_branches_accepted_as_decimal(self) -> None:
+        """int and decimal branches unify to decimal (only allowed widening)."""
+        r = accept_type(
+            'let s = "a"\n'
+            'let x = case s of\n'
+            '  | "a" => 1\n'
+            '  | _ => 1.5\n'
+        )
+        from agm.agl.syntax.nodes import LetDecl
+        stmt = r.resolved.program.body[1]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, CaseExpr)
+        assert r.node_types[stmt.value.node_id] == DecimalType()
+
+    def test_text_int_branches_rejected(self) -> None:
+        """text and int branches are incompatible — rejected."""
+        err = reject_type(
+            'let s = "a"\n'
+            'let x = case s of\n'
+            '  | "a" => "hello"\n'
+            '  | _ => 1\n'
+        )
+        assert "incompatible" in err.to_diagnostic().message
+
+    def test_identical_record_type_branches_accepted(self) -> None:
+        """Two branches returning the same record type are accepted."""
+        r = accept_type(
+            "record Pt\n  x: int\n"
+            "let flag = true\n"
+            "let x = case flag of\n"
+            "  | true => Pt(x: 1)\n"
+            "  | _ => Pt(x: 2)\n"
+        )
+        assert r.resolved.program is not None

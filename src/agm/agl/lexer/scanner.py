@@ -528,21 +528,35 @@ class _Scanner:
                 self._advance()
                 current_lit.append(ch)
 
-        # Build combined literal text with placeholders for interpolation holes,
-        # so the dedent rule operates on the whole literal skeleton at once.
-        placeholder = "\x00INTERP\x00"
-        combined = "".join(
-            seg.text if isinstance(seg, _LitSeg) else placeholder for seg in segments
-        )
-        dedented = _apply_triple_dedent(combined)
-        lit_parts = dedented.split(placeholder)
-
+        # Build combined literal text (literals only — holes contribute zero
+        # chars) and record where each literal segment boundary falls within it.
+        # We use character-offset arithmetic so that no in-band marker is
+        # needed and literal content containing any byte sequence is safe.
         lit_segs = [seg for seg in segments if isinstance(seg, _LitSeg)]
         interp_segs = [seg for seg in segments if isinstance(seg, _InterpSeg)]
 
+        combined = "".join(seg.text for seg in lit_segs)
+        # Boundaries: boundary[i] is the start offset of lit_segs[i] in combined.
+        boundaries: list[int] = []
+        offset = 0
+        for seg in lit_segs:
+            boundaries.append(offset)
+            offset += len(seg.text)
+
+        dedented, pos_map = _apply_triple_dedent_with_map(combined)
+
+        # Use the position map to find where each literal segment starts in dedented.
+        def _mapped(pre: int) -> int:
+            """Map a pre-dedent offset to its post-dedent offset."""
+            return pos_map[pre] if pre < len(pos_map) else len(dedented)
+
         # Emit STRING_FRAGMENT (+ INTERP_START / inner tokens / INTERP_END) per part.
-        for part_idx, lit_text in enumerate(lit_parts):
-            lit_seg = lit_segs[part_idx]
+        for part_idx, lit_seg in enumerate(lit_segs):
+            seg_start = _mapped(boundaries[part_idx])
+            # End of this literal segment = start of next segment's boundary.
+            next_boundary = boundaries[part_idx + 1] if part_idx + 1 < len(boundaries) else offset
+            seg_end = _mapped(next_boundary)
+            lit_text = dedented[seg_start:seg_end]
             yield Token(
                 STRING_FRAGMENT,
                 lit_text,
@@ -591,11 +605,13 @@ class _Scanner:
         start_col = self._col
         ch = self._advance()
 
-        # Identifiers and keywords
-        if ch.isalpha() or ch == "_":
-            while not self._at_end() and (self._peek().isalnum() or self._peek() == "_"):
+        # Identifiers and keywords (ASCII-only: [A-Za-z_][A-Za-z0-9_]*)
+        if (ord(ch) < 128 and ch.isalpha()) or ch == "_":
+            while not self._at_end() and (
+                (ord(self._peek()) < 128 and self._peek().isalnum()) or self._peek() == "_"
+            ):
                 self._advance()
-            word = self._src[start_pos:self._pos]
+            word = self._src[start_pos : self._pos]
             if word in KEYWORDS:
                 typ = word
             elif word[0].isupper():
@@ -727,33 +743,6 @@ class _Scanner:
 # ---------------------------------------------------------------------------
 
 
-def _apply_triple_dedent(text: str) -> str:
-    """Apply the triple-quoted dedent rule to *text*.
-
-    Rule:
-    1. Remove one leading ``\\n`` if present.
-    2. Strip the minimum common indentation of all non-blank lines.
-    3. Remove one trailing ``\\n`` if present (after dedent).
-
-    This order (dedent after leading-strip, trailing-strip after dedent)
-    produces the natural result for the common pattern where the closing
-    delimiter's indentation defines the common indent level.
-    """
-    # Step 1: drop one leading newline
-    if text.startswith("\n"):
-        text = text[1:]
-    # Step 2: find minimum indentation across non-blank lines and strip
-    lines = text.split("\n")
-    min_indent = _compute_min_indent(lines)
-    if min_indent > 0:
-        lines = [_strip_indent(line, min_indent) for line in lines]
-        text = "\n".join(lines)
-    # Step 3: drop one trailing newline (after dedent normalises the content)
-    if text.endswith("\n"):
-        text = text[:-1]
-    return text
-
-
 def _compute_min_indent(lines: list[str]) -> int:
     """Return the minimum leading whitespace count of non-blank lines."""
     min_ind: int | None = None
@@ -766,14 +755,61 @@ def _compute_min_indent(lines: list[str]) -> int:
     return min_ind if min_ind is not None else 0
 
 
-def _strip_indent(line: str, n: int) -> str:
-    """Strip up to *n* leading spaces/tabs from *line*."""
-    stripped = 0
-    i = 0
-    while i < len(line) and stripped < n and line[i] in (" ", "\t"):
-        stripped += 1
-        i += 1
-    return line[i:]
+def _apply_triple_dedent_with_map(text: str) -> tuple[str, list[int]]:
+    """Apply the triple-quoted dedent rule and return a position map.
+
+    Rule:
+    1. Remove one leading ``\\n`` if present.
+    2. Strip the minimum common indentation of all non-blank lines.
+    3. Remove one trailing ``\\n`` if present (after dedent).
+
+    This order (dedent after leading-strip, trailing-strip after dedent)
+    produces the natural result for the common pattern where the closing
+    delimiter's indentation defines the common indent level.
+
+    Returns ``(dedented, pos_map)`` where ``pos_map[i]`` is the index in
+    *dedented* that corresponds to position *i* in *text*.  The map has
+    length ``len(text) + 1``; the extra entry maps the past-the-end position.
+    Removed positions map to the output index of the next kept character, so
+    callers can locate boundaries from the original string within the result
+    without relying on any in-band sentinel marker.
+    """
+    kept = [True] * len(text)
+
+    # Step 1: drop one leading newline.
+    pre_start = 0
+    if text.startswith("\n"):
+        kept[0] = False
+        pre_start = 1
+
+    # Step 2: strip the minimum common indentation.  Every character in
+    # line[:min_indent] is whitespace: non-blank lines carry at least
+    # min_indent leading whitespace by construction, and blank lines are
+    # whitespace throughout.
+    lines = text[pre_start:].split("\n")
+    min_indent = _compute_min_indent(lines)
+    pos = pre_start
+    for line in lines:
+        for offset in range(min(min_indent, len(line))):
+            kept[pos + offset] = False
+        pos += len(line) + 1  # +1 for the '\n' separator (or past-end)
+
+    # Step 3: drop one trailing newline (after dedent normalises the content).
+    kept_indices = [i for i, k in enumerate(kept) if k]
+    if kept_indices and text[kept_indices[-1]] == "\n":
+        kept[kept_indices[-1]] = False
+
+    # Build pos_map: pos_map[i] = output index of input position i.
+    pos_map: list[int] = []
+    out = 0
+    for k in kept:
+        pos_map.append(out)
+        if k:
+            out += 1
+    pos_map.append(out)  # past-the-end entry
+
+    dedented = "".join(ch for i, ch in enumerate(text) if kept[i])
+    return dedented, pos_map
 
 
 # ---------------------------------------------------------------------------

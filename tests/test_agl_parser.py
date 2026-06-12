@@ -808,6 +808,31 @@ class TestTypeAnnotationEdgeCases:
         key_col = src.index("bogus") + 1
         assert err.source_span.start_col == key_col
 
+    # --- Task 2: dict_type head validation ---
+
+    def test_dict_head_foo_rejected(self) -> None:
+        """foo[text, int] must be rejected — head must be 'dict'."""
+        src = "let x: foo[text, int] = null"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "'foo'" in str(err) or "foo" in str(err)
+
+    def test_dict_head_list_rejected(self) -> None:
+        """list[text, int] must be rejected — list takes one type argument."""
+        src = "let x: list[text, int] = null"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "'list'" in str(err) or "list" in str(err)
+
+    def test_dict_head_dict_still_accepted(self) -> None:
+        """dict[text, int] must still parse to DictT(IntT)."""
+        stmt = _parse_one("let x: dict[text, int] = null")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.type_ann, DictT)
+        assert isinstance(stmt.type_ann.value, IntT)
+
 
 # ---------------------------------------------------------------------------
 # errors.py: direct coverage of all exception conversion paths
@@ -2414,6 +2439,47 @@ class TestTryCatch:
         b0 = stmt.branches[0]
         assert len(b0.body) == 1
         assert isinstance(b0.body[0], TryCatch)
+
+    # --- Task 1: catch wildcard validation ---
+
+    def test_catch_lowercase_name_rejected(self) -> None:
+        """catch <lowercase-name> (not '_') must be rejected with a targeted error."""
+        src = "try pass catch foo => pass"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "'foo' is not an exception type name" in str(err)
+        # Span must point at the offending name token.
+        assert err.source_span.start_col == src.index("foo") + 1
+
+    def test_catch_lowercase_name_message_includes_guidance(self) -> None:
+        """Error message for a bad catch name must include guidance."""
+        src = "try pass catch myerr => pass"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        msg = str(exc_info.value)
+        assert "exception type" in msg
+
+    def test_catch_wildcard_still_accepted(self) -> None:
+        """catch _ => ... must still parse as a wildcard (exc_type=None)."""
+        stmt = _parse_one("try pass catch _ => pass")
+        assert isinstance(stmt, TryCatch)
+        assert stmt.handlers[0].exc_type is None
+        assert stmt.handlers[0].binding is None
+
+    def test_catch_wildcard_with_binding_still_accepted(self) -> None:
+        """catch _ as e => ... must still parse correctly."""
+        stmt = _parse_one("try pass catch _ as e => pass")
+        assert isinstance(stmt, TryCatch)
+        assert stmt.handlers[0].exc_type is None
+        assert stmt.handlers[0].binding == "e"
+
+    def test_catch_type_name_still_accepted(self) -> None:
+        """catch AgentParseError as e => ... must still parse correctly."""
+        stmt = _parse_one("try\n  pass\ncatch AgentParseError as e =>\n  pass")
+        assert isinstance(stmt, TryCatch)
+        assert stmt.handlers[0].exc_type == "AgentParseError"
+        assert stmt.handlers[0].binding == "e"
 
 
 # ---------------------------------------------------------------------------

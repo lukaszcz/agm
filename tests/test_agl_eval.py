@@ -1281,6 +1281,137 @@ class TestJsonEquality:
         assert result.ok
         assert result.bindings["x"] == BoolValue(False)
 
+    # Task 1: bool/number equality guard inside containers (list[json] / dict[text,json])
+
+    def test_list_json_bool_not_equal_to_number(self) -> None:
+        """[true] ≠ [1] for list[json] — bool/number guard must apply inside containers.
+
+        Regression: before Task 1 fix, list[json] comparison fell through to
+        dataclass __eq__ which used Python ``True == 1`` semantics.
+        """
+        from agm.agl.eval.values import BoolValue
+
+        result = run(
+            "let a: list[json] = [true]\nlet b: list[json] = [1]\nlet x = (a = b)"
+        )
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(False)
+
+    def test_list_json_bool_equal_to_bool(self) -> None:
+        """[true] = [true] for list[json] — equal json values inside containers compare true."""
+        from agm.agl.eval.values import BoolValue
+
+        result = run(
+            "let a: list[json] = [true]\nlet b: list[json] = [true]\nlet x = (a = b)"
+        )
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(True)
+
+    def test_dict_json_value_bool_not_equal_to_number(self) -> None:
+        """{k: true} ≠ {k: 1} for dict[text, json] — guard applies inside dict values."""
+        from agm.agl.eval.values import BoolValue
+
+        result = run(
+            'let a: dict[text, json] = {k: true}\n'
+            'let b: dict[text, json] = {k: 1}\n'
+            "let x = (a = b)"
+        )
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(False)
+
+    def test_dict_json_value_equal_to_same(self) -> None:
+        """{k: true} = {k: true} for dict[text, json]."""
+        from agm.agl.eval.values import BoolValue
+
+        result = run(
+            'let a: dict[text, json] = {k: true}\n'
+            'let b: dict[text, json] = {k: true}\n'
+            "let x = (a = b)"
+        )
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(True)
+
+    # Task 2: JsonValue __eq__/__hash__ and container hash stability
+
+    def test_json_value_direct_equality_bool_not_number(self) -> None:
+        """JsonValue([True]) != JsonValue([1]) via the new __eq__."""
+        from agm.agl.eval.values import JsonValue
+
+        assert JsonValue([True]) != JsonValue([1])
+        assert JsonValue([True]) == JsonValue([True])
+
+    def test_json_value_hash_consistent_with_eq(self) -> None:
+        """JsonValue items that compare equal must have the same hash."""
+        from agm.agl.eval.values import JsonValue
+
+        a = JsonValue(1)
+        b = JsonValue(1)
+        assert a == b
+        assert hash(a) == hash(b)
+
+    def test_json_value_bool_and_number_different_hashes(self) -> None:
+        """JsonValue(True) and JsonValue(1) compare unequal and hash differently."""
+        from agm.agl.eval.values import JsonValue
+
+        assert JsonValue(True) != JsonValue(1)
+        # They should hash differently (not a hard invariant but strongly expected).
+        assert hash(JsonValue(True)) != hash(JsonValue(1))
+
+    def test_container_with_json_value_payload_hashable(self) -> None:
+        """DictValue/RecordValue/EnumValue/ExceptionValue containing JsonValue
+        payloads wrapping dicts/lists must be hashable (Task 2).
+
+        Before the fix, ``__hash__`` called ``hash(tuple(sorted(...)))`` which
+        invoked Python's built-in ``hash`` on the JsonValue, which in turn tried
+        to hash the underlying dict/list — raising ``TypeError: unhashable type``.
+        """
+        from agm.agl.eval.values import (
+            DictValue,
+            EnumValue,
+            ExceptionValue,
+            JsonValue,
+            RecordValue,
+        )
+
+        # JsonValue wrapping an unhashable payload.
+        jv = JsonValue({"a": [1, 2]})
+
+        d = DictValue(entries={"data": jv})
+        assert isinstance(hash(d), int)
+
+        r = RecordValue(type_name="R", fields={"f": jv})
+        assert isinstance(hash(r), int)
+
+        e = EnumValue(type_name="E", variant="V", fields={"f": jv})
+        assert isinstance(hash(e), int)
+
+        x = ExceptionValue(type_name="X", fields={"f": jv})
+        assert isinstance(hash(x), int)
+
+    def test_json_value_hash_list_and_dict(self) -> None:
+        """_json_hash covers the list and dict branches (coverage for values.py)."""
+        from agm.agl.eval.values import JsonValue
+
+        # List branch.
+        h_list = hash(JsonValue([1, 2, 3]))
+        assert isinstance(h_list, int)
+        # Dict branch.
+        h_dict = hash(JsonValue({"k": "v"}))
+        assert isinstance(h_dict, int)
+        # Fallback (str/None).
+        h_str = hash(JsonValue("hello"))
+        assert isinstance(h_str, int)
+        h_none = hash(JsonValue(None))
+        assert isinstance(h_none, int)
+
+    def test_json_value_eq_not_implemented_for_non_json_value(self) -> None:
+        """JsonValue.__eq__ returns NotImplemented for non-JsonValue objects."""
+        from agm.agl.eval.values import JsonValue
+
+        jv = JsonValue(42)
+        result = jv.__eq__("not a json value")
+        assert result is NotImplemented
+
 
 # ---------------------------------------------------------------------------
 # Print with var refs
@@ -1872,229 +2003,6 @@ class TestContractError:
         codecs = {"text": TextCodec()}
         with pytest.raises(ValueError, match="unknown_codec"):
             materialize_contract(spec, codecs)
-
-
-# ---------------------------------------------------------------------------
-# WorkflowRuntime: exception handlers and edge cases
-# ---------------------------------------------------------------------------
-
-
-class TestRuntimeExceptionHandlers:
-    def test_generic_parse_exception_returns_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Non-AglSyntaxError from parse_program → ok=False diagnostic."""
-        import agm.agl.runtime.runtime as rt_mod
-
-        def bad_parse(source: str) -> object:
-            raise RuntimeError("unexpected parser crash")
-
-        monkeypatch.setattr(rt_mod, "parse_program", bad_parse, raising=False)
-        # Need to patch the import inside run()
-        import agm.agl.parser as parser_mod
-
-        monkeypatch.setattr(parser_mod, "parse_program", bad_parse)
-
-        rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
-        assert result.ok is False
-        assert "unexpected parser crash" in result.diagnostics[0].message
-
-    def test_generic_scope_exception_returns_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Non-AglScopeError from resolve → ok=False diagnostic."""
-        import agm.agl.scope as scope_mod
-
-
-        def bad_resolve(program: object) -> object:
-            raise RuntimeError("resolve crash")
-
-        monkeypatch.setattr(scope_mod, "resolve", bad_resolve)
-
-        rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
-        assert result.ok is False
-        assert "resolve crash" in result.diagnostics[0].message
-
-    def test_generic_typecheck_exception_returns_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Non-AglTypeError from check → ok=False diagnostic."""
-        import agm.agl.typecheck as tc_mod
-
-        def bad_check(resolved: object, caps: object) -> object:
-            raise RuntimeError("typecheck crash")
-
-        monkeypatch.setattr(tc_mod, "check", bad_check)
-
-        rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
-        assert result.ok is False
-        assert "typecheck crash" in result.diagnostics[0].message
-
-    def test_internal_interpreter_error_propagates(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """F1c: an unexpected (non-AglRaise) interpreter error must propagate.
-
-        A Python-level bug must crash loudly rather than masquerade as a
-        user-facing pre-execution diagnostic.
-        """
-        from agm.agl.eval.interpreter import Interpreter
-
-        def bad_execute(self: Interpreter, root_scope: object) -> None:
-            raise RuntimeError("internal crash")
-
-        monkeypatch.setattr(Interpreter, "execute", bad_execute)
-
-        rt = WorkflowRuntime()
-        with pytest.raises(RuntimeError, match="internal crash"):
-            rt.run("let x = 1")
-
-    def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
-        """_exception_value_to_run_error converts every Value kind to JSON shape.
-
-        This is the pure converter used to surface an uncaught AgL exception
-        (e.g. AgentParseError) as a RunError.
-        """
-        from agm.agl.eval.values import (
-            BoolValue,
-            DecimalValue,
-            DictValue,
-            EnumValue,
-            ExceptionValue,
-            IntValue,
-            JsonValue,
-            ListValue,
-            RecordValue,
-            TextValue,
-        )
-        from agm.agl.runtime.runtime import RunError, _exception_value_to_run_error
-
-        exc_val = ExceptionValue(
-            type_name="AgentParseError",
-            fields={
-                "message": TextValue("failed"),
-                "trace_id": TextValue(""),
-                "raw": TextValue("abc"),
-                "agent": TextValue("prompt"),
-                "attempts": IntValue(1),
-                "target_type": TextValue("text"),
-                "decimal_val": DecimalValue(decimal.Decimal("1.5")),
-                "bool_val": BoolValue(True),
-                "json_val": JsonValue({"k": "v"}),
-                "list_val": ListValue(elements=(IntValue(1),)),
-                "dict_val": DictValue(entries={"x": IntValue(2)}),
-                "rec_val": RecordValue(type_name="R", fields={"f": TextValue("v")}),
-                "enum_val": EnumValue(type_name="E", variant="V", fields={}),
-                "exc_val": ExceptionValue(type_name="Inner", fields={}),
-                "none_val": JsonValue(None),
-            },
-        )
-        error = _exception_value_to_run_error(exc_val)
-        assert isinstance(error, RunError)
-        assert error.type_name == "AgentParseError"
-        assert error.fields["message"] == "failed"
-        # F3/F9: Decimal is preserved exactly (not converted to float).
-        assert error.fields["decimal_val"] == decimal.Decimal("1.5")
-        assert isinstance(error.fields["decimal_val"], decimal.Decimal)
-        assert error.fields["bool_val"] is True
-        assert error.fields["json_val"] == {"k": "v"}
-        assert error.fields["list_val"] == [1]
-        assert error.fields["dict_val"] == {"x": 2}
-        assert error.fields["rec_val"] == {"f": "v"}
-        assert error.fields["enum_val"] == {"$case": "V"}
-        assert isinstance(error.fields["exc_val"], dict)
-
-    def test_convert_input_int_from_decimal_string(self) -> None:
-        from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import IntType
-
-        # "1.0" parses as Decimal("1.0") which equals int(1) → IntValue
-        result = _convert_input("n", "1.0", IntType())
-        assert result == IntValue(1)
-
-    def test_convert_input_invalid_json_raises(self) -> None:
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import IntType
-
-        with pytest.raises(ValueError, match="JSON"):
-            _convert_input("n", "not_json", IntType())
-
-    def test_convert_input_decimal_from_int(self) -> None:
-        from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import DecimalType
-
-        # Int passed as raw int → DecimalValue
-        result = _convert_input("r", 5, DecimalType())
-        assert isinstance(result, DecimalValue)
-
-    def test_convert_input_decimal_invalid_raises(self) -> None:
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import DecimalType
-
-        with pytest.raises(ValueError, match="decimal"):
-            _convert_input("r", True, DecimalType())
-
-    def test_convert_input_bool_invalid_raises(self) -> None:
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import BoolType
-
-        # Pass an integer (valid JSON type, but not a bool).
-        with pytest.raises(ValueError, match="bool"):
-            _convert_input("b", 42, BoolType())
-
-    def test_convert_input_json_type_accepts_any(self) -> None:
-        from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import JsonType
-
-        result = _convert_input("meta", [1, 2, 3], JsonType())
-        assert result == JsonValue([1, 2, 3])
-
-    def test_convert_input_list_type_parsed_via_json_codec(self) -> None:
-        # M2: list/dict/record/enum inputs are now accepted via the JsonCodec.
-        from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import ListType, TextType
-
-        result = _convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
-        assert isinstance(result, ListValue)
-        assert result.elements == (TextValue("a"), TextValue("b"))
-
-    def test_convert_input_text_non_str_raises(self) -> None:
-        from agm.agl.runtime.runtime import _convert_input
-        from agm.agl.typecheck.types import TextType
-
-        with pytest.raises(ValueError, match="text"):
-            _convert_input("t", 42, TextType())
-
-    def test_agl_raise_from_interpreter_becomes_run_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An AglRaise from the interpreter → RunResult.error (not None)."""
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.values import ExceptionValue, TextValue
-
-        def bad_execute(self: Interpreter, root_scope: object) -> None:
-            exc_val = ExceptionValue(
-                type_name="Abort",
-                fields={"message": TextValue("fatal"), "trace_id": TextValue("")},
-            )
-            raise AglRaise(exc_val)
-
-        monkeypatch.setattr(Interpreter, "execute", bad_execute)
-
-        rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
-        assert result.ok is False
-        assert result.error is not None
-        assert result.error.type_name == "Abort"
-        assert result.error.fields.get("message") == "fatal"
 
 
 # ---------------------------------------------------------------------------
@@ -3040,6 +2948,27 @@ class TestEvalExprCompound:
         with pytest.raises(AglRaise) as exc_info:
             _eval_value(expr)
         assert exc_info.value.exc.type_name == "MatchError"
+
+    def test_case_expr_no_match_carries_span(self) -> None:
+        """Task 4a: uncaught MatchError from a case expression carries the
+        expression's source span (line/col), so WorkflowRuntime can report the
+        raise site.
+
+        Before the fix, ``_eval_case_expr`` raised ``AglRaise`` without a
+        span, so ``exc.span`` was always ``None``.
+        """
+        result = run(
+            "enum C\n  | A\n  | B\n"
+            "let v: C = A\n"
+            "let x = case v of\n"
+            "  | B => 1\n"  # no match for A → MatchError
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "MatchError"
+        # The raise-site line must be set (not None) because the span was threaded.
+        assert result.error.line is not None
+        assert result.error.line >= 1
 
     def test_list_literal(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
@@ -4760,6 +4689,51 @@ class TestExecIdleTimeoutBoundsWallTime:
         assert result.error.fields.get("timed_out") is True
         # Wall time bounded well below the 5s sleep: the tree was actually killed.
         assert elapsed < 3.0, f"exec did not bound wall time: {elapsed:.1f}s elapsed"
+
+    def test_timeout_message_mentions_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Task 4b: the ExecError message for a timed-out command must mention
+        timeout (not the generic "exited with code -1" message).
+
+        Before the fix, the timeout path fell through to the generic
+        ``f"Shell command exited with code {exit_code}: ..."`` branch, which
+        said nothing about a timeout.
+        """
+        from agm.core import process as process_mod
+        from agm.core.process import ProcessCaptureResult
+
+        def fake_run_capture_result(
+            cmd: list[str],
+            *,
+            idle_timeout: object = None,
+            isolate_process_group: bool = False,
+        ) -> ProcessCaptureResult:
+            return ProcessCaptureResult(
+                returncode=None,
+                stdout="",
+                stderr="",
+                elapsed=0.1,
+                timed_out=True,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        monkeypatch.setattr(process_mod, "run_capture_result", fake_run_capture_result)
+
+        rt = WorkflowRuntime(shell_exec_timeout=0.1)
+        result = rt.run('let x = exec "sleep 5"\n')
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "ExecError"
+        # timed_out field must be True.
+        assert result.error.fields.get("timed_out") is True
+        # The message must explicitly mention "timeout" — not "exited with code".
+        message = str(result.error.fields.get("message", ""))
+        assert "timeout" in message.lower(), (
+            f"Expected timeout in message, got: {message!r}"
+        )
+        assert "exited with code" not in message
 
 
 class TestExecParseErrorTraceLinkage:

@@ -688,23 +688,28 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
 
     # Structured types (list/dict/record/enum): delegate to JsonCodec.
     if isinstance(type_obj, (ListType, DictType, RecordType, EnumType)):
-        import decimal as _decimal_mod
-
         from agm.agl.runtime.codec import JsonCodec
         from agm.agl.runtime.schema import derive_schema
 
-        # Accept either a JSON string or a Python native object (list/dict)
-        # that was already parsed from JSON (e.g. by the e2e test harness).
+        # Accept either a JSON string or a Python native object (dict/list/
+        # scalar) that was already parsed from JSON.  For native objects we
+        # re-serialize to a JSON string so the codec can validate and convert
+        # using the full type-aware path.  Decimal values are serialized
+        # losslessly using dumps_exact, which emits them as unquoted numeric
+        # text so the codec's json.loads(parse_float=Decimal) round-trip is
+        # exact — avoiding the old default=str bug that turned Decimal("1.5")
+        # into the JSON string "1.5" and failed schema validation.
         if isinstance(raw, str):
             json_str = raw
-        elif isinstance(raw, (dict, list, bool, int, _decimal_mod.Decimal, float)):
-            # Serialise native Python object to JSON string so the codec can
-            # validate and convert it using the full type-aware path.
-            json_str = json.dumps(raw, default=str)
+        elif _is_json_shaped(raw):
+            from agm.agl.runtime.serialize import dumps_exact
+
+            json_str = dumps_exact(raw, indent=None)
         else:
             raise ValueError(
                 f"Input {name!r} has type {type_obj!r}; structured inputs must be "
-                "provided as a JSON string or a JSON-compatible Python value."
+                "provided as a JSON string or a JSON-compatible Python value "
+                f"(got {type(raw).__name__!r})."
             )
         codec = JsonCodec()
         # Precompute schema once (CARRY-IN 2: avoids re-derivation inside parse).
@@ -762,6 +767,28 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
 
     # JsonType: accept any parsed JSON value.
     return JsonValue(value)
+
+
+def _is_json_shaped(obj: object) -> bool:
+    """Return ``True`` iff *obj* is a JSON-compatible Python value.
+
+    The closed set: ``None``, ``bool``, ``int``, ``float``,
+    ``decimal.Decimal``, ``str``, ``list`` (elements recursively JSON-shaped),
+    and ``dict`` (str keys, values recursively JSON-shaped).
+
+    Used by :func:`_convert_input` to detect non-JSON-shaped host objects
+    (e.g. sets or custom classes) before attempting serialisation, so the
+    caller can emit a clean diagnostic instead of a cryptic traceback.
+    """
+    import decimal as _decimal_mod
+
+    if obj is None or isinstance(obj, (bool, int, float, str, _decimal_mod.Decimal)):
+        return True
+    if isinstance(obj, list):
+        return all(_is_json_shaped(e) for e in obj)
+    if isinstance(obj, dict):
+        return all(isinstance(k, str) and _is_json_shaped(v) for k, v in obj.items())
+    return False
 
 
 def _exception_value_to_run_error(

@@ -458,15 +458,18 @@ class AstBuilder(Transformer):
     def dict_type(self, meta: Meta, args: _Args) -> DictT:
         """VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB — dict[text, V].
 
-        In v1 the key type is always ``text``; any other key is rejected with
-        the key token's span so the diagnostic pinpoints the offending type.
+        The head must be ``dict``; any other head is rejected.  In v1 the key
+        type is always ``text``; any other key is rejected with the key token's
+        span so the diagnostic pinpoints the offending type.
         """
-        # args: [dict, LSQB, key VAR_NAME, COMMA, type_expr, RSQB].  The key is
-        # the second VAR_NAME token (the first is the "dict" head).
+        # args: [head VAR_NAME, LSQB, key VAR_NAME, COMMA, type_expr, RSQB].
         var_name_toks = [
             a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"
         ]
         assert len(var_name_toks) >= 2, "dict_type: missing key token"
+        head_tok = var_name_toks[0]
+        if str(head_tok) != "dict":
+            raise syntax_error_from_meta(meta, f"Unknown generic type: {str(head_tok)!r}")
         key_tok = var_name_toks[1]
         if str(key_tok) != "text":
             raise AglSyntaxError(
@@ -1289,6 +1292,13 @@ class AstBuilder(Transformer):
     ) -> tuple[str | None, str | None]:
         """catch_pattern: VAR_NAME ("as" VAR_NAME)?  where first VAR_NAME is "_"."""
         var_toks = [a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"]
+        wildcard_tok = var_toks[0]
+        if str(wildcard_tok) != "_":
+            raise AglSyntaxError(
+                f"{str(wildcard_tok)!r} is not an exception type name. "
+                "Catch patterns take an exception type (capitalized) or '_'.",
+                span=_span_from_token(wildcard_tok),
+            )
         # First token is the wildcard "_"; second (if present) is the binding name.
         binding: str | None = str(var_toks[1]) if len(var_toks) >= 2 else None
         return (None, binding)

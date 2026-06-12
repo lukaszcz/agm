@@ -1350,3 +1350,131 @@ class TestUncaughtExceptionOutputFormat:
         err = capsys.readouterr().err
         assert "line 5" in err
         assert "col" not in err
+
+
+# ---------------------------------------------------------------------------
+# Task 3: binary .agl file → clean error, exit 1
+# ---------------------------------------------------------------------------
+
+
+class TestExecBinaryFileError:
+    """agm exec with a binary (non-UTF-8) .agl file exits 1 with clean error."""
+
+    def test_binary_agl_file_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A binary file passed as the .agl source file exits 1 with a clean Error."""
+        binary_file = tmp_path / "prog.agl"
+        binary_file.write_bytes(b"\xff\xfe binary garbage \x00\x01\x02")
+
+        args = ExecArgs(
+            file=str(binary_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        # No raw traceback
+        assert "UnicodeDecodeError" not in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_binary_agl_file_no_stdout(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A binary .agl file must not produce any stdout before failing."""
+        binary_file = tmp_path / "prog.agl"
+        binary_file.write_bytes(b"\xff\xfe binary garbage \x00\x01\x02")
+
+        args = ExecArgs(
+            file=str(binary_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit):
+            exec_command.run(args)
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+
+# ---------------------------------------------------------------------------
+# Task 4: whitespace-only --runner exits 1 with clean error BEFORE any run
+# ---------------------------------------------------------------------------
+
+
+class TestExecWhitespaceRunner:
+    """--runner '  ' (whitespace-only) must exit 1 with a clean error before execution."""
+
+    def test_whitespace_runner_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--runner '  ' exits 1 before any statement runs."""
+        agl_file = tmp_path / "prog.agl"
+        # If the program ran, stdout would contain "should-not-run".
+        agl_file.write_text('print "should-not-run"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner="   ",  # whitespace-only
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+
+    def test_whitespace_runner_prints_clean_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--runner '  ' prints a clean usage-style error."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "should-not-run"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner="   ",
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit):
+            exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "runner" in captured.err.lower()
+
+    def test_whitespace_runner_no_stdout_before_exit(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """With a whitespace-only runner, the program must NOT execute (stdout empty)."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "should-not-run"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner="   ",
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit):
+            exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "should-not-run" not in captured.out

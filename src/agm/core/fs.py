@@ -44,8 +44,15 @@ def read_text_arg(path: Path, *, encoding: str = "utf-8") -> str:
 
     try:
         return path.read_text(encoding=encoding)
+    except UnicodeDecodeError as exc:
+        print(
+            f"Error: cannot read {display_path(path)}: file is not valid UTF-8 text",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
     except OSError as exc:
-        print(f"Error: cannot read {display_path(path)}: {exc.strerror}", file=sys.stderr)
+        detail = exc.strerror if exc.strerror is not None else str(exc)
+        print(f"Error: cannot read {display_path(path)}: {detail}", file=sys.stderr)
         raise SystemExit(1) from exc
 
 

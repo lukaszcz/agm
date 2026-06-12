@@ -31,6 +31,7 @@ Flag notes:
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
@@ -99,6 +100,17 @@ def run(args: ExecArgs) -> None:
     # default (the same default used by agm loop/review, per plan §9.5).
     # ----------------------------------------------------------------
     runner_cmd = args.runner or config.runner or default_agent_runner()
+
+    # Validate the resolved runner command: shlex.split must yield at least
+    # one token.  A whitespace-only CLI --runner value is truthy but useless;
+    # catching it here (before runtime.run) honours the exit-1 = pre-execution
+    # contract (plan §10.1).
+    if not shlex.split(runner_cmd):
+        print(
+            f"Error: invalid runner command {runner_cmd!r}: empty after parsing",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     # Build a runner-backed agent as both the ``prompt`` default and the
     # fallback for arbitrary named agents (plan §9.5).  This means any

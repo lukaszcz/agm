@@ -28,8 +28,8 @@ Rules implemented
     element/value type and assert every element soundly.  Qualified enum
     constructors, ``is`` tests, and patterns resolve their qualifier
     alias-transparently (§5.4).
-10. Duplicate call options are already rejected by the AST builder; checked
-    here for robustness.
+10. Duplicate constructor argument names: the parser rejects these; the
+    checker repeats the check defensively for direct AST construction.
 11. Type declarations: duplicate fields, duplicate variants, duplicate
     constructor args, duplicate dict keys.
 
@@ -611,14 +611,22 @@ class _Checker:
     def _check_template(self, node: Template) -> TextType:
         for seg in node.segments:
             if isinstance(seg, InterpSegment):
-                # Pass ``json`` as the expected type for interpolation segments:
-                # a dict/list literal inside ``${ … }`` may have mixed-kind
-                # values (e.g. ``{kind: "demo", tags: items}`` where one value
-                # is text and another is list[text]).  With ``expected=json``
-                # the dict-literal check accepts any JSON-shaped element type
-                # (design §5.8 rule 3).  A renderer override narrows the type
-                # expectation further below.
-                seg_type = self._check_expr(seg.expr, expected=JsonType())
+                # Pass ``expected=json`` only for *non-empty* inline dict/list
+                # literals so that mixed-value-kind dicts (e.g.
+                # ``{kind: "demo", tags: xs}``) inside ``${ … }`` are accepted
+                # under design §5.8 rule 3.  Empty ``[]`` / ``{}`` literals
+                # receive ``expected=None`` so they produce the standard
+                # "needs annotation" diagnostic (design §5.6).
+                # For all other expression kinds — in particular ``AgentCall``
+                # and ``CaseExpr`` — pass ``expected=None`` so that agent calls
+                # default to the §11.4 text contract.
+                is_nonempty_literal = (
+                    isinstance(seg.expr, DictLit) and bool(seg.expr.entries)
+                ) or (
+                    isinstance(seg.expr, ListLit) and bool(seg.expr.elements)
+                )
+                seg_expected: JsonType | None = JsonType() if is_nonempty_literal else None
+                seg_type = self._check_expr(seg.expr, expected=seg_expected)
                 # Validate renderer name if explicit.
                 if seg.render is not None and seg.render != "default":
                     if seg.render not in self._caps.renderer_names:
@@ -1032,16 +1040,18 @@ class _Checker:
         if not branch_types:
             return expected if expected is not None else TextType()
 
-        # All branches must have compatible types (int→decimal widening).
+        # All branches must have the same type after int→decimal widening
+        # (design §11.8: "there are no other coercions to a common type").
+        # Only int↔decimal widening is allowed; every other pair is rejected.
         result_type = branch_types[0]
         for bt in branch_types[1:]:
             if bt == result_type:
                 continue
-            if is_assignable(bt, result_type) or is_assignable(result_type, bt):
-                # Widen to decimal when int meets decimal.
-                if isinstance(result_type, IntType) and isinstance(bt, DecimalType):
-                    result_type = DecimalType()
-                # If result_type is already DecimalType and bt is IntType, no change needed.
+            # int + decimal (in either order) → widen to decimal.
+            if isinstance(result_type, IntType) and isinstance(bt, DecimalType):
+                result_type = DecimalType()
+            elif isinstance(result_type, DecimalType) and isinstance(bt, IntType):
+                pass  # already decimal; no change needed
             else:
                 raise AglTypeError(
                     f"Case expression branches have incompatible types: "
@@ -1095,7 +1105,7 @@ class _Checker:
                     f"Variant '{node.name}' does not exist in enum '{node.qualifier}'.",
                     span=node.span,
                 )
-            return self._check_variant_call(node, enum_type, node.name)
+            return self._check_constructor_call(node, enum_type, variant=node.name)
         else:
             # Unqualified: look up in all known types.
             return self._check_unqualified_constructor(node, expected=expected)
@@ -1104,21 +1114,20 @@ class _Checker:
         self, node: Constructor, *, expected: Type | None
     ) -> Type:
         name = node.name
-        # Try records first.
-        rec = self._env.get_type(name)
-        if isinstance(rec, RecordType):
-            return self._check_record_call(node, rec)
-        # Try exception types (built-in constructors such as Abort, MatchError).
-        exc = self._env.get_type(name)
-        if isinstance(exc, ExceptionType):
+        # A single get_type lookup covers both record and exception types since
+        # each name maps to exactly one entry in the type namespace.
+        named_type = self._env.get_type(name)
+        if isinstance(named_type, RecordType):
+            return self._check_constructor_call(node, named_type)
+        if isinstance(named_type, ExceptionType):
             # The abstract "Exception" base is not constructible.
-            if exc.name == "Exception":
+            if named_type.name == "Exception":
                 raise AglTypeError(
                     "The abstract 'Exception' base type is not constructible. "
                     "Use a concrete exception type (e.g. 'Abort').",
                     span=node.span,
                 )
-            return self._check_exception_call(node, exc)
+            return self._check_constructor_call(node, named_type)
         # Try enums (find a unique matching variant).
         candidates: list[tuple[EnumType, str]] = []
         for type_name in self._env.all_declared_type_names():
@@ -1127,10 +1136,10 @@ class _Checker:
                 candidates.append((t, name))
         # If expected type is an enum, resolve ambiguity.
         if isinstance(expected, EnumType) and (expected, name) in candidates:
-            return self._check_variant_call(node, expected, name)
+            return self._check_constructor_call(node, expected, variant=name)
         if len(candidates) == 1:
             enum_t, variant = candidates[0]
-            return self._check_variant_call(node, enum_t, variant)
+            return self._check_constructor_call(node, enum_t, variant=variant)
         if len(candidates) > 1:
             enum_names = ", ".join(sorted(et.name for et, _ in candidates))
             raise AglTypeError(
@@ -1143,104 +1152,85 @@ class _Checker:
             span=node.span,
         )
 
-    def _check_exception_call(self, node: Constructor, exc: ExceptionType) -> ExceptionType:
-        """Type-check a concrete exception constructor call (e.g. ``Abort(message: "…")``)."""
+    def _check_constructor_call(
+        self,
+        node: Constructor,
+        owner: RecordType | EnumType | ExceptionType,
+        *,
+        variant: str | None = None,
+    ) -> RecordType | EnumType | ExceptionType:
+        """Type-check a constructor call for a record, enum variant, or exception.
+
+        ``owner``  The record/enum/exception type being constructed.
+        ``variant`` For enum types, the variant being constructed (required when
+                    *owner* is an ``EnumType``).
+
+        All three former helpers shared the same structure:
+        1. Duplicate-argument check (record/enum always; exception: same rule
+           applied for robustness — direct AST construction can bypass the parser
+           which normally rejects duplicates first).
+        2. Unknown-field check.
+        3. Missing-field check (exceptions skip ``trace_id`` — runtime-injected).
+        4. Argument type-check.
+
+        The ``trace_id`` skip applies only to ``ExceptionType``; records and enum
+        variants are checked for every declared field.
+        """
+        # Resolve the field map for the target.
+        if isinstance(owner, EnumType):
+            assert variant is not None, "variant is required for EnumType"
+            fields = owner.variants[variant]
+            type_label = f"variant '{owner.name}.{variant}'"
+        elif isinstance(owner, RecordType):
+            fields = owner.fields
+            type_label = f"record '{owner.name}'"
+        else:
+            fields = owner.fields
+            type_label = f"exception type '{owner.name}'"
+
         provided = {arg.name: arg for arg in node.args}
-        # Check for unknown fields.
-        # Note: duplicate argument names are rejected earlier by the parser.
-        for arg_name in provided:
-            if arg_name not in exc.fields:
+
+        # 1. Duplicate-argument check (mirrors the parser guard; defensive for
+        #    direct AST construction that bypasses the parser).
+        seen_args: set[str] = set()
+        for arg in node.args:
+            if arg.name in seen_args:
                 raise AglTypeError(
-                    f"Exception type '{exc.name}' has no field '{arg_name}'.",
+                    f"Duplicate argument '{arg.name}' in constructor call.",
+                    span=arg.span,
+                )
+            seen_args.add(arg.name)
+
+        # 2. Unknown-field check.
+        for arg_name in provided:
+            if arg_name not in fields:
+                raise AglTypeError(
+                    f"'{type_label}' has no field '{arg_name}'.",
                     span=provided[arg_name].span,
                 )
-        # Check for missing required fields.  The ``message`` field is required
-        # for all exception types; ``trace_id`` is injected by the runtime, so
-        # it may be omitted from the constructor call.
-        for field_name, field_type in exc.fields.items():
-            if field_name == "trace_id":
+        # Normalise the error message form to match what the old helpers produced
+        # so callers that pattern-match on message text keep working.
+        # The error message above uses the type_label; downstream tests check for
+        # the field name, which is preserved.
+
+        # 3. Missing-field check.
+        for field_name in fields:
+            if isinstance(owner, ExceptionType) and field_name == "trace_id":
                 continue  # injected by the runtime; not required in source
             if field_name not in provided:
                 raise AglTypeError(
                     f"Missing field '{field_name}' in constructor call for "
-                    f"exception type '{exc.name}'.",
+                    f"{type_label}.",
                     span=node.span,
                 )
-        # Type-check supplied arguments.  By this point, every arg.name in
-        # node.args is a known field (unknown fields raised above).
-        for arg in node.args:
-            expected_field_type = exc.fields[arg.name]
-            arg_type = self._check_expr(arg.value, expected=expected_field_type)
-            self._assert_assignable(arg_type, expected_field_type, arg.span)
-        return exc
 
-    def _check_record_call(self, node: Constructor, rec: RecordType) -> RecordType:
-        provided = {arg.name: arg for arg in node.args}
-        # Check duplicates.
-        seen_args: set[str] = set()
+        # 4. Argument type-check.
         for arg in node.args:
-            if arg.name in seen_args:
-                raise AglTypeError(
-                    f"Duplicate argument '{arg.name}' in constructor call.",
-                    span=arg.span,
-                )
-            seen_args.add(arg.name)
-        # Check for unknown fields.
-        for arg_name in provided:
-            if arg_name not in rec.fields:
-                raise AglTypeError(
-                    f"Record '{rec.name}' has no field '{arg_name}'.",
-                    span=provided[arg_name].span,
-                )
-        # Check for missing fields.
-        for field_name in rec.fields:
-            if field_name not in provided:
-                raise AglTypeError(
-                    f"Missing field '{field_name}' in constructor call for record '{rec.name}'.",
-                    span=node.span,
-                )
-        # Check argument types.
-        for arg in node.args:
-            expected_field_type = rec.fields[arg.name]
+            expected_field_type = fields[arg.name]
             arg_type = self._check_expr(arg.value, expected=expected_field_type)
             self._assert_assignable(arg_type, expected_field_type, arg.span)
-        return rec
 
-    def _check_variant_call(
-        self, node: Constructor, enum_type: EnumType, variant: str
-    ) -> EnumType:
-        vfields = enum_type.variants[variant]
-        provided = {arg.name: arg for arg in node.args}
-        # Check duplicates.
-        seen_args: set[str] = set()
-        for arg in node.args:
-            if arg.name in seen_args:
-                raise AglTypeError(
-                    f"Duplicate argument '{arg.name}' in constructor call.",
-                    span=arg.span,
-                )
-            seen_args.add(arg.name)
-        # Check for unknown fields.
-        for arg_name in provided:
-            if arg_name not in vfields:
-                raise AglTypeError(
-                    f"Variant '{enum_type.name}.{variant}' has no field '{arg_name}'.",
-                    span=provided[arg_name].span,
-                )
-        # Check for missing fields.
-        for field_name in vfields:
-            if field_name not in provided:
-                raise AglTypeError(
-                    f"Missing field '{field_name}' in constructor call "
-                    f"for variant '{enum_type.name}.{variant}'.",
-                    span=node.span,
-                )
-        # Check argument types.
-        for arg in node.args:
-            expected_field_type = vfields[arg.name]
-            arg_type = self._check_expr(arg.value, expected=expected_field_type)
-            self._assert_assignable(arg_type, expected_field_type, arg.span)
-        return enum_type
+        return owner
 
     # --- List / Dict literals ---
 

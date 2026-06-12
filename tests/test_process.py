@@ -373,3 +373,139 @@ class TestRunCaptureResultCwdEnv:
         )
         assert result.returncode == 0
         assert result.stdout.strip() == "magic42"
+
+
+# ---------------------------------------------------------------------------
+# Task 1: ENOEXEC (spawn hole) — run_capture_result must return spawn-error
+# ---------------------------------------------------------------------------
+
+
+class TestRunCaptureResultEnoexec:
+    """ENOEXEC ('Exec format error') from running a file with no shebang / binary
+    content must be caught at the spawn boundary and returned as a spawn-error
+    result rather than escaping as a raw OSError.
+    """
+
+    def _make_enoexec_script(self, tmp_path: Path) -> Path:
+        """Create a file with exec permission but no shebang (binary junk)."""
+        script = tmp_path / "garbage_binary"
+        script.write_bytes(b"\x7f\x45\x4c\x46garbage")  # ELF magic but not valid
+        script.chmod(script.stat().st_mode | 0o111)  # add exec bit
+        return script
+
+    def test_enoexec_does_not_raise(self, tmp_path: Path) -> None:
+        """run_capture_result must never raise on ENOEXEC."""
+        script = self._make_enoexec_script(tmp_path)
+        # Must not raise OSError or any other exception
+        result = run_capture_result([str(script)])
+        assert result.spawn_error is not None
+
+    def test_enoexec_returns_spawn_error_result(self, tmp_path: Path) -> None:
+        """ENOEXEC must produce spawn_error set and returncode=None."""
+        script = self._make_enoexec_script(tmp_path)
+        result = run_capture_result([str(script)])
+        assert result.spawn_error is not None
+        assert result.returncode is None
+
+    def test_enoexec_streams_are_empty(self, tmp_path: Path) -> None:
+        """When ENOEXEC fires, no output was produced."""
+        script = self._make_enoexec_script(tmp_path)
+        result = run_capture_result([str(script)])
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+    def test_enoexec_spawn_errno_is_set(self, tmp_path: Path) -> None:
+        """spawn_errno should be ENOEXEC (8) so callers can distinguish the cause."""
+        import errno as errno_mod
+
+        script = self._make_enoexec_script(tmp_path)
+        result = run_capture_result([str(script)])
+        assert result.spawn_errno == errno_mod.ENOEXEC
+
+
+class TestRunCaptureEnoexecReraise:
+    """run_capture must re-raise ENOEXEC as OSError (not FileNotFoundError/PermissionError)."""
+
+    def _make_enoexec_script(self, tmp_path: Path) -> Path:
+        script = tmp_path / "garbage_binary"
+        script.write_bytes(b"\x7f\x45\x4c\x46garbage")
+        script.chmod(script.stat().st_mode | 0o111)
+        return script
+
+    def test_enoexec_raises_os_error_not_file_not_found(self, tmp_path: Path) -> None:
+        """ENOEXEC re-raises as OSError (or subclass), not FileNotFoundError."""
+        script = self._make_enoexec_script(tmp_path)
+        with pytest.raises(OSError) as exc_info:
+            run_capture([str(script)])
+        # Must NOT be FileNotFoundError (wrong semantic) — it's an exec format error
+        assert not isinstance(exc_info.value, FileNotFoundError)
+
+    def test_enoexec_errno_intact(self, tmp_path: Path) -> None:
+        """The re-raised OSError must preserve errno=ENOEXEC."""
+        import errno as errno_mod
+
+        script = self._make_enoexec_script(tmp_path)
+        with pytest.raises(OSError) as exc_info:
+            run_capture([str(script)])
+        assert exc_info.value.errno == errno_mod.ENOEXEC
+
+
+class TestRunCaptureErrnoIntact:
+    """run_capture re-raises FileNotFoundError/PermissionError with errno/filename intact."""
+
+    def test_file_not_found_errno_intact(self) -> None:
+        """FileNotFoundError from run_capture preserves errno=ENOENT."""
+        import errno as errno_mod
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            run_capture(["/nonexistent/binary/that/does/not/exist"])
+        assert exc_info.value.errno == errno_mod.ENOENT
+
+    def test_permission_error_errno_intact(self, tmp_path: Path) -> None:
+        """PermissionError from run_capture preserves errno=EACCES."""
+        import errno as errno_mod
+
+        script = tmp_path / "not_executable.sh"
+        script.write_text("#!/bin/sh\necho hi\n")
+        script.chmod(0o644)
+        with pytest.raises(PermissionError) as exc_info:
+            run_capture([str(script)])
+        assert exc_info.value.errno == errno_mod.EACCES
+
+    def test_file_not_found_filename_intact(self) -> None:
+        """FileNotFoundError from run_capture preserves the filename."""
+        path = "/nonexistent/binary/that/does/not/exist"
+        with pytest.raises(FileNotFoundError) as exc_info:
+            run_capture([path])
+        assert exc_info.value.filename == path or path in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Task 2: stdin_text threading — 2MB stdin must not BrokenPipeError or deadlock
+# ---------------------------------------------------------------------------
+
+
+class TestRunCaptureResultLargeStdin:
+    """stdin_text must be written from a thread; large stdin to 'true' must not raise."""
+
+    def test_large_stdin_to_true_does_not_raise(self) -> None:
+        """2MB stdin to 'true' (which never reads stdin) must return rc=0, no exception."""
+        result = run_capture_result(["true"], stdin_text="x" * 2_000_000)
+        assert result.returncode == 0
+        assert result.spawn_error is None
+
+    def test_large_stdin_to_cat_completes_without_deadlock(self) -> None:
+        """Large stdin to 'cat' (reads all stdin, writes all stdout) must complete."""
+        payload = "line\n" * 50_000  # ~350KB
+        result = run_capture_result(["cat"], stdin_text=payload)
+        assert result.returncode == 0
+        assert result.stdout == payload
+
+    def test_small_stdin_behavior_unchanged(self) -> None:
+        """Small stdin still works correctly after the threading change."""
+        result = run_capture_result(
+            [sys.executable, "-c", "import sys; print(sys.stdin.read().strip())"],
+            stdin_text="hello from stdin",
+        )
+        assert result.returncode == 0
+        assert "hello from stdin" in result.stdout

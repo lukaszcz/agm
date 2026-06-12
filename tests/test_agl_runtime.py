@@ -1556,6 +1556,191 @@ class TestRuntimeErrorPaths:
         result = _convert_input("b", True, BoolType())
         assert result == BoolValue(True)
 
+    # --- assertions migrated from TestRuntimeExceptionHandlers (eval tests) ---
+
+    def test_internal_interpreter_error_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F1c: an unexpected (non-AglRaise) interpreter error must propagate.
+
+        A Python-level bug must crash loudly rather than masquerade as a
+        user-facing pre-execution diagnostic.
+        """
+        from agm.agl.eval.interpreter import Interpreter
+
+        def bad_execute(self: Interpreter, root_scope: object) -> None:
+            raise RuntimeError("internal crash")
+
+        monkeypatch.setattr(Interpreter, "execute", bad_execute)
+
+        rt = WorkflowRuntime()
+        with pytest.raises(RuntimeError, match="internal crash"):
+            rt.run("let x = 1")
+
+    def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
+        """_exception_value_to_run_error converts every Value kind to JSON shape.
+
+        This is the pure converter used to surface an uncaught AgL exception
+        (e.g. AgentParseError) as a RunError.
+        """
+        import decimal
+
+        from agm.agl.eval.values import (
+            BoolValue,
+            DecimalValue,
+            DictValue,
+            EnumValue,
+            ExceptionValue,
+            IntValue,
+            JsonValue,
+            ListValue,
+            RecordValue,
+            TextValue,
+        )
+        from agm.agl.runtime.runtime import RunError, _exception_value_to_run_error
+
+        exc_val = ExceptionValue(
+            type_name="AgentParseError",
+            fields={
+                "message": TextValue("failed"),
+                "trace_id": TextValue(""),
+                "raw": TextValue("abc"),
+                "agent": TextValue("prompt"),
+                "attempts": IntValue(1),
+                "target_type": TextValue("text"),
+                "decimal_val": DecimalValue(decimal.Decimal("1.5")),
+                "bool_val": BoolValue(True),
+                "json_val": JsonValue({"k": "v"}),
+                "list_val": ListValue(elements=(IntValue(1),)),
+                "dict_val": DictValue(entries={"x": IntValue(2)}),
+                "rec_val": RecordValue(type_name="R", fields={"f": TextValue("v")}),
+                "enum_val": EnumValue(type_name="E", variant="V", fields={}),
+                "exc_val": ExceptionValue(type_name="Inner", fields={}),
+                "none_val": JsonValue(None),
+            },
+        )
+        error = _exception_value_to_run_error(exc_val)
+        assert isinstance(error, RunError)
+        assert error.type_name == "AgentParseError"
+        assert error.fields["message"] == "failed"
+        # F3/F9: Decimal is preserved exactly (not converted to float).
+        assert error.fields["decimal_val"] == decimal.Decimal("1.5")
+        assert isinstance(error.fields["decimal_val"], decimal.Decimal)
+        assert error.fields["bool_val"] is True
+        assert error.fields["json_val"] == {"k": "v"}
+        assert error.fields["list_val"] == [1]
+        assert error.fields["dict_val"] == {"x": 2}
+        assert error.fields["rec_val"] == {"f": "v"}
+        assert error.fields["enum_val"] == {"$case": "V"}
+        assert isinstance(error.fields["exc_val"], dict)
+
+    def test_convert_input_json_type_accepts_any(self) -> None:
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import JsonType
+
+        result = _convert_input("meta", [1, 2, 3], JsonType())
+        assert result == JsonValue([1, 2, 3])
+
+    def test_convert_input_list_type_parsed_via_json_codec(self) -> None:
+        # M2: list/dict/record/enum inputs are now accepted via the JsonCodec.
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import ListType, TextType
+
+        result = _convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
+        assert isinstance(result, ListValue)
+        assert result.elements == (TextValue("a"), TextValue("b"))
+
+    def test_agl_raise_from_interpreter_becomes_run_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An AglRaise from the interpreter → RunResult.error (not None)."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.eval.values import ExceptionValue, TextValue
+
+        def bad_execute(self: Interpreter, root_scope: object) -> None:
+            exc_val = ExceptionValue(
+                type_name="Abort",
+                fields={"message": TextValue("fatal"), "trace_id": TextValue("")},
+            )
+            raise AglRaise(exc_val)
+
+        monkeypatch.setattr(Interpreter, "execute", bad_execute)
+
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1")
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "Abort"
+        assert result.error.fields.get("message") == "fatal"
+
+    # --- Task 3: structured Decimal inputs and non-JSON-shaped rejection ---
+
+    def test_list_decimal_input_validates_exactly(self) -> None:
+        """Task 3: a list[decimal] input with native Decimal values must bind
+        correctly without the old default=str corruption.
+
+        Before the fix, Decimal("1.5") was serialized as the JSON string "1.5"
+        (quoted), which failed schema validation.
+        """
+        import decimal as _decimal
+
+        from agm.agl.eval.values import DecimalValue, ListValue
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import DecimalType, ListType
+
+        result = _convert_input(
+            "xs", [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")], ListType(elem=DecimalType())
+        )
+        assert isinstance(result, ListValue)
+        assert result.elements == (
+            DecimalValue(_decimal.Decimal("1.5")),
+            DecimalValue(_decimal.Decimal("2.75")),
+        )
+
+    def test_non_json_shaped_object_yields_clean_diagnostic(self) -> None:
+        """Task 3: a non-JSON-shaped object (e.g. a set) must yield a clean
+        input-validation error naming the input, not a stringified value or
+        traceback.
+        """
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import ListType, TextType
+
+        with pytest.raises(ValueError, match="xs") as exc_info:
+            _convert_input("xs", {1, 2, 3}, ListType(elem=TextType()))
+        # The error message must name the input and mention the type, not
+        # contain a raw repr of the set or a json.dumps traceback.
+        msg = str(exc_info.value)
+        assert "set" in msg  # type name named
+
+    def test_decimal_native_in_list_end_to_end(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Task 3 e2e: input xs: list[decimal] with Decimal values binds and prints."""
+        import decimal as _decimal
+
+        result = WorkflowRuntime().run(
+            "input xs: list[decimal]\nprint xs\n",
+            inputs={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
+        )
+        assert result.ok is True
+        out = capsys.readouterr().out
+        assert "1.5" in out
+        assert "2.25" in out
+
+    def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
+        """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers
+        the dict branch of _is_json_shaped, line 790).
+        """
+        from agm.agl.runtime.runtime import _is_json_shaped
+
+        # Dict with non-str key.
+        assert _is_json_shaped({1: "a"}) is False
+        # Dict with str keys and JSON-shaped values.
+        assert _is_json_shaped({"k": 1}) is True
+
 
 class TestRegisteredRendererInvoked:
     """F1 (M3b): a host-registered renderer is actually invoked at eval time.

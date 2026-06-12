@@ -1,22 +1,25 @@
 """WorkflowRuntime — the public façade for the AgL host runtime.
 
-M0 shell: the constructor, ``register_agent``, and a ``run`` method that
-always returns a pre-execution failure result (execution is not yet
-implemented).  Later milestones fill in the full pipeline.
+M1 implementation: full parse → scope → typecheck → eval pipeline.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from agm.agl.diagnostics import Diagnostic
+
+if TYPE_CHECKING:
+    from agm.agl.eval.values import ExceptionValue, Value
+    from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
 
-# Type alias for an agent callable (relaxed for M0; tightened in M1).
+# Type alias for an agent callable.
 AgentFn = Callable[..., Any]
 
 
@@ -50,11 +53,15 @@ class RunResult:
         *started* executing but ended with an unhandled exception (exit code 2
         per the CLI contract).  ``None`` for pre-execution failures and for
         successful runs.
+    ``bindings``
+        Root-scope bindings after a successful run (name → Value).  Empty for
+        failed runs.
     """
 
     ok: bool
     diagnostics: list[Diagnostic]
     error: RunError | None
+    bindings: dict[str, Value] = field(default_factory=dict)
 
 
 class WorkflowRuntime:
@@ -107,17 +114,233 @@ class WorkflowRuntime:
     def run(self, source: str, *, inputs: Mapping[str, object] | None = None) -> RunResult:
         """Parse, analyse, and execute an AgL source program.
 
-        M0 implementation: always returns a pre-execution failure with a
-        single diagnostic explaining that execution is not yet implemented.
-        The full pipeline (lex → parse → scope → typecheck → eval) is wired
-        in M1–M5.
+        Pipeline:
+            parse → resolve → check (with HostCapabilities) →
+            validate inputs → materialize contracts → eval
+
+        Returns a ``RunResult`` capturing the outcome.
         """
-        del source, inputs  # unused in M0
-        diagnostic = Diagnostic(
-            message="AgL execution is not implemented yet (M0 skeleton)",
-            line=1,
+        if inputs is None:
+            inputs = {}
+
+        # ----------------------------------------------------------------
+        # Build HostCapabilities from registrations.
+        # ----------------------------------------------------------------
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.runtime.agents import AgentRegistry
+        from agm.agl.runtime.codec import TextCodec
+
+        text_codec = TextCodec()
+        registry = AgentRegistry(
+            named={name: fn for name, fn in self._agents.items()},
+            default_agent=self._default_agent,
         )
-        return RunResult(ok=False, diagnostics=[diagnostic], error=None)
+        capabilities = HostCapabilities(
+            agent_names=registry.agent_names,
+            has_fallback_agent=registry.has_fallback,
+            codec_kinds={text_codec.name: frozenset({"text"})},
+            renderer_names=frozenset({"default", "raw", "json", "bullets"}),
+        )
+
+        # ----------------------------------------------------------------
+        # [1] Parse
+        # ----------------------------------------------------------------
+        from agm.agl.parser import AglSyntaxError, parse_program
+
+        try:
+            program = parse_program(source)
+        except AglSyntaxError as exc:
+            return RunResult(
+                ok=False,
+                diagnostics=[exc.to_diagnostic()],
+                error=None,
+            )
+        except Exception as exc:
+            return RunResult(
+                ok=False,
+                diagnostics=[Diagnostic(message=str(exc), line=1)],
+                error=None,
+            )
+
+        # ----------------------------------------------------------------
+        # [2] Scope / name resolution
+        # ----------------------------------------------------------------
+        from agm.agl.scope import AglScopeError, resolve
+
+        try:
+            resolved = resolve(program)
+        except AglScopeError as exc:
+            return RunResult(
+                ok=False,
+                diagnostics=[exc.to_diagnostic()],
+                error=None,
+            )
+        except Exception as exc:
+            return RunResult(
+                ok=False,
+                diagnostics=[Diagnostic(message=f"Scope error: {exc}", line=1)],
+                error=None,
+            )
+
+        # ----------------------------------------------------------------
+        # [3] Type checking
+        # ----------------------------------------------------------------
+        from agm.agl.typecheck import AglTypeError, check
+
+        try:
+            checked = check(resolved, capabilities)
+        except AglTypeError as exc:
+            return RunResult(
+                ok=False,
+                diagnostics=[exc.to_diagnostic()],
+                error=None,
+            )
+        except Exception as exc:
+            return RunResult(
+                ok=False,
+                diagnostics=[Diagnostic(message=f"Type error: {exc}", line=1)],
+                error=None,
+            )
+
+        # Collect warnings from typecheck.
+        warnings: list[Diagnostic] = list(checked.warnings)
+
+        # ----------------------------------------------------------------
+        # [4] Validate host inputs against input declarations
+        # ----------------------------------------------------------------
+        from agm.agl.syntax.nodes import InputDecl
+
+        # Build declared input map.
+        declared_inputs: dict[str, object] = {}  # name → declared Type
+        for stmt in program.body:
+            if isinstance(stmt, InputDecl):
+                # Resolve the declared type from the annotation AST node.
+                input_type = _resolve_annotation(stmt.annotation)
+                declared_inputs[stmt.name] = input_type
+
+        # Validate: check for missing and undeclared.
+        input_errors: list[Diagnostic] = []
+        provided_keys = set(inputs.keys())
+        declared_keys = set(declared_inputs.keys())
+
+        for name in declared_keys - provided_keys:
+            input_errors.append(
+                Diagnostic(
+                    message=f"Missing declared input: {name!r}",
+                    line=1,
+                )
+            )
+        for name in provided_keys - declared_keys:
+            input_errors.append(
+                Diagnostic(
+                    message=f"Undeclared input: {name!r} was provided but not declared",
+                    line=1,
+                )
+            )
+
+        if input_errors:
+            return RunResult(ok=False, diagnostics=input_errors, error=None)
+
+        # ----------------------------------------------------------------
+        # [5] Materialize output contracts (text codec only in M1)
+        # ----------------------------------------------------------------
+        from agm.agl.runtime.contract import materialize_contract
+
+        codecs = {text_codec.name: text_codec}
+        contracts: dict[int, object] = {}
+        contract_errors: list[Diagnostic] = []
+
+        for node_id, spec in checked.contract_specs.items():
+            try:
+                contracts[node_id] = materialize_contract(spec, codecs)
+            except ValueError as exc:
+                contract_errors.append(
+                    Diagnostic(message=f"Contract error: {exc}", line=1)
+                )
+
+        if contract_errors:
+            return RunResult(ok=False, diagnostics=contract_errors, error=None)
+
+        # ----------------------------------------------------------------
+        # [6] Build root scope from inputs + type-check declarations
+        # ----------------------------------------------------------------
+        from agm.agl.eval.scope import Scope
+
+        root_scope = Scope(parent=None)
+        input_bind_errors: list[Diagnostic] = []
+
+        for stmt in program.body:
+            if isinstance(stmt, InputDecl):
+                raw_val = inputs[stmt.name]
+                input_type_obj = declared_inputs.get(stmt.name)
+                # Convert/validate the raw value.
+                try:
+                    typed_val = _convert_input(stmt.name, raw_val, input_type_obj)
+                except ValueError as exc:
+                    input_bind_errors.append(
+                        Diagnostic(message=str(exc), line=stmt.span.start_line)
+                    )
+                    continue
+                root_scope.define(
+                    stmt.name, typed_val, mutable=False, decl_span=stmt.span
+                )
+
+        if input_bind_errors:
+            return RunResult(ok=False, diagnostics=input_bind_errors, error=None)
+
+        # ----------------------------------------------------------------
+        # [7] Build and run the interpreter
+        # ----------------------------------------------------------------
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.runtime.contract import OutputContract
+
+        typed_contracts: dict[int, OutputContract] = {
+            nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
+        }
+
+        # Build a TypeEnvironment so the interpreter can resolve constructors.
+        type_env = _build_type_env(checked)
+
+        interp = Interpreter(
+            checked=checked,
+            registry=registry,
+            contracts=typed_contracts,
+            loop_limit=self._default_loop_limit,
+            strict_json=self._default_strict_json,
+        )
+        # Inject the type environment.
+        interp._type_env = type_env
+
+        try:
+            interp.execute(root_scope)
+        except AglRaise as exc:
+            # Uncaught AgL exception.
+            error = _exception_value_to_run_error(exc.exc)
+            return RunResult(
+                ok=False,
+                diagnostics=list(warnings),
+                error=error,
+                bindings={},
+            )
+        except Exception as exc:
+            return RunResult(
+                ok=False,
+                diagnostics=list(warnings) + [
+                    Diagnostic(message=f"Internal interpreter error: {exc}", line=1)
+                ],
+                error=None,
+            )
+
+        # Successful run: snapshot root bindings.
+        root_bindings = root_scope.snapshot()
+
+        return RunResult(
+            ok=True,
+            diagnostics=list(warnings),
+            error=None,
+            bindings=root_bindings,
+        )
 
     @property
     def default_loop_limit(self) -> int:
@@ -128,3 +351,174 @@ class WorkflowRuntime:
     def default_strict_json(self) -> bool:
         """Whether strict JSON parsing is the default."""
         return self._default_strict_json
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _convert_input(name: str, raw: object, type_obj: object) -> "Value":
+    """Convert a raw host input value to the declared AgL type.
+
+    For ``text`` inputs the value is taken verbatim (must already be a str).
+    For other types the value is JSON-parsed and type-validated.
+    """
+    import decimal as _decimal
+
+    from agm.agl.eval.values import (
+        BoolValue,
+        DecimalValue,
+        IntValue,
+        JsonValue,
+        TextValue,
+    )
+    from agm.agl.typecheck.types import BoolType, DecimalType, IntType, JsonType, TextType
+
+    # Text: verbatim.
+    if isinstance(type_obj, TextType) or type_obj is None:
+        if not isinstance(raw, str):
+            raise ValueError(
+                f"Input {name!r}: expected a text value (str), got {type(raw).__name__}"
+            )
+        return TextValue(raw)
+
+    # Non-text: parse from JSON if given as a string.
+    value = raw
+    if isinstance(value, str):
+        try:
+            value = json.loads(value, parse_float=_decimal.Decimal)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Input {name!r}: could not parse as JSON: {exc}"
+            ) from exc
+
+    if isinstance(type_obj, IntType):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return IntValue(value)
+        if isinstance(value, _decimal.Decimal) and value == int(value):
+            return IntValue(int(value))
+        raise ValueError(
+            f"Input {name!r}: expected an integer, got {type(value).__name__} {value!r}"
+        )
+
+    if isinstance(type_obj, DecimalType):
+        if isinstance(value, _decimal.Decimal):
+            return DecimalValue(value)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return DecimalValue(_decimal.Decimal(value))
+        raise ValueError(
+            f"Input {name!r}: expected a decimal, got {type(value).__name__} {value!r}"
+        )
+
+    if isinstance(type_obj, BoolType):
+        if isinstance(value, bool):
+            return BoolValue(value)
+        raise ValueError(
+            f"Input {name!r}: expected a bool, got {type(value).__name__} {value!r}"
+        )
+
+    if isinstance(type_obj, JsonType):
+        return JsonValue(value)
+
+    # Fallback: accept anything as JSON.
+    return JsonValue(value)
+
+
+def _exception_value_to_run_error(exc: "ExceptionValue") -> RunError:
+    """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``."""
+    from agm.agl.eval.values import (
+        BoolValue,
+        DecimalValue,
+        DictValue,
+        EnumValue,
+        ExceptionValue,
+        IntValue,
+        JsonValue,
+        ListValue,
+        RecordValue,
+        TextValue,
+    )
+
+    def _to_json_obj(v: object) -> object:
+        if isinstance(v, TextValue):
+            return v.value
+        if isinstance(v, IntValue):
+            return v.value
+        if isinstance(v, DecimalValue):
+            return float(v.value)
+        if isinstance(v, BoolValue):
+            return v.value
+        if isinstance(v, JsonValue):
+            return v.raw
+        if isinstance(v, ListValue):
+            return [_to_json_obj(e) for e in v.elements]
+        if isinstance(v, DictValue):
+            return {k: _to_json_obj(fv) for k, fv in v.entries.items()}
+        if isinstance(v, RecordValue):
+            return {k: _to_json_obj(fv) for k, fv in v.fields.items()}
+        if isinstance(v, EnumValue):
+            d: dict[str, object] = {"$case": v.variant}
+            d.update({k: _to_json_obj(fv) for k, fv in v.fields.items()})
+            return d
+        if isinstance(v, ExceptionValue):
+            return {k: _to_json_obj(fv) for k, fv in v.fields.items()}
+        return None  # pragma: no cover
+
+    # Handle Value (not object) — need the import here.
+
+    fields: dict[str, object] = {}
+    for k, v in exc.fields.items():
+        fields[k] = _to_json_obj(v)
+
+    return RunError(type_name=exc.type_name, fields=fields)
+
+
+def _resolve_annotation(annotation: object) -> object:
+    """Convert an AST type-annotation node to a ``typecheck.types.Type`` instance.
+
+    Returns the resolved ``Type``, or ``None`` (which maps to ``TextType``) when
+    no annotation is present.  Only scalar types are needed here; compound types
+    (list, dict) are not supported as input in M1.
+    """
+    from agm.agl.syntax.types import BoolT, DecimalT, IntT, JsonT, TextT
+    from agm.agl.typecheck.types import BoolType, DecimalType, IntType, JsonType, TextType
+
+    if annotation is None:
+        return TextType()
+    if isinstance(annotation, TextT):
+        return TextType()
+    if isinstance(annotation, IntT):
+        return IntType()
+    if isinstance(annotation, DecimalT):
+        return DecimalType()
+    if isinstance(annotation, BoolT):
+        return BoolType()
+    if isinstance(annotation, JsonT):
+        return JsonType()
+    # Unknown annotation: default to text
+    return TextType()
+
+
+def _build_type_env(checked: "CheckedProgram") -> TypeEnvironment:
+    """Reconstruct a TypeEnvironment from the checked program."""
+    from agm.agl.syntax.nodes import EnumDef, RecordDef, TypeAlias
+    from agm.agl.typecheck.env import TypeEnvironment
+
+    env = TypeEnvironment()
+    # Walk the program body to register types in the right order.
+    for stmt in checked.resolved.program.body:
+        if isinstance(stmt, RecordDef):
+            t = checked.node_types.get(stmt.node_id)
+            if t is not None:
+                env.register_type(stmt.name, t)
+        elif isinstance(stmt, EnumDef):
+            t = checked.node_types.get(stmt.node_id)
+            if t is not None:
+                env.register_type(stmt.name, t)
+        elif isinstance(stmt, TypeAlias):
+            t = checked.node_types.get(stmt.node_id)
+            if t is not None:
+                env.register_type(stmt.name, t)
+
+    return env

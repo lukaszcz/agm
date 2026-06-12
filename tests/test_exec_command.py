@@ -230,12 +230,33 @@ class TestExecCommandBehavior:
         # The friendly message names the offending path.
         assert "a_directory" in captured.err
 
-    def test_valid_file_exits_1_pre_execution(
+    def test_valid_file_exits_0_success(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A valid .agl file should exit 1 because execution is not yet implemented."""
+        """A valid .agl file with no agent calls exits 0 (success)."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        # M1: a simple valid program succeeds
+        result = exec_command.run(args)
+        assert result is None  # returns None on success (exit 0)
+
+    def test_static_error_file_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A .agl file with a static error exits 1 and prints diagnostics to stderr."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = undefined_name\n")
         from agm.commands.args import ExecArgs
 
         args = ExecArgs(
@@ -250,28 +271,7 @@ class TestExecCommandBehavior:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 1
-
-    def test_valid_file_prints_diagnostic_to_stderr(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Diagnostics should be printed to stderr."""
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-        from agm.commands.args import ExecArgs
-
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit):
-            exec_command.run(args)
         captured = capsys.readouterr()
-        # diagnostics go to stderr
         assert captured.err
 
 
@@ -529,6 +529,114 @@ class TestExecCLIPaths:
             ["exec", "--no-log", "--log-file", "/tmp/x.log", str(agl_file)],
         )
         assert result.exit_code != 0
+
+
+class TestExecCommandM1:
+    """M1 exec command behavior: exit codes, inputs, agent calls."""
+
+    def test_valid_program_exits_0(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        result = exec_command.run(args)
+        assert result is None  # no SystemExit → exit 0
+
+    def test_program_with_inputs_exits_0(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("input msg\nprint msg\n")
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=["msg=hello"],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        result = exec_command.run(args)
+        assert result is None
+
+    def test_missing_input_exits_1(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("input msg\nprint msg\n")
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],  # missing 'msg'
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+
+    def test_uncaught_agl_exception_exits_2(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An uncaught AgL exception during execution → exit code 2."""
+        from agm.agl.runtime.runtime import RunError, RunResult, WorkflowRuntime
+        from agm.commands.args import ExecArgs
+
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+
+        def fake_run(self: WorkflowRuntime, source: str, *, inputs: object = None) -> RunResult:
+            return RunResult(
+                ok=False,
+                diagnostics=[],
+                error=RunError(type_name="Abort", fields={"message": "fatal"}),
+            )
+
+        import agm.agl.runtime.runtime as rt_mod
+
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 2
+
+    def test_static_error_exits_1_not_2(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = undefined_name\n")
+        from agm.commands.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1  # static error, not AgL exception
 
 
 class TestParseKeyValue:

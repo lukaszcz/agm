@@ -1,13 +1,15 @@
-"""Tests for the WorkflowRuntime shell (M0).
+"""Tests for WorkflowRuntime — M0 shell behaviors preserved, M1 additions.
 
 Covers:
 - WorkflowRuntime constructor with default kwargs
 - register_agent: duplicate rejection, reserved-name rejection (prompt, exec)
-- run: returns a failed RunResult with a diagnostic when not implemented
+- run: full pipeline now active; valid programs succeed; static errors fail
 - Diagnostic has .message (str) and .line (int)
 - RunResult has .ok (bool), .diagnostics (list), .error (None for pre-exec failures)
 - AglError and SourceSpan
 - Token constants
+- M1 additions: agent registration/fallback, capability derivation, input validation,
+  text-codec behavior, AgentCallError, empty-response valid case
 """
 
 from __future__ import annotations
@@ -42,10 +44,9 @@ class TestWorkflowRuntimeConstructor:
         rt = WorkflowRuntime(default_agent=my_agent)
         rt.register_agent("reviewer", my_agent)  # should not raise
         result = rt.run("let x = 1")
-        # M0: run() returns the not-implemented pre-execution failure.
-        assert result.ok is False
+        # M1: a valid program with no agent calls returns ok=True
+        assert result.ok is True
         assert result.error is None
-        assert result.diagnostics
 
 
 class TestRegisterAgent:
@@ -86,59 +87,200 @@ class TestRegisterAgent:
             rt.register_agent("exec", my_agent)
 
 
-class TestRunNotImplemented:
+class TestRunBehavior:
+    """M1 run() behavior: valid programs run, static errors fail cleanly."""
+
     def test_run_returns_run_result(self) -> None:
         rt = WorkflowRuntime()
         result = rt.run("let x = 1")
         assert isinstance(result, RunResult)
 
-    def test_run_result_ok_is_false(self) -> None:
+    def test_valid_program_ok(self) -> None:
         rt = WorkflowRuntime()
         result = rt.run("let x = 1")
-        assert result.ok is False
+        assert result.ok is True
 
-    def test_run_result_has_diagnostic(self) -> None:
+    def test_static_error_not_ok(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = undefined_name")
+        assert result.ok is False
+        assert result.error is None
         assert len(result.diagnostics) >= 1
 
-    def test_run_result_diagnostic_has_message(self) -> None:
+    def test_static_error_diagnostic_has_message(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = undefined_name")
         diag = result.diagnostics[0]
         assert isinstance(diag.message, str)
-        assert diag.message  # non-empty
+        assert diag.message
 
-    def test_run_result_diagnostic_has_line(self) -> None:
+    def test_static_error_diagnostic_has_line(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = undefined_name")
         diag = result.diagnostics[0]
         assert isinstance(diag.line, int)
-        assert diag.line == 1
+        assert diag.line >= 1
 
-    def test_run_result_error_is_none(self) -> None:
+    def test_run_result_error_none_for_static_failure(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = undefined_name")
         # pre-execution failure: error is None (no AgL exception was raised)
         assert result.error is None
 
     def test_run_with_inputs(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1", inputs={"key": "value"})
+        result = rt.run("input k\nprint k", inputs={"k": "value"})
         assert isinstance(result, RunResult)
-        assert result.ok is False
+        assert result.ok is True
 
     def test_run_with_empty_inputs(self) -> None:
         rt = WorkflowRuntime()
         result = rt.run("let x = 1", inputs={})
         assert isinstance(result, RunResult)
+        assert result.ok is True
 
-    def test_diagnostic_message_mentions_not_implemented(self) -> None:
+    def test_run_parse_error_not_ok(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
-        diag = result.diagnostics[0]
-        # The message should mention that execution is not yet implemented
-        assert "not implemented" in diag.message.lower() or "implementation" in diag.message.lower()
+        # Invalid syntax
+        result = rt.run("@@@@@")
+        assert result.ok is False
+        assert result.error is None
+
+
+class TestFallbackAgent:
+    """has_fallback_agent behavior for capability checking."""
+
+    def test_no_default_agent_prompt_call_static_error(self) -> None:
+        rt = WorkflowRuntime()  # no default_agent
+        result = rt.run('let x = prompt "hi"')
+        assert result.ok is False
+        assert result.error is None  # static, not runtime
+
+    def test_with_default_agent_prompt_call_succeeds(self) -> None:
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        result = rt.run('let x = prompt "hi"')
+        assert result.ok is True
+
+    def test_named_agent_registered_accepted(self) -> None:
+        rt = WorkflowRuntime()
+        rt.register_agent("impl", lambda req: "output")
+        result = rt.run('let x = impl "do it"')
+        assert result.ok is True
+
+    def test_unknown_named_agent_without_fallback_is_error(self) -> None:
+        rt = WorkflowRuntime()
+        # No agents registered, no fallback → static error for named agent
+        result = rt.run('let x = mysterious_agent "hi"')
+        assert result.ok is False
+        assert result.error is None
+
+    def test_has_fallback_when_default_agent_is_set(self) -> None:
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        # A runtime with a default_agent provides fallback for any name
+        result = rt.run('let x = any_agent_name "hi"')
+        assert result.ok is True
+
+
+class TestInputValidationRuntime:
+    """Input validation before execution (§11.3, §9.5)."""
+
+    def test_missing_input_fails_not_ok(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("input spec\nprint spec", inputs={})
+        assert result.ok is False
+        assert result.error is None  # host error, not AgL exception
+
+    def test_missing_input_mentions_name(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("input spec\nprint spec", inputs={})
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "spec" in msgs.lower()
+
+    def test_undeclared_extra_fails(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("input a\nprint a", inputs={"a": "ok", "b": "extra"})
+        assert result.ok is False
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "b" in msgs.lower()
+
+    def test_text_input_verbatim(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("input msg\nprint msg", inputs={"msg": "hello world"})
+        assert result.ok is True
+
+    def test_no_agent_called_on_input_failure(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: object) -> str:
+            calls.append(req.prompt)  # type: ignore[attr-defined]
+            return "ok"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        rt.run("input x\nlet y = prompt \"Hi\"", inputs={})
+        assert calls == []
+
+    def test_int_input_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("input n: int\nprint n", inputs={"n": 5})
+        assert result.ok
+        out = capsys.readouterr().out
+        assert "5" in out
+
+    def test_invalid_typed_input_fails(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("input n: int\nprint n", inputs={"n": "five"})
+        assert result.ok is False
+        assert result.error is None
+
+
+class TestEmptyResponse:
+    """Exit 0 with empty stdout is a valid empty response (plan §9.5)."""
+
+    def test_empty_string_response_is_valid_text(self) -> None:
+        rt = WorkflowRuntime(default_agent=lambda req: "")
+        result = rt.run('let x = prompt "Say nothing."')
+        assert result.ok is True
+        from agm.agl.eval.values import TextValue
+
+        assert result.bindings["x"] == TextValue("")
+
+
+class TestAgentRequest:
+    """AgentRequest contract: .prompt and .agent fields."""
+
+    def test_request_prompt_is_rendered_template(self) -> None:
+        received: list[object] = []
+
+        def agent(req: object) -> str:
+            received.append(req)
+            return "ok"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        rt.run('let x = prompt "Hello world"')
+        assert received[0].prompt == "Hello world"  # type: ignore[attr-defined]
+
+    def test_request_agent_name_for_default(self) -> None:
+        received: list[object] = []
+
+        def agent(req: object) -> str:
+            received.append(req)
+            return "ok"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        rt.run('let x = prompt "Hi"')
+        assert received[0].agent == "prompt"  # type: ignore[attr-defined]
+
+    def test_request_agent_name_for_named(self) -> None:
+        received: list[object] = []
+
+        def reviewer(req: object) -> str:
+            received.append(req)
+            return "ok"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("reviewer", reviewer)
+        rt.run('let x = reviewer "Review this"')
+        assert received[0].agent == "reviewer"  # type: ignore[attr-defined]
 
 
 class TestDiagnosticType:
@@ -174,6 +316,12 @@ class TestRunResultType:
         assert result.ok is True
         assert result.diagnostics == [warning]
         assert result.error is None
+
+    def test_run_result_has_bindings(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1")
+        assert hasattr(result, "bindings")
+        assert isinstance(result.bindings, dict)
 
 
 class TestSourceSpan:

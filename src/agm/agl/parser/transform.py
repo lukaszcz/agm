@@ -47,6 +47,9 @@ from agm.agl.syntax.types import (
     TypeExpr,
 )
 
+# Types used internally for constructor-arg assembly
+_NamedArgList = list[syntax.NamedArg]
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -126,6 +129,7 @@ class AstBuilder(Transformer):
             for s in args
             if s is not None and not isinstance(s, Token)
             if isinstance(s, (
+                syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
                 syntax.InputDecl, syntax.LetDecl, syntax.VarDecl,
                 syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
                 syntax.ExprStmt,
@@ -139,6 +143,7 @@ class AstBuilder(Transformer):
     def closed_stmt(self, meta: Meta, args: _Args) -> syntax.Stmt:
         (inner,) = args
         assert isinstance(inner, (
+            syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
             syntax.InputDecl, syntax.LetDecl, syntax.VarDecl,
             syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
             syntax.ExprStmt,
@@ -203,6 +208,111 @@ class AstBuilder(Transformer):
             target=str(name_tok),
             value=value,
             span=span,
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M2: record_def / field_def
+    # ------------------------------------------------------------------
+
+    def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
+        # Grammar: "record" TYPE_NAME _NEWLINE _INDENT field_def+ _DEDENT
+        # args: [Token(TYPE_NAME), FieldDef, FieldDef, ...]
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        fields = tuple(a for a in args[1:] if isinstance(a, syntax.FieldDef))
+        return syntax.RecordDef(
+            name=str(name_tok),
+            fields=fields,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
+        # Grammar: VAR_NAME COLON type_expr
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        type_expr = _find_type_expr(args[1:])
+        return syntax.FieldDef(
+            name=str(name_tok),
+            type_expr=type_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M2: enum_def / variant_def / variant_payload / field_list / field_inline
+    # ------------------------------------------------------------------
+
+    def enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
+        # Grammar: "enum" TYPE_NAME _NEWLINE _INDENT variant_def+ _DEDENT
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        variants = tuple(a for a in args[1:] if isinstance(a, syntax.VariantDef))
+        return syntax.EnumDef(
+            name=str(name_tok),
+            variants=variants,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
+        # Grammar: PIPE TYPE_NAME variant_payload?
+        # args: [Token(PIPE), Token(TYPE_NAME), fields_tuple_or_nothing]
+        name_tok = next((a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None)
+        assert name_tok is not None, "variant_def: no TYPE_NAME token"
+        # variant_payload returns a tuple[FieldDef, ...]; may be absent.
+        fields: tuple[syntax.FieldDef, ...] = ()
+        for a in args:
+            if isinstance(a, tuple):
+                fields = cast(tuple[syntax.FieldDef, ...], a)
+                break
+        return syntax.VariantDef(
+            name=str(name_tok),
+            fields=fields,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+        # Grammar: LPAR field_list? RPAR
+        # args: [Token(LPAR), fields_tuple_or_None, Token(RPAR)]
+        # field_list returns a tuple[FieldDef, ...]; when absent (empty payload),
+        # maybe_placeholders=True yields None.
+        for a in args:
+            if isinstance(a, tuple):
+                return cast(tuple[syntax.FieldDef, ...], a)
+        return ()
+
+    def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+        # Grammar: field_inline (COMMA field_inline)* COMMA?
+        return tuple(a for a in args if isinstance(a, syntax.FieldDef))
+
+    def field_inline(self, meta: Meta, args: _Args) -> syntax.FieldDef:
+        # Grammar: VAR_NAME COLON type_expr  (same as field_def)
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        type_expr = _find_type_expr(args[1:])
+        return syntax.FieldDef(
+            name=str(name_tok),
+            type_expr=type_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M2: type_alias
+    # ------------------------------------------------------------------
+
+    def type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
+        # Grammar: "type" TYPE_NAME EQ type_expr
+        name_tok = next((a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None)
+        assert name_tok is not None, "type_alias: no TYPE_NAME token"
+        type_expr = _find_type_expr(args)
+        return syntax.TypeAlias(
+            name=str(name_tok),
+            type_expr=type_expr,
+            span=_span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -363,13 +473,248 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
+    # M2: access-level rules (field_access, type_access, access transparent)
+    # ------------------------------------------------------------------
+
+    def access(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """access: atom — transparent; return the single Expr child.
+
+        The ``access: atom`` production passes through a single non-Token child.
+        """
+        # args always contains exactly one non-Token element (the atom).
+        expr = next(a for a in args if a is not None and not isinstance(a, Token))
+        return cast(syntax.Expr, expr)
+
+    def field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
+        """access DOT VAR_NAME — record field access (lowercase field name)."""
+        obj_expr = cast(syntax.Expr, args[0])
+        field_tok = next(
+            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
+        )
+        assert field_tok is not None, "field_access: no VAR_NAME token"
+        return syntax.FieldAccess(
+            obj=obj_expr,
+            field=str(field_tok),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def type_access(self, meta: Meta, args: _Args) -> syntax.Constructor:
+        """access DOT TYPE_NAME — qualified enum-variant constructor.
+
+        When ``access`` is an unqualified zero-arg Constructor, produces a
+        qualified Constructor: ``Status.Done`` → Constructor("Status","Done",()).
+        Any other form is surfaced as a bare Constructor for M2c error reporting.
+        """
+        obj_expr = args[0]
+        type_name_tok = next(
+            (a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None
+        )
+        assert type_name_tok is not None, "type_access: no TYPE_NAME token"
+        variant_name = str(type_name_tok)
+        span = _span_from_meta(meta)
+        nid = self._next_id()
+        if isinstance(obj_expr, syntax.Constructor) and obj_expr.qualifier is None:
+            return syntax.Constructor(
+                qualifier=obj_expr.name,
+                name=variant_name,
+                args=(),
+                span=span,
+                node_id=nid,
+            )
+        return syntax.Constructor(
+            qualifier=None,
+            name=variant_name,
+            args=(),
+            span=span,
+            node_id=nid,
+        )
+
+    def ctor_applied(self, meta: Meta, args: _Args) -> syntax.Constructor:
+        """access constructor_payload — apply args to a bare constructor.
+
+        Handles both unqualified ``Type(x: 1)`` and qualified ``Ns.Type(x: 1)``
+        by taking the existing (possibly qualified) Constructor from the access
+        position and attaching the named arguments from constructor_payload.
+
+        ``args`` is always ``[Constructor, list[NamedArg]]`` since
+        ``constructor_payload`` is required (not optional) in this rule.
+        """
+        ctor = args[0]
+        payload = args[1]
+        assert isinstance(ctor, syntax.Constructor), (
+            f"ctor_applied: expected Constructor base, got {type(ctor)}"
+        )
+        assert isinstance(payload, list), (
+            f"ctor_applied: expected list payload, got {type(payload)}"
+        )
+        named_args = tuple(cast(_NamedArgList, payload))
+        return syntax.Constructor(
+            qualifier=ctor.qualifier,
+            name=ctor.name,
+            args=named_args,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M2: list literal
+    # ------------------------------------------------------------------
+
+    def lit_list(self, meta: Meta, args: _Args) -> syntax.ListLit:
+        """lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB"""
+        elements = tuple(
+            cast(syntax.Expr, a)
+            for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        return syntax.ListLit(
+            elements=elements,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M2: dict literal
+    # ------------------------------------------------------------------
+
+    def lit_dict(self, meta: Meta, args: _Args) -> syntax.DictLit:
+        """lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE"""
+        entries = tuple(a for a in args if isinstance(a, syntax.DictEntry))
+        return syntax.DictLit(
+            entries=entries,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def dict_entry_str(self, meta: Meta, args: _Args) -> syntax.DictEntry:
+        """dict_entry: template COLON expr — quoted string key.
+
+        The template transformer normalises plain strings to StringLit already.
+        Both StringLit (plain key) and Template (interpolated key) are accepted;
+        only the StringLit form is valid per v1 semantics (DictEntry.key: StringLit).
+        """
+        non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
+        assert len(non_tokens) >= 2, (
+            f"dict_entry_str: expected key + expr, got {args!r}"
+        )
+        key_node = non_tokens[0]
+        val_expr = cast(syntax.Expr, non_tokens[1])
+        if isinstance(key_node, syntax.StringLit):
+            key_lit = key_node
+        else:
+            assert isinstance(key_node, syntax.Template), (
+                f"dict_entry_str: expected StringLit or Template for key, got {type(key_node)}"
+            )
+            key_text = "".join(
+                seg.text for seg in key_node.segments if isinstance(seg, syntax.TextSegment)
+            )
+            key_lit = syntax.StringLit(
+                value=key_text,
+                span=key_node.span,
+                node_id=self._next_id(),
+            )
+        return syntax.DictEntry(
+            key=key_lit,
+            value=val_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def dict_entry_name(self, meta: Meta, args: _Args) -> syntax.DictEntry:
+        """dict_entry: VAR_NAME COLON expr — identifier shorthand key.
+
+        The identifier is converted to ``StringLit`` so the AST key is always
+        ``StringLit``, matching ``DictEntry.key``.
+        """
+        name_tok = next(
+            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
+        )
+        assert name_tok is not None, "dict_entry_name: no VAR_NAME token"
+        val_expr = _find_expr(args[1:])
+        key_lit = syntax.StringLit(
+            value=str(name_tok),
+            span=_span_from_token(name_tok),
+            node_id=self._next_id(),
+        )
+        return syntax.DictEntry(
+            key=key_lit,
+            value=val_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M2: constructor expressions
+    # ------------------------------------------------------------------
+
+    def ctor_unqualified(self, meta: Meta, args: _Args) -> syntax.Constructor:
+        """constructor: TYPE_NAME → bare unqualified constructor (no args).
+
+        The payload (if any) is applied by ``ctor_applied`` at the access level.
+        """
+        name_tok = next(
+            (a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None
+        )
+        assert name_tok is not None, "ctor_unqualified: no TYPE_NAME token"
+        return syntax.Constructor(
+            qualifier=None,
+            name=str(name_tok),
+            args=(),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def constructor_payload(self, meta: Meta, args: _Args) -> _NamedArgList:
+        """constructor_payload: LPAR constructor_args? RPAR → list[NamedArg]."""
+        for a in args:
+            if isinstance(a, list):
+                return cast(_NamedArgList, a)
+        return []
+
+    def constructor_args(self, meta: Meta, args: _Args) -> _NamedArgList:
+        """constructor_args: named_arg (COMMA named_arg)* COMMA?
+
+        Duplicate argument names are rejected with the span of the duplicate.
+        """
+        result: list[syntax.NamedArg] = []
+        seen: dict[str, SourceSpan] = {}
+        for a in args:
+            if not isinstance(a, syntax.NamedArg):
+                continue
+            if a.name in seen:
+                raise AglSyntaxError(
+                    f"duplicate constructor argument {a.name!r}.",
+                    span=a.span,
+                )
+            seen[a.name] = a.span
+            result.append(a)
+        return result
+
+    def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg:
+        """named_arg: VAR_NAME COLON expr"""
+        name_tok = next(
+            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
+        )
+        assert name_tok is not None, "named_arg: no VAR_NAME token"
+        val_expr = _find_expr(args[1:])
+        return syntax.NamedArg(
+            name=str(name_tok),
+            value=val_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
     # agent_call
     # ------------------------------------------------------------------
 
     def agent_call(self, meta: Meta, args: _Args) -> syntax.AgentCall:
         # Grammar: VAR_NAME call_options? template
-        # args when no options:   [Token(VAR_NAME), Template]
-        # args when with options: [Token(VAR_NAME), CallOptions, Template]
+        # args when no options:   [Token(VAR_NAME), Template|StringLit]
+        # args when with options: [Token(VAR_NAME), CallOptions, Template|StringLit]
+        # Note: the template transformer normalises plain strings to StringLit;
+        # AgentCall.template requires Template, so we wrap StringLit back here.
         name_tok = args[0]
         assert isinstance(name_tok, Token)
 
@@ -381,6 +726,16 @@ class AstBuilder(Transformer):
                 options = a
             if isinstance(a, syntax.Template):
                 tmpl = a
+            elif isinstance(a, syntax.StringLit):
+                # Normalised from a plain-text template — re-wrap as Template.
+                text_seg = syntax.TextSegment(
+                    text=a.value, span=a.span, node_id=self._next_id()
+                )
+                tmpl = syntax.Template(
+                    segments=(text_seg,),
+                    span=a.span,
+                    node_id=self._next_id(),
+                )
 
         assert tmpl is not None, "agent_call: no Template found"
 
@@ -523,7 +878,7 @@ class AstBuilder(Transformer):
     # template
     # ------------------------------------------------------------------
 
-    def template(self, meta: Meta, args: _Args) -> syntax.Template:
+    def template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
         """Build a Template from its segment children.
 
         Invariant: ``segments`` never contains empty ``TextSegment`` nodes.
@@ -531,6 +886,10 @@ class AstBuilder(Transformer):
         interpolations produce empty text fragments in the token stream; an
         empty fragment carries no information, so it is normalized away here.
         Adjacent ``InterpSegment`` nodes are legal.
+
+        Normalisation: a template with no interpolation segments (only text) is
+        returned as a ``StringLit``.  This covers simple quoted strings such as
+        ``"hello"`` which have no runtime interpolation behaviour.
         """
         # args: TEMPLATE_START, [segments...], TEMPLATE_END
         # Filter out the synthetic tokens; keep only template_segment results,
@@ -541,10 +900,16 @@ class AstBuilder(Transformer):
             if isinstance(a, (syntax.TextSegment, syntax.InterpSegment))
             if not (isinstance(a, syntax.TextSegment) and a.text == "")
         ]
+        span = _span_from_meta(meta)
+        nid = self._next_id()
+        # Plain string (no interpolations) → StringLit
+        if all(isinstance(s, syntax.TextSegment) for s in segments):
+            text = "".join(s.text for s in segments if isinstance(s, syntax.TextSegment))
+            return syntax.StringLit(value=text, span=span, node_id=nid)
         return syntax.Template(
             segments=tuple(segments),
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
+            span=span,
+            node_id=nid,
         )
 
     def tmpl_text(self, meta: Meta, args: _Args) -> syntax.TextSegment:

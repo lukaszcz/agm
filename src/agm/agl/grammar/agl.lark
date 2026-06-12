@@ -31,11 +31,14 @@
 //   Interp:      INTERP_START expr ("as" VAR_NAME)? INTERP_END
 //   EQ_EQ:       produces AglSyntaxError "Use `=` for equality."
 //
-// Not in M1 (additive additions in M2+):
-//   do_until, if_stmt, case_stmt/expr, try_stmt, raise_stmt
+// M2 adds:
 //   record_def, enum_def, type_alias
-//   Binary/unary operators, field access, is/in/and/or/not
-//   Constructor expressions, list/dict literals, named args
+//   Constructor expressions (qualified + named args), list/dict literals
+//   Field access: postfix .VAR_NAME chains (access level)
+//
+// Not in M2 (additive additions in M3+):
+//   do_until, if_stmt, case_stmt/expr, try_stmt, raise_stmt
+//   Binary/unary operators, is/in/and/or/not
 
 // ---------------------------------------------------------------------------
 // Synthetic tokens (custom lexer — no regex; underscore-prefixed are filtered)
@@ -50,7 +53,7 @@
 
 %declare VAR_NAME TYPE_NAME
 %declare INT DECIMAL
-%declare EQ EQ_EQ ARROW LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE
+%declare EQ EQ_EQ ARROW LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE DOT
 
 // ---------------------------------------------------------------------------
 // Program root
@@ -68,7 +71,10 @@ block_stmts: stmt ((_NEWLINE | SEMICOLON) stmt)* (_NEWLINE | SEMICOLON)?
 // open_stmt (if_stmt | case_stmt | try_stmt | do_until) is added in M3.
 ?stmt: closed_stmt
 
-closed_stmt: input_decl
+closed_stmt: record_def
+           | enum_def
+           | type_alias
+           | input_decl
            | let_decl
            | var_decl
            | set_stmt
@@ -79,6 +85,35 @@ closed_stmt: input_decl
 // ---------------------------------------------------------------------------
 // Declarations and statements
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Type declarations
+// ---------------------------------------------------------------------------
+
+// record_def: indented block of field definitions (design §10.4).
+//   The lexer emits _INDENT directly after the name line (the first real content
+//   line at a greater indentation starts the indent block).  Fields are separated
+//   by _NEWLINE tokens within the block; there is no _NEWLINE before _INDENT.
+record_def: "record" TYPE_NAME _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
+
+field_def: VAR_NAME COLON type_expr
+
+// enum_def: flat variant list (design §10.4).
+//   The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
+//   before each | — the entire variant list is a flat token sequence starting with
+//   the enum keyword.  No _INDENT/_DEDENT wrapping is needed.
+enum_def: "enum" TYPE_NAME variant_def+
+
+variant_def: PIPE TYPE_NAME variant_payload?
+
+variant_payload: LPAR field_list? RPAR
+
+field_list: field_inline (COMMA field_inline)* COMMA?
+
+field_inline: VAR_NAME COLON type_expr
+
+// type_alias: "type" TYPE_NAME EQ type_expr (design §10.4)
+type_alias: "type" TYPE_NAME EQ type_expr
 
 input_decl: "input" VAR_NAME type_ann?
 
@@ -119,17 +154,36 @@ type_expr: VAR_NAME                              -> prim_type_or_name
 // ?expr — general form; admits bare case_expr (M3+ adds the case_expr branch)
 ?expr: or_expr
 
-// Precedence chain (M1: no binary operators; single level collapses to atom).
+// Precedence chain (M2: access level added).
 // M3 will expand or_expr -> and_expr -> not_expr -> comparison -> additive ->
 // multiplicative -> unary -> access -> atom (one rule at a time, additive).
-?or_expr: atom
+?or_expr: access
 
-// atom: the M1 expression primitives
+// access: postfix field-access, namespace-qualification, and constructor-payload chains.
+// access -> atom is transparent (returns atom as-is).
+// M3's unary level slots between or_expr and access.
+//
+// Three postfix variants:
+//   access DOT VAR_NAME        — field access on records (lowercase field name)
+//   access DOT TYPE_NAME       — qualified enum-variant namespace: Status.Done
+//                                AstBuilder converts Constructor(None,"Status") DOT "Done"
+//                                into Constructor("Status","Done").
+//   access constructor_payload — apply constructor args to a bare constructor.
+//                                Handles both Type(x:1) and Type.Variant(x:1).
+//                                Only valid when the access is a Constructor.
+access: access DOT VAR_NAME          -> field_access
+      | access DOT TYPE_NAME         -> type_access
+      | access constructor_payload   -> ctor_applied
+      | atom
+
 ?atom: lit_int
      | lit_decimal
      | lit_true
      | lit_false
      | lit_null
+     | lit_list
+     | lit_dict
+     | constructor
      | var_ref
      | agent_call
      | template
@@ -178,3 +232,48 @@ template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
 
 interp: INTERP_START expr ("as" VAR_NAME)? INTERP_END
+
+// ---------------------------------------------------------------------------
+// M2: List and dict literals (design §10.14)
+// ---------------------------------------------------------------------------
+
+// list_literal: "[" (expr ("," expr)* ","?)? "]"
+// Inside LSQB…RSQB paren_level>0, so _NEWLINE is suppressed (implicit continuation).
+lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB
+
+// dict_literal: "{" (dict_entry ("," dict_entry)* ","?)? "}"
+// Inside LBRACE…RBRACE paren_level>0 (implicit continuation).
+// dict_entry key is either a template (quoted string) or a VAR_NAME identifier shorthand.
+// Both are converted to StringLit by the AstBuilder.
+lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE
+
+dict_entry: template COLON expr     -> dict_entry_str
+          | VAR_NAME COLON expr     -> dict_entry_name
+
+// ---------------------------------------------------------------------------
+// M2: Constructor expressions (design §10.13, §5.5)
+//
+// constructor: qualified_constructor constructor_payload?
+// qualified_constructor: TYPE_NAME | TYPE_NAME "." TYPE_NAME
+//
+// constructor_payload: "(" constructor_args? ")"
+// constructor_args: named_arg ("," named_arg)* ","?
+// named_arg: VAR_NAME ":" expr
+//
+// Note: TYPE_NAME (uppercase) is unambiguous with VAR_NAME (lowercase) and
+// with dict_entry (inside braces) and call_option (inside brackets).
+// Qualified form TYPE_NAME DOT TYPE_NAME is unambiguous with field_access
+// (VAR_NAME DOT VAR_NAME) because the qualifier is TYPE_NAME.
+// ---------------------------------------------------------------------------
+
+// Constructors start with TYPE_NAME. The bare form (no payload) is parsed here.
+// The payload is applied at the access level (ctor_applied) to handle both
+// unqualified (Type(x:1)) and qualified (Qualifier.Type(x:1)) constructors.
+// Qualified form: access DOT TYPE_NAME → type_access; then access constructor_payload → ctor_applied.
+constructor: TYPE_NAME    -> ctor_unqualified
+
+constructor_payload: LPAR constructor_args? RPAR
+
+constructor_args: named_arg (COMMA named_arg)* COMMA?
+
+named_arg: VAR_NAME COLON expr

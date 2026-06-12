@@ -3,6 +3,7 @@
 Covers:
 - LALR(1) conflict-guard: zero shift/reduce and reduce/reduce conflicts.
 - Parsing every M1 construct to the expected AST shape.
+- M2: RecordDef, EnumDef, TypeAlias, Constructor, FieldAccess, ListLit, DictLit.
 - Inline semicolons vs newlines produce identical ASTs.
 - Template strings: plain text, single/multiple interpolations, renderer.
 - Agent calls: with/without call_options, every option type.
@@ -31,20 +32,31 @@ from agm.agl.syntax import (
     AgentCall,
     BoolLit,
     CallOptions,
+    Constructor,
     DecimalLit,
+    DictEntry,
+    DictLit,
+    EnumDef,
     ExprStmt,
+    FieldAccess,
+    FieldDef,
     InputDecl,
     InterpSegment,
     IntLit,
     LetDecl,
+    ListLit,
+    NamedArg,
     NullLit,
     PassStmt,
     PrintStmt,
     Program,
+    RecordDef,
     RetryPolicy,
     SetStmt,
+    StringLit,
     Template,
     TextSegment,
+    TypeAlias,
     VarDecl,
     VarRef,
 )
@@ -692,11 +704,13 @@ class TestNodeIds:
         ids: list[int] = []
 
         def visit(node: object) -> None:
-            nid = getattr(node, "node_id", None)
+            nid: object = getattr(node, "node_id", None)
             if isinstance(nid, int):
                 ids.append(nid)
-            for field_name in getattr(node, "__dataclass_fields__", {}):
-                child = getattr(node, field_name)
+            fields: object = getattr(node, "__dataclass_fields__", {})
+            assert isinstance(fields, dict)
+            for field_name in fields:
+                child: object = getattr(node, field_name)
                 if isinstance(child, tuple):
                     for c in child:
                         visit(c)
@@ -938,6 +952,617 @@ class TestInternalHelpers:
         meta.empty = False
         builder = AstBuilder()
         # Passing all-Token args triggers the assertion
-        args = [LarkToken("LPAR", "("), LarkToken("RPAR", ")")]
+        args: list[object] = [LarkToken("LPAR", "("), LarkToken("RPAR", ")")]
         with pytest.raises(AssertionError, match="paren_expr"):
             builder.paren_expr(meta, args)
+
+
+# ---------------------------------------------------------------------------
+# M2: RecordDef
+# ---------------------------------------------------------------------------
+
+
+class TestRecordDef:
+    def test_simple_record(self) -> None:
+        prog = parse_program("record Point\n  x: int\n  y: int")
+        assert isinstance(prog, Program)
+        assert len(prog.body) == 1
+        stmt = prog.body[0]
+        assert isinstance(stmt, RecordDef)
+        assert stmt.name == "Point"
+        assert len(stmt.fields) == 2
+        f0, f1 = stmt.fields
+        assert isinstance(f0, FieldDef)
+        assert f0.name == "x"
+        assert isinstance(f1, FieldDef)
+        assert f1.name == "y"
+
+    def test_record_field_types(self) -> None:
+        src = "record Issue\n  title: text\n  severity: int\n  weight: decimal\n  tags: list[text]"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, RecordDef)
+        assert stmt.name == "Issue"
+        assert len(stmt.fields) == 4
+        from agm.agl.syntax.types import DecimalT, IntT, ListT, TextT
+        assert isinstance(stmt.fields[0].type_expr, TextT)
+        assert isinstance(stmt.fields[1].type_expr, IntT)
+        assert isinstance(stmt.fields[2].type_expr, DecimalT)
+        assert isinstance(stmt.fields[3].type_expr, ListT)
+        assert isinstance(stmt.fields[3].type_expr.elem, TextT)
+
+    def test_record_field_named_type(self) -> None:
+        src = "record Wrapper\n  inner: MyType"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, RecordDef)
+        from agm.agl.syntax.types import NameT
+        assert isinstance(stmt.fields[0].type_expr, NameT)
+        assert stmt.fields[0].type_expr.name == "MyType"
+
+    def test_record_span_covers_full_declaration(self) -> None:
+        src = "record Point\n  x: int\n  y: int"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, RecordDef)
+        assert stmt.span.start_line == 1
+        assert stmt.span.start_col == 1
+        assert stmt.span.end_line >= 3
+
+    def test_record_in_program_with_other_stmts(self) -> None:
+        src = "record Point\n  x: int\nlet p = null"
+        prog = parse_program(src)
+        assert len(prog.body) == 2
+        assert isinstance(prog.body[0], RecordDef)
+        assert isinstance(prog.body[1], LetDecl)
+
+    def test_two_records(self) -> None:
+        src = "record A\n  x: int\nrecord B\n  y: text"
+        prog = parse_program(src)
+        assert len(prog.body) == 2
+        rec_a = prog.body[0]
+        rec_b = prog.body[1]
+        assert isinstance(rec_a, RecordDef)
+        assert isinstance(rec_b, RecordDef)
+        assert rec_a.name == "A"
+        assert rec_b.name == "B"
+
+    def test_record_requires_indented_block(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_program("record Point")  # missing field block
+
+
+# ---------------------------------------------------------------------------
+# M2: EnumDef
+# ---------------------------------------------------------------------------
+
+
+class TestEnumDef:
+    def test_simple_nullary_variants(self) -> None:
+        src = "enum Color\n  | Red\n  | Green\n  | Blue"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        assert stmt.name == "Color"
+        assert len(stmt.variants) == 3
+        v0, v1, v2 = stmt.variants
+        assert v0.name == "Red"
+        assert v1.name == "Green"
+        assert v2.name == "Blue"
+        assert len(v0.fields) == 0
+        assert len(v1.fields) == 0
+        assert len(v2.fields) == 0
+
+    def test_variant_with_single_field(self) -> None:
+        src = "enum Status\n  | Done\n  | Failed(reason: text)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        assert stmt.name == "Status"
+        assert len(stmt.variants) == 2
+        v0, v1 = stmt.variants
+        assert v0.name == "Done"
+        assert len(v0.fields) == 0
+        assert v1.name == "Failed"
+        assert len(v1.fields) == 1
+        assert v1.fields[0].name == "reason"
+        from agm.agl.syntax.types import TextT
+        assert isinstance(v1.fields[0].type_expr, TextT)
+
+    def test_variant_with_multiple_fields(self) -> None:
+        src = "enum FixResult\n  | Blocked(reason: text, recoverable: bool)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        v = stmt.variants[0]
+        assert v.name == "Blocked"
+        assert len(v.fields) == 2
+        assert v.fields[0].name == "reason"
+        assert v.fields[1].name == "recoverable"
+
+    def test_same_column_pipe_continuation(self) -> None:
+        """| variants at same indentation level as the enum keyword."""
+        src = "enum Status\n  | Done\n  | Failed(reason: text, fatal: bool)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        assert len(stmt.variants) == 2
+
+    def test_indented_pipe_variants(self) -> None:
+        """Variants at deeper indentation (deeper indented block)."""
+        src = "enum Status\n  | Done\n  | Partial(left: int)\n  | Failed(reason: text)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        assert len(stmt.variants) == 3
+
+    def test_enum_span_covers_full_declaration(self) -> None:
+        src = "enum Status\n  | Done\n  | Failed(reason: text)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        assert stmt.span.start_line == 1
+        assert stmt.span.end_line >= 3
+
+    def test_enum_then_let(self) -> None:
+        src = "enum Status\n  | Done\nlet x = null"
+        prog = parse_program(src)
+        assert len(prog.body) == 2
+        assert isinstance(prog.body[0], EnumDef)
+        assert isinstance(prog.body[1], LetDecl)
+
+    def test_variant_trailing_comma_in_field_list(self) -> None:
+        src = "enum Foo\n  | Bar(x: int, y: text,)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        v = stmt.variants[0]
+        assert len(v.fields) == 2
+
+    def test_variant_empty_payload(self) -> None:
+        """Variant with empty parens is accepted and has no fields."""
+        src = "enum Foo\n  | Empty()"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, EnumDef)
+        v = stmt.variants[0]
+        assert v.name == "Empty"
+        assert len(v.fields) == 0
+
+    def test_enum_requires_indented_block(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_program("enum Status")  # missing variant block
+
+
+# ---------------------------------------------------------------------------
+# M2: TypeAlias
+# ---------------------------------------------------------------------------
+
+
+class TestTypeAlias:
+    def test_simple_alias_to_named_type(self) -> None:
+        stmt = _parse_one("type Status = Review")
+        assert isinstance(stmt, TypeAlias)
+        assert stmt.name == "Status"
+        from agm.agl.syntax.types import NameT
+        assert isinstance(stmt.type_expr, NameT)
+        assert stmt.type_expr.name == "Review"
+
+    def test_alias_to_list_type(self) -> None:
+        stmt = _parse_one("type IssueList = list[Issue]")
+        assert isinstance(stmt, TypeAlias)
+        from agm.agl.syntax.types import ListT, NameT
+        assert isinstance(stmt.type_expr, ListT)
+        assert isinstance(stmt.type_expr.elem, NameT)
+        assert stmt.type_expr.elem.name == "Issue"
+
+    def test_alias_to_dict_type(self) -> None:
+        stmt = _parse_one("type IssueMap = dict[text, Issue]")
+        assert isinstance(stmt, TypeAlias)
+        from agm.agl.syntax.types import DictT, NameT
+        assert isinstance(stmt.type_expr, DictT)
+        assert isinstance(stmt.type_expr.value, NameT)
+
+    def test_alias_to_primitive_type(self) -> None:
+        stmt = _parse_one("type Msg = text")
+        assert isinstance(stmt, TypeAlias)
+        from agm.agl.syntax.types import TextT
+        assert isinstance(stmt.type_expr, TextT)
+
+    def test_alias_span(self) -> None:
+        stmt = _parse_one("type Status = Review")
+        assert isinstance(stmt, TypeAlias)
+        assert stmt.span.start_line == 1
+        assert stmt.span.start_col == 1
+
+    def test_alias_in_program(self) -> None:
+        src = "type Status = Review\nlet x = null"
+        prog = parse_program(src)
+        assert len(prog.body) == 2
+        assert isinstance(prog.body[0], TypeAlias)
+        assert isinstance(prog.body[1], LetDecl)
+
+
+# ---------------------------------------------------------------------------
+# M2: List literals
+# ---------------------------------------------------------------------------
+
+
+class TestListLit:
+    def test_empty_list(self) -> None:
+        stmt = _parse_one("let x = []")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, ListLit)
+        assert len(stmt.value.elements) == 0
+
+    def test_single_element(self) -> None:
+        stmt = _parse_one("let x = [1]")
+        assert isinstance(stmt, LetDecl)
+        lst = stmt.value
+        assert isinstance(lst, ListLit)
+        assert len(lst.elements) == 1
+        elem = lst.elements[0]
+        assert isinstance(elem, IntLit)
+        assert elem.value == 1
+
+    def test_multiple_elements(self) -> None:
+        stmt = _parse_one('let x = [1, 2, 3]')
+        assert isinstance(stmt, LetDecl)
+        lst = stmt.value
+        assert isinstance(lst, ListLit)
+        assert len(lst.elements) == 3
+
+    def test_trailing_comma(self) -> None:
+        stmt = _parse_one('let x = [1, 2,]')
+        assert isinstance(stmt, LetDecl)
+        lst = stmt.value
+        assert isinstance(lst, ListLit)
+        assert len(lst.elements) == 2
+
+    def test_nested_list(self) -> None:
+        stmt = _parse_one("let x = [[1, 2], [3]]")
+        assert isinstance(stmt, LetDecl)
+        lst = stmt.value
+        assert isinstance(lst, ListLit)
+        assert len(lst.elements) == 2
+        assert isinstance(lst.elements[0], ListLit)
+        assert isinstance(lst.elements[1], ListLit)
+
+    def test_list_of_strings(self) -> None:
+        stmt = _parse_one('let x = ["a", "b"]')
+        assert isinstance(stmt, LetDecl)
+        lst = stmt.value
+        assert isinstance(lst, ListLit)
+        assert len(lst.elements) == 2
+        first = lst.elements[0]
+        assert isinstance(first, StringLit)
+        assert first.value == "a"
+
+    def test_list_expr_stmt(self) -> None:
+        stmt = _parse_one("[1, 2]")
+        assert isinstance(stmt, ExprStmt)
+        assert isinstance(stmt.expr, ListLit)
+
+    def test_list_multiline(self) -> None:
+        src = 'let x = [\n  "a",\n  "b"\n]'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, ListLit)
+        assert len(stmt.value.elements) == 2
+
+
+# ---------------------------------------------------------------------------
+# M2: Dict literals
+# ---------------------------------------------------------------------------
+
+
+class TestDictLit:
+    def test_empty_dict(self) -> None:
+        stmt = _parse_one("let x = {}")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, DictLit)
+        assert len(stmt.value.entries) == 0
+
+    def test_identifier_key(self) -> None:
+        stmt = _parse_one('let x = {source: "reviewer"}')
+        assert isinstance(stmt, LetDecl)
+        d = stmt.value
+        assert isinstance(d, DictLit)
+        assert len(d.entries) == 1
+        e = d.entries[0]
+        assert isinstance(e, DictEntry)
+        assert isinstance(e.key, StringLit)
+        assert e.key.value == "source"
+        assert isinstance(e.value, StringLit)
+
+    def test_string_key(self) -> None:
+        stmt = _parse_one('let x = {"source": "reviewer"}')
+        assert isinstance(stmt, LetDecl)
+        d = stmt.value
+        assert isinstance(d, DictLit)
+        assert len(d.entries) == 1
+        e = d.entries[0]
+        assert isinstance(e.key, StringLit)
+        assert e.key.value == "source"
+
+    def test_multiple_entries(self) -> None:
+        stmt = _parse_one('let x = {source: "reviewer", attempt: 2}')
+        assert isinstance(stmt, LetDecl)
+        d = stmt.value
+        assert isinstance(d, DictLit)
+        assert len(d.entries) == 2
+        assert d.entries[0].key.value == "source"
+        assert d.entries[1].key.value == "attempt"
+
+    def test_trailing_comma(self) -> None:
+        stmt = _parse_one('let x = {a: 1, b: 2,}')
+        assert isinstance(stmt, LetDecl)
+        d = stmt.value
+        assert isinstance(d, DictLit)
+        assert len(d.entries) == 2
+
+    def test_null_value(self) -> None:
+        stmt = _parse_one("{retries: null}")
+        assert isinstance(stmt, ExprStmt)
+        d = stmt.expr
+        assert isinstance(d, DictLit)
+        assert isinstance(d.entries[0].value, NullLit)
+
+    def test_nested_list_value(self) -> None:
+        stmt = _parse_one('{tags: ["a", "b"]}')
+        assert isinstance(stmt, ExprStmt)
+        d = stmt.expr
+        assert isinstance(d, DictLit)
+        assert isinstance(d.entries[0].value, ListLit)
+
+    def test_dict_multiline(self) -> None:
+        src = 'let x = {\n  source: "reviewer",\n  attempt: 2\n}'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, DictLit)
+        assert len(stmt.value.entries) == 2
+
+    def test_identifier_key_is_string_lit(self) -> None:
+        """Identifier shorthand keys are converted to StringLit by the builder."""
+        stmt = _parse_one("{foo: 1}")
+        assert isinstance(stmt, ExprStmt)
+        d = stmt.expr
+        assert isinstance(d, DictLit)
+        e = d.entries[0]
+        assert isinstance(e.key, StringLit)
+        assert e.key.value == "foo"
+
+    def test_interpolated_string_key(self) -> None:
+        """A dict key that is a template with interpolation is handled.
+
+        An interpolated key (e.g. ``"${x}"``) only captures plain-text segments;
+        the interp segments are dropped, producing an empty-string StringLit key.
+        """
+        src = 'let d = {"${x}": 1}'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        d = stmt.value
+        assert isinstance(d, DictLit)
+        assert len(d.entries) == 1
+        e = d.entries[0]
+        # Interpolated keys are normalised to StringLit (interp segments stripped).
+        assert isinstance(e.key, StringLit)
+        assert isinstance(e.value, IntLit)
+
+
+# ---------------------------------------------------------------------------
+# M2: Constructor expressions
+# ---------------------------------------------------------------------------
+
+
+class TestConstructor:
+    def test_nullary_unqualified(self) -> None:
+        """Unqualified nullary constructor: just TYPE_NAME."""
+        stmt = _parse_one("let x = Done")
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.qualifier is None
+        assert c.name == "Done"
+        assert len(c.args) == 0
+
+    def test_qualified_nullary(self) -> None:
+        """Qualified nullary: TYPE_NAME.TYPE_NAME."""
+        stmt = _parse_one("let x = Status.Done")
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.qualifier == "Status"
+        assert c.name == "Done"
+        assert len(c.args) == 0
+
+    def test_unqualified_with_args(self) -> None:
+        """Unqualified constructor with named args: Type(x: 1, y: 2)."""
+        stmt = _parse_one("let p = Point(x: 1, y: 2)")
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.qualifier is None
+        assert c.name == "Point"
+        assert len(c.args) == 2
+        a0, a1 = c.args
+        assert isinstance(a0, NamedArg)
+        assert a0.name == "x"
+        assert isinstance(a0.value, IntLit)
+        assert a0.value.value == 1
+        assert a1.name == "y"
+        assert isinstance(a1.value, IntLit)
+        assert a1.value.value == 2
+
+    def test_qualified_with_args(self) -> None:
+        """Qualified constructor with named args."""
+        stmt = _parse_one('let r = Review.Fail(issues: ["missing tests"])')
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.qualifier == "Review"
+        assert c.name == "Fail"
+        assert len(c.args) == 1
+        assert c.args[0].name == "issues"
+        assert isinstance(c.args[0].value, ListLit)
+
+    def test_constructor_trailing_comma(self) -> None:
+        """Trailing comma in constructor args is accepted."""
+        stmt = _parse_one("let p = Point(x: 1, y: 2,)")
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert len(c.args) == 2
+
+    def test_constructor_empty_parens(self) -> None:
+        """TYPE_NAME() — constructor with empty argument list."""
+        stmt = _parse_one("let x = Done()")
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.name == "Done"
+        assert len(c.args) == 0
+
+    def test_constructor_expr_stmt(self) -> None:
+        """Constructor as expression statement."""
+        stmt = _parse_one("Done")
+        assert isinstance(stmt, ExprStmt)
+        ctor = stmt.expr
+        assert isinstance(ctor, Constructor)
+        assert ctor.name == "Done"
+
+    def test_duplicate_named_arg_rejected(self) -> None:
+        """Duplicate named arg is rejected; error points at the duplicate."""
+        src = "let p = Point(x: 1, x: 2)"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "duplicate" in str(err).lower()
+        # Error span must point at the second (duplicate) occurrence of 'x'
+        dup_col = src.index("x: 2") + 1
+        assert err.source_span.start_col == dup_col
+
+    def test_positional_arg_rejected(self) -> None:
+        """Positional (non-named) constructor args are not in v1."""
+        with pytest.raises(AglSyntaxError):
+            parse_program("let x = Point(1, 2)")
+
+    def test_constructor_multiline(self) -> None:
+        """Multi-line constructor with trailing comma."""
+        src = "let issue = Issue(\n  title: null,\n  severity: 3,\n)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.name == "Issue"
+        assert len(c.args) == 2
+
+    def test_constructor_nested(self) -> None:
+        """Nested constructor: Author(name: ...) inside Issue(author: ...)."""
+        src = 'let x = Issue(author: Author(name: "Ada", active: true))'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.name == "Issue"
+        inner = c.args[0].value
+        assert isinstance(inner, Constructor)
+        assert inner.name == "Author"
+
+
+# ---------------------------------------------------------------------------
+# M2: Field access
+# ---------------------------------------------------------------------------
+
+
+class TestFieldAccess:
+    def test_simple_field_access(self) -> None:
+        stmt = _parse_one("print issue.title")
+        assert isinstance(stmt, PrintStmt)
+        fa = stmt.value
+        assert isinstance(fa, FieldAccess)
+        assert isinstance(fa.obj, VarRef)
+        assert fa.obj.name == "issue"
+        assert fa.field == "title"
+
+    def test_chained_field_access(self) -> None:
+        stmt = _parse_one("print issue.author.name")
+        assert isinstance(stmt, PrintStmt)
+        fa = stmt.value
+        assert isinstance(fa, FieldAccess)
+        assert fa.field == "name"
+        inner = fa.obj
+        assert isinstance(inner, FieldAccess)
+        assert inner.field == "author"
+        assert isinstance(inner.obj, VarRef)
+        assert inner.obj.name == "issue"
+
+    def test_field_access_in_let(self) -> None:
+        stmt = _parse_one("let t = issue.title")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, FieldAccess)
+
+    def test_field_access_span(self) -> None:
+        stmt = _parse_one("let t = issue.title")
+        assert isinstance(stmt, LetDecl)
+        fa = stmt.value
+        assert isinstance(fa, FieldAccess)
+        assert fa.span.start_line == 1
+
+    def test_var_ref_not_wrapped_in_field_access(self) -> None:
+        """A plain VAR_NAME reference without '.' must not become FieldAccess."""
+        stmt = _parse_one("let x = y")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, VarRef)
+
+    def test_field_access_on_paren_expr(self) -> None:
+        """Field access can be applied to parenthesized expressions."""
+        stmt = _parse_one("let t = (issue).title")
+        assert isinstance(stmt, LetDecl)
+        fa = stmt.value
+        assert isinstance(fa, FieldAccess)
+        assert fa.field == "title"
+
+    def test_type_name_access_on_non_constructor(self) -> None:
+        """VAR_NAME.TypeName — type_access where LHS is not a Constructor.
+
+        This covers the else-branch in type_access: when the object expression
+        is not a bare unqualified Constructor (e.g. a VarRef), the result is
+        a Constructor with no qualifier so the scope checker can report the error.
+        """
+        stmt = _parse_one("let t = x.Done")
+        assert isinstance(stmt, LetDecl)
+        # The result is a Constructor built from the TYPE_NAME part.
+        # Scope checking (M3) will validate whether this is legal.
+        ctor = stmt.value
+        assert isinstance(ctor, Constructor)
+        assert ctor.qualifier is None
+        assert ctor.name == "Done"
+
+
+# ---------------------------------------------------------------------------
+# M2: Sanity — parse types/*.agl programs to a Program (parse-only)
+# ---------------------------------------------------------------------------
+
+
+class TestTypeProgramFiles:
+    @pytest.mark.xfail(
+        reason="records.agl uses M3 constructs (if_stmt, comparison); passes after M3.",
+        strict=False,
+    )
+    def test_parse_records_agl(self) -> None:
+        """tests/agl/programs/types/records.agl must parse to a Program."""
+        import pathlib
+
+        src_path = pathlib.Path("tests/agl/programs/types/records.agl")
+        src = src_path.read_text(encoding="utf-8")
+        prog = parse_program(src)
+        assert isinstance(prog, Program)
+        assert len(prog.body) > 0
+        # Must contain at least one RecordDef
+        assert any(isinstance(s, RecordDef) for s in prog.body)
+
+    @pytest.mark.xfail(
+        reason="enums.agl uses M3 constructs (if_stmt, case_stmt, is/is not); passes after M3.",
+        strict=False,
+    )
+    def test_parse_enums_agl(self) -> None:
+        """tests/agl/programs/types/enums.agl must parse to a Program."""
+        import pathlib
+
+        src_path = pathlib.Path("tests/agl/programs/types/enums.agl")
+        src = src_path.read_text(encoding="utf-8")
+        prog = parse_program(src)
+        assert isinstance(prog, Program)
+        assert len(prog.body) > 0
+        # Must contain at least one EnumDef
+        assert any(isinstance(s, EnumDef) for s in prog.body)

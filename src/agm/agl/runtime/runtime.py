@@ -447,10 +447,14 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
                 "provided as a JSON string."
             )
         codec = JsonCodec()
-        result = codec.parse(raw, type_obj, strict_json=False)
+        # Host-supplied --input values are not chatty agent output: they must be
+        # exactly one bare JSON value (F7).  Strict parsing avoids json-repair
+        # silently "fixing" user typos.
+        result = codec.parse(raw, type_obj, strict_json=True)
         if not result.ok or result.value is None:
             raise ValueError(
-                f"Input {name!r}: could not parse as {type_obj!r}: {result.error_msg}"
+                f"Input {name!r}: could not parse as {type_obj!r}; structured "
+                f"inputs must be exactly one valid JSON value: {result.error_msg}"
             )
         return result.value
 

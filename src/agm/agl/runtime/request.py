@@ -12,10 +12,61 @@ output (design §7.6).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
+
+
+# The documented validation-error categories (design §7.5):
+# - ``missing_field``  — a required field was absent.
+# - ``unknown_field``  — an undeclared field was present (``additionalProperties``).
+# - ``wrong_type``     — a field's JSON type did not match the schema.
+# - ``bad_case``       — an enum object's ``$case`` did not name a known variant
+#                        (or was missing / not a string).
+ValidationErrorCategory = Literal[
+    "missing_field",
+    "unknown_field",
+    "wrong_type",
+    "bad_case",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationError:
+    """A structured parse/validation error (design §7.5 / §7.7).
+
+    Produced by the JSON codec when an agent response parses as JSON but fails
+    strict schema validation.  Carries enough structure that retry feedback and
+    ``AgentParseError.validation_errors`` can describe *what* went wrong without
+    leaking jsonschema-internal phrasing (e.g. "is not valid under any of the
+    given schemas").
+
+    ``category``
+        One of the documented categories (see :data:`ValidationErrorCategory`).
+    ``message``
+        A human-readable, type-directed description of the failure.
+    ``path``
+        A JSON-path-like location of the offending value (``"$"`` for the root,
+        ``"$.field"`` for a record field, etc.).
+    ``field``
+        The offending field name when applicable (``None`` for root-level or
+        ``$case`` failures).
+    """
+
+    category: ValidationErrorCategory
+    message: str
+    path: str = "$"
+    field: str | None = None
+
+    def to_json_obj(self) -> dict[str, object]:
+        """JSON-shaped representation (for tracing / retry-feedback prompts)."""
+        return {
+            "category": self.category,
+            "message": self.message,
+            "path": self.path,
+            "field": self.field,
+        }
 
 
 @dataclass(slots=True)
@@ -34,6 +85,10 @@ class AgentRequest:
     ``previous_invalid_output``
         The raw text returned by the previous (failed) attempt, or ``None``
         on the first attempt.  Useful for retry-feedback messages (M4+).
+    ``validation_errors``
+        Structured :class:`ValidationError` records from the previous failed
+        attempt (design §7.5 / §7.8).  Empty on the first attempt; populated on
+        retries so the agent can be told *what* was wrong.
     ``output_contract``
         The materialized output contract for this call site (design §7.5).
         Carries ``format_instructions`` and ``json_schema`` so agents can
@@ -45,6 +100,7 @@ class AgentRequest:
     prompt: str
     attempt: int = 0
     previous_invalid_output: str | None = None
+    validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
     output_contract: "OutputContract | None" = None
 

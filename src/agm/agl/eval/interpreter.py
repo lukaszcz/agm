@@ -464,7 +464,7 @@ class Interpreter:
         parse_policy: object,  # ParsePolicy | None
     ) -> Value:
         """Execute an agent call with the given contract and parse policy."""
-        from agm.agl.runtime.request import AgentRequest
+        from agm.agl.runtime.request import AgentRequest, ValidationError
         from agm.agl.syntax.nodes import RetryPolicy
 
         # Determine max retries.
@@ -484,12 +484,14 @@ class Interpreter:
             effective_strict = self._strict_json
 
         last_raw: str | None = None
+        last_errors: tuple[ValidationError, ...] = ()
         for attempt in range(max_attempts):
             request = AgentRequest(
                 agent=agent_name,
                 prompt=prompt_text,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
+                validation_errors=list(last_errors),
                 output_contract=contract,
             )
             response = self._registry.dispatch(agent_name, request)
@@ -501,19 +503,26 @@ class Interpreter:
                 return result.value
 
             last_raw = raw
+            last_errors = result.errors
 
-        # All attempts exhausted → raise AgentParseError.
+        # All attempts exhausted → raise AgentParseError.  Validation errors are
+        # threaded as JSON-shaped values (a list of per-error objects) so the
+        # exception's ``validation_errors`` field (text-renderable) matches the
+        # exception field schema (design §7.5 / §7.9).
+        errors_json: list[object] = [e.to_json_obj() for e in last_errors]
         raise AglRaise(
             _make_exc_value(
                 "AgentParseError",
                 f"Agent {agent_name!r} failed to produce a valid {contract.target_type!r} "
                 f"after {max_attempts} attempt(s). Last output: {last_raw!r}",
                 raw=TextValue(last_raw or ""),
+                normalized_raw=TextValue(last_raw or ""),
                 agent=TextValue(agent_name),
                 attempts=IntValue(max_attempts),
                 target_type=TextValue(str(contract.target_type)),
                 expected_schema=JsonValue(contract.json_schema),
-                validation_errors=JsonValue(None),
+                validation_errors=JsonValue(errors_json),
+                metadata=JsonValue(None),
             )
         )
 

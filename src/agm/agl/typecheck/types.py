@@ -259,7 +259,14 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
         fields={
             "message": TextType(),
             "trace_id": TextType(),
+            "agent": TextType(),
+            "target_type": TextType(),
+            "expected_schema": JsonType(),
             "raw": TextType(),
+            "normalized_raw": TextType(),
+            "validation_errors": JsonType(),
+            "attempts": IntType(),
+            "metadata": JsonType(),
         },
     ),
     "MaxIterationsExceeded": ExceptionType(

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import itertools
 from decimal import Decimal
-from typing import cast
 
 import pytest
 
@@ -118,6 +117,19 @@ def _make_contract_for(typ: Type) -> OutputContract:
     codec = JsonCodec()
     env = TypeEnvironment()
     return codec.make_contract(typ, env)
+
+
+def _variant_schema_for_case(schema: dict[str, object], case: str) -> dict[str, object]:
+    """Return the ``oneOf`` variant sub-schema whose ``$case`` const is *case*."""
+    one_of = schema["oneOf"]
+    assert isinstance(one_of, list)
+    for variant in one_of:
+        assert isinstance(variant, dict)
+        props = variant["properties"]
+        assert isinstance(props, dict)
+        if props["$case"] == {"const": case}:
+            return variant
+    raise AssertionError(f"no variant with $case={case!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -327,14 +339,16 @@ class TestDeriveSchema:
             fields={"a": IntType(), "b": TextType()},
         )
         schema = derive_schema(typ)
-        required = cast(list[str], schema["required"])
+        required = schema["required"]
+        assert isinstance(required, list)
         assert set(required) == {"a", "b"}
 
     def test_record_nested_record(self) -> None:
         inner = RecordType(name="Inner", fields={"x": IntType()})
         outer = RecordType(name="Outer", fields={"inner": inner})
         schema = derive_schema(outer)
-        properties = cast(dict[str, object], schema["properties"])
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
         assert properties["inner"] == {
             "type": "object",
             "additionalProperties": False,
@@ -381,26 +395,18 @@ class TestDeriveSchema:
     def test_enum_nullary_variant_has_only_case_field(self) -> None:
         typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
         schema = derive_schema(typ)
-        # First variant (A) should have only $case in required
-        variants = cast(list[dict[str, object]], schema["oneOf"])
-        a_schema = next(
-            v
-            for v in variants
-            if cast(dict[str, object], v["properties"])["$case"] == {"const": "A"}
-        )
-        required_a = cast(list[str], a_schema["required"])
+        # First variant (A) should have only $case in required.
+        a_schema = _variant_schema_for_case(schema, "A")
+        required_a = a_schema["required"]
+        assert isinstance(required_a, list)
         assert required_a == ["$case"]
 
     def test_enum_payload_variant_has_case_plus_fields(self) -> None:
         typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
         schema = derive_schema(typ)
-        variants = cast(list[dict[str, object]], schema["oneOf"])
-        b_schema = next(
-            v
-            for v in variants
-            if cast(dict[str, object], v["properties"])["$case"] == {"const": "B"}
-        )
-        required_b = cast(list[str], b_schema["required"])
+        b_schema = _variant_schema_for_case(schema, "B")
+        required_b = b_schema["required"]
+        assert isinstance(required_b, list)
         assert set(required_b) == {"$case", "x"}
 
 
@@ -812,6 +818,247 @@ class TestSchemaValidationErrors:
 
 
 # ---------------------------------------------------------------------------
+# 7b. Structured ValidationError records (F1 — design §7.5 / §7.7)
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredValidationErrors:
+    """Each documented category is surfaced as a structured ValidationError."""
+
+    def _categories(self, result: ParseResult) -> list[str]:
+        return [e.category for e in result.errors]
+
+    def test_missing_field_category(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('{"title": "Bug"}', _make_issue_type(), strict_json=False)
+        assert result.ok is False
+        assert "missing_field" in self._categories(result)
+        missing = [e for e in result.errors if e.category == "missing_field"]
+        assert all(e.field is not None for e in missing)
+
+    def test_unknown_field_category(self) -> None:
+        codec = JsonCodec()
+        raw = '{"title": "Bug", "severity": 1, "description": "x", "extra": true}'
+        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        assert result.ok is False
+        assert self._categories(result) == ["unknown_field"]
+        # The opaque jsonschema phrasing must not leak verbatim as the category.
+        assert "extra" in result.errors[0].message
+
+    def test_wrong_type_category(self) -> None:
+        codec = JsonCodec()
+        raw = '{"title": "Bug", "severity": "high", "description": "x"}'
+        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        assert result.ok is False
+        wrong = [e for e in result.errors if e.category == "wrong_type"]
+        assert wrong
+        assert wrong[0].field == "severity"
+        assert wrong[0].path == "$.severity"
+
+    def test_bad_case_unknown_variant(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('{"$case": "Nope"}', _make_review_type(), strict_json=False)
+        assert result.ok is False
+        assert self._categories(result) == ["bad_case"]
+        msg = result.errors[0].message
+        # Type-directed: real variant names, not "not valid under any of ...".
+        assert "is not valid under any of the given schemas" not in msg
+        assert "Nope" in msg
+        assert "Pass" in msg and "Fail" in msg
+
+    def test_bad_case_missing_tag(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('{"issues": ["x"]}', _make_review_type(), strict_json=False)
+        assert result.ok is False
+        assert self._categories(result) == ["bad_case"]
+        assert result.errors[0].field == "$case"
+        assert "is not valid under any of the given schemas" not in result.errors[0].message
+
+    def test_enum_missing_payload_field_is_missing_field(self) -> None:
+        codec = JsonCodec()
+        # Fail variant requires "issues".
+        result = codec.parse('{"$case": "Fail"}', _make_review_type(), strict_json=False)
+        assert result.ok is False
+        assert self._categories(result) == ["missing_field"]
+        assert result.errors[0].field == "issues"
+        assert "is not valid under any of the given schemas" not in result.errors[0].message
+
+    def test_enum_unknown_payload_field_is_unknown_field(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('{"$case": "Pass", "junk": 1}', _make_review_type(), strict_json=False)
+        assert result.ok is False
+        assert self._categories(result) == ["unknown_field"]
+        assert result.errors[0].field == "junk"
+
+    def test_nested_enum_wrong_type_path(self) -> None:
+        """Type-directed enum resolution works under a record field path."""
+        codec = JsonCodec()
+        typ = RecordType(name="Wrapper", fields={"review": _make_review_type()})
+        result = codec.parse('{"review": {"$case": "Bogus"}}', typ, strict_json=False)
+        assert result.ok is False
+        assert self._categories(result) == ["bad_case"]
+        assert "Bogus" in result.errors[0].message
+
+    def test_success_has_no_errors(self) -> None:
+        codec = JsonCodec()
+        raw = '{"title": "Bug", "severity": 1, "description": "x"}'
+        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        assert result.ok is True
+        assert result.errors == ()
+
+    def test_non_validation_failure_has_no_errors(self) -> None:
+        """A failure to extract any JSON is not a schema-validation error."""
+        codec = JsonCodec()
+        result = codec.parse("complete gibberish ###", _make_issue_type(), strict_json=False)
+        assert result.ok is False
+        assert result.errors == ()
+
+
+class TestValidationErrorsThroughRuntime:
+    """F1: real ValidationErrors thread into AgentParseError.validation_errors."""
+
+    def test_validation_errors_in_agent_parse_error(self) -> None:
+        record_def = _record_def(
+            "Issue",
+            _field_def("title", _text_ty()),
+            _field_def("severity", _int_ty()),
+        )
+        let_x = _let(
+            "x",
+            _agent_call("tracker", "Get issue."),
+            type_ann=_name_ty("Issue"),
+        )
+        with pytest.raises(AglRaise) as exc_info:
+            _run_with_json_codec(
+                (record_def, let_x),
+                # Valid JSON, but missing the required "severity" field.
+                named={"tracker": lambda req: '{"title": "Bug"}'},
+            )
+        exc = exc_info.value.exc
+        assert exc.type_name == "AgentParseError"
+        ve = exc.fields["validation_errors"]
+        assert isinstance(ve, JsonValue)
+        assert isinstance(ve.raw, list)
+        assert len(ve.raw) >= 1
+        first = ve.raw[0]
+        assert isinstance(first, dict)
+        assert first["category"] == "missing_field"
+        assert first["field"] == "severity"
+
+    def test_bad_case_validation_errors_through_runtime(self) -> None:
+        enum_def = _enum_def(
+            "Review",
+            _variant_def("Pass"),
+            _variant_def("Fail", _field_def("issues", _list_ty(_text_ty()))),
+        )
+        let_r = _let("r", _agent_call("rv", "Review."), type_ann=_name_ty("Review"))
+        with pytest.raises(AglRaise) as exc_info:
+            _run_with_json_codec(
+                (enum_def, let_r),
+                named={"rv": lambda req: '{"$case": "Nope"}'},
+            )
+        exc = exc_info.value.exc
+        ve = exc.fields["validation_errors"]
+        assert isinstance(ve, JsonValue)
+        assert isinstance(ve.raw, list)
+        first = ve.raw[0]
+        assert isinstance(first, dict)
+        assert first["category"] == "bad_case"
+
+    def test_retry_request_carries_previous_validation_errors(self) -> None:
+        """On retry, the AgentRequest exposes the prior attempt's ValidationErrors."""
+        from agm.agl.runtime.request import ValidationError as VE
+
+        seen: list[list[VE]] = []
+
+        def agent(req: AgentRequest) -> str:
+            seen.append(list(req.validation_errors))
+            return '{"title": "Bug"}'  # always missing severity → always fails
+
+        record_def = _record_def(
+            "Issue",
+            _field_def("title", _text_ty()),
+            _field_def("severity", _int_ty()),
+        )
+        from agm.agl.syntax.nodes import CallOptions, RetryPolicy
+
+        retry_call = ast.AgentCall(
+            agent="tracker",
+            options=CallOptions(
+                format=None,
+                strict_json=None,
+                parse_policy=RetryPolicy(extra=1, span=_sp(), node_id=_nid()),
+                span=_sp(),
+                node_id=_nid(),
+            ),
+            template=_template(_text_seg("Get issue.")),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        let_x = _let("x", retry_call, type_ann=_name_ty("Issue"))
+        with pytest.raises(AglRaise):
+            _run_with_json_codec((record_def, let_x), named={"tracker": agent})
+        # Two attempts: first sees no prior errors, retry sees the missing_field.
+        assert len(seen) == 2
+        assert seen[0] == []
+        assert seen[1] and seen[1][0].category == "missing_field"
+
+
+# ---------------------------------------------------------------------------
+# 7c. Multi-value ambiguity rejection (F3 — design §2.8 "exactly one value")
+# ---------------------------------------------------------------------------
+
+
+class TestMultiValueAmbiguity:
+    def test_two_objects_rejected(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('{"a":1} {"b":2}', JsonType(), strict_json=False)
+        assert result.ok is False
+        assert "multiple JSON values" in result.error_msg
+
+    def test_two_objects_newline_separated_rejected(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('{"a":1}\n{"b":2}', JsonType(), strict_json=False)
+        assert result.ok is False
+        assert "multiple JSON values" in result.error_msg
+
+    def test_text_then_single_object_recovers(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('text then {"a": 1}', JsonType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, JsonValue)
+        assert result.value.raw == {"a": 1}
+
+    def test_bare_array_parses(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('[1, 2]', JsonType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, JsonValue)
+        assert result.value.raw == [1, 2]
+
+    def test_fenced_array_parses(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('```json\n[1, 2]\n```', JsonType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, JsonValue)
+        assert result.value.raw == [1, 2]
+
+    def test_prose_wrapped_array_recovers(self) -> None:
+        """A genuine single array wrapped in prose is recovered (not ambiguous)."""
+        codec = JsonCodec()
+        result = codec.parse('Here you go:\n[1, 2]', JsonType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, JsonValue)
+        assert result.value.raw == [1, 2]
+
+    def test_ambiguous_inside_fence_rejected(self) -> None:
+        codec = JsonCodec()
+        result = codec.parse('```json\n{"a":1} {"b":2}\n```', JsonType(), strict_json=False)
+        assert result.ok is False
+        assert "multiple JSON values" in result.error_msg
+
+
+# ---------------------------------------------------------------------------
 # 8. make_contract (OutputContract materialization)
 # ---------------------------------------------------------------------------
 
@@ -819,14 +1066,14 @@ class TestSchemaValidationErrors:
 class TestMakeContract:
     def test_json_schema_populated_for_record(self) -> None:
         contract = _make_contract_for(_make_issue_type())
-        assert contract.json_schema is not None
-        schema = cast(dict[str, object], contract.json_schema)
+        schema = contract.json_schema
+        assert isinstance(schema, dict)
         assert schema["type"] == "object"
 
     def test_json_schema_populated_for_enum(self) -> None:
         contract = _make_contract_for(_make_review_type())
-        assert contract.json_schema is not None
-        schema = cast(dict[str, object], contract.json_schema)
+        schema = contract.json_schema
+        assert isinstance(schema, dict)
         assert "oneOf" in schema
 
     def test_format_instructions_non_empty_for_record(self) -> None:
@@ -1297,6 +1544,33 @@ class TestRecordEnumInputs:
         with pytest.raises(ValueError, match="unsupported type"):
             _convert_input("e", "val", ExceptionType(name="Boom"))
 
+    def test_structured_input_is_strict_no_repair(self) -> None:
+        """F7: host --input values are parsed strictly; typos are NOT repaired.
+
+        A trailing comma (which json-repair would silently fix for chatty agent
+        output) must be rejected for a user-supplied structured input, with an
+        error that makes the JSON requirement clear.
+        """
+        from agm.agl.runtime.runtime import _convert_input
+
+        with pytest.raises(ValueError, match="valid JSON value"):
+            _convert_input(
+                "issue",
+                '{"title": "Bug", "severity": 5,}',  # trailing comma typo
+                RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()}),
+            )
+
+    def test_structured_input_rejects_fenced_json(self) -> None:
+        """F7: a Markdown-fenced --input value is not stripped (strict parsing)."""
+        from agm.agl.runtime.runtime import _convert_input
+
+        with pytest.raises(ValueError, match="valid JSON value"):
+            _convert_input(
+                "tags",
+                "```json\n[1, 2]\n```",
+                ListType(elem=IntType()),
+            )
+
 
 # ---------------------------------------------------------------------------
 # 13. Coverage: _json_to_value error branches
@@ -1411,12 +1685,51 @@ class TestJsonToValueErrorBranches:
         with pytest.raises(ValueError, match="Cannot deserialise"):
             _json_to_value({}, ExceptionType(name="Boom"))
 
-    def test_int_from_decimal_whole_number(self) -> None:
-        """int widening: Decimal("3.0") → IntValue(3) when target is int."""
-        from agm.agl.runtime.codec import _json_to_value
+    def test_integral_decimal_to_int_through_parse(self) -> None:
+        """F2: wire ``1.0`` validates and converts to IntValue(1) for an int target.
 
-        result = _json_to_value(Decimal("3.0"), IntType())
-        assert result == IntValue(3)
+        Exercised through ``parse()`` (the public path), not the previously-dead
+        ``_json_to_value`` branch: post-parse normalization rewrites integral
+        Decimals to int *before* schema validation, so ``{"type": "integer"}``
+        accepts ``1.0``.
+        """
+        codec = JsonCodec()
+        result = codec.parse("1.0", IntType(), strict_json=False)
+        assert result.ok is True
+        assert result.value == IntValue(1)
+
+    def test_integral_decimal_to_int_strict(self) -> None:
+        """F2: integral-Decimal normalization also applies on the strict path."""
+        codec = JsonCodec()
+        result = codec.parse("1.0", IntType(), strict_json=True)
+        assert result.ok is True
+        assert result.value == IntValue(1)
+
+    def test_non_integral_decimal_rejected_for_int(self) -> None:
+        """F2: ``1.5`` still fails an int target (not integral)."""
+        codec = JsonCodec()
+        result = codec.parse("1.5", IntType(), strict_json=False)
+        assert result.ok is False
+        assert result.value is None
+        assert any(e.category == "wrong_type" for e in result.errors)
+
+    def test_integral_decimal_for_decimal_target(self) -> None:
+        """F2: ``1.0`` for a decimal target yields a value-exact DecimalValue.
+
+        Normalization routes the integral Decimal through int, and the
+        int→decimal widening in ``_json_to_value`` re-widens it: the resulting
+        value equals ``1`` exactly (design §5.1 — no value/precision loss;
+        ``Decimal('1') == Decimal('1.0')``).
+        """
+        codec = JsonCodec()
+        result = codec.parse("1.0", DecimalType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, DecimalValue)
+        # Value exactness: numerically equal to both 1 and 1.0.
+        assert result.value.value == Decimal("1.0")
+        assert result.value.value == Decimal("1")
+        # Pinned representation: integral decimals normalize to scale-0 Decimal('1').
+        assert result.value.value == Decimal(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1556,3 +1869,101 @@ class TestFencedRepairFallback:
             result = codec.parse("anything", IntType(), strict_json=False)
         assert result.ok is False
         assert "JSON parse failed after repair attempt" in result.error_msg
+
+
+# ---------------------------------------------------------------------------
+# 16. Coverage: validation-error mapping internals (F1) and extraction edges
+# ---------------------------------------------------------------------------
+
+
+class TestValidationMappingCoverage:
+    """Cover structural / defensive branches of the F1 error mapping."""
+
+    def test_trailing_comma_array_recovers_not_ambiguous(self) -> None:
+        """A repaired array whose candidate already starts with '[' is not ambiguous."""
+        codec = JsonCodec()
+        result = codec.parse("[1, 2,]", JsonType(), strict_json=False)
+        assert result.ok is True
+        assert isinstance(result.value, JsonValue)
+        assert result.value.raw == [1, 2]
+
+    def test_enum_two_field_variant_reports_first_missing(self) -> None:
+        codec = JsonCodec()
+        typ = EnumType(name="E", variants={"V": {"a": IntType(), "b": IntType()}})
+        # "a" present, "b" missing → loop skips a, reports b.
+        result = codec.parse('{"$case": "V", "a": 1}', typ, strict_json=False)
+        assert result.ok is False
+        assert result.errors[0].category == "missing_field"
+        assert result.errors[0].field == "b"
+
+    def test_enum_non_object_instance_is_bad_case(self) -> None:
+        codec = JsonCodec()
+        typ = EnumType(name="E", variants={"A": {}})
+        result = codec.parse("42", typ, strict_json=False)
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+
+    def test_list_nested_enum_bad_case(self) -> None:
+        codec = JsonCodec()
+        enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
+        result = codec.parse('[{"$case": "Z"}]', ListType(elem=enum), strict_json=False)
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$[0]"
+
+    def test_dict_nested_enum_bad_case(self) -> None:
+        codec = JsonCodec()
+        enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
+        result = codec.parse('{"k": {"$case": "Z"}}', DictType(value=enum), strict_json=False)
+        assert result.ok is False
+        assert result.errors[0].category == "bad_case"
+        assert result.errors[0].path == "$.k"
+
+    def test_missing_required_field_helper_defensive(self) -> None:
+        """_missing_required_field returns None for non-list / non-dict shapes."""
+        from jsonschema import ValidationError as JVE
+
+        from agm.agl.runtime.codec import _missing_required_field
+
+        err = JVE("required")
+        err.validator_value = "not-a-list"
+        err.instance = {"x": 1}
+        assert _missing_required_field(err) is None
+
+    def test_missing_required_field_helper_all_present(self) -> None:
+        """_missing_required_field returns None when every required name is present."""
+        from jsonschema import ValidationError as JVE
+
+        from agm.agl.runtime.codec import _missing_required_field
+
+        err = JVE("required")
+        err.validator_value = ["a", "b"]
+        err.instance = {"a": 1, "b": 2}
+        assert _missing_required_field(err) is None
+
+    def test_classify_unknown_validator_is_wrong_type(self) -> None:
+        """A non-required/additionalProperties/type/oneOf validator → wrong_type."""
+        from jsonschema import ValidationError as JVE
+
+        from agm.agl.runtime.codec import _classify_jsonschema_error
+
+        err = JVE("const mismatch")
+        err.validator = "const"
+        err.validator_value = "X"
+        err.instance = "Y"
+        ve = _classify_jsonschema_error(err, TextType())
+        assert ve.category == "wrong_type"
+        assert ve.message == "const mismatch"
+
+    def test_enum_type_at_path_unknown_record_field(self) -> None:
+        """_enum_type_at_path returns None when a path step names an unknown field."""
+        from agm.agl.runtime.codec import _enum_type_at_path
+
+        rec = RecordType(name="R", fields={"a": IntType()})
+        assert _enum_type_at_path(rec, ["missing"]) is None
+
+    def test_enum_type_at_path_scalar_with_remaining_path(self) -> None:
+        """_enum_type_at_path returns None when path descends past a scalar."""
+        from agm.agl.runtime.codec import _enum_type_at_path
+
+        assert _enum_type_at_path(IntType(), ["deeper"]) is None

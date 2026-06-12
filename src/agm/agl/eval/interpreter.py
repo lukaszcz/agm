@@ -125,11 +125,13 @@ def _make_exc_value(
     return ExceptionValue(type_name=type_name, fields=fields)
 
 
-def _make_match_error(subject: Value) -> "ExceptionValue":
+def _make_match_error(subject: Value, *, trace_id: str = "") -> "ExceptionValue":
     """Create a ``MatchError`` ``ExceptionValue`` for a non-matching *subject*.
 
     Populates ``scrutinee_type`` (the AgL type-name string of the value) and
     ``scrutinee`` (the JSON-shaped representation of the value) per design §8.1.
+    *trace_id* links the exception to its eventual ``exception`` trace record
+    (design §8.1 / §12.6); the caller mints it via the trace store.
     """
     from agm.agl.runtime.serialize import value_to_json_obj
 
@@ -138,6 +140,7 @@ def _make_match_error(subject: Value) -> "ExceptionValue":
     return _make_exc_value(
         "MatchError",
         f"Non-exhaustive case: no pattern matched value of type {scrutinee_type!r}",
+        trace_id=trace_id,
         scrutinee_type=TextValue(scrutinee_type),
         scrutinee=JsonValue(scrutinee_json),
     )
@@ -354,6 +357,7 @@ class Interpreter:
             _make_exc_value(
                 "MaxIterationsExceeded",
                 f"Loop exhausted after {limit} iterations",
+                trace_id=self._trace.new_event_id(),
                 limit=IntValue(limit),
                 condition=TextValue(self._source_slice(stmt.condition.span)),
                 last_condition_value=BoolValue(last_cond),
@@ -403,7 +407,7 @@ class Interpreter:
                     self._exec_stmt(s, branch_scope)
                 return
         # No match: raise MatchError with scrutinee_type and scrutinee fields.
-        raise AglRaise(_make_match_error(subject))
+        raise AglRaise(_make_match_error(subject, trace_id=self._trace.new_event_id()))
 
     def _exec_try_catch(self, stmt: TryCatch, scope: Scope) -> None:
         try:
@@ -831,6 +835,7 @@ class Interpreter:
                 _make_exc_value(
                     "ExecError",
                     f"Failed to spawn shell: {result.spawn_error}",
+                    trace_id=self._trace.new_event_id(),
                     command=TextValue(command),
                     exit_code=IntValue(-1),
                     stdout=TextValue(""),
@@ -854,6 +859,7 @@ class Interpreter:
                 _make_exc_value(
                     "ExecError",
                     f"Shell command exited with code {exit_code}: {command!r}",
+                    trace_id=self._trace.new_event_id(),
                     command=TextValue(command),
                     exit_code=IntValue(exit_code),
                     stdout=TextValue(result.stdout.rstrip("\n")),
@@ -944,9 +950,7 @@ class Interpreter:
             # store (plan §9.6 / design §8.1). A fresh event-level id is
             # generated so the raised exception can be cross-referenced with
             # any matching record in the trace file.
-            from agm.agl.runtime.trace import _new_id
-
-            exc_trace_id = _new_id()
+            exc_trace_id = self._trace.new_event_id()
             fields: dict[str, Value] = {"trace_id": TextValue(exc_trace_id)}
             for fname, fval in arg_values.items():
                 field_type = typ.fields.get(fname)
@@ -981,7 +985,7 @@ class Interpreter:
         if op is BinOp.SUB or op is BinOp.MUL:
             return _arith(left, right, op)
         if op is BinOp.DIV:
-            return _div(left, right)
+            return _div(left, right, trace=self._trace)
 
         # Comparison.
         if (
@@ -1050,7 +1054,7 @@ class Interpreter:
                         name, val, mutable=False, decl_span=branch.span
                     )
                 return self._eval_expr(branch.body, branch_scope)
-        raise AglRaise(_make_match_error(subject))
+        raise AglRaise(_make_match_error(subject, trace_id=self._trace.new_event_id()))
 
 
 # ---------------------------------------------------------------------------
@@ -1131,8 +1135,14 @@ def _arith(left: Value, right: Value, op: BinOp) -> Value:
     raise RuntimeError(f"Cannot perform {op.value} on {type(left).__name__}")
 
 
-def _div(left: Value, right: Value) -> Value:
-    """Division: always yields decimal."""
+def _div(left: Value, right: Value, *, trace: "TraceStore") -> Value:
+    """Division: always yields decimal.
+
+    *trace* is the run's trace store; on division by zero a fresh event id is
+    minted from it so the ``ArithmeticError`` links to its eventual
+    ``exception`` trace record (design §8.1 / §12.6).  The id is minted only at
+    the raise site, so a successful division costs nothing.
+    """
     if isinstance(left, (IntValue, DecimalValue)) and isinstance(right, (IntValue, DecimalValue)):
         rd = _to_decimal(right)
         if rd == decimal.Decimal(0):
@@ -1140,6 +1150,7 @@ def _div(left: Value, right: Value) -> Value:
                 _make_exc_value(
                     "ArithmeticError",
                     "Division by zero",
+                    trace_id=trace.new_event_id(),
                     operation=TextValue("/"),
                 )
             )

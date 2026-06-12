@@ -34,8 +34,12 @@ if TYPE_CHECKING:
     from agm.agl.syntax.spans import SourceSpan
 
 
-def _new_id() -> str:
-    """Generate a fresh unique identifier (UUID4 hex string)."""
+def new_trace_id() -> str:
+    """Generate a fresh unique trace/event identifier (UUID4 hex string).
+
+    Public module-level helper so other components (e.g. the interpreter) can
+    mint ids without importing a private symbol across modules.
+    """
     return uuid.uuid4().hex
 
 
@@ -52,7 +56,20 @@ class TraceStore:
 
     def __init__(self, path: Path | None) -> None:
         self._path = path
-        self._run_id: str = _new_id()
+        self._run_id: str = new_trace_id()
+
+    def new_event_id(self) -> str:
+        """Return a fresh event-level trace id.
+
+        Cheap and always valid, even when logging is disabled (``path`` is
+        ``None``).  Callers (e.g. the interpreter at a built-in raise site) mint
+        an id here and place it in both an ``ExceptionValue.fields['trace_id']``
+        and the eventual ``exception`` record so the two can be cross-referenced
+        (design §8.1 / §12.6).  When logging is disabled the id still exists; a
+        ``trace_id`` that references no record is acceptable (§8.1 only requires
+        the field be present).
+        """
+        return new_trace_id()
 
     @property
     def path(self) -> Path | None:
@@ -76,11 +93,15 @@ class TraceStore:
 
     def run_start(self) -> None:
         """Record the start of a run (boundary marker)."""
-        self._emit("run_start", _new_id(), {})
+        if self._path is None:
+            return
+        self._emit("run_start", new_trace_id(), {})
 
     def run_end(self, *, ok: bool) -> None:
         """Record the end of a run with the overall outcome."""
-        self._emit("run_end", _new_id(), {"ok": ok})
+        if self._path is None:
+            return
+        self._emit("run_end", new_trace_id(), {"ok": ok})
 
     def agent_call_attempt(
         self,
@@ -90,8 +111,14 @@ class TraceStore:
         prompt: str,
         span: "SourceSpan | None" = None,
     ) -> str:
-        """Record one agent-call attempt; return the event's ``trace_id``."""
-        trace_id = _new_id()
+        """Record one agent-call attempt; return the event's ``trace_id``.
+
+        Returns a fresh id even when logging is disabled (no record written) so
+        callers can always thread a valid ``trace_id`` through.
+        """
+        trace_id = new_trace_id()
+        if self._path is None:
+            return trace_id
         extra: dict[str, object] = {
             "agent": agent,
             "attempt": attempt,
@@ -113,6 +140,8 @@ class TraceStore:
         span: "SourceSpan | None" = None,
     ) -> None:
         """Record the outcome of a codec parse attempt."""
+        if self._path is None:
+            return
         extra: dict[str, object] = {
             "ok": ok,
             "raw": raw,
@@ -122,7 +151,7 @@ class TraceStore:
         if span is not None:
             extra["line"] = span.start_line
             extra["col"] = span.start_col
-        self._emit("parse_result", _new_id(), extra)
+        self._emit("parse_result", new_trace_id(), extra)
 
     def mutation(
         self,
@@ -132,6 +161,8 @@ class TraceStore:
         span: "SourceSpan | None" = None,
     ) -> None:
         """Record a ``set`` mutation of a mutable binding."""
+        if self._path is None:
+            return
         from agm.agl.runtime.serialize import dumps_exact
 
         serialized = dumps_exact(value_to_json_obj(value), indent=None)
@@ -142,7 +173,7 @@ class TraceStore:
         if span is not None:
             extra["line"] = span.start_line
             extra["col"] = span.start_col
-        self._emit("mutation", _new_id(), extra)
+        self._emit("mutation", new_trace_id(), extra)
 
     def print_stmt(
         self,
@@ -151,11 +182,13 @@ class TraceStore:
         span: "SourceSpan | None" = None,
     ) -> None:
         """Record a ``print`` statement output."""
+        if self._path is None:
+            return
         extra: dict[str, object] = {"rendered": rendered}
         if span is not None:
             extra["line"] = span.start_line
             extra["col"] = span.start_col
-        self._emit("print", _new_id(), extra)
+        self._emit("print", new_trace_id(), extra)
 
     def exec_command(
         self,
@@ -168,6 +201,8 @@ class TraceStore:
         span: "SourceSpan | None" = None,
     ) -> None:
         """Record a completed ``exec`` shell command (success or failure)."""
+        if self._path is None:
+            return
         extra: dict[str, object] = {
             "command": command,
             "exit_code": exit_code,
@@ -178,7 +213,7 @@ class TraceStore:
         if span is not None:
             extra["line"] = span.start_line
             extra["col"] = span.start_col
-        self._emit("exec_command", _new_id(), extra)
+        self._emit("exec_command", new_trace_id(), extra)
 
     def exception(
         self,
@@ -195,6 +230,8 @@ class TraceStore:
         cross-reference the exception record in the trace file with the raised
         exception (design §12.6 / §8.1).
         """
+        if self._path is None:
+            return
         extra: dict[str, object] = {
             "type_name": type_name,
             "message": message,

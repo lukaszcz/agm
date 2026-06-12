@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
 
 from agm.core.fs import append_text, mkdir
@@ -56,10 +55,13 @@ def prepare_log_file(
 def _jsonl_default(obj: object) -> str:
     """JSON serializer for types not handled by the stdlib encoder.
 
-    ``Decimal`` is emitted as exact fixed-point text (never via float).
+    Raises ``TypeError`` for any unsupported type — including ``Decimal``.
+    There is a single numeric convention for the DSL, and it lives in
+    ``agm.agl.runtime.serialize.dumps_exact`` (unquoted exact fixed-point text).
+    Emitting a ``Decimal`` here would quote it as a JSON string and silently
+    diverge from that convention, so callers MUST pre-serialize any
+    ``Decimal``-bearing values before passing the record in (F2).
     """
-    if isinstance(obj, Decimal):
-        return format(obj, "f")
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
@@ -68,8 +70,13 @@ def append_jsonl(path: Path | None, record: Mapping[str, object]) -> None:
 
     A DSL-agnostic helper (plan §11.1): any command that needs structured
     append-a-record logging can use this rather than writing its own JSONL
-    emitter.  ``Decimal`` values are serialized exactly (no float round-trip,
-    design §5.1).
+    emitter.
+
+    This helper has NO special numeric handling: ``Decimal`` (and any other
+    non-stdlib-JSON type) raises ``TypeError``.  The single numeric convention
+    lives in the DSL serializer (``agm.agl.runtime.serialize.dumps_exact``);
+    callers MUST pre-serialize ``Decimal``-bearing values to exact text before
+    calling this (F2).
 
     If *path* is ``None`` this is a no-op (logging disabled).
     """

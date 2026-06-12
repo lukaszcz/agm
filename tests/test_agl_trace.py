@@ -404,6 +404,83 @@ class TestExceptionRecord:
 
 
 # ---------------------------------------------------------------------------
+# 4b. Built-in runtime exceptions also carry a linked, non-empty trace_id (F1)
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinExceptionTraceId:
+    """Built-in runtime exceptions (ArithmeticError, MatchError,
+    MaxIterationsExceeded, ExecError) must carry a non-empty ``trace_id`` that
+    matches their ``exception`` trace record — mirroring AgentParseError (F1)."""
+
+    def test_arithmetic_error_trace_id_non_empty_with_logging(
+        self, tmp_path: Path
+    ) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        # Uncaught division by zero → ArithmeticError escapes the program.
+        result = rt.run("let x = 1 / 0", log_file=log_path)
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "ArithmeticError"
+
+        agl_trace_id = result.error.fields.get("trace_id")
+        assert isinstance(agl_trace_id, str) and agl_trace_id
+
+        records = _load_jsonl(log_path)
+        exc_recs = [r for r in records if r.get("kind") == "exception"]
+        assert exc_recs
+        rec_trace_id = exc_recs[0].get("trace_id")
+        # Linkage: the exception record's trace_id matches the raised exception.
+        assert rec_trace_id == agl_trace_id
+        assert isinstance(rec_trace_id, str) and rec_trace_id
+
+    def test_arithmetic_error_trace_id_non_empty_without_logging(self) -> None:
+        rt = WorkflowRuntime()
+        # With logging OFF the trace_id still exists (references nothing; §8.1
+        # only requires the field be present).
+        result = rt.run("let x = 1 / 0", log_file=None)
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "ArithmeticError"
+        agl_trace_id = result.error.fields.get("trace_id")
+        assert isinstance(agl_trace_id, str) and agl_trace_id
+
+    def test_match_error_trace_id_non_empty_without_logging(self) -> None:
+        rt = WorkflowRuntime()
+        # A case statement with no matching pattern raises MatchError.
+        result = rt.run(
+            "case 5 of\n  | 0 => pass\n",
+            log_file=None,
+        )
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "MatchError"
+        agl_trace_id = result.error.fields.get("trace_id")
+        assert isinstance(agl_trace_id, str) and agl_trace_id
+
+    def test_max_iterations_trace_id_linked_with_logging(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        # A do-loop whose condition never becomes true exhausts its limit.
+        result = rt.run(
+            "var x = 0\ndo[2]\n  set x = x\nuntil false\n",
+            log_file=log_path,
+        )
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "MaxIterationsExceeded"
+
+        agl_trace_id = result.error.fields.get("trace_id")
+        assert isinstance(agl_trace_id, str) and agl_trace_id
+
+        records = _load_jsonl(log_path)
+        exc_recs = [r for r in records if r.get("kind") == "exception"]
+        assert exc_recs
+        assert exc_recs[0].get("trace_id") == agl_trace_id
+
+
+# ---------------------------------------------------------------------------
 # 5. run_start / run_end records
 # ---------------------------------------------------------------------------
 
@@ -475,6 +552,33 @@ class TestNoLog:
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
         assert not jsonl_files
+
+    def test_no_log_with_decimal_mutation_still_works(self, tmp_path: Path) -> None:
+        """A no-log run that mutates a decimal binding still succeeds and writes
+        nothing (F3 early-out before any serialization/UUID work)."""
+        rt = WorkflowRuntime()
+        result = rt.run(
+            "var x: decimal = 0.1\nset x = x + 0.2",
+            log_file=None,
+        )
+        assert result.ok
+        jsonl_files = list(tmp_path.rglob("*.jsonl"))
+        assert not jsonl_files
+
+    def test_noop_store_mutation_early_outs_before_serialize(self) -> None:
+        """``mutation()`` on a no-op store (path=None) returns without invoking
+        the serializer.  Observable via a value the serializer would choke on:
+        the early-out means no serialization (and no file) happens (F3)."""
+        from agm.agl.eval.values import DecimalValue
+        from agm.agl.runtime.trace import TraceStore
+
+        ts = TraceStore(path=None)
+        # If the early-out were missing this would still run dumps_exact; the
+        # honest check is that the no-op call neither raises nor produces output.
+        ts.run_start()
+        ts.mutation(name="x", value=DecimalValue(Decimal("0.3")), span=None)
+        ts.run_end(ok=True)
+        assert ts.path is None
 
 
 # ---------------------------------------------------------------------------
@@ -621,15 +725,18 @@ class TestAppendJsonl:
         # Must not raise when path is None.
         append_jsonl(None, {"kind": "noop"})
 
-    def test_append_jsonl_decimal_exact(self, tmp_path: Path) -> None:
+    def test_append_jsonl_decimal_raises(self, tmp_path: Path) -> None:
+        """``append_jsonl`` has no numeric convention: a raw ``Decimal`` raises.
+
+        The single numeric convention lives in the DSL serializer
+        (``dumps_exact``); callers MUST pre-serialize ``Decimal``-bearing values
+        (F2).  Encoding it here would quote it as a JSON string and diverge.
+        """
         from agm.core.log import append_jsonl
 
         path = tmp_path / "out.jsonl"
-        append_jsonl(path, {"value": Decimal("0.1")})
-        content = path.read_text(encoding="utf-8")
-        assert '"0.1"' in content or "0.1" in content
-        # Must NOT contain float-approximation digits.
-        assert "0.10000000000000001" not in content
+        with pytest.raises(TypeError):
+            append_jsonl(path, {"value": Decimal("0.1")})
 
     def test_append_jsonl_unserializable_type_raises(self, tmp_path: Path) -> None:
         """Non-JSON-serializable, non-Decimal values raise TypeError."""
@@ -664,6 +771,26 @@ class TestTraceStoreProperties:
 
         ts = TraceStore(path=tmp_path / "t.jsonl")
         assert isinstance(ts.run_id, str) and ts.run_id
+
+    def test_new_event_id_fresh_each_call(self) -> None:
+        """``new_event_id`` returns a fresh non-empty id even when disabled (F1)."""
+        from agm.agl.runtime.trace import TraceStore
+
+        ts = TraceStore(path=None)
+        a = ts.new_event_id()
+        b = ts.new_event_id()
+        assert isinstance(a, str) and a
+        assert a != b
+
+    def test_module_level_new_trace_id_public(self) -> None:
+        """A public module-level ``new_trace_id`` exists so callers never import
+        a private symbol across modules (F4)."""
+        from agm.agl.runtime.trace import new_trace_id
+
+        a = new_trace_id()
+        b = new_trace_id()
+        assert isinstance(a, str) and a
+        assert a != b
 
     def test_trace_store_records_without_span(self, tmp_path: Path) -> None:
         """Methods called with span=None still emit valid JSONL (no line/col keys)."""

@@ -2170,8 +2170,9 @@ class TestInterpreterUnit:
     def test_div_decimal(self) -> None:
         from agm.agl.eval.interpreter import _div
         from agm.agl.eval.values import DecimalValue, IntValue
+        from agm.agl.runtime.trace import noop_trace
 
-        result = _div(IntValue(10), IntValue(4))
+        result = _div(IntValue(10), IntValue(4), trace=noop_trace())
         assert isinstance(result, DecimalValue)
 
     def test_arithmetic_uses_pinned_context_not_ambient(self) -> None:
@@ -2200,18 +2201,23 @@ class TestInterpreterUnit:
     def test_div_by_zero_raises_agl_raise(self) -> None:
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.interpreter import _div
-        from agm.agl.eval.values import IntValue
+        from agm.agl.eval.values import IntValue, TextValue
+        from agm.agl.runtime.trace import noop_trace
 
         with pytest.raises(AglRaise) as exc_info:
-            _div(IntValue(5), IntValue(0))
+            _div(IntValue(5), IntValue(0), trace=noop_trace())
         assert exc_info.value.exc.type_name == "ArithmeticError"
+        # The minted trace_id is present on the raised exception (F1).
+        trace_id = exc_info.value.exc.fields.get("trace_id")
+        assert isinstance(trace_id, TextValue) and trace_id.value
 
     def test_div_type_error(self) -> None:
         from agm.agl.eval.interpreter import _div
         from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.trace import noop_trace
 
         with pytest.raises(RuntimeError, match="Cannot divide"):
-            _div(TextValue("a"), TextValue("b"))
+            _div(TextValue("a"), TextValue("b"), trace=noop_trace())
 
     def test_compare_eq_text(self) -> None:
         from agm.agl.eval.interpreter import _compare

@@ -15,13 +15,29 @@ NOTE: Tests are scoped to what the M1 parser and typecheck support:
 from __future__ import annotations
 
 import decimal
+import itertools
 
 import pytest
 
 from agm.agl import WorkflowRuntime
+from agm.agl.eval.scope import Scope
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.runtime import RunResult
+from agm.agl.syntax import nodes as ast
+from agm.agl.syntax import types as tast
+from agm.agl.syntax.nodes import (
+    BinOp,
+    Expr,
+    IfBranch,
+    NamedArg,
+    Pattern,
+    PatternField,
+    Stmt,
+    TemplateSegment,
+)
+from agm.agl.syntax.spans import SourceSpan
+from agm.agl.typecheck.env import CheckedProgram
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,6 +74,334 @@ def run_with_agents(
     for name, fn in others.items():
         rt.register_agent(name, fn)
     return rt.run(source, inputs=inputs or {})
+
+
+# ---------------------------------------------------------------------------
+# AST builders + a public-contract execution driver
+#
+# These let tests pin M3+ constructs that the M1 parser cannot yet parse by
+# hand-building a real ``syntax.Program``, running it through the REAL
+# ``resolve`` + ``check`` passes, and executing it via ``Interpreter.execute``.
+# Assertions are on user-visible outcomes: bound values in the (public) root
+# ``Scope`` snapshot, ``print`` output via capsys, and raised ``AglRaise`` /
+# ``RuntimeError`` surfaced by ``execute``.
+#
+# Branch-scoped statements (if / case / try / do) are observed by declaring a
+# mutable ``var`` at root scope and ``set``-ing it inside the branch, then
+# reading the root binding back — exactly the user-visible workflow.
+# ---------------------------------------------------------------------------
+
+_node_ids = itertools.count(1)
+
+
+def _nid() -> int:
+    """Return a fresh, program-unique node id (side tables key on these)."""
+    return next(_node_ids)
+
+
+def _sp() -> SourceSpan:
+    return SourceSpan(1, 1, 1, 5, 0, 4)
+
+
+# --- expression builders ---------------------------------------------------
+
+
+def _int(value: int) -> ast.IntLit:
+    return ast.IntLit(value=value, span=_sp(), node_id=_nid())
+
+
+def _dec(value: str) -> ast.DecimalLit:
+    return ast.DecimalLit(value=decimal.Decimal(value), span=_sp(), node_id=_nid())
+
+
+def _bool(value: bool) -> ast.BoolLit:
+    return ast.BoolLit(value=value, span=_sp(), node_id=_nid())
+
+
+def _null() -> ast.NullLit:
+    return ast.NullLit(span=_sp(), node_id=_nid())
+
+
+def _str(value: str) -> ast.StringLit:
+    return ast.StringLit(value=value, span=_sp(), node_id=_nid())
+
+
+def _ref(name: str) -> ast.VarRef:
+    return ast.VarRef(name=name, span=_sp(), node_id=_nid())
+
+
+def _field(obj: Expr, name: str) -> ast.FieldAccess:
+    return ast.FieldAccess(obj=obj, field=name, span=_sp(), node_id=_nid())
+
+
+def _binop(op: BinOp, left: Expr, right: Expr) -> ast.BinaryOp:
+    return ast.BinaryOp(op=op, left=left, right=right, span=_sp(), node_id=_nid())
+
+
+def _unary_not(operand: Expr) -> ast.UnaryNot:
+    return ast.UnaryNot(operand=operand, span=_sp(), node_id=_nid())
+
+
+def _unary_neg(operand: Expr) -> ast.UnaryNeg:
+    return ast.UnaryNeg(operand=operand, span=_sp(), node_id=_nid())
+
+
+def _is_test(
+    expr: Expr, variant: str, *, qualifier: str | None = None, negated: bool = False
+) -> ast.IsTest:
+    return ast.IsTest(
+        expr=expr, qualifier=qualifier, variant=variant, negated=negated,
+        span=_sp(), node_id=_nid(),
+    )
+
+
+def _ctor(
+    name: str, *, qualifier: str | None = None, args: tuple[NamedArg, ...] = ()
+) -> ast.Constructor:
+    return ast.Constructor(
+        qualifier=qualifier, name=name, args=tuple(args), span=_sp(), node_id=_nid()
+    )
+
+
+def _arg(name: str, value: Expr) -> ast.NamedArg:
+    return ast.NamedArg(name=name, value=value, span=_sp(), node_id=_nid())
+
+
+def _list(*elements: Expr) -> ast.ListLit:
+    return ast.ListLit(elements=tuple(elements), span=_sp(), node_id=_nid())
+
+
+def _dict(**entries: Expr) -> ast.DictLit:
+    items = tuple(
+        ast.DictEntry(key=_str(k), value=v, span=_sp(), node_id=_nid())
+        for k, v in entries.items()
+    )
+    return ast.DictLit(entries=items, span=_sp(), node_id=_nid())
+
+
+def _template(*segments: TemplateSegment) -> ast.Template:
+    return ast.Template(segments=tuple(segments), span=_sp(), node_id=_nid())
+
+
+def _text_seg(text: str) -> ast.TextSegment:
+    return ast.TextSegment(text=text, span=_sp(), node_id=_nid())
+
+
+def _interp_seg(expr: Expr, *, render: str | None = None) -> ast.InterpSegment:
+    return ast.InterpSegment(expr=expr, render=render, span=_sp(), node_id=_nid())
+
+
+def _case_expr(subject: Expr, *branches: ast.CaseExprBranch) -> ast.CaseExpr:
+    return ast.CaseExpr(subject=subject, branches=tuple(branches), span=_sp(), node_id=_nid())
+
+
+def _case_expr_branch(pattern: Pattern, body: Expr) -> ast.CaseExprBranch:
+    return ast.CaseExprBranch(pattern=pattern, body=body, span=_sp(), node_id=_nid())
+
+
+# --- pattern builders ------------------------------------------------------
+
+
+def _wild() -> ast.WildcardPattern:
+    return ast.WildcardPattern(span=_sp(), node_id=_nid())
+
+
+def _var_pat(name: str) -> ast.VarPattern:
+    return ast.VarPattern(name=name, span=_sp(), node_id=_nid())
+
+
+def _lit_pat(
+    literal: ast.IntLit | ast.DecimalLit | ast.BoolLit | ast.StringLit | ast.NullLit,
+) -> ast.LiteralPattern:
+    return ast.LiteralPattern(literal=literal, span=_sp(), node_id=_nid())
+
+
+def _ctor_pat(
+    name: str, *, qualifier: str | None = None, fields: tuple[PatternField, ...] = ()
+) -> ast.ConstructorPattern:
+    return ast.ConstructorPattern(
+        qualifier=qualifier, name=name, fields=tuple(fields), span=_sp(), node_id=_nid()
+    )
+
+
+def _pat_field(name: str, pattern: Pattern) -> ast.PatternField:
+    return ast.PatternField(name=name, pattern=pattern, span=_sp(), node_id=_nid())
+
+
+# --- statement builders ----------------------------------------------------
+
+
+def _let(name: str, value: Expr, *, type_ann: tast.TypeExpr | None = None) -> ast.LetDecl:
+    return ast.LetDecl(name=name, type_ann=type_ann, value=value, span=_sp(), node_id=_nid())
+
+
+def _var(name: str, value: Expr, *, type_ann: tast.TypeExpr | None = None) -> ast.VarDecl:
+    return ast.VarDecl(name=name, type_ann=type_ann, value=value, span=_sp(), node_id=_nid())
+
+
+def _set(target: str, value: Expr) -> ast.SetStmt:
+    return ast.SetStmt(target=target, value=value, span=_sp(), node_id=_nid())
+
+
+def _pass() -> ast.PassStmt:
+    return ast.PassStmt(span=_sp(), node_id=_nid())
+
+
+def _print(value: Expr) -> ast.PrintStmt:
+    return ast.PrintStmt(value=value, span=_sp(), node_id=_nid())
+
+
+def _expr_stmt(expr: Expr) -> ast.ExprStmt:
+    return ast.ExprStmt(expr=expr, span=_sp(), node_id=_nid())
+
+
+def _do_until(
+    condition: Expr, body: tuple[Stmt, ...], *, limit: int | None = None
+) -> ast.DoUntil:
+    return ast.DoUntil(
+        limit=limit, body=tuple(body), condition=condition, span=_sp(), node_id=_nid()
+    )
+
+
+def _if(*branches: IfBranch) -> ast.IfStmt:
+    return ast.IfStmt(branches=tuple(branches), span=_sp(), node_id=_nid())
+
+
+def _if_branch(cond: Expr, body: tuple[Stmt, ...]) -> ast.IfBranch:
+    return ast.IfBranch(cond=cond, body=tuple(body), span=_sp(), node_id=_nid())
+
+
+def _else_branch(body: tuple[Stmt, ...]) -> ast.IfBranch:
+    return ast.IfBranch(cond=ast.ELSE, body=tuple(body), span=_sp(), node_id=_nid())
+
+
+def _case_stmt(subject: Expr, *branches: ast.CaseStmtBranch) -> ast.CaseStmt:
+    return ast.CaseStmt(subject=subject, branches=tuple(branches), span=_sp(), node_id=_nid())
+
+
+def _case_stmt_branch(pattern: Pattern, body: tuple[Stmt, ...]) -> ast.CaseStmtBranch:
+    return ast.CaseStmtBranch(pattern=pattern, body=tuple(body), span=_sp(), node_id=_nid())
+
+
+def _try(body: tuple[Stmt, ...], *handlers: ast.CatchClause) -> ast.TryCatch:
+    return ast.TryCatch(body=tuple(body), handlers=tuple(handlers), span=_sp(), node_id=_nid())
+
+
+def _catch(
+    body: tuple[Stmt, ...], *, exc_type: str | None = None, binding: str | None = None
+) -> ast.CatchClause:
+    return ast.CatchClause(
+        exc_type=exc_type, binding=binding, body=tuple(body), span=_sp(), node_id=_nid()
+    )
+
+
+def _raise(exc: Expr) -> ast.Raise:
+    return ast.Raise(exc=exc, span=_sp(), node_id=_nid())
+
+
+def _input(name: str, *, annotation: tast.TypeExpr | None = None) -> ast.InputDecl:
+    return ast.InputDecl(name=name, annotation=annotation, span=_sp(), node_id=_nid())
+
+
+# --- type-declaration / annotation builders --------------------------------
+
+
+def _field_def(name: str, type_expr: tast.TypeExpr) -> ast.FieldDef:
+    return ast.FieldDef(name=name, type_expr=type_expr, span=_sp(), node_id=_nid())
+
+
+def _record_def(name: str, *fields: ast.FieldDef) -> ast.RecordDef:
+    return ast.RecordDef(name=name, fields=tuple(fields), span=_sp(), node_id=_nid())
+
+
+def _variant_def(name: str, *fields: ast.FieldDef) -> ast.VariantDef:
+    return ast.VariantDef(name=name, fields=tuple(fields), span=_sp(), node_id=_nid())
+
+
+def _enum_def(name: str, *variants: ast.VariantDef) -> ast.EnumDef:
+    return ast.EnumDef(name=name, variants=tuple(variants), span=_sp(), node_id=_nid())
+
+
+def _type_alias(name: str, type_expr: tast.TypeExpr) -> ast.TypeAlias:
+    return ast.TypeAlias(name=name, type_expr=type_expr, span=_sp(), node_id=_nid())
+
+
+def _ty(kind: str) -> tast.TypeExpr:
+    """Build a scalar type-annotation node by kind name."""
+    if kind == "text":
+        return tast.TextT(span=_sp(), node_id=_nid())
+    if kind == "int":
+        return tast.IntT(span=_sp(), node_id=_nid())
+    if kind == "decimal":
+        return tast.DecimalT(span=_sp(), node_id=_nid())
+    if kind == "bool":
+        return tast.BoolT(span=_sp(), node_id=_nid())
+    if kind == "json":
+        return tast.JsonT(span=_sp(), node_id=_nid())
+    raise AssertionError(f"unknown scalar kind {kind!r}")
+
+
+def _list_ty(elem: tast.TypeExpr) -> tast.ListT:
+    return tast.ListT(elem=elem, span=_sp(), node_id=_nid())
+
+
+# --- the public-contract execution driver ----------------------------------
+
+
+def _check_program(body: tuple[Stmt, ...], *, has_fallback: bool = False) -> CheckedProgram:
+    """Run *body* statements through the real resolve + check passes."""
+    from agm.agl.capabilities import HostCapabilities
+    from agm.agl.scope import resolve
+    from agm.agl.syntax.nodes import Program
+    from agm.agl.typecheck import check
+
+    program = Program(body=tuple(body), span=_sp(), node_id=_nid())
+    resolved = resolve(program)
+    caps = HostCapabilities(
+        agent_names=frozenset(),
+        has_fallback_agent=has_fallback,
+        codec_kinds={"text": frozenset({"text"})},
+        renderer_names=frozenset({"default", "raw"}),
+    )
+    return check(resolved, caps)
+
+
+def _execute(
+    body: tuple[Stmt, ...],
+    *,
+    default_agent: AgentFn | None = None,
+    named: dict[str, AgentFn] | None = None,
+    has_fallback: bool = False,
+) -> Scope:
+    """Build + resolve + check + execute *body*, returning the root ``Scope``.
+
+    Mirrors ``WorkflowRuntime.run`` for constructs the M1 parser cannot parse
+    yet: drives the program through the real static passes and the public
+    ``Interpreter.execute`` entry point.  Raised ``AglRaise`` / ``RuntimeError``
+    propagate to the caller (the user-visible failure surface).
+    """
+    from agm.agl.eval.interpreter import Interpreter
+    from agm.agl.runtime.agents import AgentRegistry
+
+    checked = _check_program(body, has_fallback=has_fallback or default_agent is not None)
+    registry = AgentRegistry(named=named or {}, default_agent=default_agent)
+    interp = Interpreter(
+        checked=checked,
+        registry=registry,
+        contracts={},
+        type_env=checked.type_env,
+        loop_limit=3,
+        strict_json=False,
+    )
+    root = Scope(parent=None)
+    interp.execute(root)
+    return root
+
+
+def _eval_value(expr: Expr, *, prelude: tuple[Stmt, ...] = ()) -> object:
+    """Bind ``let r = expr`` (after *prelude*) and return r's runtime value."""
+    body = (*prelude, _let("r", expr))
+    return _execute(body).snapshot()["r"]
 
 
 # ---------------------------------------------------------------------------
@@ -1822,102 +2166,112 @@ class TestInterpreterUnit:
         with pytest.raises(RuntimeError, match="in"):
             _in_op(IntValue(1), TextValue("hello"))
 
-    def test_match_pattern_wildcard(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
+    def test_case_wildcard_pattern_always_matches(self) -> None:
+        """A ``_`` wildcard branch matches any subject (here an int)."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import WildcardPattern
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        p = WildcardPattern(span=span, node_id=0)
-        matched, bindings = _match_pattern(p, IntValue(42))
-        assert matched
-        assert bindings == {}
+        body = (
+            _let("r", _case_expr(_int(42), _case_expr_branch(_wild(), _int(1)))),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
-    def test_match_pattern_var(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
+    def test_case_var_pattern_binds_subject(self) -> None:
+        """A var pattern captures the subject into the branch body scope."""
         from agm.agl.eval.values import TextValue
-        from agm.agl.syntax.nodes import VarPattern
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        p = VarPattern(name="x", span=span, node_id=0)
-        matched, bindings = _match_pattern(p, TextValue("hello"))
-        assert matched
-        assert bindings == {"x": TextValue("hello")}
+        body = (
+            _let("r", _case_expr(_str("hello"), _case_expr_branch(_var_pat("x"), _ref("x")))),
+        )
+        assert _execute(body).snapshot()["r"] == TextValue("hello")
 
-    def test_match_pattern_literal_int_match(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
+    def test_case_literal_int_pattern_match_and_no_match(self) -> None:
+        """An int literal pattern matches an equal subject and skips otherwise."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import IntLit, LiteralPattern
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        lit = IntLit(value=42, span=span, node_id=0)
-        p = LiteralPattern(literal=lit, span=span, node_id=1)
-        matched, bindings = _match_pattern(p, IntValue(42))
-        assert matched
-        assert bindings == {}
+        hit = (
+            _let(
+                "r",
+                _case_expr(
+                    _int(42),
+                    _case_expr_branch(_lit_pat(_int(42)), _int(1)),
+                    _case_expr_branch(_wild(), _int(0)),
+                ),
+            ),
+        )
+        assert _execute(hit).snapshot()["r"] == IntValue(1)
 
-    def test_match_pattern_literal_int_no_match(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
+        miss = (
+            _let(
+                "r",
+                _case_expr(
+                    _int(42),
+                    _case_expr_branch(_lit_pat(_int(99)), _int(1)),
+                    _case_expr_branch(_wild(), _int(0)),
+                ),
+            ),
+        )
+        assert _execute(miss).snapshot()["r"] == IntValue(0)
+
+    def test_case_literal_decimal_pattern_match(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import IntLit, LiteralPattern
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        lit = IntLit(value=99, span=span, node_id=0)
-        p = LiteralPattern(literal=lit, span=span, node_id=1)
-        matched, _ = _match_pattern(p, IntValue(42))
-        assert not matched
+        body = (
+            _let(
+                "r",
+                _case_expr(
+                    _dec("1.5"),
+                    _case_expr_branch(_lit_pat(_dec("1.5")), _int(1)),
+                    _case_expr_branch(_wild(), _int(0)),
+                ),
+            ),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
-    def test_match_pattern_literal_decimal(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import DecimalValue
-        from agm.agl.syntax.nodes import DecimalLit, LiteralPattern
-        from agm.agl.syntax.spans import SourceSpan
+    def test_case_literal_bool_pattern_match(self) -> None:
+        from agm.agl.eval.values import IntValue
 
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        lit = DecimalLit(value=decimal.Decimal("1.5"), span=span, node_id=0)
-        p = LiteralPattern(literal=lit, span=span, node_id=1)
-        matched, _ = _match_pattern(p, DecimalValue(decimal.Decimal("1.5")))
-        assert matched
+        body = (
+            _let(
+                "r",
+                _case_expr(
+                    _bool(True),
+                    _case_expr_branch(_lit_pat(_bool(True)), _int(1)),
+                    _case_expr_branch(_wild(), _int(0)),
+                ),
+            ),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
-    def test_match_pattern_literal_bool(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BoolLit, LiteralPattern
-        from agm.agl.syntax.spans import SourceSpan
+    def test_case_literal_string_pattern_match(self) -> None:
+        from agm.agl.eval.values import IntValue
 
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        lit = BoolLit(value=True, span=span, node_id=0)
-        p = LiteralPattern(literal=lit, span=span, node_id=1)
-        matched, _ = _match_pattern(p, BoolValue(True))
-        assert matched
+        body = (
+            _let(
+                "r",
+                _case_expr(
+                    _str("hello"),
+                    _case_expr_branch(_lit_pat(_str("hello")), _int(1)),
+                    _case_expr_branch(_wild(), _int(0)),
+                ),
+            ),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
-    def test_match_pattern_literal_string(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import TextValue
-        from agm.agl.syntax.nodes import LiteralPattern, StringLit
-        from agm.agl.syntax.spans import SourceSpan
+    def test_case_literal_null_pattern_match(self) -> None:
+        from agm.agl.eval.values import IntValue
 
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        lit = StringLit(value="hello", span=span, node_id=0)
-        p = LiteralPattern(literal=lit, span=span, node_id=1)
-        matched, _ = _match_pattern(p, TextValue("hello"))
-        assert matched
-
-    def test_match_pattern_literal_null(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import JsonValue
-        from agm.agl.syntax.nodes import LiteralPattern, NullLit
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        lit = NullLit(span=span, node_id=0)
-        p = LiteralPattern(literal=lit, span=span, node_id=1)
-        matched, _ = _match_pattern(p, JsonValue(None))
-        assert matched
+        body = (
+            _let("j", _null(), type_ann=_ty("json")),
+            _let(
+                "r",
+                _case_expr(
+                    _ref("j"),
+                    _case_expr_branch(_lit_pat(_null()), _int(1)),
+                    _case_expr_branch(_wild(), _int(0)),
+                ),
+            ),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
     def test_matches_catch_bare_handler(self) -> None:
         from agm.agl.eval.interpreter import _matches_catch
@@ -1987,48 +2341,15 @@ class TestInterpreterUnit:
         assert "Abort" in _describe_value(ExceptionValue(type_name="Abort", fields={}))
         assert "IntValue" in _describe_value(IntValue(1))
 
-    def test_field_access_on_non_record_raises(self) -> None:
-        """_eval_field_access on a non-record/enum/exception type raises RuntimeError."""
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
+    def test_unary_not_on_non_bool_raises_at_runtime(self) -> None:
+        """``not <int>`` passes typecheck but raises a runtime error.
 
-        interp = _make_interp()
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        # Build a FieldAccess node manually; obj evaluates to an IntValue.
-        obj_ref = VarRef(name="n", span=span, node_id=0)
-        fa = FieldAccess(obj=obj_ref, field="x", span=span, node_id=1)
-        scope = Scope(parent=None)
-        scope.define("n", IntValue(42), mutable=False, decl_span=span)
-        with pytest.raises(RuntimeError, match="Field access"):
-            interp._eval_field_access(fa, scope)
-
-    def test_eval_unary_not_non_bool_raises(self) -> None:
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import IntLit, UnaryNot
-        from agm.agl.syntax.spans import SourceSpan
-
-        interp = _make_interp()
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        operand = IntLit(value=1, span=span, node_id=0)
-        not_expr = UnaryNot(operand=operand, span=span, node_id=1)
-        scope = Scope(parent=None)
+        ``not`` accepts any operand statically, so the interpreter's runtime
+        type guard is reachable through a real resolve+check-valid program.
+        """
+        body = (_let("a", _unary_not(_int(1))),)
         with pytest.raises(RuntimeError, match="not: expected bool"):
-            interp._eval_unary_not(not_expr, scope)
-
-    def test_eval_unary_neg_non_number_raises(self) -> None:
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import StringLit, UnaryNeg
-        from agm.agl.syntax.spans import SourceSpan
-
-        interp = _make_interp()
-        span = SourceSpan(1, 1, 1, 1, 0, 0)
-        operand = StringLit(value="hello", span=span, node_id=0)
-        neg_expr = UnaryNeg(operand=operand, span=span, node_id=1)
-        scope = Scope(parent=None)
-        with pytest.raises(RuntimeError, match="unary -"):
-            interp._eval_unary_neg(neg_expr, scope)
+            _execute(body)
 
 
 # ---------------------------------------------------------------------------
@@ -2081,437 +2402,169 @@ class TestRuntimeContractError:
 
 
 # ---------------------------------------------------------------------------
-# Helper: build a minimal Interpreter for direct unit testing
-# ---------------------------------------------------------------------------
-
-
-def _make_interp(type_env: object = None) -> object:
-    """Create a minimal interpreter with optional TypeEnvironment injection."""
-    from agm.agl.capabilities import HostCapabilities
-    from agm.agl.eval.interpreter import Interpreter
-    from agm.agl.parser import parse_program
-    from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
-    from agm.agl.typecheck.env import TypeEnvironment
-
-    program = parse_program("pass")
-    resolved = resolve(program)
-    caps = HostCapabilities(
-        agent_names=frozenset(),
-        has_fallback_agent=False,
-        codec_kinds={},
-        renderer_names=frozenset({"default", "raw"}),
-    )
-    checked = check(resolved, caps)
-    registry = AgentRegistry(named={}, default_agent=None)
-    interp = Interpreter(
-        checked=checked,
-        registry=registry,
-        contracts={},
-        type_env=type_env if type_env is not None else TypeEnvironment(),
-        loop_limit=3,
-        strict_json=False,
-    )
-    return interp
-
-
-def _span() -> object:
-    from agm.agl.syntax.spans import SourceSpan
-
-    return SourceSpan(1, 1, 1, 5, 0, 4)
-
-
-# ---------------------------------------------------------------------------
 # Coverage: interpreter M3+ statement dispatch (_exec_stmt branches)
 # ---------------------------------------------------------------------------
 
 
 class TestInterpreterM3Stmts:
-    """Unit tests for M3+ statement types dispatched by _exec_stmt."""
+    """M3+ statements driven through resolve + check + execute.
 
-    def test_do_until_runs_body_until_true(self) -> None:
-        """DoUntil with limit=1 and condition=true exits after one iteration."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import BoolLit, DoUntil, PassStmt
-        from agm.agl.syntax.spans import SourceSpan
+    Branch bodies are observed by mutating a root-scope ``var`` and reading the
+    public root binding back.
+    """
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        body = (PassStmt(span=span, node_id=10),)
-        condition = BoolLit(value=True, span=span, node_id=11)
-        stmt = DoUntil(limit=3, body=body, condition=condition, span=span, node_id=12)
+    def test_do_until_runs_body_until_condition_true(self) -> None:
+        """A ``do`` loop whose condition is true exits after running its body."""
+        from agm.agl.eval.values import IntValue
 
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_do_until(stmt, scope)  # Should not raise
+        body = (
+            _var("n", _int(0), type_ann=_ty("int")),
+            _do_until(_bool(True), (_set("n", _int(1)),), limit=3),
+        )
+        assert _execute(body).snapshot()["n"] == IntValue(1)
 
-    def test_do_until_uses_runtime_loop_limit(self) -> None:
-        """DoUntil with limit=None uses self._loop_limit."""
+    def test_do_until_exhausts_uses_runtime_loop_limit(self) -> None:
+        """A ``do`` loop with no explicit limit and a false condition exhausts.
+
+        Exhaustion raises ``MaxIterationsExceeded`` (an uncaught AgL exception).
+        """
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import BoolLit, DoUntil, PassStmt
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        body = (PassStmt(span=span, node_id=10),)
-        condition = BoolLit(value=False, span=span, node_id=11)
-        stmt = DoUntil(limit=None, body=body, condition=condition, span=span, node_id=12)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
+        body = (_do_until(_bool(False), (_pass(),)),)
         with pytest.raises(AglRaise) as exc_info:
-            interp._exec_do_until(stmt, scope)
+            _execute(body)
         assert exc_info.value.exc.type_name == "MaxIterationsExceeded"
 
-    def test_if_stmt_true_branch_executes(self) -> None:
-        """IfStmt with true condition executes that branch."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import BoolLit, IfBranch, IfStmt, PrintStmt
-        from agm.agl.syntax.spans import SourceSpan
+    def test_if_true_branch_executes(self) -> None:
+        from agm.agl.eval.values import IntValue
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        cond = BoolLit(value=True, span=span, node_id=1)
-        # Use PrintStmt — it has a side-effect we can check via capsys,
-        # but here we just check no error is raised.
-        body_stmt = PrintStmt(value=BoolLit(value=True, span=span, node_id=2), span=span, node_id=3)
-        branch = IfBranch(cond=cond, body=(body_stmt,), span=span, node_id=4)
-        stmt = IfStmt(branches=(branch,), span=span, node_id=5)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_if(stmt, scope)
-        # Branch was executed without error
-
-    def test_if_stmt_false_branch_skipped(self) -> None:
-        """IfStmt with false condition skips the branch."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import BoolLit, IfBranch, IfStmt, IntLit, LetDecl
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        cond = BoolLit(value=False, span=span, node_id=1)
-        body_stmt = LetDecl(
-            name="x", type_ann=None, value=IntLit(value=42, span=span, node_id=2),
-            span=span, node_id=3,
+        body = (
+            _var("r", _int(0), type_ann=_ty("int")),
+            _if(_if_branch(_bool(True), (_set("r", _int(1)),))),
         )
-        branch = IfBranch(cond=cond, body=(body_stmt,), span=span, node_id=4)
-        stmt = IfStmt(branches=(branch,), span=span, node_id=5)
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_if(stmt, scope)
-        assert scope.lookup("x") is None
+    def test_if_false_branch_skipped(self) -> None:
+        from agm.agl.eval.values import IntValue
 
-    def test_if_stmt_else_branch_executes(self) -> None:
-        """IfStmt else branch (ElseSentinel) executes when no prior branch matched."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import ELSE, BoolLit, IfBranch, IfStmt, PassStmt
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        false_branch = IfBranch(
-            cond=BoolLit(value=False, span=span, node_id=1),
-            body=(),
-            span=span,
-            node_id=2,
+        body = (
+            _var("r", _int(0), type_ann=_ty("int")),
+            _if(_if_branch(_bool(False), (_set("r", _int(1)),))),
         )
-        else_branch = IfBranch(
-            cond=ELSE,
-            body=(PassStmt(span=span, node_id=3),),
-            span=span,
-            node_id=4,
+        # Branch skipped → r keeps its initial value.
+        assert _execute(body).snapshot()["r"] == IntValue(0)
+
+    def test_if_else_branch_executes_when_no_prior_match(self) -> None:
+        from agm.agl.eval.values import IntValue
+
+        body = (
+            _var("r", _int(0), type_ann=_ty("int")),
+            _if(
+                _if_branch(_bool(False), (_set("r", _int(1)),)),
+                _else_branch((_set("r", _int(2)),)),
+            ),
         )
-        stmt = IfStmt(branches=(false_branch, else_branch), span=span, node_id=5)
+        assert _execute(body).snapshot()["r"] == IntValue(2)
 
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_if(stmt, scope)
-        # Else branch executed without error
+    def test_case_stmt_wildcard_branch_matches(self) -> None:
+        from agm.agl.eval.values import IntValue
 
-    def test_case_stmt_matches_wildcard(self) -> None:
-        """CaseStmt with wildcard pattern always matches."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, IntLit, LetDecl, WildcardPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=5, span=span, node_id=1)
-        body_stmt = LetDecl(
-            name="matched", type_ann=None, value=IntLit(value=1, span=span, node_id=2),
-            span=span, node_id=3,
+        body = (
+            _var("r", _int(0), type_ann=_ty("int")),
+            _case_stmt(_int(5), _case_stmt_branch(_wild(), (_set("r", _int(1)),))),
         )
-        branch = CaseStmtBranch(
-            pattern=WildcardPattern(span=span, node_id=4), body=(body_stmt,),
-            span=span, node_id=5,
-        )
-        stmt = CaseStmt(subject=subject, branches=(branch,), span=span, node_id=6)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_case_stmt(stmt, scope)
-        # "matched" is defined in branch_scope (a child), not in root scope
-        # but no error means it executed
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
     def test_case_stmt_no_match_raises_match_error(self) -> None:
-        """CaseStmt with no matching branch raises AglRaise(MatchError)."""
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, IntLit, LiteralPattern
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=5, span=span, node_id=1)
-        # Pattern: literal 99 (won't match 5)
-        pat = LiteralPattern(literal=IntLit(value=99, span=span, node_id=2), span=span, node_id=3)
-        branch = CaseStmtBranch(pattern=pat, body=(), span=span, node_id=4)
-        stmt = CaseStmt(subject=subject, branches=(branch,), span=span, node_id=5)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
+        body = (
+            _case_stmt(_int(5), _case_stmt_branch(_lit_pat(_int(99)), (_pass(),))),
+        )
         with pytest.raises(AglRaise) as exc_info:
-            interp._exec_case_stmt(stmt, scope)
+            _execute(body)
         assert exc_info.value.exc.type_name == "MatchError"
 
     def test_try_catch_no_exception_runs_body(self) -> None:
-        """TryCatch with non-raising body executes normally."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import CatchClause, IntLit, LetDecl, TryCatch
-        from agm.agl.syntax.spans import SourceSpan
+        from agm.agl.eval.values import IntValue
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        let = LetDecl(
-            name="y", type_ann=None, value=IntLit(value=3, span=span, node_id=1),
-            span=span, node_id=2,
+        body = (
+            _var("r", _int(0), type_ann=_ty("int")),
+            _try(
+                (_set("r", _int(1)),),
+                _catch((_set("r", _int(2)),)),
+            ),
         )
-        handler = CatchClause(exc_type=None, binding=None, body=(), span=span, node_id=3)
-        stmt = TryCatch(body=(let,), handlers=(handler,), span=span, node_id=4)
+        # Body ran without raising → handler skipped, r == 1.
+        assert _execute(body).snapshot()["r"] == IntValue(1)
 
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_try_catch(stmt, scope)
-        # y defined in try_scope (child), not visible in root scope — no error
+    def test_try_catch_matching_handler_binds_exception(self) -> None:
+        """A matching handler catches the AgL exception and binds its value."""
+        from agm.agl.eval.values import TextValue
 
-    def test_try_catch_catches_matching_exception_with_binding(self) -> None:
-        """TryCatch catches a matching AglRaise and binds the exception value."""
+        # 1 / 0 raises ArithmeticError; the handler binds it as ``e`` and reads
+        # its public ``message`` field.
+        body = (
+            _var("msg", _str("none"), type_ann=_ty("text")),
+            _try(
+                (_let("z", _binop(BinOp.DIV, _int(1), _int(0))),),
+                _catch(
+                    (_set("msg", _field(_ref("e"), "message")),),
+                    exc_type="ArithmeticError",
+                    binding="e",
+                ),
+            ),
+        )
+        assert _execute(body).snapshot()["msg"] == TextValue("Division by zero")
+
+    def test_try_catch_reraises_when_no_handler_matches(self) -> None:
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.syntax.nodes import CatchClause, PassStmt, TryCatch
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-
-        exc_val = ExceptionValue(
-            type_name="Abort",
-            fields={"message": TextValue("oops"), "trace_id": TextValue("")},
+        body = (
+            _try(
+                (_let("z", _binop(BinOp.DIV, _int(1), _int(0))),),
+                _catch((_pass(),), exc_type="Abort"),
+            ),
         )
-
-        # Use a counter to only raise on the first call (the body), not the handler
-        call_count = [0]
-
-        class RaisingInterp(Interpreter):
-            def _exec_stmt(self, s: object, sc: object) -> None:
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    raise AglRaise(exc_val)
-                # Handler body executes normally (pass)
-
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
-        from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import TypeEnvironment
-
-        program = parse_program("pass")
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(), has_fallback_agent=False,
-            codec_kinds={}, renderer_names=frozenset()
-        )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = RaisingInterp(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            type_env=TypeEnvironment(),
-            loop_limit=3,
-            strict_json=False,
-        )
-
-        handler = CatchClause(
-            exc_type="Abort",
-            binding="e",
-            body=(PassStmt(span=span, node_id=10),),
-            span=span,
-            node_id=11,
-        )
-        stmt = TryCatch(
-            body=(PassStmt(span=span, node_id=1),),
-            handlers=(handler,),
-            span=span,
-            node_id=12,
-        )
-        scope = Scope(parent=None)
-        interp._exec_try_catch(stmt, scope)  # should not raise
-        assert call_count[0] == 2  # body + handler body
-
-    def test_try_catch_reraises_unhandled_exception(self) -> None:
-        """TryCatch re-raises when no handler matches."""
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.syntax.nodes import CatchClause, PassStmt, TryCatch
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-
-        # Only raise on the body statement, not on any handler stmt
-        class BodyRaisingInterp(Interpreter):
-            def _exec_stmt(self, s: object, sc: object) -> None:
-                exc_val = ExceptionValue(
-                    type_name="NetworkError",
-                    fields={"message": TextValue("conn"), "trace_id": TextValue("")},
-                )
-                raise AglRaise(exc_val)
-
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
-        from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import TypeEnvironment
-
-        program = parse_program("pass")
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(), has_fallback_agent=False,
-            codec_kinds={}, renderer_names=frozenset()
-        )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = BodyRaisingInterp(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            type_env=TypeEnvironment(),
-            loop_limit=3,
-            strict_json=False,
-        )
-
-        # Handler only catches "Abort" — NetworkError will be re-raised.
-        handler = CatchClause(exc_type="Abort", binding=None, body=(), span=span, node_id=5)
-        stmt = TryCatch(
-            body=(PassStmt(span=span, node_id=1),),
-            handlers=(handler,),
-            span=span,
-            node_id=6,
-        )
-        scope = Scope(parent=None)
-        with pytest.raises(AglRaise):
-            interp._exec_try_catch(stmt, scope)
-
-    def test_exec_raise_exception_value(self) -> None:
-        """_exec_raise with ExceptionValue propagates AglRaise."""
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.syntax.nodes import Raise
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-
-        # Build an ExceptionValue in scope and raise it via a VarRef.
-        from agm.agl.syntax.nodes import VarRef
-
-        exc_val = ExceptionValue(
-            type_name="Abort",
-            fields={"message": TextValue("boom"), "trace_id": TextValue("")},
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-
-        scope = Scope(parent=None)
-        scope.define("err", exc_val, mutable=False, decl_span=span)
-
-        ref = VarRef(name="err", span=span, node_id=1)
-        raise_stmt = Raise(exc=ref, span=span, node_id=2)
         with pytest.raises(AglRaise) as exc_info:
-            interp._exec_raise(raise_stmt, scope)
-        assert exc_info.value.exc.type_name == "Abort"
+            _execute(body)
+        assert exc_info.value.exc.type_name == "ArithmeticError"
 
-    def test_exec_raise_non_exception_value_raises_runtime(self) -> None:
-        """_exec_raise with a non-ExceptionValue raises RuntimeError."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import IntLit, Raise
-        from agm.agl.syntax.spans import SourceSpan
+    def test_raise_bound_exception_propagates(self) -> None:
+        """``raise e`` of a caught exception value re-propagates it."""
+        from agm.agl.eval.exceptions import AglRaise
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        raise_stmt = Raise(exc=IntLit(value=5, span=span, node_id=1), span=span, node_id=2)
+        body = (
+            _try(
+                (_let("z", _binop(BinOp.DIV, _int(1), _int(0))),),
+                _catch(
+                    (_raise(_ref("e")),),
+                    exc_type="ArithmeticError",
+                    binding="e",
+                ),
+            ),
+        )
+        with pytest.raises(AglRaise) as exc_info:
+            _execute(body)
+        assert exc_info.value.exc.type_name == "ArithmeticError"
 
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        with pytest.raises(RuntimeError):
-            interp._exec_raise(raise_stmt, scope)
+    def test_raise_non_exception_value_raises_runtime(self) -> None:
+        """``raise <int>`` passes typecheck but fails at runtime."""
+        body = (_raise(_int(5)),)
+        with pytest.raises(RuntimeError, match="expected an ExceptionValue"):
+            _execute(body)
 
-    def test_exec_stmt_input_decl_is_noop(self) -> None:
-        """InputDecl in _exec_stmt is a no-op at runtime."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import InputDecl
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        stmt = InputDecl(name="x", annotation=None, span=span, node_id=1)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_stmt(stmt, scope)  # No error, no binding
-
-    def test_exec_stmt_record_enum_alias_noop(self) -> None:
-        """RecordDef/EnumDef/TypeAlias in _exec_stmt are no-ops."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import EnumDef, RecordDef, TypeAlias
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import IntT
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        rec = RecordDef(name="Point", fields=(), span=span, node_id=1)
-        interp._exec_stmt(rec, scope)  # No error
-
-        enm = EnumDef(name="Color", variants=(), span=span, node_id=2)
-        interp._exec_stmt(enm, scope)  # No error
-
-        alias = TypeAlias(name="Num", type_expr=IntT(span=span, node_id=0), span=span, node_id=3)
-        interp._exec_stmt(alias, scope)  # No error
+    def test_input_and_type_declarations_are_runtime_noops(self) -> None:
+        """input / record / enum / type-alias declarations bind nothing at runtime."""
+        body = (
+            _input("x"),
+            _record_def("Point", _field_def("v", _ty("int"))),
+            _enum_def("Color", _variant_def("Red")),
+            _type_alias("Num", _ty("int")),
+            _pass(),
+        )
+        root = _execute(body)
+        assert root.snapshot() == {}
 
 
 # ---------------------------------------------------------------------------
@@ -2520,136 +2573,42 @@ class TestInterpreterM3Stmts:
 
 
 class TestLetVarCoercion:
-    """Tests for let/var with explicit type annotations that trigger coercion."""
+    """let/var with explicit type annotations that trigger coercion."""
 
-    def test_exec_let_with_decimal_annotation_coerces_int(self) -> None:
-        """let x: decimal = 3 → x holds DecimalValue(3)."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_let_with_decimal_annotation_coerces_int(self) -> None:
+        """``let x: decimal = 3`` widens the int to a DecimalValue."""
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.syntax.nodes import IntLit, LetDecl
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import DecimalT
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        ann = DecimalT(span=span, node_id=0)
-        stmt = LetDecl(
-            name="x",
-            type_ann=ann,
-            value=IntLit(value=3, span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_let(stmt, scope)
-        b = scope.lookup("x")
-        assert b is not None
-        assert isinstance(b.value, DecimalValue)
+        body = (_let("x", _int(3), type_ann=_ty("decimal")),)
+        assert _execute(body).snapshot()["x"] == DecimalValue(decimal.Decimal(3))
 
-    def test_exec_var_with_text_annotation_no_coerce(self) -> None:
-        """var x: text = 'hi' → TextValue unchanged."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_var_with_text_annotation_no_coerce(self) -> None:
         from agm.agl.eval.values import TextValue
-        from agm.agl.syntax.nodes import StringLit, VarDecl
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import TextT
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        ann = TextT(span=span, node_id=0)
-        stmt = VarDecl(
-            name="msg",
-            type_ann=ann,
-            value=StringLit(value="hi", span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_var(stmt, scope)
-        b = scope.lookup("msg")
-        assert b is not None
-        assert b.value == TextValue("hi")
+        body = (_var("msg", _str("hi"), type_ann=_ty("text")),)
+        assert _execute(body).snapshot()["msg"] == TextValue("hi")
 
-    def test_exec_let_with_bool_annotation(self) -> None:
-        """let x: bool = true → BoolValue unchanged."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_let_with_bool_annotation(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BoolLit, LetDecl
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import BoolT
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        ann = BoolT(span=span, node_id=0)
-        stmt = LetDecl(
-            name="b",
-            type_ann=ann,
-            value=BoolLit(value=True, span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_let(stmt, scope)
-        b = scope.lookup("b")
-        assert b is not None
-        assert b.value == BoolValue(True)
+        body = (_let("b", _bool(True), type_ann=_ty("bool")),)
+        assert _execute(body).snapshot()["b"] == BoolValue(True)
 
-    def test_exec_let_with_json_annotation(self) -> None:
-        """let x: json = null → JsonValue unchanged."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_let_with_json_annotation(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.syntax.nodes import LetDecl, NullLit
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import JsonT
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        ann = JsonT(span=span, node_id=0)
-        stmt = LetDecl(
-            name="j",
-            type_ann=ann,
-            value=NullLit(span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_let(stmt, scope)
-        b = scope.lookup("j")
-        assert b is not None
-        assert b.value == JsonValue(None)
+        body = (_let("j", _null(), type_ann=_ty("json")),)
+        assert _execute(body).snapshot()["j"] == JsonValue(None)
 
-    def test_exec_set_with_decimal_binding_coerces_int(self) -> None:
-        """set x = 5 when x holds DecimalValue → coerces to DecimalValue."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_set_into_decimal_binding_coerces_int(self) -> None:
+        """``set`` of an int into a decimal-typed var widens to DecimalValue."""
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.syntax.nodes import IntLit, SetStmt
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define("x", DecimalValue(decimal.Decimal("1.0")), mutable=True, decl_span=span)
-
-        stmt = SetStmt(
-            target="x",
-            value=IntLit(value=7, span=span, node_id=1),
-            span=span,
-            node_id=2,
+        body = (
+            _var("x", _dec("1.0"), type_ann=_ty("decimal")),
+            _set("x", _int(7)),
         )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        interp._exec_set(stmt, scope)
-        b = scope.lookup("x")
-        assert b is not None
-        assert isinstance(b.value, DecimalValue)
+        assert _execute(body).snapshot()["x"] == DecimalValue(decimal.Decimal(7))
 
 
 # ---------------------------------------------------------------------------
@@ -2658,430 +2617,132 @@ class TestLetVarCoercion:
 
 
 class TestEvalExprCompound:
-    """Unit tests for compound expression types in _eval_expr."""
+    """Compound expressions evaluated through resolve + check + execute.
 
-    def test_eval_binary_op_add_int(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    Each test binds ``let r = <expr>`` and inspects the public root binding.
+    """
+
+    def test_binary_op_add_int(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.ADD,
-            left=IntLit(value=3, span=span, node_id=1),
-            right=IntLit(value=4, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == IntValue(7)
+        assert _eval_value(_binop(BinOp.ADD, _int(3), _int(4))) == IntValue(7)
 
-    def test_eval_binary_op_sub(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_sub(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.SUB,
-            left=IntLit(value=10, span=span, node_id=1),
-            right=IntLit(value=3, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == IntValue(7)
+        assert _eval_value(_binop(BinOp.SUB, _int(10), _int(3))) == IntValue(7)
 
-    def test_eval_binary_op_mul(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_mul(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.MUL,
-            left=IntLit(value=4, span=span, node_id=1),
-            right=IntLit(value=5, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == IntValue(20)
+        assert _eval_value(_binop(BinOp.MUL, _int(4), _int(5))) == IntValue(20)
 
-    def test_eval_binary_op_div(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_div_yields_decimal(self) -> None:
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.DIV,
-            left=IntLit(value=7, span=span, node_id=1),
-            right=IntLit(value=2, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert isinstance(result, DecimalValue)
+        assert isinstance(_eval_value(_binop(BinOp.DIV, _int(7), _int(2))), DecimalValue)
 
-    def test_eval_binary_op_compare_eq(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_compare_eq(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.EQ,
-            left=IntLit(value=1, span=span, node_id=1),
-            right=IntLit(value=1, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == BoolValue(True)
+        assert _eval_value(_binop(BinOp.EQ, _int(1), _int(1))) == BoolValue(True)
 
-    def test_eval_binary_op_in_op(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import BoolValue, IntValue, ListValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        lst = ListValue(elements=(IntValue(1), IntValue(2)))
-        scope.define("lst", lst, mutable=False, decl_span=span)
-
-        expr = BinaryOp(
-            op=BinOp.IN,
-            left=IntLit(value=1, span=span, node_id=1),
-            right=VarRef(name="lst", span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, scope)
-        assert result == BoolValue(True)
-
-    def test_eval_binary_op_and_short_circuit_false(self) -> None:
-        """and: left=false → returns false without evaluating right."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_in_list(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, BoolLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.AND,
-            left=BoolLit(value=False, span=span, node_id=1),
-            right=BoolLit(value=True, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == BoolValue(False)
+        prelude = (_let("lst", _list(_int(1), _int(2))),)
+        result = _eval_value(_binop(BinOp.IN, _int(1), _ref("lst")), prelude=prelude)
+        assert result == BoolValue(True)
 
-    def test_eval_binary_op_and_both_true(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_and_short_circuit_false(self) -> None:
+        """``false and true`` short-circuits to false."""
         from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, BoolLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.AND,
-            left=BoolLit(value=True, span=span, node_id=1),
-            right=BoolLit(value=True, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == BoolValue(True)
+        assert _eval_value(_binop(BinOp.AND, _bool(False), _bool(True))) == BoolValue(False)
 
-    def test_eval_binary_op_or_short_circuit_true(self) -> None:
-        """or: left=true → returns true without evaluating right."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_and_both_true(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, BoolLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.OR,
-            left=BoolLit(value=True, span=span, node_id=1),
-            right=BoolLit(value=False, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == BoolValue(True)
+        assert _eval_value(_binop(BinOp.AND, _bool(True), _bool(True))) == BoolValue(True)
 
-    def test_eval_binary_op_or_both_false(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_binary_op_or_short_circuit_true(self) -> None:
+        """``true or false`` short-circuits to true."""
         from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, BoolLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.OR,
-            left=BoolLit(value=False, span=span, node_id=1),
-            right=BoolLit(value=False, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        assert result == BoolValue(False)
+        assert _eval_value(_binop(BinOp.OR, _bool(True), _bool(False))) == BoolValue(True)
 
-    def test_eval_is_test_matching_variant(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import BoolValue, EnumValue
-        from agm.agl.syntax.nodes import IsTest, VarRef
-        from agm.agl.syntax.spans import SourceSpan
+    def test_binary_op_or_both_false(self) -> None:
+        from agm.agl.eval.values import BoolValue
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "s",
-            EnumValue(type_name="Status", variant="Active", fields={}),
-            mutable=False,
-            decl_span=span,
+        assert _eval_value(_binop(BinOp.OR, _bool(False), _bool(False))) == BoolValue(False)
+
+    def test_is_test_matching_variant(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        prelude = (
+            _enum_def("Status", _variant_def("Active"), _variant_def("Inactive")),
+            _let("s", _ctor("Active", qualifier="Status")),
         )
-        expr = IsTest(
-            expr=VarRef(name="s", span=span, node_id=1),
-            qualifier=None,
-            variant="Active",
-            negated=False,
-            span=span,
-            node_id=2,
+        assert _eval_value(_is_test(_ref("s"), "Active"), prelude=prelude) == BoolValue(True)
+
+    def test_is_test_negated(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        prelude = (
+            _enum_def("Status", _variant_def("Active"), _variant_def("Inactive")),
+            _let("s", _ctor("Inactive", qualifier="Status")),
         )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_is_test(expr, scope)
+        result = _eval_value(_is_test(_ref("s"), "Active", negated=True), prelude=prelude)
         assert result == BoolValue(True)
 
-    def test_eval_is_test_negated(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import BoolValue, EnumValue
-        from agm.agl.syntax.nodes import IsTest, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "s",
-            EnumValue(type_name="Status", variant="Inactive", fields={}),
-            mutable=False,
-            decl_span=span,
-        )
-        expr = IsTest(
-            expr=VarRef(name="s", span=span, node_id=1),
-            qualifier=None,
-            variant="Active",
-            negated=True,
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_is_test(expr, scope)
-        assert result == BoolValue(True)
-
-    def test_eval_is_test_on_non_enum_raises(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_case_expr_matches(self) -> None:
+        """A case expression returns the matching branch's body value."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import IsTest, VarRef
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define("n", IntValue(1), mutable=False, decl_span=span)
-        expr = IsTest(
-            expr=VarRef(name="n", span=span, node_id=1),
-            qualifier=None,
-            variant="Active",
-            negated=False,
-            span=span,
-            node_id=2,
+        expr = _case_expr(
+            _int(5),
+            _case_expr_branch(_lit_pat(_int(5)), _int(99)),
+            _case_expr_branch(_wild(), _int(0)),
         )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(RuntimeError, match="is test on non-enum"):
-            interp._eval_is_test(expr, scope)
+        assert _eval_value(expr) == IntValue(99)
 
-    def test_eval_case_expr_matches(self) -> None:
-        """CaseExpr with matching branch returns the branch body value."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import (
-            CaseExpr,
-            CaseExprBranch,
-            IntLit,
-            LiteralPattern,
-        )
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=5, span=span, node_id=1)
-        # Branch: pattern=5 → body=99
-        pat = LiteralPattern(literal=IntLit(value=5, span=span, node_id=2), span=span, node_id=3)
-        branch = CaseExprBranch(
-            pattern=pat, body=IntLit(value=99, span=span, node_id=4), span=span, node_id=5
-        )
-        expr = CaseExpr(subject=subject, branches=(branch,), span=span, node_id=6)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_case_expr(expr, Scope(parent=None))
-        assert result == IntValue(99)
-
-    def test_eval_case_expr_no_match_raises(self) -> None:
-        """CaseExpr with no matching branch raises AglRaise(MatchError)."""
+    def test_case_expr_no_match_raises(self) -> None:
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import (
-            CaseExpr,
-            CaseExprBranch,
-            IntLit,
-            LiteralPattern,
-        )
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=1, span=span, node_id=1)
-        pat = LiteralPattern(literal=IntLit(value=99, span=span, node_id=2), span=span, node_id=3)
-        branch = CaseExprBranch(
-            pattern=pat, body=IntLit(value=0, span=span, node_id=4), span=span, node_id=5
-        )
-        expr = CaseExpr(subject=subject, branches=(branch,), span=span, node_id=6)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
+        expr = _case_expr(_int(1), _case_expr_branch(_lit_pat(_int(99)), _int(0)))
         with pytest.raises(AglRaise) as exc_info:
-            interp._eval_case_expr(expr, Scope(parent=None))
+            _eval_value(expr)
         assert exc_info.value.exc.type_name == "MatchError"
 
-    def test_eval_list_lit(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_list_literal(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.syntax.nodes import IntLit, ListLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = ListLit(
-            elements=(IntLit(value=1, span=span, node_id=1), IntLit(value=2, span=span, node_id=2)),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_list_lit(expr, Scope(parent=None))
+        result = _eval_value(_list(_int(1), _int(2)))
         assert isinstance(result, ListValue)
         assert result.elements == (IntValue(1), IntValue(2))
 
-    def test_eval_dict_lit(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_dict_literal(self) -> None:
         from agm.agl.eval.values import DictValue, IntValue
-        from agm.agl.syntax.nodes import DictEntry, DictLit, IntLit, StringLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        key = StringLit(value="k", span=span, node_id=1)
-        val = IntLit(value=42, span=span, node_id=2)
-        entry = DictEntry(key=key, value=val, span=span, node_id=3)
-        expr = DictLit(entries=(entry,), span=span, node_id=4)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_dict_lit(expr, Scope(parent=None))
+        result = _eval_value(_dict(k=_int(42)))
         assert isinstance(result, DictValue)
         assert result.entries["k"] == IntValue(42)
 
-    def test_eval_unary_not_true(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_unary_not_true(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BoolLit, UnaryNot
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = UnaryNot(operand=BoolLit(value=True, span=span, node_id=1), span=span, node_id=2)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_unary_not(expr, Scope(parent=None))
-        assert result == BoolValue(False)
+        assert _eval_value(_unary_not(_bool(True))) == BoolValue(False)
 
-    def test_eval_unary_neg_int(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_unary_neg_int(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import IntLit, UnaryNeg
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = UnaryNeg(operand=IntLit(value=5, span=span, node_id=1), span=span, node_id=2)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_unary_neg(expr, Scope(parent=None))
-        assert result == IntValue(-5)
+        assert _eval_value(_unary_neg(_int(5))) == IntValue(-5)
 
-    def test_eval_unary_neg_decimal(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_unary_neg_decimal(self) -> None:
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.syntax.nodes import DecimalLit, UnaryNeg
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = UnaryNeg(
-            operand=DecimalLit(value=decimal.Decimal("2.5"), span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_unary_neg(expr, Scope(parent=None))
-        assert result == DecimalValue(decimal.Decimal("-2.5"))
+        assert _eval_value(_unary_neg(_dec("2.5"))) == DecimalValue(decimal.Decimal("-2.5"))
+
 
 # ---------------------------------------------------------------------------
 # Coverage: field access on RecordValue, EnumValue, ExceptionValue
@@ -3089,145 +2750,39 @@ class TestEvalExprCompound:
 
 
 class TestFieldAccess:
+    """Field access on record and exception values via the public pipeline.
+
+    Field access on enums, on non-record/enum/exception values, and on
+    undeclared fields is rejected by the type checker, so only the
+    record-field and exception-field paths are reachable at runtime.
+    """
+
     def test_field_access_on_record_value(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
+        from agm.agl.eval.values import IntValue
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "pt",
-            RecordValue(type_name="Point", fields={"x": IntValue(3)}),
-            mutable=False,
-            decl_span=span,
+        body = (
+            _record_def("Point", _field_def("x", _ty("int"))),
+            _let("p", _ctor("Point", args=(_arg("x", _int(3)),))),
+            _let("r", _field(_ref("p"), "x")),
         )
-        expr = FieldAccess(
-            obj=VarRef(name="pt", span=span, node_id=1), field="x", span=span, node_id=2
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_field_access(expr, scope)
-        assert result == IntValue(3)
-
-    def test_field_access_missing_record_field_raises(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import RecordValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "pt",
-            RecordValue(type_name="Point", fields={}),
-            mutable=False,
-            decl_span=span,
-        )
-        expr = FieldAccess(
-            obj=VarRef(name="pt", span=span, node_id=1), field="z", span=span, node_id=2
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(RuntimeError, match="no field"):
-            interp._eval_field_access(expr, scope)
-
-    def test_field_access_on_enum_value(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import EnumValue, TextValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "ev",
-            EnumValue(type_name="Color", variant="Red", fields={"label": TextValue("red")}),
-            mutable=False,
-            decl_span=span,
-        )
-        expr = FieldAccess(
-            obj=VarRef(name="ev", span=span, node_id=1), field="label", span=span, node_id=2
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_field_access(expr, scope)
-        assert result == TextValue("red")
-
-    def test_field_access_missing_enum_field_raises(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "ev",
-            EnumValue(type_name="Color", variant="Red", fields={}),
-            mutable=False,
-            decl_span=span,
-        )
-        expr = FieldAccess(
-            obj=VarRef(name="ev", span=span, node_id=1), field="missing", span=span, node_id=2
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(RuntimeError, match="no field"):
-            interp._eval_field_access(expr, scope)
+        assert _execute(body).snapshot()["r"] == IntValue(3)
 
     def test_field_access_on_exception_value(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
+        """Reading a field off a caught exception value returns that field."""
+        from agm.agl.eval.values import TextValue
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "ex",
-            ExceptionValue(
-                type_name="E", fields={"message": TextValue("oops"), "trace_id": TextValue("")}
+        body = (
+            _var("msg", _str("none"), type_ann=_ty("text")),
+            _try(
+                (_let("z", _binop(BinOp.DIV, _int(1), _int(0))),),
+                _catch(
+                    (_set("msg", _field(_ref("e"), "message")),),
+                    exc_type="ArithmeticError",
+                    binding="e",
+                ),
             ),
-            mutable=False,
-            decl_span=span,
         )
-        expr = FieldAccess(
-            obj=VarRef(name="ex", span=span, node_id=1), field="message", span=span, node_id=2
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_field_access(expr, scope)
-        assert result == TextValue("oops")
-
-    def test_field_access_missing_exception_field_raises(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ExceptionValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "ex",
-            ExceptionValue(type_name="E", fields={}),
-            mutable=False,
-            decl_span=span,
-        )
-        expr = FieldAccess(
-            obj=VarRef(name="ex", span=span, node_id=1), field="missing", span=span, node_id=2
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(RuntimeError, match="no field"):
-            interp._eval_field_access(expr, scope)
+        assert _execute(body).snapshot()["msg"] == TextValue("Division by zero")
 
 
 # ---------------------------------------------------------------------------
@@ -3236,106 +2791,47 @@ class TestFieldAccess:
 
 
 class TestConstructorEval:
-    def test_eval_constructor_record(self) -> None:
-        """Constructor for a RecordType builds a RecordValue."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    """Record / enum constructors via the public pipeline.
+
+    Constructing an unknown type is a static error, so only the record and
+    enum-variant constructor paths are reachable at runtime.
+    """
+
+    def test_constructor_record(self) -> None:
         from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.syntax.nodes import Constructor, IntLit, NamedArg
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import IntType, RecordType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        type_env.register_type("Point", RecordType(name="Point", fields={"x": IntType()}))
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        expr = Constructor(
-            qualifier=None,
-            name="Point",
-            args=(
-                NamedArg(
-                    name="x", value=IntLit(value=5, span=span, node_id=1), span=span, node_id=2
-                ),
-            ),
-            span=span,
-            node_id=3,
+        body = (
+            _record_def("Point", _field_def("x", _ty("int"))),
+            _let("p", _ctor("Point", args=(_arg("x", _int(5)),))),
         )
-        result = interp._eval_constructor(expr, scope)
-        assert isinstance(result, RecordValue)
-        assert result.type_name == "Point"
-        assert result.fields["x"] == IntValue(5)
+        value = _execute(body).snapshot()["p"]
+        assert isinstance(value, RecordValue)
+        assert value.type_name == "Point"
+        assert value.fields["x"] == IntValue(5)
 
-    def test_eval_constructor_enum_qualified(self) -> None:
-        """Qualified enum constructor (Color.Red) builds an EnumValue."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_constructor_enum_qualified(self) -> None:
+        """``Color.Red`` builds an EnumValue."""
         from agm.agl.eval.values import EnumValue
-        from agm.agl.syntax.nodes import Constructor
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import EnumType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        type_env.register_type("Color", EnumType(name="Color", variants={"Red": {}}))
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        expr = Constructor(
-            qualifier="Color",
-            name="Red",
-            args=(),
-            span=span,
-            node_id=1,
+        body = (
+            _enum_def("Color", _variant_def("Red")),
+            _let("c", _ctor("Red", qualifier="Color")),
         )
-        result = interp._eval_constructor(expr, scope)
-        assert isinstance(result, EnumValue)
-        assert result.variant == "Red"
+        value = _execute(body).snapshot()["c"]
+        assert isinstance(value, EnumValue)
+        assert value.variant == "Red"
 
-    def test_eval_constructor_unqualified_enum_variant(self) -> None:
-        """Unqualified enum constructor (Active) resolves by scanning enum types."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_constructor_unqualified_enum_variant(self) -> None:
+        """An unqualified variant name resolves by scanning enum types."""
         from agm.agl.eval.values import EnumValue
-        from agm.agl.syntax.nodes import Constructor
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import EnumType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        type_env.register_type("Status", EnumType(name="Status", variants={"Active": {}}))
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        expr = Constructor(qualifier=None, name="Active", args=(), span=span, node_id=1)
-        result = interp._eval_constructor(expr, scope)
-        assert isinstance(result, EnumValue)
-        assert result.variant == "Active"
-
-    def test_eval_constructor_unknown_type_raises(self) -> None:
-        """Constructor for an unknown type raises RuntimeError."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import Constructor
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = Constructor(qualifier=None, name="UnknownType", args=(), span=span, node_id=1)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(RuntimeError, match="Cannot construct"):
-            interp._eval_constructor(expr, Scope(parent=None))
+        body = (
+            _enum_def("Status", _variant_def("Active")),
+            _let("s", _ctor("Active")),
+        )
+        value = _execute(body).snapshot()["s"]
+        assert isinstance(value, EnumValue)
+        assert value.variant == "Active"
 
 
 # ---------------------------------------------------------------------------
@@ -3345,7 +2841,12 @@ class TestConstructorEval:
 
 class TestAgentCallEdgeCases:
     def test_agent_call_uses_fallback_contract_when_missing(self) -> None:
-        """When no contract is registered for a call node, a TextCodec contract is used."""
+        """With no contract registered for a call node, a TextCodec fallback is used.
+
+        Driven through the interpreter's public ``execute`` entry on a real
+        parsed program (``let x = prompt "hi"``) with an empty contract map, so
+        the defensive fallback path materializes the contract.
+        """
         from agm.agl.capabilities import HostCapabilities
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
@@ -3353,13 +2854,9 @@ class TestAgentCallEdgeCases:
         from agm.agl.parser import parse_program
         from agm.agl.runtime.agents import AgentRegistry
         from agm.agl.scope import resolve
-        from agm.agl.syntax.nodes import AgentCall, CallOptions, Template, TextSegment
-        from agm.agl.syntax.spans import SourceSpan
         from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import TypeEnvironment
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        program = parse_program("pass")
+        program = parse_program('let x = prompt "hi"')
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
@@ -3372,49 +2869,39 @@ class TestAgentCallEdgeCases:
         def my_fn(req: AgentRequest) -> str:
             return "hello"
 
-        # call_kind will be None for synthetic node → dispatches to "prompt" (default agent)
         registry = AgentRegistry(named={}, default_agent=my_fn)
         interp = Interpreter(
             checked=checked,
             registry=registry,
-            contracts={},  # No contracts → triggers fallback
-            type_env=TypeEnvironment(),
+            contracts={},  # No contracts → triggers the fallback contract.
+            type_env=checked.type_env,
             loop_limit=3,
             strict_json=False,
         )
-
-        scope = Scope(parent=None)
-        opts = CallOptions(format=None, strict_json=None, parse_policy=None, span=span, node_id=1)
-        template = Template(
-            segments=(TextSegment(text="hello", span=span, node_id=2),),
-            span=span,
-            node_id=3,
-        )
-        # node_id=99 has no call_kinds entry → call_kind=None → agent_name="prompt"
-        expr = AgentCall(agent="prompt", options=opts, template=template, span=span, node_id=99)
-        result = interp._eval_agent_call(expr, scope)
-        assert isinstance(result, TextValue)
-        assert result.value == "hello"
+        root = Scope(parent=None)
+        interp.execute(root)
+        assert root.snapshot()["x"] == TextValue("hello")
 
     def test_agent_call_strict_json_from_contract(self) -> None:
-        """Agent call uses contract.strict_json when not None."""
+        """A call uses ``contract.strict_json`` when it is not None.
+
+        Driven through ``execute`` on a real parsed program with a host-supplied
+        contract whose ``strict_json`` overrides the runtime default.
+        """
         from agm.agl.capabilities import HostCapabilities
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import TextValue
         from agm.agl.parser import parse_program
         from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.runtime.codec import TextCodec
+        from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.scope import resolve
-        from agm.agl.syntax.nodes import AgentCall, CallOptions, Template, TextSegment
-        from agm.agl.syntax.spans import SourceSpan
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
         from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import TextType
+        from agm.agl.typecheck.types import TextType, Type
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        program = parse_program("pass")
+        program = parse_program('let x = prompt "hi"')
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
@@ -3424,40 +2911,44 @@ class TestAgentCallEdgeCases:
         )
         checked = check(resolved, caps)
 
+        let_stmt = checked.resolved.program.body[0]
+        assert isinstance(let_stmt, LetDecl)
+        call_expr = let_stmt.value
+        assert isinstance(call_expr, AgentCall)
+
+        seen_strict: list[bool] = []
+
+        class RecordingCodec(TextCodec):
+            def parse(
+                self, raw: str, target_type: Type, *, strict_json: bool = False
+            ) -> ParseResult:
+                seen_strict.append(strict_json)
+                return super().parse(raw, target_type, strict_json=strict_json)
+
         def my_fn(req: AgentRequest) -> str:
             return "ok"
 
-        # call_kind=None for synthetic node → dispatches to "prompt" (default agent)
         registry = AgentRegistry(named={}, default_agent=my_fn)
-        node_id = 99
         contract = OutputContract(
             target_type=TextType(),
-            codec=TextCodec(),
-            strict_json=True,  # Explicit strict_json override
+            codec=RecordingCodec(),
+            strict_json=True,  # Overrides the runtime default of False.
             format_instructions="",
             json_schema=None,
         )
         interp = Interpreter(
             checked=checked,
             registry=registry,
-            contracts={node_id: contract},
-            type_env=TypeEnvironment(),
+            contracts={call_expr.node_id: contract},
+            type_env=checked.type_env,
             loop_limit=3,
-            strict_json=False,  # Runtime default is False, contract overrides to True
+            strict_json=False,
         )
-
-        scope = Scope(parent=None)
-        opts = CallOptions(format=None, strict_json=None, parse_policy=None, span=span, node_id=1)
-        template = Template(
-            segments=(TextSegment(text="hi", span=span, node_id=2),),
-            span=span,
-            node_id=3,
-        )
-        expr = AgentCall(
-            agent="prompt", options=opts, template=template, span=span, node_id=node_id
-        )
-        result = interp._eval_agent_call(expr, scope)
-        assert isinstance(result, TextValue)
+        root = Scope(parent=None)
+        interp.execute(root)
+        assert root.snapshot()["x"] == TextValue("ok")
+        # The contract's strict_json=True flowed through to the codec.
+        assert seen_strict == [True]
 
     def test_agent_call_retry_policy_exhausts(self) -> None:
         """A retry-policy call whose codec always fails raises AgentParseError.
@@ -3577,202 +3068,76 @@ class TestResolveTypeAnn:
 
 
 class TestMatchPatternConstructor:
-    def test_constructor_pattern_matches_record(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.syntax.nodes import (
-            ConstructorPattern,
-            PatternField,
-            WildcardPattern,
-        )
-        from agm.agl.syntax.spans import SourceSpan
+    """Constructor (enum-variant) patterns matched via ``case`` statements.
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        # Pattern: Point { x: _ }
-        field_pat = PatternField(
-            name="x",
-            pattern=WildcardPattern(span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        pat = ConstructorPattern(
-            qualifier=None, name="Point", fields=(field_pat,), span=span, node_id=3
-        )
-        value = RecordValue(type_name="Point", fields={"x": IntValue(5)})
-        matched, bindings = _match_pattern(pat, value)
-        assert matched
-        assert bindings == {}
+    The type checker only allows constructor patterns against enum subjects
+    (record / non-enum subjects and undeclared variant fields are static
+    errors), so only the enum-variant paths are reachable at runtime.  Each
+    test sets a root ``var`` inside the matching branch to observe the outcome.
+    """
 
-    def test_constructor_pattern_record_type_mismatch(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.syntax.nodes import ConstructorPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        pat = ConstructorPattern(qualifier=None, name="Line", fields=(), span=span, node_id=1)
-        value = RecordValue(type_name="Point", fields={"x": IntValue(5)})
-        matched, _ = _match_pattern(pat, value)
-        assert not matched
-
-    def test_constructor_pattern_record_qualified_match(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import RecordValue
-        from agm.agl.syntax.nodes import ConstructorPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        # Pattern: qualifier="Point", name="Something" should not match type_name="Point"
-        pat = ConstructorPattern(
-            qualifier="Point", name="Other", fields=(), span=span, node_id=1
-        )
-        value = RecordValue(type_name="Point", fields={})
-        matched, _ = _match_pattern(pat, value)
-        # qualifier="Point" matches type_name="Point" but name is different
-        # from the code: type_name != pattern.name and (qualifier is None or qualifier != type_name)
-        # => "Point" != "Other" and ("Point" is not None and "Point" == "Point")
-        # → second part is False
-        # so whole condition False → not returned early → matched
-        assert matched
-
-    def test_constructor_pattern_record_missing_field(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import RecordValue
-        from agm.agl.syntax.nodes import ConstructorPattern, PatternField, WildcardPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        field_pat = PatternField(
-            name="z",
-            pattern=WildcardPattern(span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        pat = ConstructorPattern(
-            qualifier=None, name="Point", fields=(field_pat,), span=span, node_id=3
-        )
-        value = RecordValue(type_name="Point", fields={})  # missing "z"
-        matched, _ = _match_pattern(pat, value)
-        assert not matched
-
-    def test_constructor_pattern_record_sub_pattern_no_match(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.syntax.nodes import (
-            ConstructorPattern,
-            IntLit,
-            LiteralPattern,
-            PatternField,
-        )
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        # Pattern: Point { x: 99 } — x is 5, so no match
-        field_pat = PatternField(
-            name="x",
-            pattern=LiteralPattern(
-                literal=IntLit(value=99, span=span, node_id=1), span=span, node_id=2
+    @staticmethod
+    def _option_prelude() -> tuple[Stmt, ...]:
+        # enum Option { Some(n: int), Nothing }; let o = Option.Some(n: 1)
+        return (
+            _enum_def(
+                "Option",
+                _variant_def("Some", _field_def("n", _ty("int"))),
+                _variant_def("Nothing"),
             ),
-            span=span,
-            node_id=3,
+            _let("o", _ctor("Some", qualifier="Option", args=(_arg("n", _int(1)),))),
         )
-        pat = ConstructorPattern(
-            qualifier=None, name="Point", fields=(field_pat,), span=span, node_id=4
-        )
-        value = RecordValue(type_name="Point", fields={"x": IntValue(5)})
-        matched, _ = _match_pattern(pat, value)
-        assert not matched
 
-    def test_constructor_pattern_matches_enum_variant(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import EnumValue, IntValue
-        from agm.agl.syntax.nodes import ConstructorPattern, PatternField, VarPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        field_pat = PatternField(
-            name="n",
-            pattern=VarPattern(name="val", span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        pat = ConstructorPattern(
-            qualifier=None, name="Some", fields=(field_pat,), span=span, node_id=3
-        )
-        value = EnumValue(type_name="Option", variant="Some", fields={"n": IntValue(42)})
-        matched, bindings = _match_pattern(pat, value)
-        assert matched
-        assert bindings == {"val": IntValue(42)}
-
-    def test_constructor_pattern_enum_variant_mismatch(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.syntax.nodes import ConstructorPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        pat = ConstructorPattern(qualifier=None, name="None", fields=(), span=span, node_id=1)
-        value = EnumValue(type_name="Option", variant="Some", fields={})
-        matched, _ = _match_pattern(pat, value)
-        assert not matched
-
-    def test_constructor_pattern_enum_missing_field(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.syntax.nodes import ConstructorPattern, PatternField, WildcardPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        field_pat = PatternField(
-            name="missing",
-            pattern=WildcardPattern(span=span, node_id=1),
-            span=span,
-            node_id=2,
-        )
-        pat = ConstructorPattern(
-            qualifier=None, name="Some", fields=(field_pat,), span=span, node_id=3
-        )
-        value = EnumValue(type_name="Option", variant="Some", fields={})  # no "missing"
-        matched, _ = _match_pattern(pat, value)
-        assert not matched
-
-    def test_constructor_pattern_enum_sub_pattern_no_match(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
-        from agm.agl.eval.values import EnumValue, IntValue
-        from agm.agl.syntax.nodes import (
-            ConstructorPattern,
-            IntLit,
-            LiteralPattern,
-            PatternField,
-        )
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        field_pat = PatternField(
-            name="n",
-            pattern=LiteralPattern(
-                literal=IntLit(value=99, span=span, node_id=1), span=span, node_id=2
-            ),
-            span=span,
-            node_id=3,
-        )
-        pat = ConstructorPattern(
-            qualifier=None, name="Some", fields=(field_pat,), span=span, node_id=4
-        )
-        value = EnumValue(type_name="Option", variant="Some", fields={"n": IntValue(1)})
-        matched, _ = _match_pattern(pat, value)
-        assert not matched
-
-    def test_constructor_pattern_on_non_record_enum_no_match(self) -> None:
-        from agm.agl.eval.interpreter import _match_pattern
+    def test_enum_variant_pattern_binds_field(self) -> None:
+        """``Some(n: val)`` matches and binds the variant field into ``val``."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import ConstructorPattern
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        pat = ConstructorPattern(qualifier=None, name="Foo", fields=(), span=span, node_id=1)
-        matched, _ = _match_pattern(pat, IntValue(1))
-        assert not matched
+        body = (
+            *self._option_prelude(),
+            _var("r", _int(0), type_ann=_ty("int")),
+            _case_stmt(
+                _ref("o"),
+                _case_stmt_branch(
+                    _ctor_pat("Some", fields=(_pat_field("n", _var_pat("val")),)),
+                    (_set("r", _ref("val")),),
+                ),
+                _case_stmt_branch(_wild(), (_pass(),)),
+            ),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(1)
+
+    def test_enum_variant_name_mismatch_skips_branch(self) -> None:
+        """A different variant name does not match (falls through to wildcard)."""
+        from agm.agl.eval.values import IntValue
+
+        body = (
+            *self._option_prelude(),
+            _var("r", _int(0), type_ann=_ty("int")),
+            _case_stmt(
+                _ref("o"),
+                _case_stmt_branch(_ctor_pat("Nothing"), (_set("r", _int(1)),)),
+                _case_stmt_branch(_wild(), (_pass(),)),
+            ),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(0)
+
+    def test_enum_variant_sub_pattern_no_match_skips_branch(self) -> None:
+        """A sub-pattern that fails (``Some(n: 99)`` vs n=1) does not match."""
+        from agm.agl.eval.values import IntValue
+
+        body = (
+            *self._option_prelude(),
+            _var("r", _int(0), type_ann=_ty("int")),
+            _case_stmt(
+                _ref("o"),
+                _case_stmt_branch(
+                    _ctor_pat("Some", fields=(_pat_field("n", _lit_pat(_int(99))),)),
+                    (_set("r", _int(1)),),
+                ),
+                _case_stmt_branch(_wild(), (_pass(),)),
+            ),
+        )
+        assert _execute(body).snapshot()["r"] == IntValue(0)
 
 
 # ---------------------------------------------------------------------------
@@ -3893,339 +3258,23 @@ class TestConvertInputDecimalToInt:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _exec_stmt dispatch for M3+ types (lines 158-166)
-# These test calling _exec_stmt (not the underlying methods directly) so
-# the dispatch elif branches are covered.
-# ---------------------------------------------------------------------------
-
-
-class TestExecStmtDispatch:
-    """Tests that call _exec_stmt for M3+ statement types to cover dispatch branches."""
-
-    def test_exec_stmt_dispatches_do_until(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import BoolLit, DoUntil
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        cond = BoolLit(value=True, span=span, node_id=1)
-        stmt = DoUntil(limit=1, body=(), condition=cond, span=span, node_id=2)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_stmt(stmt, scope)  # Dispatches via DoUntil branch
-
-    def test_exec_stmt_dispatches_if_stmt(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import BoolLit, IfBranch, IfStmt
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        branch = IfBranch(
-            cond=BoolLit(value=False, span=span, node_id=1), body=(), span=span, node_id=2
-        )
-        stmt = IfStmt(branches=(branch,), span=span, node_id=3)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_stmt(stmt, scope)  # Dispatches via IfStmt branch
-
-    def test_exec_stmt_dispatches_case_stmt(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, IntLit, WildcardPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=1, span=span, node_id=1)
-        branch = CaseStmtBranch(
-            pattern=WildcardPattern(span=span, node_id=2), body=(), span=span, node_id=3
-        )
-        stmt = CaseStmt(subject=subject, branches=(branch,), span=span, node_id=4)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_stmt(stmt, scope)  # Dispatches via CaseStmt branch
-
-    def test_exec_stmt_dispatches_try_catch(self) -> None:
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import CatchClause, TryCatch
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        handler = CatchClause(exc_type=None, binding=None, body=(), span=span, node_id=1)
-        stmt = TryCatch(body=(), handlers=(handler,), span=span, node_id=2)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_stmt(stmt, scope)  # Dispatches via TryCatch branch
-
-    def test_exec_stmt_dispatches_raise(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.syntax.nodes import Raise, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        exc_val = ExceptionValue(
-            type_name="Abort",
-            fields={"message": TextValue("x"), "trace_id": TextValue("")},
-        )
-        scope = Scope(parent=None)
-        scope.define("e", exc_val, mutable=False, decl_span=span)
-        stmt = Raise(exc=VarRef(name="e", span=span, node_id=1), span=span, node_id=2)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(AglRaise):
-            interp._exec_stmt(stmt, scope)  # Dispatches via Raise branch
-
-
-# ---------------------------------------------------------------------------
-# Coverage: remaining interpreter paths via _eval_expr dispatch
-# ---------------------------------------------------------------------------
-
-
-class TestEvalExprDispatch:
-    """Tests that call _eval_expr (not sub-methods) to cover dispatch branches."""
-
-    def test_eval_expr_dispatches_field_access(self) -> None:
-        """_eval_expr dispatches to _eval_field_access for FieldAccess nodes."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.syntax.nodes import FieldAccess, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "pt",
-            RecordValue(type_name="P", fields={"x": IntValue(9)}),
-            mutable=False,
-            decl_span=span,
-        )
-        expr = FieldAccess(
-            obj=VarRef(name="pt", span=span, node_id=1), field="x", span=span, node_id=2
-        )
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, scope)
-        assert result == IntValue(9)
-
-    def test_eval_expr_dispatches_template(self) -> None:
-        """_eval_expr dispatches compound expressions via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import TextValue
-        from agm.agl.syntax.nodes import Template, TextSegment
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = Template(
-            segments=(TextSegment(text="hello", span=span, node_id=1),),
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert result == TextValue("hello")
-
-    def test_eval_expr_dispatches_list_lit(self) -> None:
-        """_eval_expr dispatches ListLit via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ListValue
-        from agm.agl.syntax.nodes import IntLit, ListLit
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = ListLit(elements=(IntLit(value=1, span=span, node_id=1),), span=span, node_id=2)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert isinstance(result, ListValue)
-
-    def test_eval_expr_dispatches_dict_lit(self) -> None:
-        """_eval_expr dispatches DictLit via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import DictValue
-        from agm.agl.syntax.nodes import DictEntry, DictLit, IntLit, StringLit
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        entry = DictEntry(
-            key=StringLit(value="k", span=span, node_id=1),
-            value=IntLit(value=1, span=span, node_id=2),
-            span=span, node_id=3,
-        )
-        expr = DictLit(entries=(entry,), span=span, node_id=4)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert isinstance(result, DictValue)
-
-    def test_eval_expr_dispatches_unary_not(self) -> None:
-        """_eval_expr dispatches UnaryNot via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import BoolValue
-        from agm.agl.syntax.nodes import BoolLit, UnaryNot
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = UnaryNot(operand=BoolLit(value=False, span=span, node_id=1), span=span, node_id=2)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert result == BoolValue(True)
-
-    def test_eval_expr_dispatches_unary_neg(self) -> None:
-        """_eval_expr dispatches UnaryNeg via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import IntLit, UnaryNeg
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = UnaryNeg(operand=IntLit(value=3, span=span, node_id=1), span=span, node_id=2)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert result == IntValue(-3)
-
-    def test_eval_expr_dispatches_is_test(self) -> None:
-        """_eval_expr dispatches IsTest via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import BoolValue, EnumValue
-        from agm.agl.syntax.nodes import IsTest, VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        scope = Scope(parent=None)
-        scope.define(
-            "s", EnumValue(type_name="S", variant="A", fields={}), mutable=False, decl_span=span
-        )
-        expr = IsTest(
-            expr=VarRef(name="s", span=span, node_id=1),
-            qualifier=None,
-            variant="A",
-            negated=False,
-            span=span,
-            node_id=2,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, scope)
-        assert result == BoolValue(True)
-
-    def test_eval_expr_dispatches_case_expr(self) -> None:
-        """_eval_expr dispatches CaseExpr via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import CaseExpr, CaseExprBranch, IntLit, WildcardPattern
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=5, span=span, node_id=1)
-        branch = CaseExprBranch(
-            pattern=WildcardPattern(span=span, node_id=2),
-            body=IntLit(value=99, span=span, node_id=3),
-            span=span,
-            node_id=4,
-        )
-        expr = CaseExpr(subject=subject, branches=(branch,), span=span, node_id=5)
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert result == IntValue(99)
-
-    def test_eval_expr_dispatches_binary_op(self) -> None:
-        """_eval_expr dispatches BinaryOp via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, IntLit
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.ADD,
-            left=IntLit(value=2, span=span, node_id=1),
-            right=IntLit(value=3, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert result == IntValue(5)
-
-    def test_eval_expr_dispatches_constructor(self) -> None:
-        """_eval_expr dispatches Constructor via _eval_expr."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.syntax.nodes import Constructor
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import EnumType
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        type_env.register_type("Color", EnumType(name="Color", variants={"Red": {}}))
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-
-        expr = Constructor(qualifier="Color", name="Red", args=(), span=span, node_id=1)
-        result = interp._eval_expr(expr, Scope(parent=None))
-        assert isinstance(result, EnumValue)
-
-
-# ---------------------------------------------------------------------------
 # Coverage: template interpolation non-VarRef expr path (lines 408->410)
 # ---------------------------------------------------------------------------
 
 
 class TestTemplateInterpSegment:
-    def test_template_interp_non_var_ref_no_var_name(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """InterpSegment with a non-VarRef expr has var_name=None."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_template_with_text_and_interp_segments(self) -> None:
+        """A template (routed through ``_eval_expr``) concatenates its segments.
+
+        The interpolation here is a non-VarRef (int literal), so the boundary
+        tag has no variable name — the rendered value is the bare scalar.
+        """
         from agm.agl.eval.values import TextValue
-        from agm.agl.syntax.nodes import InterpSegment, IntLit, Template
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        # IntLit is not a VarRef → var_name stays None
-        interp_seg = InterpSegment(
-            expr=IntLit(value=42, span=span, node_id=1), render=None, span=span, node_id=2
-        )
-        template = Template(segments=(interp_seg,), span=span, node_id=3)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_template(template, Scope(parent=None))
-        assert isinstance(result, TextValue)
-        assert "42" in result.value
+        template = _template(_text_seg("n="), _interp_seg(_int(42)))
+        value = _eval_value(template)
+        assert isinstance(value, TextValue)
+        assert value.value == "n=42"
 
 
 # ---------------------------------------------------------------------------
@@ -4234,70 +3283,17 @@ class TestTemplateInterpSegment:
 
 
 class TestAgentCallShellExec:
-    def test_eval_agent_call_shell_exec_raises(self) -> None:
-        """When call_kind == CallKind.shell_exec, raises AglRaise(ExecError)."""
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
-        from agm.agl.scope.symbols import CallKind, ResolvedProgram
-        from agm.agl.syntax.nodes import AgentCall, CallOptions, Template, TextSegment
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import CheckedProgram
+    def test_exec_call_raises_exec_error(self) -> None:
+        """An ``exec`` call surfaces ExecError (shell exec is unsupported in M1).
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        source = "pass"
-        program = parse_program(source)
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=False,
-            codec_kinds={},
-            renderer_names=frozenset(),
-        )
-        checked = check(resolved, caps)
-
-        # Inject a synthetic call_kinds entry with shell_exec
-        node_id = 88
-        new_call_kinds = dict(checked.resolved.call_kinds)
-        new_call_kinds[node_id] = CallKind.shell_exec
-        new_resolved = ResolvedProgram(
-            program=checked.resolved.program,
-            resolution=checked.resolved.resolution,
-            call_kinds=new_call_kinds,
-            root_scope=checked.resolved.root_scope,
-        )
-        new_checked = CheckedProgram(
-            resolved=new_resolved,
-            node_types=checked.node_types,
-            contract_specs=checked.contract_specs,
-            warnings=checked.warnings,
-            type_env=checked.type_env,
-        )
-
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = Interpreter(
-            checked=new_checked,
-            registry=registry,
-            contracts={},
-            type_env=checked.type_env,
-            loop_limit=3,
-            strict_json=False,
-        )
-
-        opts = CallOptions(format=None, strict_json=None, parse_policy=None, span=span, node_id=1)
-        template = Template(
-            segments=(TextSegment(text="cmd", span=span, node_id=2),), span=span, node_id=3
-        )
-        expr = AgentCall(agent="exec", options=opts, template=template, span=span, node_id=node_id)
-        scope = Scope(parent=None)
-        with pytest.raises(AglRaise) as exc_info:
-            interp._eval_agent_call(expr, scope)
-        assert exc_info.value.exc.type_name == "ExecError"
+        ``exec "cmd"`` is M1-parseable, so this exercises the shell_exec call
+        path through the public ``run`` surface: the uncaught AgL exception
+        becomes ``RunResult.error``.
+        """
+        result = run('exec "cmd"')
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "ExecError"
 
 
 # ---------------------------------------------------------------------------
@@ -4306,75 +3302,29 @@ class TestAgentCallShellExec:
 
 
 class TestConstructorCoercion:
-    def test_eval_constructor_record_int_to_decimal_coercion(self) -> None:
-        """Constructor with int arg for a decimal field coerces to DecimalValue."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_constructor_record_int_to_decimal_coercion(self) -> None:
+        """An int arg for a decimal record field is coerced to DecimalValue."""
         from agm.agl.eval.values import DecimalValue, RecordValue
-        from agm.agl.syntax.nodes import Constructor, IntLit, NamedArg
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import DecimalType, RecordType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        # Field "v" expects decimal — passing int should be coerced
-        type_env.register_type("Box", RecordType(name="Box", fields={"v": DecimalType()}))
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        expr = Constructor(
-            qualifier=None,
-            name="Box",
-            args=(
-                NamedArg(
-                    name="v", value=IntLit(value=3, span=span, node_id=1), span=span, node_id=2
-                ),
-            ),
-            span=span,
-            node_id=3,
+        body = (
+            _record_def("Box", _field_def("v", _ty("decimal"))),
+            _let("b", _ctor("Box", args=(_arg("v", _int(3)),))),
         )
-        result = interp._eval_constructor(expr, scope)
-        assert isinstance(result, RecordValue)
-        assert isinstance(result.fields["v"], DecimalValue)
+        value = _execute(body).snapshot()["b"]
+        assert isinstance(value, RecordValue)
+        assert value.fields["v"] == DecimalValue(decimal.Decimal(3))
 
-    def test_eval_constructor_enum_int_to_decimal_coercion(self) -> None:
-        """Enum constructor with int arg for a decimal field coerces to DecimalValue."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_constructor_enum_int_to_decimal_coercion(self) -> None:
+        """An int arg for a decimal enum-variant field is coerced to DecimalValue."""
         from agm.agl.eval.values import DecimalValue, EnumValue
-        from agm.agl.syntax.nodes import Constructor, IntLit, NamedArg
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import DecimalType, EnumType
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        type_env.register_type(
-            "Measure",
-            EnumType(name="Measure", variants={"Amount": {"v": DecimalType()}}),
+        body = (
+            _enum_def("Measure", _variant_def("Amount", _field_def("v", _ty("decimal")))),
+            _let("m", _ctor("Amount", qualifier="Measure", args=(_arg("v", _int(5)),))),
         )
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        expr = Constructor(
-            qualifier="Measure",
-            name="Amount",
-            args=(
-                NamedArg(
-                    name="v", value=IntLit(value=5, span=span, node_id=1), span=span, node_id=2
-                ),
-            ),
-            span=span,
-            node_id=3,
-        )
-        result = interp._eval_constructor(expr, scope)
-        assert isinstance(result, EnumValue)
-        assert isinstance(result.fields["v"], DecimalValue)
+        value = _execute(body).snapshot()["m"]
+        assert isinstance(value, EnumValue)
+        assert value.fields["v"] == DecimalValue(decimal.Decimal(5))
 
 
 # ---------------------------------------------------------------------------
@@ -4383,49 +3333,17 @@ class TestConstructorCoercion:
 
 
 class TestBinaryOpNonBoolRight:
-    def test_and_true_left_non_bool_right_returns_right(self) -> None:
-        """and: left=true, right=IntValue → returns right (not BoolValue)."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_and_true_left_returns_non_bool_right(self) -> None:
+        """``true and <int>`` returns the right operand value verbatim."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, BoolLit, IntLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.AND,
-            left=BoolLit(value=True, span=span, node_id=1),
-            right=IntLit(value=42, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        # right is IntValue(42), not BoolValue → returned directly (line 609)
-        assert result == IntValue(42)
+        assert _eval_value(_binop(BinOp.AND, _bool(True), _int(42))) == IntValue(42)
 
-    def test_or_false_left_non_bool_right_returns_right(self) -> None:
-        """or: left=false, right=IntValue → returns right (not BoolValue)."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_or_false_left_returns_non_bool_right(self) -> None:
+        """``false or <int>`` returns the right operand value verbatim."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import BinaryOp, BinOp, BoolLit, IntLit
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = BinaryOp(
-            op=BinOp.OR,
-            left=BoolLit(value=False, span=span, node_id=1),
-            right=IntLit(value=7, span=span, node_id=2),
-            span=span,
-            node_id=3,
-        )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_binary_op(expr, Scope(parent=None))
-        # right is IntValue(7), not BoolValue → returned directly (line 616)
-        assert result == IntValue(7)
+        assert _eval_value(_binop(BinOp.OR, _bool(False), _int(7))) == IntValue(7)
 
 
 # ---------------------------------------------------------------------------
@@ -4478,27 +3396,20 @@ class TestCompareFallback:
 
 class TestCaseStmtVarBinding:
     def test_case_stmt_var_pattern_captures_binding(self) -> None:
-        """CaseStmt with VarPattern captures value in branch scope."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, IntLit, PassStmt, VarPattern
-        from agm.agl.syntax.spans import SourceSpan
+        """A var pattern in a ``case`` statement captures the subject value.
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=5, span=span, node_id=1)
-        # VarPattern: captures value as "n"
-        branch = CaseStmtBranch(
-            pattern=VarPattern(name="n", span=span, node_id=2),
-            body=(PassStmt(span=span, node_id=3),),
-            span=span,
-            node_id=4,
+        Observed by copying the captured ``n`` into a root-scope ``var``.
+        """
+        from agm.agl.eval.values import IntValue
+
+        body = (
+            _var("r", _int(0), type_ann=_ty("int")),
+            _case_stmt(
+                _int(5),
+                _case_stmt_branch(_var_pat("n"), (_set("r", _ref("n")),)),
+            ),
         )
-        stmt = CaseStmt(subject=subject, branches=(branch,), span=span, node_id=5)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_case_stmt(stmt, scope)  # Should not raise; binding in branch scope
+        assert _execute(body).snapshot()["r"] == IntValue(5)
 
 
 # ---------------------------------------------------------------------------
@@ -4508,69 +3419,17 @@ class TestCaseStmtVarBinding:
 
 class TestTryCatchHandlerNoBinding:
     def test_try_catch_handler_without_binding_catches(self) -> None:
-        """CatchClause with binding=None still catches the exception."""
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.syntax.nodes import CatchClause, PassStmt, TryCatch
-        from agm.agl.syntax.spans import SourceSpan
+        """A handler with ``binding=None`` still catches a matching exception."""
+        from agm.agl.eval.values import TextValue
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-
-        call_count = [0]
-
-        class RaisingInterp(Interpreter):
-            def _exec_stmt(self, s: object, sc: object) -> None:
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    exc_val = ExceptionValue(
-                        type_name="Abort",
-                        fields={"message": TextValue("oops"), "trace_id": TextValue("")},
-                    )
-                    raise AglRaise(exc_val)
-
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.scope import resolve
-        from agm.agl.typecheck import check
-        from agm.agl.typecheck.env import TypeEnvironment
-
-        program = parse_program("pass")
-        resolved = resolve(program)
-        caps = HostCapabilities(
-            agent_names=frozenset(), has_fallback_agent=False,
-            codec_kinds={}, renderer_names=frozenset()
+        body = (
+            _var("caught", _str("no"), type_ann=_ty("text")),
+            _try(
+                (_let("z", _binop(BinOp.DIV, _int(1), _int(0))),),
+                _catch((_set("caught", _str("yes")),), exc_type="ArithmeticError"),
+            ),
         )
-        checked = check(resolved, caps)
-        registry = AgentRegistry(named={}, default_agent=None)
-        interp = RaisingInterp(
-            checked=checked,
-            registry=registry,
-            contracts={},
-            type_env=TypeEnvironment(),
-            loop_limit=3,
-            strict_json=False,
-        )
-
-        # Handler without binding (binding=None) — takes the else path at line 270
-        handler = CatchClause(
-            exc_type="Abort",
-            binding=None,  # No binding
-            body=(PassStmt(span=span, node_id=10),),
-            span=span,
-            node_id=11,
-        )
-        stmt = TryCatch(
-            body=(PassStmt(span=span, node_id=1),),
-            handlers=(handler,),
-            span=span,
-            node_id=12,
-        )
-        scope = Scope(parent=None)
-        interp._exec_try_catch(stmt, scope)  # Should not raise
-        assert call_count[0] == 2  # body + handler body
+        assert _execute(body).snapshot()["caught"] == TextValue("yes")
 
 
 # ---------------------------------------------------------------------------
@@ -4579,57 +3438,29 @@ class TestTryCatchHandlerNoBinding:
 
 
 class TestLetVarAnnotationNone:
-    def test_exec_let_with_unknown_annotation_no_coerce(self) -> None:
-        """LetDecl with an annotation _resolve_type_ann returns None → no coercion."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import IntLit, LetDecl
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import IntT, ListT
+    """let/var with a list annotation: ``_resolve_type_ann`` returns None.
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        # ListT is not handled by _resolve_type_ann → returns None → no coercion
-        ann = ListT(elem=IntT(span=span, node_id=0), span=span, node_id=1)
-        stmt = LetDecl(
-            name="lst",
-            type_ann=ann,
-            value=IntLit(value=7, span=span, node_id=2),
-            span=span,
-            node_id=3,
+    A ``list`` annotation is not one of the scalar coercion targets, so no
+    coercion is applied and the value passes through unchanged.
+    """
+
+    def test_let_with_list_annotation_no_coerce(self) -> None:
+        from agm.agl.eval.values import IntValue, ListValue
+
+        body = (
+            _let("lst", _list(_int(7)), type_ann=_list_ty(_ty("int"))),
         )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_let(stmt, scope)
-        b = scope.lookup("lst")
-        assert b is not None
-        # No coercion: stays as IntValue
-        assert b.value == IntValue(7)
+        value = _execute(body).snapshot()["lst"]
+        assert value == ListValue(elements=(IntValue(7),))
 
-    def test_exec_var_with_unknown_annotation_no_coerce(self) -> None:
-        """VarDecl with an annotation _resolve_type_ann returns None → no coercion."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import IntLit, VarDecl
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.syntax.types import IntT, ListT
+    def test_var_with_list_annotation_no_coerce(self) -> None:
+        from agm.agl.eval.values import IntValue, ListValue
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        ann = ListT(elem=IntT(span=span, node_id=0), span=span, node_id=1)
-        stmt = VarDecl(
-            name="lst",
-            type_ann=ann,
-            value=IntLit(value=8, span=span, node_id=2),
-            span=span,
-            node_id=3,
+        body = (
+            _var("lst", _list(_int(8)), type_ann=_list_ty(_ty("int"))),
         )
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-        interp._exec_var(stmt, scope)
-        b = scope.lookup("lst")
-        assert b is not None
+        value = _execute(body).snapshot()["lst"]
+        assert value == ListValue(elements=(IntValue(8),))
 
 
 # ---------------------------------------------------------------------------
@@ -4639,139 +3470,19 @@ class TestLetVarAnnotationNone:
 
 
 class TestRemainingCoverage:
-    def test_eval_var_ref_undefined_raises(self) -> None:
-        """_eval_expr with a VarRef to an undefined variable raises RuntimeError."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.syntax.nodes import VarRef
-        from agm.agl.syntax.spans import SourceSpan
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        expr = VarRef(name="undefined_var", span=span, node_id=1)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        with pytest.raises(RuntimeError, match="Undefined variable"):
-            interp._eval_expr(expr, Scope(parent=None))
-
-    def test_template_two_text_segments_covers_loop_branch(self) -> None:
-        """Template with two TextSegments ensures the loop iterates (404->401)."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_template_two_text_segments_concatenate(self) -> None:
+        """A template with two text segments concatenates them in order."""
         from agm.agl.eval.values import TextValue
-        from agm.agl.syntax.nodes import Template, TextSegment
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        seg1 = TextSegment(text="hello ", span=span, node_id=1)
-        seg2 = TextSegment(text="world", span=span, node_id=2)
-        template = Template(segments=(seg1, seg2), span=span, node_id=3)
+        template = _template(_text_seg("hello "), _text_seg("world"))
+        assert _eval_value(template) == TextValue("hello world")
 
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_template(template, Scope(parent=None))
-        assert result == TextValue("hello world")
-
-    def test_constructor_record_extra_field_not_in_type(self) -> None:
-        """Constructor passing an arg for a field not declared in RecordType uses else branch."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.syntax.nodes import Constructor, IntLit, NamedArg
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import IntType, RecordType
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        # Only field "x" declared; we'll also pass "extra" which is not in type
-        type_env.register_type("Point", RecordType(name="Point", fields={"x": IntType()}))
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        expr = Constructor(
-            qualifier=None,
-            name="Point",
-            args=(
-                NamedArg(
-                    name="x", value=IntLit(value=1, span=span, node_id=1), span=span, node_id=2
-                ),
-                NamedArg(
-                    name="extra",
-                    value=IntLit(value=99, span=span, node_id=3),
-                    span=span,
-                    node_id=4,
-                ),
-            ),
-            span=span,
-            node_id=5,
-        )
-        result = interp._eval_constructor(expr, scope)
-        assert isinstance(result, RecordValue)
-        # "extra" field passed through as-is (else branch at line 560)
-        assert result.fields.get("extra") == IntValue(99)
-
-    def test_constructor_enum_extra_field_not_in_type(self) -> None:
-        """Constructor passing an enum arg not declared in variant uses else branch."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import EnumValue, IntValue
-        from agm.agl.syntax.nodes import Constructor, IntLit, NamedArg
-        from agm.agl.syntax.spans import SourceSpan
-        from agm.agl.typecheck.env import TypeEnvironment
-        from agm.agl.typecheck.types import EnumType
-
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        type_env = TypeEnvironment()
-        # Variant "A" has no fields declared; we pass "val"
-        type_env.register_type("MyEnum", EnumType(name="MyEnum", variants={"A": {}}))
-
-        interp = _make_interp(type_env)
-        assert isinstance(interp, Interpreter)
-        scope = Scope(parent=None)
-
-        expr = Constructor(
-            qualifier="MyEnum",
-            name="A",
-            args=(
-                NamedArg(
-                    name="val", value=IntLit(value=5, span=span, node_id=1), span=span, node_id=2
-                ),
-            ),
-            span=span,
-            node_id=3,
-        )
-        result = interp._eval_constructor(expr, scope)
-        assert isinstance(result, EnumValue)
-        # "val" is passed through (else branch at line 570)
-        assert result.fields.get("val") == IntValue(5)
-
-    def test_eval_case_expr_var_pattern_binds(self) -> None:
-        """CaseExpr with VarPattern creates a binding and uses it in branch body."""
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
+    def test_case_expr_var_pattern_binds_and_uses_binding(self) -> None:
+        """A case-expression var pattern binds the subject and the body reads it."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.syntax.nodes import CaseExpr, CaseExprBranch, IntLit, VarPattern, VarRef
-        from agm.agl.syntax.spans import SourceSpan
 
-        span = SourceSpan(1, 1, 1, 5, 0, 4)
-        subject = IntLit(value=42, span=span, node_id=1)
-        # VarPattern "n" captures the value, body returns that captured var
-        branch = CaseExprBranch(
-            pattern=VarPattern(name="n", span=span, node_id=2),
-            body=VarRef(name="n", span=span, node_id=3),  # Returns captured value
-            span=span,
-            node_id=4,
-        )
-        expr = CaseExpr(subject=subject, branches=(branch,), span=span, node_id=5)
-
-        interp = _make_interp()
-        assert isinstance(interp, Interpreter)
-        result = interp._eval_case_expr(expr, Scope(parent=None))
-        # Branch body is VarRef("n") = IntValue(42)
-        assert result == IntValue(42)
+        expr = _case_expr(_int(42), _case_expr_branch(_var_pat("n"), _ref("n")))
+        assert _eval_value(expr) == IntValue(42)
 
     def test_resolve_type_ann_int(self) -> None:
         """_resolve_type_ann returns IntType for IntT annotation."""

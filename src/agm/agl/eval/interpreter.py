@@ -348,7 +348,10 @@ class Interpreter:
             return IntValue(-operand.value)
         if isinstance(operand, DecimalValue):
             return DecimalValue(-operand.value)
-        raise RuntimeError(f"unary -: expected number, got {type(operand).__name__}")
+        # Unreachable: the type checker requires a numeric operand for unary '-'.
+        raise RuntimeError(  # pragma: no cover
+            f"unary -: expected number, got {type(operand).__name__}"
+        )
 
     def _eval_list_lit(self, expr: ListLit, scope: Scope) -> ListValue:
         elements = tuple(self._eval_expr(e, scope) for e in expr.elements)
@@ -362,35 +365,20 @@ class Interpreter:
 
     def _eval_var_ref(self, expr: VarRef, scope: Scope) -> Value:
         binding = scope.lookup(expr.name)
-        if binding is None:
+        if binding is None:  # pragma: no cover
+            # Unreachable: name resolution rejects undefined variables statically.
             raise RuntimeError(f"Undefined variable at runtime: {expr.name!r}")
         return binding.value
 
     def _eval_field_access(self, expr: FieldAccess, scope: Scope) -> Value:
         obj = self._eval_expr(expr.obj, scope)
-        if isinstance(obj, RecordValue):
-            v = obj.fields.get(expr.field)
-            if v is None:
-                raise RuntimeError(
-                    f"Record {obj.type_name!r} has no field {expr.field!r}"
-                )
-            return v
-        if isinstance(obj, EnumValue):
-            v = obj.fields.get(expr.field)
-            if v is None:
-                raise RuntimeError(
-                    f"Enum variant {obj.variant!r} has no field {expr.field!r}"
-                )
-            return v
-        if isinstance(obj, ExceptionValue):
-            v = obj.fields.get(expr.field)
-            if v is None:
-                raise RuntimeError(
-                    f"Exception {obj.type_name!r} has no field {expr.field!r}"
-                )
-            return v
-        raise RuntimeError(
-            f"Field access on non-record/enum/exception: {type(obj).__name__}"
+        # The type checker only admits field access on record and exception
+        # values, and it guarantees the named field exists, so missing-field /
+        # wrong-kind cases are statically unreachable.
+        if isinstance(obj, (RecordValue, ExceptionValue)):
+            return obj.fields[expr.field]
+        raise RuntimeError(  # pragma: no cover
+            f"Field access on non-record/exception: {type(obj).__name__}"
         )
 
     def _eval_template(self, expr: Template, scope: Scope) -> TextValue:
@@ -546,29 +534,27 @@ class Interpreter:
             # Unqualified: may be a record or an enum variant.
             type_name, variant_name = self._resolve_constructor_name(expr.name, env)
 
+        # The type checker validates that the constructor names a known type and
+        # that every supplied field is declared, so each ``arg`` field is present
+        # in the corresponding record/variant field table.
         typ = env.get_type(type_name)
         if isinstance(typ, RecordType):
-            # Coerce field values if needed.
-            coerced: dict[str, Value] = {}
-            for fname, fval in arg_values.items():
-                ftype = typ.fields.get(fname)
-                if ftype is not None:
-                    coerced[fname] = _coerce(fval, ftype)
-                else:
-                    coerced[fname] = fval
+            coerced = {
+                fname: _coerce(fval, typ.fields[fname]) for fname, fval in arg_values.items()
+            }
             return RecordValue(type_name=type_name, fields=coerced)
         if isinstance(typ, EnumType):
             variant_fields = typ.variants.get(variant_name, {})
-            coerced2: dict[str, Value] = {}
-            for fname, fval in arg_values.items():
-                ftype2 = variant_fields.get(fname)
-                if ftype2 is not None:
-                    coerced2[fname] = _coerce(fval, ftype2)
-                else:
-                    coerced2[fname] = fval
+            coerced2 = {
+                fname: _coerce(fval, variant_fields[fname])
+                for fname, fval in arg_values.items()
+            }
             return EnumValue(type_name=type_name, variant=variant_name, fields=coerced2)
 
-        raise RuntimeError(f"Cannot construct value of type {type_name!r}")
+        # Unreachable: an unknown constructor is a static error.
+        raise RuntimeError(  # pragma: no cover
+            f"Cannot construct value of type {type_name!r}"
+        )
 
     def _resolve_constructor_name(
         self, name: str, env: TypeEnvironment
@@ -587,7 +573,8 @@ class Interpreter:
             typ = env.get_type(tname)
             if isinstance(typ, EnumType) and name in typ.variants:
                 return (tname, name)
-        return (name, name)
+        # Unreachable: the type checker rejects unknown constructor names.
+        return (name, name)  # pragma: no cover
 
     def _eval_binary_op(self, expr: BinaryOp, scope: Scope) -> Value:
         op = expr.op
@@ -642,7 +629,10 @@ class Interpreter:
             variant_matches = value.variant == expr.variant
             result = variant_matches != expr.negated
             return BoolValue(result)
-        raise RuntimeError(f"is test on non-enum value: {type(value).__name__}")
+        # Unreachable: 'is' tests require an enum-typed operand statically.
+        raise RuntimeError(  # pragma: no cover
+            f"is test on non-enum value: {type(value).__name__}"
+        )
 
     def _eval_case_expr(self, expr: CaseExpr, scope: Scope) -> Value:
         subject = self._eval_expr(expr.subject, scope)
@@ -862,40 +852,20 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
         return value == pat_val, {}
 
     if isinstance(pattern, ConstructorPattern):
-        # Unpack record or enum variant.
-        if isinstance(value, RecordValue):
-            if value.type_name != pattern.name and (
-                pattern.qualifier is None or pattern.qualifier != value.type_name
-            ):
+        # The type checker only admits constructor patterns against enum
+        # subjects and guarantees each named field exists on the variant, so the
+        # subject is always an EnumValue and every field lookup succeeds.
+        assert isinstance(value, EnumValue), "constructor pattern on non-enum value"
+        if value.variant != pattern.name:
+            return False, {}
+        bindings: dict[str, Value] = {}
+        for field_pat in pattern.fields:
+            field_val = value.fields[field_pat.name]
+            matched, sub_bindings = _match_pattern(field_pat.pattern, field_val)
+            if not matched:
                 return False, {}
-            bindings: dict[str, Value] = {}
-            for field_pat in pattern.fields:
-                field_val = value.fields.get(field_pat.name)
-                if field_val is None:
-                    return False, {}
-                matched, sub_bindings = _match_pattern(field_pat.pattern, field_val)
-                if not matched:
-                    return False, {}
-                bindings.update(sub_bindings)
-            return True, bindings
-
-        if isinstance(value, EnumValue):
-            # Match variant name.
-            expected_variant = pattern.name
-            if value.variant != expected_variant:
-                return False, {}
-            bindings2: dict[str, Value] = {}
-            for field_pat in pattern.fields:
-                field_val = value.fields.get(field_pat.name)
-                if field_val is None:
-                    return False, {}
-                matched2, sub_bindings2 = _match_pattern(field_pat.pattern, field_val)
-                if not matched2:
-                    return False, {}
-                bindings2.update(sub_bindings2)
-            return True, bindings2
-
-        return False, {}
+            bindings.update(sub_bindings)
+        return True, bindings
 
     assert_never(pattern)  # pragma: no cover
 

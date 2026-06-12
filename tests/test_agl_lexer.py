@@ -1055,6 +1055,16 @@ class TestNewlineNormalization:
         cr = "a\rb\rc"
         assert tok(cr) == tok(lf)
 
+    def test_shared_normalize_newlines_helper(self) -> None:
+        """F10: the shared universal-newline helper converts CRLF and lone CR to
+        LF (the single source of truth shared by the scanner and the evaluator)."""
+        from agm.agl._text import normalize_newlines
+
+        assert normalize_newlines("a\r\nb\rc\nd") == "a\nb\nc\nd"
+        assert normalize_newlines("") == ""
+        # Idempotent on already-LF text.
+        assert normalize_newlines("x\ny") == "x\ny"
+
 
 # ---------------------------------------------------------------------------
 # F4 — leading _NEWLINE suppression

@@ -576,67 +576,57 @@ def reject_program(*stmts: Stmt) -> AglScopeError:
     return exc_info.value
 
 
-class TestScopeViaAstConstruction:
-    """Tests that build AST nodes directly to exercise code paths not yet
-    reachable through the M1 parser."""
-
-    # --- Type declarations (RecordDef, EnumDef, TypeAlias) are ignored by scope ---
+class TestScopeViaSourceParseable:
+    """F11: constructs that now parse from source — type declarations, expression
+    statements, and ``raise`` — exercised through the real parser + scope pass
+    instead of hand-built AST."""
 
     def test_record_def_ignored_by_scope(self) -> None:
-        from agm.agl.syntax.nodes import RecordDef
-        from agm.agl.syntax.types import IntT
-
-        fd = _make_field("n", IntT(span=_sp(), node_id=_nid()))
-        rec = RecordDef(name="P", fields=(fd,), span=_sp(), node_id=_nid())
-        r = resolve_program(rec)
+        r = parse_and_resolve("record P\n  n: int\n")
         assert r.program is not None
 
     def test_enum_def_ignored_by_scope(self) -> None:
-        from agm.agl.syntax.nodes import EnumDef, VariantDef
-
-        vd = VariantDef(name="A", fields=(), span=_sp(), node_id=_nid())
-        enum_def = EnumDef(name="E", variants=(vd,), span=_sp(), node_id=_nid())
-        r = resolve_program(enum_def)
+        r = parse_and_resolve("enum E\n  | A\n  | B\n")
         assert r.program is not None
 
     def test_type_alias_ignored_by_scope(self) -> None:
-        from agm.agl.syntax.nodes import TypeAlias
-        from agm.agl.syntax.types import TextT
-
-        alias = TypeAlias(
-            name="MyText",
-            type_expr=TextT(span=_sp(), node_id=_nid()),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(alias)
+        r = parse_and_resolve("type MyText = text\n")
         assert r.program is not None
 
-    # --- ExprStmt ---
-
     def test_expr_stmt(self) -> None:
-        from agm.agl.syntax.nodes import ExprStmt
-
-        stmt = ExprStmt(expr=_make_intlit(1), span=_sp(), node_id=_nid())
-        r = resolve_program(stmt)
+        r = parse_and_resolve("1\n")
         assert r.program is not None
 
     def test_expr_stmt_with_varref(self) -> None:
-        from agm.agl.syntax.nodes import ExprStmt
-
-        let = _make_let("x", _make_intlit(1))
-        stmt = ExprStmt(expr=_make_varref("x"), span=_sp(), node_id=_nid())
-        r = resolve_program(let, stmt)
+        r = parse_and_resolve("let x = 1\nx\n")
         assert r.program is not None
-
-    # --- Raise ---
 
     def test_raise_stmt(self) -> None:
-        from agm.agl.syntax.nodes import Raise
-
-        raise_stmt = Raise(exc=_make_intlit(1), span=_sp(), node_id=_nid())
-        r = resolve_program(raise_stmt)
+        # Scope resolves a ``raise`` operand like any expression; the operand's
+        # type is the typechecker's concern (F1), not the scope pass.
+        r = parse_and_resolve("raise 1\n")
         assert r.program is not None
+
+    def test_raise_undefined_name_rejected(self) -> None:
+        # A ``raise`` of an undefined name is a scope error (the operand is
+        # resolved like any other expression).
+        err = reject_scope("raise nope\n")
+        assert "nope" in err.to_diagnostic().message
+
+
+class TestScopeViaAstConstruction:
+    """Scope-resolution behavior driven by direct AST construction.
+
+    These cases build AST nodes to exercise scope-pass code paths in isolation
+    (precise control over nested-scope visibility, cross-scope leaks, and the
+    ``input``-not-at-root rule).  The constructs themselves now all parse from
+    source — the previously-stale "not reachable through the M1 parser"
+    justification has been removed.  The genuinely-parseable standalone cases
+    (type declarations, expression statements, and ``raise``) are exercised as
+    source tests in :class:`TestScopeViaSourceParseable` below; what remains here
+    keeps the AST form only because hand-built nodes are the clearest way to pin
+    a specific resolution path.
+    """
 
     # --- DoUntil scope ---
 

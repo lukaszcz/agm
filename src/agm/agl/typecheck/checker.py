@@ -114,6 +114,7 @@ from agm.agl.typecheck.types import (
     RecordType,
     TextType,
     Type,
+    comparable_types,
     is_assignable,
 )
 
@@ -457,15 +458,27 @@ class _Checker:
         for s in stmt.body:
             self._check_stmt(s)
         cond_type = self._check_expr(stmt.condition, expected=None)
-        # Condition should be bool; we don't hard-error in M1 (full M3 check).
-        _ = cond_type
+        self._require_bool_condition(cond_type, stmt.condition.span, "until")
 
     def _check_if(self, stmt: IfStmt) -> None:
         for branch in stmt.branches:
             if not isinstance(branch.cond, ElseSentinel):
-                self._check_expr(branch.cond, expected=None)
+                cond_type = self._check_expr(branch.cond, expected=None)
+                self._require_bool_condition(cond_type, branch.cond.span, "if")
             for s in branch.body:
                 self._check_stmt(s)
+
+    def _require_bool_condition(self, cond_type: Type, span: SourceSpan, kw: str) -> None:
+        """Reject a non-bool ``if``/``until`` condition (design §4.3).
+
+        The span points at the condition expression so the diagnostic lands on
+        the offending operand rather than the enclosing statement.
+        """
+        if not isinstance(cond_type, BoolType):
+            raise AglTypeError(
+                f"'{kw}' condition must be bool; got '{cond_type!r}'.",
+                span=span,
+            )
 
     def _check_case_stmt(self, stmt: CaseStmt) -> None:
         subj_type = self._check_expr(stmt.subject, expected=None)
@@ -508,13 +521,16 @@ class _Checker:
             self._check_stmt(s)
 
     def _check_raise(self, stmt: Raise) -> None:
+        # The operand must be an exception value (design §8.3). Constructing the
+        # abstract ``Exception`` base is rejected at the constructor level
+        # (``_check_unqualified_constructor``); a *rethrow* of an
+        # ``Exception``-typed binder (e.g. ``catch _ as e => raise e``) is legal
+        # and must NOT be rejected here.
         exc_type = self._check_expr(stmt.exc, expected=None)
-        # Abstract Exception base is not constructible (design §8.1).
-        if isinstance(exc_type, ExceptionType) and exc_type.name == "Exception":
+        if not isinstance(exc_type, ExceptionType):
             raise AglTypeError(
-                "The abstract 'Exception' base type is not constructible. "
-                "Use a concrete exception type (e.g. 'Abort').",
-                span=stmt.span,
+                f"'raise' requires an exception value; got '{exc_type!r}'.",
+                span=stmt.exc.span,
             )
 
     # ------------------------------------------------------------------
@@ -567,7 +583,12 @@ class _Checker:
         if isinstance(expr, BinaryOp):
             return self._check_binary_op(expr)
         if isinstance(expr, UnaryNot):
-            self._check_expr(expr.operand, expected=None)
+            operand_type = self._check_expr(expr.operand, expected=None)
+            if not isinstance(operand_type, BoolType):
+                raise AglTypeError(
+                    f"'not' requires a bool operand; got '{operand_type!r}'.",
+                    span=expr.operand.span,
+                )
             return BoolType()
         if isinstance(expr, UnaryNeg):
             return self._check_unary_neg(expr)
@@ -805,10 +826,11 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.EQ, BinOp.NEQ):
-            # Allow with int→decimal widening.
-            if not (
-                is_assignable(left_type, right_type) or is_assignable(right_type, left_type)
-            ):
+            # Operands must be the same type after int→decimal widening
+            # (design §5.8 rule 4).  ``json`` compares only with ``json``;
+            # ``json`` vs a non-``json`` type is a static error (``comparable_types``
+            # does not absorb JSON-shaped scalars the way ``is_assignable`` does).
+            if not comparable_types(left_type, right_type):
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
                     f"got '{left_type!r}' and '{right_type!r}'.",
@@ -1311,7 +1333,18 @@ class _Checker:
         if isinstance(pattern, WildcardPattern):
             pass
         elif isinstance(pattern, LiteralPattern):
-            pass
+            # A literal pattern's type must be compatible with the scrutinee's
+            # static type (design §6.1/§11.9, F3/F5 ruling): same type after
+            # int→decimal widening.  An int literal against a text scrutinee, or
+            # any scalar literal against a json scrutinee, can never match and is
+            # a static error (consistent with equality rule 4).
+            lit_type = self._check_expr(pattern.literal, expected=None)
+            if not comparable_types(lit_type, subj_type):
+                raise AglTypeError(
+                    f"Literal pattern of type '{lit_type!r}' is incompatible with "
+                    f"scrutinee of type '{subj_type!r}'.",
+                    span=pattern.span,
+                )
         elif isinstance(pattern, VarPattern):
             # Simple binding captures subject type.
             # All callers (CaseStmtBranch, CaseExprBranch, PatternField) have node_id.
@@ -1337,9 +1370,18 @@ class _Checker:
             # alias-transparently and must name the operand's enum (design §5.4).
             if pattern.qualifier is not None:
                 self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
-            # Look up variant field types and bind each sub-pattern.
+            # The variant name must belong to the scrutinee's enum (design §6.1,
+            # F4) — mirroring ``_check_is_test``.  A phantom variant is a static
+            # error, not a silently-dead arm that miscounts toward exhaustiveness.
             variant_name = pattern.name
-            vfields = subj_type.variants.get(variant_name, {})
+            if variant_name not in subj_type.variants:
+                raise AglTypeError(
+                    f"Variant '{variant_name}' does not belong to enum "
+                    f"'{subj_type.name}'.",
+                    span=pattern.span,
+                )
+            # Look up variant field types and bind each sub-pattern.
+            vfields = subj_type.variants[variant_name]
             # Check for duplicate pattern fields (design §5.9).
             seen_pf: set[str] = set()
             for pf in pattern.fields:
@@ -1378,9 +1420,14 @@ class _Checker:
             if isinstance(pattern, (WildcardPattern, VarPattern)):
                 # A catch-all binding covers every remaining variant.
                 return
-            if isinstance(pattern, ConstructorPattern):
-                covered.add(pattern.name)
-            # LiteralPattern cannot match an enum value, so it covers nothing.
+            # Only constructor patterns reach exhaustiveness analysis on an enum:
+            # ``_bind_pattern_types`` rejects a literal pattern against an enum
+            # scrutinee before this runs (F4/F5), so ``pattern`` is always a
+            # ``ConstructorPattern`` here.
+            assert isinstance(pattern, ConstructorPattern), (
+                f"unexpected pattern kind on enum scrutinee: {type(pattern).__name__}"
+            )
+            covered.add(pattern.name)
         missing = [name for name in subj_type.variants if name not in covered]
         if not missing:
             return

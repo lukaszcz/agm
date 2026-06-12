@@ -35,6 +35,7 @@ from typing import Iterator
 
 from lark.lexer import Token
 
+from agm.agl._text import normalize_newlines
 from agm.agl.diagnostics import SourceSpan
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
@@ -158,7 +159,7 @@ class _Scanner:
     def __init__(self, source: str) -> None:
         # Universal-newline normalization: CRLF and lone CR both become LF.
         # All offsets henceforth refer to this normalized text.
-        self._src = source.replace("\r\n", "\n").replace("\r", "\n")
+        self._src = normalize_newlines(source)
         self._pos = 0
         self._line = 1
         self._col = 1  # 1-based column

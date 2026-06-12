@@ -1223,6 +1223,65 @@ class TestTypeCoercion:
         assert result.bindings["x"] == DecimalValue(decimal.Decimal("1.5"))
 
 
+class TestJsonEquality:
+    """F3: json = json compares the wrapped JSON trees with numeric int/decimal
+    equivalence (JSON numbers compare numerically), without conflating bool and
+    numbers."""
+
+    def test_json_scalar_int_decimal_numeric_equivalence(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        result = run("let a: json = 1\nlet b: json = 1.0\nlet x = (a = b)")
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(True)
+
+    def test_json_nested_int_decimal_numeric_equivalence(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        result = run(
+            "let a: json = {n: 1}\nlet b: json = {n: 1.0}\nlet x = (a = b)"
+        )
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(True)
+
+    def test_json_list_int_decimal_numeric_equivalence(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        result = run("let a: json = [1, 2]\nlet b: json = [1.0, 2.0]\nlet x = (a = b)")
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(True)
+
+    def test_json_bool_not_equal_to_number(self) -> None:
+        """JSON ``true`` must not compare equal to JSON ``1`` (no bool/number
+        conflation, unlike Python's ``True == 1``)."""
+        from agm.agl.eval.values import BoolValue
+
+        result = run("let a: json = true\nlet b: json = 1\nlet x = (a = b)")
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(False)
+
+    def test_json_distinct_numbers_not_equal(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        result = run("let a: json = 1\nlet b: json = 2\nlet x = (a = b)")
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(False)
+
+    def test_json_lists_of_different_length_not_equal(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        result = run("let a: json = [1, 2]\nlet b: json = [1]\nlet x = (a = b)")
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(False)
+
+    def test_json_dicts_with_different_keys_not_equal(self) -> None:
+        from agm.agl.eval.values import BoolValue
+
+        result = run("let a: json = {x: 1}\nlet b: json = {y: 1}\nlet x = (a = b)")
+        assert result.ok
+        assert result.bindings["x"] == BoolValue(False)
+
+
 # ---------------------------------------------------------------------------
 # Print with var refs
 # ---------------------------------------------------------------------------
@@ -1455,6 +1514,22 @@ class TestAglRaise:
         )
         carrier = AglRaise(exc_val)
         assert isinstance(carrier, Exception)
+
+    def test_wildcard_rethrow_propagates_original_exception(self) -> None:
+        """F2: ``catch _ as e => raise e`` rethrows the original exception, which
+        then propagates uncaught out of ``run()``."""
+        result = run("try\n  let z: decimal = 1 / 0\ncatch _ as e =>\n  raise e\n")
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "ArithmeticError"
+
+    def test_named_base_rethrow_propagates_original_exception(self) -> None:
+        """F2: ``catch Exception as e => raise e`` is equivalent to the wildcard
+        rethrow and propagates the original exception."""
+        result = run("try\n  let z: decimal = 1 / 0\ncatch Exception as e =>\n  raise e\n")
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "ArithmeticError"
 
 
 # ---------------------------------------------------------------------------
@@ -2099,6 +2174,29 @@ class TestInterpreterUnit:
         result = _div(IntValue(10), IntValue(4))
         assert isinstance(result, DecimalValue)
 
+    def test_arithmetic_uses_pinned_context_not_ambient(self) -> None:
+        """F7: AgL arithmetic must not depend on the host's ambient decimal
+        context.  With ambient precision deliberately lowered to 5, ``1 / 3``
+        must still be computed at the pinned 28-digit precision."""
+        import decimal as _decimal
+
+        from agm.agl.eval.values import DecimalValue
+
+        ctx = _decimal.getcontext()
+        saved_prec = ctx.prec
+        ctx.prec = 5
+        try:
+            result = run("let x: decimal = 1 / 3\n")
+        finally:
+            ctx.prec = saved_prec
+        assert result.ok
+        value = result.bindings["x"]
+        assert isinstance(value, DecimalValue)
+        # 28-digit precision: 0.3333... with 28 significant digits.
+        assert value.value == _decimal.Decimal(1) / _decimal.Decimal(3)
+        digits = len(value.value.as_tuple().digits)
+        assert digits == 28, f"expected 28 significant digits, got {digits}"
+
     def test_div_by_zero_raises_agl_raise(self) -> None:
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.interpreter import _div
@@ -2351,6 +2449,29 @@ class TestInterpreterUnit:
         )
         assert _execute(body).snapshot()["r"] == IntValue(1)
 
+    def test_case_literal_int_decimal_widening_match(self) -> None:
+        """F5: a literal pattern matches with int→decimal widening, so a decimal
+        scrutinee ``1.0`` matches an int literal pattern ``1`` (consistent with
+        ``1 = 1.0``)."""
+        result = run(
+            "let n: decimal = 1.0\n"
+            "case n of\n"
+            '  | 1 => print "matched"\n'
+            '  | _ => print "no"\n'
+        )
+        assert result.ok
+
+    def test_case_literal_int_decimal_widening_match_output(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        run(
+            "let n: decimal = 1.0\n"
+            "case n of\n"
+            '  | 1 => print "matched"\n'
+            '  | _ => print "no"\n'
+        )
+        assert capsys.readouterr().out == "matched\n"
+
     def test_case_literal_bool_pattern_match(self) -> None:
         from agm.agl.eval.values import IntValue
 
@@ -2450,29 +2571,55 @@ class TestInterpreterUnit:
         assert _matches_catch(handler, exc) is False
 
     def test_describe_value(self) -> None:
+        """F6: nominal values keep their declared names; built-in values map to
+        their AgL type names (not Python class names like ``IntValue``)."""
+        import decimal as _decimal
+
         from agm.agl.eval.interpreter import _describe_value
         from agm.agl.eval.values import (
+            BoolValue,
+            DecimalValue,
+            DictValue,
             EnumValue,
             ExceptionValue,
             IntValue,
+            JsonValue,
+            ListValue,
             RecordValue,
+            TextValue,
         )
 
-        assert "Status" in _describe_value(
+        # Nominal types keep their declared names.
+        assert "Status" == _describe_value(
             EnumValue(type_name="Status", variant="Active", fields={})
         )
-        assert "Point" in _describe_value(RecordValue(type_name="Point", fields={}))
-        assert "Abort" in _describe_value(ExceptionValue(type_name="Abort", fields={}))
-        assert "IntValue" in _describe_value(IntValue(1))
+        assert "Point" == _describe_value(RecordValue(type_name="Point", fields={}))
+        assert "Abort" == _describe_value(ExceptionValue(type_name="Abort", fields={}))
+        # Built-ins map to AgL type names.
+        assert _describe_value(IntValue(1)) == "int"
+        assert _describe_value(TextValue("x")) == "text"
+        assert _describe_value(BoolValue(True)) == "bool"
+        assert _describe_value(DecimalValue(_decimal.Decimal("1.5"))) == "decimal"
+        assert _describe_value(JsonValue(None)) == "json"
+        assert _describe_value(ListValue(elements=())) == "list"
+        assert _describe_value(DictValue(entries={})) == "dict"
 
-    def test_unary_not_on_non_bool_raises_at_runtime(self) -> None:
-        """``not <int>`` passes typecheck but raises a runtime error.
+    def test_match_error_scrutinee_type_is_agl_name(self) -> None:
+        """F6: an uncaught MatchError exposes the AgL type name (``int``), not the
+        Python class name (``IntValue``)."""
+        result = run("case 5 of\n  | 0 => pass\n")
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "MatchError"
+        assert result.error.fields["scrutinee_type"] == "int"
 
-        ``not`` accepts any operand statically, so the interpreter's runtime
-        type guard is reachable through a real resolve+check-valid program.
-        """
+    def test_unary_not_on_non_bool_rejected_statically(self) -> None:
+        """F1: ``not <int>`` is rejected by the checker (the runtime type guard
+        is now genuinely unreachable)."""
+        from agm.agl.typecheck import AglTypeError
+
         body = (_let("a", _unary_not(_int(1))),)
-        with pytest.raises(RuntimeError, match="not: expected bool"):
+        with pytest.raises(AglTypeError, match="not"):
             _execute(body)
 
 
@@ -2691,10 +2838,13 @@ class TestInterpreterM3Stmts:
             _execute(body)
         assert exc_info.value.exc.type_name == "ArithmeticError"
 
-    def test_raise_non_exception_value_raises_runtime(self) -> None:
-        """``raise <int>`` passes typecheck but fails at runtime."""
+    def test_raise_non_exception_value_rejected_statically(self) -> None:
+        """F1: ``raise <int>`` is rejected by the checker (the runtime type guard
+        is now genuinely unreachable)."""
+        from agm.agl.typecheck import AglTypeError
+
         body = (_raise(_int(5)),)
-        with pytest.raises(RuntimeError, match="expected an ExceptionValue"):
+        with pytest.raises(AglTypeError, match="raise"):
             _execute(body)
 
     def test_input_and_type_declarations_are_runtime_noops(self) -> None:

@@ -343,7 +343,9 @@ class TestExecCommandEdgePaths:
         captured = capsys.readouterr()
         # The matched branch ran (no MatchError, since the value is Pass).
         assert captured.out == "passed\n"
-        # The exhaustiveness warning names the missing variant on stderr.
+        # The exhaustiveness warning names the missing variant on stderr, with a
+        # ``warning:`` prefix to disambiguate from errors (F8).
+        assert "warning:" in captured.err
         assert "Non-exhaustive" in captured.err
         assert "Fail" in captured.err
 
@@ -443,8 +445,8 @@ class TestExecCommandWarnings:
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
-        assert "case is non-exhaustive" in captured.err
-        assert "line 7" in captured.err
+        # F8: warnings carry a ``warning:`` prefix on stderr.
+        assert "warning: line 7: case is non-exhaustive" in captured.err
 
     def test_error_diagnostic_still_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -491,8 +493,10 @@ class TestExecCommandWarnings:
             exec_command.run(_exec_args(agl_file))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "unused binding" in captured.err
-        assert "unknown name" in captured.err
+        # F8: the warning carries a ``warning:`` prefix; the error does not.
+        assert "warning: line 2: unused binding" in captured.err
+        assert "line 5: unknown name" in captured.err
+        assert "warning: line 5: unknown name" not in captured.err
 
 
 class TestExecCLIPaths:

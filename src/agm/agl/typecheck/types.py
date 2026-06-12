@@ -235,6 +235,23 @@ def is_json_shaped(value_type: Type) -> bool:
     return False
 
 
+def comparable_types(left: Type, right: Type) -> bool:
+    """Return ``True`` if ``left`` and ``right`` may be compared (design §5.8 r4).
+
+    Equality (``=``, ``!=``) and ordering comparisons require both operands to
+    have the **same** type after the single ``int → decimal`` widening.  Unlike
+    :func:`is_assignable`, ``json`` does **not** absorb JSON-shaped scalars here:
+    ``json = json`` is allowed but ``json`` vs any non-``json`` type is a static
+    error (rule 4 as written).  Records/enums/exceptions compare only with their
+    own exact type.
+    """
+    if left == right:
+        return True
+    # The only cross-type comparison is numeric int↔decimal (either direction).
+    numeric = (IntType, DecimalType)
+    return isinstance(left, numeric) and isinstance(right, numeric)
+
+
 def is_assignable(value_type: Type, target_type: Type) -> bool:
     """Return ``True`` if ``value_type`` is assignable to ``target_type``.
 

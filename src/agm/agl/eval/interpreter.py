@@ -11,6 +11,7 @@ from __future__ import annotations
 import decimal
 from typing import TYPE_CHECKING, TypeVar, assert_never
 
+from agm.agl._text import normalize_newlines
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
@@ -94,6 +95,14 @@ if TYPE_CHECKING:
 
 _Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
 
+# Pinned decimal context for all AgL arithmetic (F7).  AgL semantics must not
+# depend on the host's ambient ``decimal`` context — a host that lowered
+# ``getcontext().prec`` would otherwise change results such as ``1 / 3``.  We
+# evaluate every program under this explicit context (28-digit precision, the
+# stdlib default, with ROUND_HALF_EVEN banker's rounding) via
+# ``decimal.localcontext`` in ``Interpreter.execute``.
+_AGL_DECIMAL_CONTEXT = decimal.Context(prec=28, rounding=decimal.ROUND_HALF_EVEN)
+
 
 def _make_exc_value(type_name: str, message: str, **extra: Value) -> ExceptionValue:
     """Create an ``ExceptionValue`` with ``message`` and optional extra fields."""
@@ -162,8 +171,9 @@ class Interpreter:
         self._type_env = type_env
         # Span offsets index the *normalized* source (universal newlines; see
         # the scanner module docstring), so normalize here to match before any
-        # offset-based slicing.
-        self._source = source.replace("\r\n", "\n").replace("\r", "\n")
+        # offset-based slicing.  Shared helper keeps this identical to the
+        # scanner's normalization without depending on the lexer (F10).
+        self._source = normalize_newlines(source)
         # ``WorkflowRuntime.run`` always passes the merged built-in + registered
         # renderer table (F1).  ``None`` (e.g. direct construction in unit tests
         # that exercise only built-in rendering) falls back to the built-ins.
@@ -182,11 +192,16 @@ class Interpreter:
     def execute(self, root_scope: Scope) -> None:
         """Execute the program body in *root_scope*.
 
+        All arithmetic runs under a pinned 28-digit ``decimal`` context
+        (``_AGL_DECIMAL_CONTEXT``) so AgL semantics never depend on the host's
+        ambient context (F7).
+
         May raise ``AglRaise`` for uncaught AgL exceptions.
         """
         self._root_scope = root_scope
-        for stmt in self._checked.resolved.program.body:
-            self._exec_stmt(stmt, root_scope)
+        with decimal.localcontext(_AGL_DECIMAL_CONTEXT):
+            for stmt in self._checked.resolved.program.body:
+                self._exec_stmt(stmt, root_scope)
 
     # ------------------------------------------------------------------
     # Statement execution
@@ -344,7 +359,9 @@ class Interpreter:
                     self._exec_stmt(s, branch_scope)
                 return
             cond = self._eval_expr(branch.cond, scope)
-            if isinstance(cond, BoolValue) and cond.value:
+            # The checker requires every if-condition to be bool (design §4.3),
+            # so this is always a BoolValue.
+            if self._require_bool(cond):
                 branch_scope = Scope(parent=scope)
                 for s in branch.body:
                     self._exec_stmt(s, branch_scope)
@@ -393,7 +410,9 @@ class Interpreter:
         exc_val = self._eval_expr(stmt.exc, scope)
         if isinstance(exc_val, ExceptionValue):
             raise AglRaise(exc_val)
-        raise RuntimeError(
+        # Unreachable: the checker requires an exception-typed operand for
+        # 'raise' (design §8.3).
+        raise AssertionError(  # pragma: no cover
             f"raise: expected an ExceptionValue, got {type(exc_val).__name__}"
         )
 
@@ -448,7 +467,10 @@ class Interpreter:
         operand = self._eval_expr(expr.operand, scope)
         if isinstance(operand, BoolValue):
             return BoolValue(not operand.value)
-        raise RuntimeError(f"not: expected bool, got {type(operand).__name__}")
+        # Unreachable: the checker requires a bool operand for 'not' (design §4.3).
+        raise AssertionError(  # pragma: no cover
+            f"not: expected bool, got {type(operand).__name__}"
+        )
 
     def _eval_unary_neg(self, expr: UnaryNeg, scope: Scope) -> IntValue | DecimalValue:
         operand = self._eval_expr(expr.operand, scope)
@@ -884,16 +906,58 @@ def _to_decimal(value: Value) -> decimal.Decimal:
     raise RuntimeError(f"Not a numeric value: {type(value).__name__}")
 
 
+def _json_eq(left: object, right: object) -> bool:
+    """Compare two JSON-shaped trees with numeric int/decimal equivalence.
+
+    Implements the ``json = json`` semantics of design §5.8/§11.9: JSON numbers
+    compare *numerically* (so ``1`` equals ``1.0`` anywhere inside the tree),
+    but ``bool`` is a distinct JSON kind and never compares equal to a number
+    (avoiding Python's ``True == 1`` conflation).  Containers recurse
+    structurally; ``text`` and ``null`` compare exactly.
+    """
+    # bool first: it must not be conflated with numbers (Python treats bool as a
+    # subclass of int, so ``True == 1`` — guard against that here).
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, (int, decimal.Decimal)) and isinstance(
+        right, (int, decimal.Decimal)
+    ):
+        return decimal.Decimal(left) == decimal.Decimal(right)
+    if isinstance(left, list) and isinstance(right, list):
+        return _json_eq_list(left, right)
+    if isinstance(left, dict) and isinstance(right, dict):
+        return _json_eq_dict(left, right)
+    return left == right
+
+
+def _json_eq_list(left: list[object], right: list[object]) -> bool:
+    """Structural element-wise comparison of two JSON arrays."""
+    if len(left) != len(right):
+        return False
+    return all(_json_eq(left[i], right[i]) for i in range(len(left)))
+
+
+def _json_eq_dict(left: dict[object, object], right: dict[object, object]) -> bool:
+    """Structural comparison of two JSON objects (same keys, equal values)."""
+    if left.keys() != right.keys():
+        return False
+    return all(_json_eq(left[k], right[k]) for k in left)
+
+
 def _value_eq(left: Value, right: Value) -> bool:
     """Value equality with int→decimal widening (design §4.3).
 
     The single source of truth for ``=`` comparison and ``in`` membership, so
     ``IntValue(1)`` equals ``DecimalValue(1)`` consistently across both passes.
+    Two ``json`` values compare their wrapped trees with numeric int/decimal
+    equivalence (design §5.8/§11.9).
     """
     if isinstance(left, IntValue) and isinstance(right, DecimalValue):
         return decimal.Decimal(left.value) == right.value
     if isinstance(left, DecimalValue) and isinstance(right, IntValue):
         return left.value == decimal.Decimal(right.value)
+    if isinstance(left, JsonValue) and isinstance(right, JsonValue):
+        return _json_eq(left.raw, right.raw)
     return left == right
 
 
@@ -1008,7 +1072,9 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
             pat_val = JsonValue(None)
         else:
             assert_never(lit)  # pragma: no cover
-        return value == pat_val, {}
+        # Use ``_value_eq`` so a literal pattern matches with int→decimal widening
+        # (e.g. ``case 1.0 of | 1 =>``), consistent with ``1 = 1.0`` (F5).
+        return _value_eq(value, pat_val), {}
 
     if isinstance(pattern, ConstructorPattern):
         # The type checker only admits constructor patterns against enum
@@ -1030,11 +1096,31 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
 
 
 def _describe_value(value: Value) -> str:
-    """Return a brief human-readable description of *value* for error messages."""
+    """Return the AgL type-name of *value* (design §8.1 ``scrutinee_type``).
+
+    Nominal values (records, enums, exceptions) report their declared type name;
+    built-in values map to their AgL type names (``int``, ``text``, ``bool``,
+    ``decimal``, ``json``, ``list``, ``dict``) rather than leaking the Python
+    runtime class name (F6).
+    """
     if isinstance(value, EnumValue):
         return value.type_name
     if isinstance(value, RecordValue):
         return value.type_name
     if isinstance(value, ExceptionValue):
         return value.type_name
-    return type(value).__name__
+    if isinstance(value, TextValue):
+        return "text"
+    if isinstance(value, IntValue):
+        return "int"
+    if isinstance(value, DecimalValue):
+        return "decimal"
+    if isinstance(value, BoolValue):
+        return "bool"
+    if isinstance(value, JsonValue):
+        return "json"
+    if isinstance(value, ListValue):
+        return "list"
+    # DictValue is the only remaining Value member.
+    assert isinstance(value, DictValue), f"unexpected value kind: {type(value).__name__}"
+    return "dict"

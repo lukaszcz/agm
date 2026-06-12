@@ -937,16 +937,15 @@ class TestExhaustivenessWarnings:
         )
         assert _warnings(checked) == []
 
-    def test_literal_pattern_branch_covers_nothing(self) -> None:
-        # A literal pattern (here a string) can syntactically appear against an
-        # enum scrutinee but never matches a variant, so it contributes no
-        # coverage: ``Fail`` is still reported as missing.
-        checked = accept_type(
+    def test_literal_pattern_incompatible_with_enum_scrutinee_rejected(self) -> None:
+        # F3/F5: a literal pattern's type must be compatible with the scrutinee's
+        # static type.  A text literal against an enum scrutinee can never match,
+        # so it is a static error (consistent with rule 4), not a dead arm.
+        err = reject_type(
             _ENUM_PRELUDE + 'case r of\n  | Pass => pass\n  | "x" => pass\n'
         )
-        warns = _warnings(checked)
-        assert len(warns) == 1
-        assert "Fail" in warns[0][1]
+        line, msg = diag(err)
+        assert line == 7
 
     def test_case_expr_missing_variant_warns(self) -> None:
         checked = accept_type(
@@ -964,6 +963,91 @@ class TestExhaustivenessWarnings:
             _ENUM_PRELUDE + "let x = case r of\n  | Pass => 1\n  | _ => 2\n"
         )
         assert _warnings(checked) == []
+
+
+class TestConstructorPatternVariantMembership:
+    """F4: a constructor pattern's variant name must belong to the scrutinee's
+    enum (mirroring ``is`` variant-membership checks); a phantom variant is a
+    static error, not a silently-dead arm."""
+
+    def test_unknown_variant_pattern_rejected(self) -> None:
+        err = reject_type(
+            _ENUM_PRELUDE + "case r of\n  | Zed => pass\n  | _ => pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 6
+        assert "Zed" in msg
+
+    def test_other_enums_variant_pattern_rejected(self) -> None:
+        err = reject_type(
+            "enum R\n  | Pass\n  | Fail\n"
+            "enum Q\n  | Other\n"
+            "let r: R = Pass\n"
+            "case r of\n  | Other => pass\n  | _ => pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 8
+        assert "Other" in msg
+
+    def test_qualified_wrong_enum_pattern_rejected(self) -> None:
+        err = reject_type(
+            "enum R\n  | Pass\n  | Fail\n"
+            "enum Q\n  | Other\n"
+            "let r: R = Pass\n"
+            "case r of\n  | Q.Other => pass\n  | _ => pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 8
+
+    def test_payload_pattern_unknown_variant_rejected(self) -> None:
+        err = reject_type(
+            "enum R\n  | Pass\n  | Fail(reason: text)\n"
+            "let r: R = Pass\n"
+            "case r of\n  | Zed(reason) => pass\n  | _ => pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 6
+        assert "Zed" in msg
+
+    def test_literal_pattern_compatible_with_int_scrutinee_accepted(self) -> None:
+        """F5: int literal patterns against an int scrutinee are valid."""
+        r = accept_type("let n = 1\ncase n of\n  | 0 => pass\n  | 1 => pass\n  | _ => pass\n")
+        assert r.resolved.program is not None
+
+    def test_literal_pattern_decimal_vs_int_scrutinee_accepted(self) -> None:
+        """F5: a decimal literal pattern is compatible with an int scrutinee
+        (consistent with ``1 = 1.0`` widening)."""
+        r = accept_type(
+            "let n = 1\ncase n of\n  | 1.0 => pass\n  | _ => pass\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_literal_pattern_int_vs_text_scrutinee_rejected(self) -> None:
+        """F5: an int literal pattern against a text scrutinee is a static error
+        (same machinery as F3 rule 4)."""
+        err = reject_type('let s = "x"\ncase s of\n  | 1 => pass\n  | _ => pass\n')
+        line, msg = diag(err)
+        assert line == 3
+
+    def test_literal_pattern_int_vs_json_scrutinee_rejected(self) -> None:
+        """F3: a scalar literal pattern against a json scrutinee is a static error
+        (json compares only with json)."""
+        err = reject_type(
+            "let j: json = 1\ncase j of\n  | 5 => pass\n  | _ => pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 3
+
+    def test_phantom_variant_no_longer_suppresses_exhaustiveness(self) -> None:
+        """A phantom variant pattern previously counted as covering a variant and
+        could suppress the non-exhaustive warning; now it is rejected outright so
+        the suppression cannot happen.  (Exhaustiveness accounting only ever sees
+        real variants.)"""
+        # ``Zed`` is phantom; it must be a hard error rather than counting toward
+        # coverage of the genuine ``Fail`` variant.
+        err = reject_type(_ENUM_PRELUDE + "case r of\n  | Pass => pass\n  | Zed => pass\n")
+        line, msg = diag(err)
+        assert "Zed" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -1080,6 +1164,35 @@ class TestOperators:
         err = reject_type('let x = (1 = "one")')
         line, msg = diag(err)
         assert line == 1
+
+    def test_eq_int_decimal_widening_accepted(self) -> None:
+        """F3 rule 4: int and decimal compare after widening."""
+        r = parse_resolve_check("let x = (1 = 1.0)")
+        assert r.resolved.program is not None
+
+    def test_eq_json_vs_json_accepted(self) -> None:
+        """F3 rule 4: json = json is fine."""
+        r = parse_resolve_check("let a: json = 1\nlet b: json = 2\nlet x = (a = b)")
+        assert r.resolved.program is not None
+
+    def test_eq_json_vs_int_rejected(self) -> None:
+        """F3 rule 4: json vs non-json is a static error (the bidirectional
+        is_assignable previously accepted this because json accepts int)."""
+        err = reject_type("let a: json = 1\nlet x = (a = 5)")
+        line, msg = diag(err)
+        assert line == 2
+
+    def test_eq_int_vs_json_rejected(self) -> None:
+        """F3 rule 4: order does not matter — int vs json is still rejected."""
+        err = reject_type("let a: json = 1\nlet x = (5 = a)")
+        line, msg = diag(err)
+        assert line == 2
+
+    def test_lt_json_vs_int_rejected(self) -> None:
+        """F3 rule 4: ordering comparison json vs non-json is a static error."""
+        err = reject_type("let a: json = 1\nlet x = (a < 5)")
+        line, msg = diag(err)
+        assert line == 2
 
     def test_in_bad_rhs(self) -> None:
         err = reject_type("let x = 1 in 2")
@@ -1717,20 +1830,71 @@ class TestCheckerStatements:
         assert r.resolved.program is not None
 
     def test_raise_non_exception_expr(self) -> None:
-        """Raising a non-Exception expression is not a checker error (the checker
-        only rejects the abstract ``Exception`` base)."""
-        r = accept_type('raise "oops"\n')
+        """F1: raising a non-exception value is a static error; the operand must
+        have an exception type (design §8.3)."""
+        err = reject_type('raise "oops"\n')
+        line, msg = diag(err)
+        assert line == 1
+        assert "exception" in msg.lower()
+
+    def test_raise_non_exception_int(self) -> None:
+        """F1: ``raise 5`` is rejected (would crash the host otherwise)."""
+        err = reject_type("raise 5\n")
+        line, msg = diag(err)
+        assert line == 1
+        assert "exception" in msg.lower()
+
+    def test_raise_abstract_base_construction_rejected(self) -> None:
+        """F2: the CONSTRUCTION of the abstract ``Exception`` base is rejected at
+        the constructor level (mirrors tests/agl/rejections fixture)."""
+        err = reject_type('raise Exception(message: "x")\n')
+        line, msg = diag(err)
+        assert line == 1
+        assert "Exception" in msg
+
+    def test_rethrow_wildcard_binder_accepted(self) -> None:
+        """F2: re-raising a wildcard-caught binder (typed as the abstract
+        ``Exception`` base) is legal — it rethrows an existing value."""
+        r = accept_type("try\n  pass\ncatch _ as e =>\n  raise e\n")
         assert r.resolved.program is not None
 
-    def test_raise_abstract_base_error(self) -> None:
-        """Re-raising a wildcard-caught binder (abstract ``Exception``) is
-        rejected."""
-        err = reject_type("try\n  pass\ncatch _ as e =>\n  raise e\n")
-        assert "Exception" in err.to_diagnostic().message
+    def test_rethrow_named_exception_accepted(self) -> None:
+        """F2: ``catch Exception as e => raise e`` is legal (rethrow)."""
+        r = accept_type("try\n  pass\ncatch Exception as e =>\n  raise e\n")
+        assert r.resolved.program is not None
 
     def test_do_until(self) -> None:
         r = accept_type("var n: int = 0\ndo[5]\n  pass\nuntil true\n")
         assert r.resolved.program is not None
+
+    def test_until_condition_must_be_bool(self) -> None:
+        """F1: a non-bool ``until`` condition is a static error (the span points
+        at the condition)."""
+        err = reject_type("var n: int = 0\ndo[2]\n  pass\nuntil 1 + 1\n")
+        line, msg = diag(err)
+        assert line == 4
+        assert "bool" in msg.lower()
+
+    def test_if_condition_must_be_bool(self) -> None:
+        """F1: a non-bool ``if`` condition is a static error."""
+        err = reject_type('if 5 =>\n  print "x"\n')
+        line, msg = diag(err)
+        assert line == 1
+        assert "bool" in msg.lower()
+
+    def test_elif_condition_must_be_bool(self) -> None:
+        """F1: every branch condition must be bool, not only the first."""
+        err = reject_type('if true => pass\n| 5 => pass\n')
+        line, msg = diag(err)
+        assert line == 2
+        assert "bool" in msg.lower()
+
+    def test_not_operand_must_be_bool(self) -> None:
+        """F1: ``not`` requires a bool operand."""
+        err = reject_type("print not 5\n")
+        line, msg = diag(err)
+        assert line == 1
+        assert "bool" in msg.lower()
 
     def test_if_stmt_with_else(self) -> None:
         r = accept_type("if true => pass | else => pass\n")

@@ -434,6 +434,17 @@ Exit codes:
 | `1` | Pre-execution failure: unreadable file, static lex/parse/scope/typecheck diagnostics, host configuration error, or input validation failure |
 | `2` | The workflow executed but ended with an uncaught AgL exception |
 
+Diagnostics and warnings:
+
+- Error-severity diagnostics (static lex/parse/scope/typecheck errors, host
+  configuration errors, input validation failures) and uncaught AgL exceptions
+  are printed to stderr and determine the exit code per the table above.
+- Advisory **warnings** (for example a non-exhaustive `case` over an enum that
+  omits some variants) are a separate channel. They are printed to stderr with a
+  `warning:` prefix (`warning: line N: message`) to disambiguate them from
+  errors, and they never affect the exit code — the program still runs to
+  completion. Program `print` output goes to stdout, kept clean of diagnostics.
+
 Config (`[exec]` section in `config.toml`):
 
 ```toml

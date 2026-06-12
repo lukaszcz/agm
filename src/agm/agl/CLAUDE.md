@@ -30,6 +30,14 @@ builder). Do NOT mutate frozen AST nodes, and do NOT use `id()` hashing. The
 side tables live in `ResolvedProgram` (scope pass output) and `CheckedProgram`
 (typecheck pass output).
 
+## Decimal arithmetic context
+
+AgL semantics must not depend on the host's ambient `decimal` context. The
+evaluator (`agm.agl.eval.interpreter`) runs every program under a pinned
+`decimal.Context` (`_AGL_DECIMAL_CONTEXT`: 28-digit precision, `ROUND_HALF_EVEN`)
+via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
+`getcontext().prec` would otherwise change results such as `1 / 3`.
+
 ## Package layout and test locations
 
 | Package | Component | Tests |

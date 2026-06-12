@@ -7,7 +7,9 @@ print diagnostics to stderr, and exit per the exit-code contract.
 
 Warnings (``result.warnings``) and error diagnostics (``result.diagnostics``)
 are two separate channels: warnings are printed to stderr like errors but never
-affect the exit code; only error-severity diagnostics yield exit 1.
+affect the exit code; only error-severity diagnostics yield exit 1.  Warnings
+carry a ``warning:`` prefix (``warning: line N: message``) to disambiguate them
+from errors on the shared stderr channel.
 
 Exit-code contract (plan §10.1):
     0  success (or a clean ``--dry-run`` static check)
@@ -66,8 +68,10 @@ def run(args: ExecArgs) -> None:
 
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.
+    # Warnings carry a ``warning:`` prefix to disambiguate them from error
+    # diagnostics on the shared stderr channel (F8).
     for diag in result.warnings:
-        print(f"line {diag.line}: {diag.message}", file=sys.stderr)
+        print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
 
     if result.ok:
         # Print the static call-site inventory when running under --dry-run.

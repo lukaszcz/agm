@@ -288,15 +288,30 @@ EXCEPTION_BASE = ExceptionType(
     },
 )
 
-# Concrete built-in exceptions (M1 subset; full schemas land in M4).
+# Concrete built-in exceptions — exact §8.1 table.
+# Every exception includes the base fields (message, trace_id) plus the
+# additional fields listed in the design's "Additional fields" section.
+#
+# Changes from prior draft vs §8.1:
+#   - AgentCallError: added agent: text and metadata: json (§8.1 §0 resolution 11)
+#   - UndefinedVariableError: added with name: text (§8.1)
+#   - ImmutableBindingError: added with name: text, operation: text (§8.1)
+#   - ValidationError: REMOVED — §8.1 does not list it as a catchable exception;
+#     agm.agl.runtime.request.ValidationError is a Python-level record shape
+#     embedded in AgentParseError.validation_errors (design §7.5), not an AgL type.
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "Exception": EXCEPTION_BASE,
+    # §8.1 AgentCallError: agent/cause/metadata (§0 resolution 11: cause is
+    # enumerated "spawn_failure"|"nonzero_exit"|"timeout"; metadata carries
+    # exit code, stderr tail, elapsed — all stored in the json field).
     "AgentCallError": ExceptionType(
         name="AgentCallError",
         fields={
             "message": TextType(),
             "trace_id": TextType(),
+            "agent": TextType(),
             "cause": TextType(),
+            "metadata": JsonType(),
         },
     ),
     "AgentParseError": ExceptionType(
@@ -312,6 +327,18 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "validation_errors": JsonType(),
             "attempts": IntType(),
             "metadata": JsonType(),
+        },
+    ),
+    "ExecError": ExceptionType(
+        name="ExecError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "command": TextType(),
+            "exit_code": IntType(),
+            "stdout": TextType(),
+            "stderr": TextType(),
+            "timed_out": BoolType(),
         },
     ),
     "MaxIterationsExceeded": ExceptionType(
@@ -334,6 +361,13 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "scrutinee": JsonType(),
         },
     ),
+    "TypeError": ExceptionType(
+        name="TypeError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+        },
+    ),
     "ArithmeticError": ExceptionType(
         name="ArithmeticError",
         fields={
@@ -342,34 +376,28 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "operation": TextType(),
         },
     ),
-    "ExecError": ExceptionType(
-        name="ExecError",
+    # §8.1: statically prevented in v1 (scope/typecheck reject set on immutable
+    # bindings and undeclared names), but still listed as catchable runtime
+    # exceptions for any runtime paths that bypass the static passes.
+    "UndefinedVariableError": ExceptionType(
+        name="UndefinedVariableError",
         fields={
             "message": TextType(),
             "trace_id": TextType(),
-            "command": TextType(),
-            "exit_code": IntType(),
-            "stdout": TextType(),
-            "stderr": TextType(),
-            "timed_out": BoolType(),
+            "name": TextType(),
+        },
+    ),
+    "ImmutableBindingError": ExceptionType(
+        name="ImmutableBindingError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "name": TextType(),
+            "operation": TextType(),
         },
     ),
     "Abort": ExceptionType(
         name="Abort",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
-    "ValidationError": ExceptionType(
-        name="ValidationError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
-    "TypeError": ExceptionType(
-        name="TypeError",
         fields={
             "message": TextType(),
             "trace_id": TextType(),

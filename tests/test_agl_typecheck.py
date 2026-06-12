@@ -2472,3 +2472,296 @@ class TestCheckerViaAstRemaining:
         )
         with pytest.raises(AssertionError):
             checker._require_binding_type(ref)
+
+
+# ---------------------------------------------------------------------------
+# M4b: §8.1 exception-schema conformance (catchability matrix)
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinExceptionSchemaConformance:
+    """§8.1 normative table: every exception type exists with the right fields.
+
+    Each test drives the catchability matrix: (a) the type name is registered,
+    (b) ``catch TypeName as e`` type-checks, (c) every documented field is
+    accessible via ``e.field``, and (d) no undocumented fields exist.
+    """
+
+    def _assert_exception_fields(
+        self, exc_name: str, expected_fields: dict[str, type]
+    ) -> None:
+        """Assert *exc_name* has exactly *expected_fields* (names + AgL type kinds)."""
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, ExceptionType
+
+        exc_type = BUILTIN_EXCEPTIONS.get(exc_name)
+        assert exc_type is not None, f"{exc_name} not in BUILTIN_EXCEPTIONS"
+        assert isinstance(exc_type, ExceptionType)
+        actual = {name: type(t) for name, t in exc_type.fields.items()}
+        assert actual == expected_fields, (
+            f"{exc_name}: expected fields {expected_fields}, got {actual}"
+        )
+
+    def test_exception_base_has_message_and_trace_id_only(self) -> None:
+        """§8.1: Exception base has exactly message: text and trace_id: text."""
+        from agm.agl.typecheck.types import TextType
+
+        self._assert_exception_fields(
+            "Exception",
+            {"message": TextType, "trace_id": TextType},
+        )
+
+    def test_agent_call_error_fields(self) -> None:
+        """§8.1: AgentCallError has agent/cause/metadata + base fields."""
+        from agm.agl.typecheck.types import JsonType, TextType
+
+        self._assert_exception_fields(
+            "AgentCallError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "agent": TextType,
+                "cause": TextType,
+                "metadata": JsonType,
+            },
+        )
+
+    def test_agent_parse_error_fields(self) -> None:
+        """§8.1: AgentParseError full field set."""
+        from agm.agl.typecheck.types import IntType, JsonType, TextType
+
+        self._assert_exception_fields(
+            "AgentParseError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "agent": TextType,
+                "target_type": TextType,
+                "expected_schema": JsonType,
+                "raw": TextType,
+                "normalized_raw": TextType,
+                "validation_errors": JsonType,
+                "attempts": IntType,
+                "metadata": JsonType,
+            },
+        )
+
+    def test_exec_error_fields(self) -> None:
+        """§8.1: ExecError has command/exit_code/stdout/stderr/timed_out."""
+        from agm.agl.typecheck.types import BoolType, IntType, TextType
+
+        self._assert_exception_fields(
+            "ExecError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "command": TextType,
+                "exit_code": IntType,
+                "stdout": TextType,
+                "stderr": TextType,
+                "timed_out": BoolType,
+            },
+        )
+
+    def test_max_iterations_exceeded_fields(self) -> None:
+        """§8.1: MaxIterationsExceeded has limit/condition/last_condition_value/metadata."""
+        from agm.agl.typecheck.types import BoolType, IntType, JsonType, TextType
+
+        self._assert_exception_fields(
+            "MaxIterationsExceeded",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "limit": IntType,
+                "condition": TextType,
+                "last_condition_value": BoolType,
+                "metadata": JsonType,
+            },
+        )
+
+    def test_match_error_fields(self) -> None:
+        """§8.1: MatchError has scrutinee_type: text, scrutinee: json."""
+        from agm.agl.typecheck.types import JsonType, TextType
+
+        self._assert_exception_fields(
+            "MatchError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "scrutinee_type": TextType,
+                "scrutinee": JsonType,
+            },
+        )
+
+    def test_arithmetic_error_fields(self) -> None:
+        """§8.1: ArithmeticError has operation: text."""
+        from agm.agl.typecheck.types import TextType
+
+        self._assert_exception_fields(
+            "ArithmeticError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "operation": TextType,
+            },
+        )
+
+    def test_undefined_variable_error_fields(self) -> None:
+        """§8.1: UndefinedVariableError has name: text."""
+        from agm.agl.typecheck.types import TextType
+
+        self._assert_exception_fields(
+            "UndefinedVariableError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "name": TextType,
+            },
+        )
+
+    def test_immutable_binding_error_fields(self) -> None:
+        """§8.1: ImmutableBindingError has name: text and operation: text."""
+        from agm.agl.typecheck.types import TextType
+
+        self._assert_exception_fields(
+            "ImmutableBindingError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+                "name": TextType,
+                "operation": TextType,
+            },
+        )
+
+    def test_type_error_fields(self) -> None:
+        """§8.1: TypeError has base fields only (no additional fields listed)."""
+        from agm.agl.typecheck.types import TextType
+
+        self._assert_exception_fields(
+            "TypeError",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+            },
+        )
+
+    def test_abort_fields(self) -> None:
+        """§8.1: Abort has base fields only (message is its sole declared field)."""
+        from agm.agl.typecheck.types import TextType
+
+        self._assert_exception_fields(
+            "Abort",
+            {
+                "message": TextType,
+                "trace_id": TextType,
+            },
+        )
+
+    def test_validation_error_not_a_catchable_exception(self) -> None:
+        """ValidationError is NOT listed in §8.1 — it is a Python-level record
+        inside AgentParseError.validation_errors, not a catchable AgL exception.
+        """
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS
+
+        assert "ValidationError" not in BUILTIN_EXCEPTIONS
+
+    def test_no_extra_exception_names(self) -> None:
+        """§8.1 exact name set — no exceptions beyond the 10 listed (+ base)."""
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS
+
+        expected = frozenset({
+            "Exception",
+            "AgentCallError",
+            "AgentParseError",
+            "ExecError",
+            "MaxIterationsExceeded",
+            "MatchError",
+            "TypeError",
+            "ArithmeticError",
+            "UndefinedVariableError",
+            "ImmutableBindingError",
+            "Abort",
+        })
+        assert frozenset(BUILTIN_EXCEPTIONS.keys()) == expected
+
+    # --- Catchability: catch TypeName → field access type-checks ---
+
+    def test_catch_agent_call_error_field_agent(self) -> None:
+        """§8.1 catchability: AgentCallError.agent is well-typed under catch."""
+        r = accept_type(
+            "try\n  pass\ncatch AgentCallError as e =>\n  print e.agent\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_agent_call_error_field_cause(self) -> None:
+        r = accept_type(
+            "try\n  pass\ncatch AgentCallError as e =>\n  print e.cause\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_agent_call_error_field_metadata(self) -> None:
+        r = accept_type(
+            "try\n  pass\ncatch AgentCallError as e =>\n  print e.metadata\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_agent_parse_error_fields(self) -> None:
+        """§8.1: every AgentParseError field is accessible under its catch."""
+        for field_name in (
+            "agent", "target_type", "expected_schema", "raw",
+            "normalized_raw", "validation_errors", "attempts", "metadata",
+        ):
+            r = accept_type(
+                "try\n  pass\n"
+                f"catch AgentParseError as e =>\n"
+                f"  print e.{field_name}\n"
+            )
+            assert r.resolved.program is not None, f"field {field_name!r} not accessible"
+
+    def test_catch_undefined_variable_error(self) -> None:
+        """§8.1: UndefinedVariableError is catchable with name field."""
+        r = accept_type(
+            "try\n  pass\ncatch UndefinedVariableError as e =>\n  print e.name\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_immutable_binding_error_name(self) -> None:
+        """§8.1: ImmutableBindingError.name is accessible."""
+        r = accept_type(
+            "try\n  pass\ncatch ImmutableBindingError as e =>\n  print e.name\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_immutable_binding_error_operation(self) -> None:
+        """§8.1: ImmutableBindingError.operation is accessible."""
+        r = accept_type(
+            "try\n  pass\ncatch ImmutableBindingError as e =>\n  print e.operation\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_exception_base_only_base_fields(self) -> None:
+        """§8.1: catch Exception as e → only base fields accessible."""
+        r = accept_type(
+            "try\n  pass\ncatch Exception as e =>\n  print e.message\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_exception_base_subtype_field_rejected(self) -> None:
+        """§8.1: accessing e.raw under catch Exception is a static error."""
+        err = reject_type(
+            "try\n  pass\ncatch Exception as e =>\n  print e.raw\n"
+        )
+        assert "raw" in err.to_diagnostic().message
+
+    def test_catch_wildcard_base_fields_accessible(self) -> None:
+        """§8.1: catch _ as e → only base fields (message/trace_id) accessible."""
+        r = accept_type(
+            "try\n  pass\ncatch _ as e =>\n  print e.message\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_catch_wildcard_subtype_field_rejected(self) -> None:
+        """§8.1: accessing subtype field under catch _ is a static error."""
+        err = reject_type(
+            "try\n  pass\ncatch _ as e =>\n  print e.raw\n"
+        )
+        assert "raw" in err.to_diagnostic().message

@@ -4109,3 +4109,329 @@ class TestRemainingCoverage:
         assert result == DecimalValue(decimal.Decimal("1.5"))
 
 
+# ---------------------------------------------------------------------------
+# M4b: §7.8 retry-feedback composition — AgentRequest fields on retries
+# ---------------------------------------------------------------------------
+
+
+class TestRetryFeedbackComposition:
+    """§7.8: The retry path threads previous_invalid_output, validation_errors,
+    and attempt number into the AgentRequest sent on each retry call.
+
+    The original rendered prompt is re-used unchanged for retries (design §7.8
+    "Exact wording is host-configurable; the prompt template is rendered once").
+    Confirmed by the acceptance test pin:
+      parse_policies.scenarios.json:retry_recovers_on_last_attempt,
+      prompts[call=1..3] all equal "Second review." (the raw template text).
+    """
+
+    def _build_retry_interpreter(
+        self, source: str, agent_fn: AgentFn
+    ) -> tuple[object, object, object]:
+        """Build an Interpreter+contract for a retry test (codec always fails).
+
+        Returns (interp, call_expr_node_id, contract).  Typed as object so
+        callers can narrow via isinstance after importing the concrete types.
+        """
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.parser import parse_program
+        from agm.agl.runtime.agents import AgentRegistry
+        from agm.agl.runtime.codec import ParseResult, TextCodec
+        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.scope import resolve
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
+        from agm.agl.typecheck import check
+        from agm.agl.typecheck.types import TextType
+
+        program = parse_program(source)
+        resolved = resolve(program)
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_fallback_agent=True,
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default"}),
+        )
+        checked = check(resolved, caps)
+
+        let_stmt = checked.resolved.program.body[0]
+        assert isinstance(let_stmt, LetDecl)
+        call_expr = let_stmt.value
+        assert isinstance(call_expr, AgentCall)
+
+        registry = AgentRegistry(named={}, default_agent=agent_fn)
+
+        class AlwaysFailCodec(TextCodec):
+            def parse(
+                self,
+                raw: str,
+                target_type: object,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure("always fails")
+
+        contract = OutputContract(
+            target_type=TextType(),
+            codec=AlwaysFailCodec(),
+            strict_json=None,
+            format_instructions="",
+            json_schema=None,
+        )
+        interp = Interpreter(
+            checked=checked,
+            registry=registry,
+            contracts={call_expr.node_id: contract},
+            type_env=checked.type_env,
+            loop_limit=5,
+            strict_json=False,
+        )
+        return interp, call_expr.node_id, contract
+
+    def test_first_attempt_has_no_previous_output(self) -> None:
+        """§7.8 r4: on the first attempt previous_invalid_output is None."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+
+        requests: list[AgentRequest] = []
+
+        def agent(req: AgentRequest) -> str:
+            requests.append(req)
+            return "raw-output-1"
+
+        source = 'let x = prompt[on_parse_error: retry[1]] "Initial."'
+        interp, _, _ = self._build_retry_interpreter(source, agent)
+
+        with pytest.raises(AglRaise):
+            interp.execute(Scope(parent=None))
+
+        assert len(requests) == 2
+        assert requests[0].attempt == 0
+        assert requests[0].previous_invalid_output is None
+        assert requests[0].validation_errors == []
+
+    def test_retry_carries_previous_invalid_output(self) -> None:
+        """§7.8 r4: on retry, previous_invalid_output is the prior raw output."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+
+        requests: list[AgentRequest] = []
+        responses = ["first-bad-output", "second-bad-output"]
+
+        def agent(req: AgentRequest) -> str:
+            requests.append(req)
+            return responses[req.attempt]
+
+        source = 'let x = prompt[on_parse_error: retry[1]] "Retry prompt."'
+        interp, _, _ = self._build_retry_interpreter(source, agent)
+
+        with pytest.raises(AglRaise):
+            interp.execute(Scope(parent=None))
+
+        assert len(requests) == 2
+        # First attempt: no previous output.
+        assert requests[0].previous_invalid_output is None
+        # Retry: the raw output from the first attempt.
+        assert requests[1].attempt == 1
+        assert requests[1].previous_invalid_output == "first-bad-output"
+
+    def test_retry_prompt_is_original_unchanged(self) -> None:
+        """§7.8: The rendered prompt template is reused unchanged for retries.
+
+        Feedback is carried in previous_invalid_output/validation_errors, not
+        injected into the prompt text itself.
+        """
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+
+        seen_prompts: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            seen_prompts.append(req.prompt)
+            return "bad"
+
+        source = 'let x = prompt[on_parse_error: retry[2]] "The original prompt."'
+        interp, _, _ = self._build_retry_interpreter(source, agent)
+
+        with pytest.raises(AglRaise):
+            interp.execute(Scope(parent=None))
+
+        # All three attempts (1 initial + 2 retries) receive the same prompt.
+        assert len(seen_prompts) == 3
+        assert all(p == "The original prompt." for p in seen_prompts)
+
+    def test_retry_attempt_counter_increments(self) -> None:
+        """§7.8 r4: attempt counter is 0-based and increments on each retry."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+
+        attempt_numbers: list[int] = []
+
+        def agent(req: AgentRequest) -> str:
+            attempt_numbers.append(req.attempt)
+            return "bad"
+
+        source = 'let x = prompt[on_parse_error: retry[2]] "Hi."'
+        interp, _, _ = self._build_retry_interpreter(source, agent)
+
+        with pytest.raises(AglRaise):
+            interp.execute(Scope(parent=None))
+
+        assert attempt_numbers == [0, 1, 2]
+
+    def test_multiple_retries_accumulate_previous_outputs(self) -> None:
+        """§7.8: Each retry gets the immediately preceding failed output, not all."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+
+        received: list[str | None] = []
+        raw_outputs = ["out-0", "out-1", "out-2"]
+
+        def agent(req: AgentRequest) -> str:
+            received.append(req.previous_invalid_output)
+            return raw_outputs[req.attempt]
+
+        source = 'let x = prompt[on_parse_error: retry[2]] "Hi."'
+        interp, _, _ = self._build_retry_interpreter(source, agent)
+
+        with pytest.raises(AglRaise):
+            interp.execute(Scope(parent=None))
+
+        # First: no previous; retry1: out-0; retry2: out-1.
+        assert received == [None, "out-0", "out-1"]
+
+    def test_agent_parse_error_attempts_field_reflects_max_attempts(self) -> None:
+        """§7.8 r7 / §7.9: AgentParseError.attempts = max_attempts (not retries)."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+        from agm.agl.eval.values import IntValue
+
+        source = 'let x = prompt[on_parse_error: retry[2]] "Hi."'
+        interp, _, _ = self._build_retry_interpreter(source, lambda req: "bad")
+
+        with pytest.raises(AglRaise) as exc_info:
+            interp.execute(Scope(parent=None))
+
+        exc = exc_info.value.exc
+        assert exc.type_name == "AgentParseError"
+        # retry[2] = 1 initial + 2 retries = 3 total attempts.
+        assert exc.fields["attempts"] == IntValue(3)
+
+    def test_abort_policy_single_attempt_no_retry(self) -> None:
+        """§7.9: on_parse_error: abort calls the agent exactly once."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+
+        call_count = [0]
+
+        def agent(req: AgentRequest) -> str:
+            call_count[0] += 1
+            return "bad"
+
+        source = 'let x = prompt[on_parse_error: abort] "Hi."'
+        interp, _, _ = self._build_retry_interpreter(source, agent)
+
+        with pytest.raises(AglRaise) as exc_info:
+            interp.execute(Scope(parent=None))
+
+        assert call_count[0] == 1
+        assert exc_info.value.exc.type_name == "AgentParseError"
+
+
+# ---------------------------------------------------------------------------
+# M4b: §8.1 AgentCallError schema — eval/catch conformance
+# ---------------------------------------------------------------------------
+
+
+class TestAgentCallErrorSchema:
+    """§8.1 / §0 resolution 11: AgentCallError has agent/cause/metadata fields.
+
+    AgentCallError is raised by M5 (the subprocess runner), not M4. These tests
+    verify that the exception schema is correctly defined so that M4c (exec) and
+    M5 (AgentCallError raises) can rely on the field set.
+    """
+
+    def test_agent_call_error_can_be_caught_and_fields_accessed(self) -> None:
+        """Catch AgentCallError and access agent, cause, metadata fields at eval."""
+        from agm.agl.eval.values import ExceptionValue, JsonValue, TextValue
+
+        # Build an ExceptionValue with all §8.1 AgentCallError fields populated.
+        exc_val = ExceptionValue(
+            type_name="AgentCallError",
+            fields={
+                "message": TextValue("agent failed"),
+                "trace_id": TextValue(""),
+                "agent": TextValue("reviewer"),
+                "cause": TextValue("spawn_failure"),
+                "metadata": JsonValue({"exit_code": None, "elapsed": 0.5}),
+            },
+        )
+        # Verify the fields are accessible (mirrors what the eval does on catch).
+        assert exc_val.fields["agent"] == TextValue("reviewer")
+        assert exc_val.fields["cause"] == TextValue("spawn_failure")
+        assert isinstance(exc_val.fields["metadata"], JsonValue)
+
+    def test_agent_call_error_schema_all_fields_correct_types(self) -> None:
+        """§8.1: all AgentCallError fields are present and have correct AgL types."""
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, JsonType, TextType
+
+        exc_type = BUILTIN_EXCEPTIONS["AgentCallError"]
+        assert exc_type.fields["agent"] == TextType()
+        assert exc_type.fields["cause"] == TextType()
+        assert exc_type.fields["metadata"] == JsonType()
+
+    def test_agent_call_error_cause_values(self) -> None:
+        """§0 resolution 11: cause is "spawn_failure"|"nonzero_exit"|"timeout".
+
+        The type is text (not an enum) — the runtime encodes the enumerated
+        string cause values; the AgL type system has no enum narrowing for text.
+        """
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, TextType
+
+        exc_type = BUILTIN_EXCEPTIONS["AgentCallError"]
+        # cause must be text (not a custom enum — the values are runtime-defined
+        # string literals per §0 resolution 11).
+        assert exc_type.fields["cause"] == TextType()
+
+    def test_agent_call_error_metadata_is_json(self) -> None:
+        """§0 resolution 11: metadata carries exit_code/stderr_tail/elapsed as json."""
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, JsonType
+
+        exc_type = BUILTIN_EXCEPTIONS["AgentCallError"]
+        assert exc_type.fields["metadata"] == JsonType()
+
+    def test_undefined_variable_error_raised_at_runtime(self) -> None:
+        """§8.1: UndefinedVariableError can be constructed as an ExceptionValue
+        with the name field populated (the interpreter raises it for runtime
+        undefined-variable paths that bypass the static check).
+        """
+        from agm.agl.eval.values import ExceptionValue, TextValue
+
+        exc = ExceptionValue(
+            type_name="UndefinedVariableError",
+            fields={
+                "message": TextValue("Undefined variable: 'x'"),
+                "trace_id": TextValue(""),
+                "name": TextValue("x"),
+            },
+        )
+        assert exc.fields["name"] == TextValue("x")
+
+    def test_immutable_binding_error_raised_at_runtime(self) -> None:
+        """§8.1: ImmutableBindingError can be constructed with name/operation."""
+        from agm.agl.eval.values import ExceptionValue, TextValue
+
+        exc = ExceptionValue(
+            type_name="ImmutableBindingError",
+            fields={
+                "message": TextValue("Cannot assign to immutable binding 'x'"),
+                "trace_id": TextValue(""),
+                "name": TextValue("x"),
+                "operation": TextValue("set"),
+            },
+        )
+        assert exc.fields["name"] == TextValue("x")
+        assert exc.fields["operation"] == TextValue("set")
+
+

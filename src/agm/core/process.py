@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import IO, TextIO
@@ -134,40 +135,133 @@ def _read_pipe_chunks(
         output_queue.put((name, None))
 
 
-def run_subprocess(
+def _drain_process_streams(
+    process: subprocess.Popen[bytes],
+    readers: list[threading.Thread],
+    stream_queue: queue.Queue[tuple[str, bytes | None]],
+    *,
+    capture_output: bool,
+    stdout_callback: Callable[[str], None] | None,
+    stderr_callback: Callable[[str], None] | None,
+    idle_timeout: float | None,
+    isolate_process_group: bool,
+    interrupt_cleanup_cmd: list[str] | None,
+    cwd: Path | None,
+    env: dict[str, str] | None,
+) -> tuple[str, str, bool]:
+    """Drain stdout/stderr reader threads and return ``(stdout, stderr, timed_out)``.
+
+    When *idle_timeout* fires the process is killed and ``timed_out=True`` is returned.
+    Any other ``BaseException`` kills the process, runs the cleanup command, and re-raises.
+    """
+    stream_data: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    callbacks: dict[str, Callable[[str], None] | None] = {
+        "stdout": stdout_callback,
+        "stderr": stderr_callback,
+    }
+    timed_out = False
+
+    try:
+        decoders = {
+            "stdout": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+            "stderr": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+        }
+        active_readers = len(readers)
+        last_chunk_time = time.monotonic()
+        while active_readers > 0:
+            try:
+                if idle_timeout is not None:
+                    remaining = idle_timeout - (time.monotonic() - last_chunk_time)
+                    if remaining <= 0:
+                        raise queue.Empty
+                    stream_name, chunk = stream_queue.get(timeout=remaining)
+                else:
+                    stream_name, chunk = stream_queue.get()
+            except queue.Empty:
+                # Idle timeout: no output received within the deadline.
+                if isolate_process_group:
+                    _kill_process_group(process)
+                else:
+                    _terminate_process(process)
+                _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
+                timed_out = True
+                break
+            if chunk is None:
+                active_readers -= 1
+                continue
+
+            last_chunk_time = time.monotonic()
+            text = decoders[stream_name].decode(chunk)
+            if not text:
+                continue
+            if capture_output:
+                stream_data[stream_name].append(text)
+            callback = callbacks[stream_name]
+            if callback is not None:
+                callback(text)
+
+        process.wait()
+
+        for stream_name, decoder in decoders.items():
+            text = decoder.decode(b"", final=True)
+            if not text:
+                continue
+            if capture_output:
+                stream_data[stream_name].append(text)
+            callback = callbacks[stream_name]
+            if callback is not None:
+                callback(text)
+
+        stdout = "".join(stream_data["stdout"])
+        stderr = "".join(stream_data["stderr"])
+    except BaseException:
+        if isolate_process_group:
+            _kill_process_group(process)
+        else:
+            _terminate_process(process)
+        _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
+        raise
+    finally:
+        for reader in readers:
+            reader.join()
+
+    return stdout, stderr, timed_out
+
+
+def _start_process_with_readers(
     cmd: list[str],
     *,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-    capture_output: bool = False,
-    interrupt_cleanup_cmd: list[str] | None = None,
-    stdout_callback: Callable[[str], None] | None = None,
-    stderr_callback: Callable[[str], None] | None = None,
-    isolate_process_group: bool = False,
-    idle_timeout: float | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run a command and clean it up on interrupt.
+    cwd: Path | None,
+    env: dict[str, str] | None,
+    capture_output: bool,
+    stdout_callback: Callable[[str], None] | None,
+    stderr_callback: Callable[[str], None] | None,
+    isolate_process_group: bool,
+    stdin_text: str | None,
+) -> tuple[subprocess.Popen[bytes], list[threading.Thread], queue.Queue[tuple[str, bytes | None]]]:
+    """Spawn the process and start pipe-reader threads; return ``(process, readers, queue)``."""
+    need_stdout_pipe = capture_output or stdout_callback is not None
+    need_stderr_pipe = capture_output or stderr_callback is not None
 
-    When *idle_timeout* is set (in seconds), the process is killed via
-    ``_kill_process_group`` if no output chunk is received for that
-    duration.  Requires *isolate_process_group=True* so the entire
-    process tree can be cleaned up.
-    """
+    stdin_pipe = subprocess.PIPE if stdin_text is not None else None
 
-    process = subprocess.Popen(
+    process: subprocess.Popen[bytes] = subprocess.Popen(
         cmd,
         cwd=cwd,
         env=os.environ if env is None else env,
-        stdout=subprocess.PIPE if capture_output or stdout_callback is not None else None,
-        stderr=subprocess.PIPE if capture_output or stderr_callback is not None else None,
+        stdout=subprocess.PIPE if need_stdout_pipe else None,
+        stderr=subprocess.PIPE if need_stderr_pipe else None,
+        stdin=stdin_pipe,
         text=False,
         start_new_session=isolate_process_group,
     )
 
+    if stdin_text is not None and process.stdin is not None:
+        process.stdin.write(stdin_text.encode())
+        process.stdin.close()
+
     readers: list[threading.Thread] = []
     stream_queue: queue.Queue[tuple[str, bytes | None]] = queue.Queue()
-    stream_data: dict[str, list[str]] = {"stdout": [], "stderr": []}
-    callbacks = {"stdout": stdout_callback, "stderr": stderr_callback}
 
     if process.stdout is not None:
         reader = threading.Thread(
@@ -195,85 +289,73 @@ def run_subprocess(
         reader.start()
         readers.append(reader)
 
-    try:
-        if readers:
-            decoders = {
-                "stdout": codecs.getincrementaldecoder("utf-8")(errors="replace"),
-                "stderr": codecs.getincrementaldecoder("utf-8")(errors="replace"),
-            }
-            active_readers = len(readers)
-            last_chunk_time = time.monotonic()
-            while active_readers > 0:
-                try:
-                    if idle_timeout is not None:
-                        remaining = idle_timeout - (time.monotonic() - last_chunk_time)
-                        if remaining <= 0:
-                            raise queue.Empty
-                        stream_name, chunk = stream_queue.get(timeout=remaining)
-                    else:
-                        stream_name, chunk = stream_queue.get()
-                except queue.Empty:
-                    # Idle timeout: no output received within the deadline.
-                    if isolate_process_group:
-                        _kill_process_group(process)
-                    else:
-                        _terminate_process(process)
-                    _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
-                    print(
-                        f"Idle timeout ({idle_timeout}s) exceeded, "
-                        "process terminated.",
-                        file=sys.stderr,
-                    )
-                    raise SystemExit(124)
-                if chunk is None:
-                    active_readers -= 1
-                    continue
+    return process, readers, stream_queue
 
-                last_chunk_time = time.monotonic()
-                text = decoders[stream_name].decode(chunk)
-                if not text:
-                    continue
-                if capture_output:
-                    stream_data[stream_name].append(text)
-                callback = callbacks[stream_name]
-                if callback is not None:
-                    callback(text)
 
-            process.wait()
+def run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    capture_output: bool = False,
+    interrupt_cleanup_cmd: list[str] | None = None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
+    isolate_process_group: bool = False,
+    idle_timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command and clean it up on interrupt.
 
-            for stream_name, decoder in decoders.items():
-                text = decoder.decode(b"", final=True)
-                if not text:
-                    continue
-                if capture_output:
-                    stream_data[stream_name].append(text)
-                callback = callbacks[stream_name]
-                if callback is not None:
-                    callback(text)
+    When *idle_timeout* is set (in seconds), the process is killed via
+    ``_kill_process_group`` if no output chunk is received for that
+    duration.  Requires *isolate_process_group=True* so the entire
+    process tree can be cleaned up.
+    """
 
-            stdout = "".join(stream_data["stdout"])
-            stderr = "".join(stream_data["stderr"])
-        else:
-            process.wait()
-            stdout = None
-            stderr = None
-    except BaseException:
-        if isolate_process_group:
-            _kill_process_group(process)
-        else:
-            _terminate_process(process)
-        _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
-        raise
-    finally:
-        for reader in readers:
-            reader.join()
-
-    return subprocess.CompletedProcess(
+    process, readers, stream_queue = _start_process_with_readers(
         cmd,
-        process.returncode,
-        stdout,
-        stderr,
+        cwd=cwd,
+        env=env,
+        capture_output=capture_output,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
+        isolate_process_group=isolate_process_group,
+        stdin_text=None,
     )
+
+    if readers:
+        stdout, stderr, timed_out = _drain_process_streams(
+            process,
+            readers,
+            stream_queue,
+            capture_output=capture_output,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
+            idle_timeout=idle_timeout,
+            isolate_process_group=isolate_process_group,
+            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+            cwd=cwd,
+            env=env,
+        )
+        if timed_out:
+            print(
+                f"Idle timeout ({idle_timeout}s) exceeded, "
+                "process terminated.",
+                file=sys.stderr,
+            )
+            raise SystemExit(124)
+        return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+    else:
+        try:
+            process.wait()
+        except BaseException:
+            if isolate_process_group:
+                _kill_process_group(process)
+            else:
+                _terminate_process(process)
+            _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
+            raise
+        return subprocess.CompletedProcess(cmd, process.returncode, None, None)
 
 
 def run_foreground(
@@ -309,20 +391,128 @@ def run_capture(
     isolate_process_group: bool = False,
     idle_timeout: float | None = None,
 ) -> tuple[int, str, str]:
-    """Run a command and capture stdout/stderr."""
+    """Run a command and capture stdout/stderr.
 
-    result = run_subprocess(
+    This is a compatibility adapter over :func:`run_capture_result`.  On idle-timeout
+    it prints a diagnostic to stderr and raises ``SystemExit(124)`` — matching the
+    original behaviour.  Spawn errors re-raise as ``FileNotFoundError``/
+    ``PermissionError``.
+    """
+    result = run_capture_result(
         cmd,
         cwd=cwd,
         env=env,
-        capture_output=True,
+        idle_timeout=idle_timeout,
+        isolate_process_group=isolate_process_group,
         interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         stdout_callback=stdout_callback,
         stderr_callback=stderr_callback,
-        isolate_process_group=isolate_process_group,
-        idle_timeout=idle_timeout,
     )
-    return result.returncode, result.stdout or "", result.stderr or ""
+    if result.spawn_error is not None:
+        raise FileNotFoundError(result.spawn_error)
+    if result.timed_out:
+        print(
+            f"Idle timeout ({idle_timeout}s) exceeded, "
+            "process terminated.",
+            file=sys.stderr,
+        )
+        raise SystemExit(124)
+    rc = result.returncode if result.returncode is not None else 1
+    return rc, result.stdout, result.stderr
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessCaptureResult:
+    """Structured result of a captured subprocess run.
+
+    Semantics:
+    - ``spawn_error`` is set (non-``None``) if and only if the process could not be
+      started (``FileNotFoundError`` or ``PermissionError``); in that case
+      ``returncode`` is ``None`` and both streams are empty.
+    - ``timed_out`` is ``True`` when the idle timeout fired; ``returncode`` then
+      reflects the kill exit code (nonzero).
+    - In all normal-completion cases ``spawn_error`` is ``None``, ``timed_out`` is
+      ``False``, and ``returncode`` is the process exit code.
+    """
+
+    returncode: int | None
+    stdout: str
+    stderr: str
+    elapsed: float
+    timed_out: bool
+    spawn_error: str | None
+
+
+def run_capture_result(
+    cmd: list[str],
+    *,
+    idle_timeout: float | None = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin_text: str | None = None,
+    isolate_process_group: bool = False,
+    interrupt_cleanup_cmd: list[str] | None = None,
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
+) -> ProcessCaptureResult:
+    """Run *cmd* and return a :class:`ProcessCaptureResult`.
+
+    Unlike :func:`run_capture` this function **never** prints to stderr and
+    **never** raises :exc:`SystemExit`.  All outcomes — spawn failure,
+    nonzero exit, and idle-timeout — are represented in the returned
+    :class:`ProcessCaptureResult`.
+
+    Parameters match :func:`run_capture` where applicable:
+    *idle_timeout* (seconds), *cwd*, *env*, *stdin_text*, *isolate_process_group*,
+    *interrupt_cleanup_cmd*, *stdout_callback*, *stderr_callback*.
+    """
+    start = time.monotonic()
+
+    try:
+        process, readers, stream_queue = _start_process_with_readers(
+            cmd,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
+            isolate_process_group=isolate_process_group,
+            stdin_text=stdin_text,
+        )
+    except (FileNotFoundError, PermissionError) as exc:
+        elapsed = time.monotonic() - start
+        return ProcessCaptureResult(
+            returncode=None,
+            stdout="",
+            stderr="",
+            elapsed=elapsed,
+            timed_out=False,
+            spawn_error=str(exc),
+        )
+
+    stdout, stderr, timed_out = _drain_process_streams(
+        process,
+        readers,
+        stream_queue,
+        capture_output=True,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
+        idle_timeout=idle_timeout,
+        isolate_process_group=isolate_process_group,
+        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        cwd=cwd,
+        env=env,
+    )
+
+    elapsed = time.monotonic() - start
+    return ProcessCaptureResult(
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        elapsed=elapsed,
+        timed_out=timed_out,
+        spawn_error=None,
+    )
 
 
 def require_success(

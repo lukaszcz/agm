@@ -27,6 +27,7 @@ from agm.core.process import (
     require_capture,
     require_success,
     run_capture,
+    run_capture_result,
     run_foreground,
     run_subprocess,
 )
@@ -1252,3 +1253,140 @@ class TestRunSubprocessFinalDecoderFlush:
         )
         # stderr final flush emits replacement char into captured output
         assert "\ufffd" in result.stderr
+
+
+class TestRunSubprocessBaseExceptionWithCapture:
+    """Exercise _drain_process_streams' except BaseException path."""
+
+    def test_interrupt_cleanup_cmd_with_capture_output(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BaseException raised while draining captured streams still runs cleanup."""
+        import agm.core.process as process_module
+
+        cleanup_calls: list[tuple[list[str] | None, Path | None, dict[str, str] | None]] = []
+
+        def tracking_cleanup(
+            cmd: list[str] | None,
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+        ) -> None:
+            cleanup_calls.append((cmd, cwd, env))
+
+        monkeypatch.setattr(process_module, "_run_cleanup_command", tracking_cleanup)
+
+        cleanup_cmd = ["echo", "cleanup"]
+
+        def send_interrupt() -> None:
+            time.sleep(0.05)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        interrupter = threading.Thread(target=send_interrupt, daemon=True)
+        interrupter.start()
+
+        with pytest.raises(KeyboardInterrupt):
+            run_subprocess(
+                ["sleep", "30"],
+                capture_output=True,
+                interrupt_cleanup_cmd=cleanup_cmd,
+            )
+
+        interrupter.join(timeout=2)
+
+        assert cleanup_calls, "cleanup command must be invoked on KeyboardInterrupt"
+        called_cmd, _, _ = cleanup_calls[0]
+        assert called_cmd == cleanup_cmd
+
+    def test_interrupt_with_isolate_process_group_and_capture(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BaseException path in _drain_process_streams calls _kill_process_group when isolated."""
+        import agm.core.process as process_module
+
+        killed: list[bool] = []
+        original_kill = process_module._kill_process_group
+
+        def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
+            killed.append(True)
+            original_kill(proc)
+
+        monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
+
+        def send_interrupt() -> None:
+            time.sleep(0.05)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        interrupter = threading.Thread(target=send_interrupt, daemon=True)
+        interrupter.start()
+
+        with pytest.raises(KeyboardInterrupt):
+            run_subprocess(
+                ["sleep", "30"],
+                capture_output=True,
+                isolate_process_group=True,
+            )
+
+        interrupter.join(timeout=2)
+        assert killed, "_kill_process_group must be called"
+
+
+class TestRunSubprocessBaseExceptionIsolatedNoCapture:
+    """Exercise run_subprocess no-readers BaseException path with isolate_process_group."""
+
+    def test_interrupt_with_isolated_process_group_no_capture(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BaseException in no-capture mode with isolate_process_group calls _kill_process_group."""
+        import agm.core.process as process_module
+
+        killed: list[bool] = []
+
+        original_kill = process_module._kill_process_group
+
+        def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
+            killed.append(True)
+            original_kill(proc)
+
+        monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
+
+        def send_interrupt() -> None:
+            time.sleep(0.05)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        interrupter = threading.Thread(target=send_interrupt, daemon=True)
+        interrupter.start()
+
+        with pytest.raises(KeyboardInterrupt):
+            run_subprocess(["sleep", "30"], isolate_process_group=True)
+
+        interrupter.join(timeout=2)
+        assert killed, "_kill_process_group must be called with isolate_process_group"
+
+
+class TestRunCaptureSpawnError:
+    """run_capture re-raises FileNotFoundError on spawn failure."""
+
+    def test_nonexistent_binary_raises_file_not_found(self) -> None:
+        with pytest.raises(FileNotFoundError):
+            run_capture(["/nonexistent/binary/that/does/not/exist"])
+
+
+class TestDrainLoopTimeoutSentinel:
+    """Sentinel drain loop after idle timeout fires."""
+
+    def test_idle_timeout_with_output_before_silence(self) -> None:
+        """When idle timeout fires after the process produced some output, the
+        post-timeout sentinel drain loop runs (some sentinels may already be queued)."""
+        script = (
+            "import sys, time\n"
+            "print('initial')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(60)\n"
+        )
+        result = run_capture_result(
+            [sys.executable, "-c", script],
+            idle_timeout=0.3,
+            isolate_process_group=True,
+        )
+        assert result.timed_out is True

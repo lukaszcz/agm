@@ -566,17 +566,21 @@ class TestTemplates:
 
         assert result.bindings["msg"] == TextValue("say hello")
 
-    def test_template_default_text_uses_boundary_markers(self) -> None:
+    def test_template_in_let_binding_no_boundary_markers(self) -> None:
+        """Templates in ``let`` bindings use console rendering (no boundary tags).
+
+        Boundary-marker rendering (``<dsl-value …>``) is for agent-call prompts
+        only.  Any other template context — ``let``, ``var``, ``set``, ``print``
+        — produces plain text so that bindings contain the value as-is.
+        """
         result = run('let s = "abc"\nlet msg = "x: ${s}"')
         assert result.ok
         from agm.agl.eval.values import TextValue
 
         v = result.bindings["msg"]
         assert isinstance(v, TextValue)
-        # Default rendering for text includes boundary markers
-        assert "<dsl-value" in v.value
-        assert "abc" in v.value
-        assert "</dsl-value>" in v.value
+        assert v.value == "x: abc"
+        assert "<dsl-value" not in v.value
 
     def test_template_with_bool_interp_raw(self) -> None:
         result = run('let b = true\nlet msg = "${b as raw}"')
@@ -685,6 +689,25 @@ class TestPrintRendering:
         assert result.ok
         out = capsys.readouterr().out
         assert out == "99\n"
+
+    def test_print_template_text_no_dsl_tags(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Template interpolation inside ``print`` must NOT add <dsl-value> tags."""
+        result = run('let name = "world"\nprint "hello ${name}"')
+        assert result.ok
+        out = capsys.readouterr().out
+        assert "<dsl-value" not in out
+        assert out == "hello world\n"
+
+    def test_print_template_scalar_interpolation(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Int/decimal/bool values inside a print template are rendered as plain text."""
+        result = run("let n = 42\nprint \"n=${n}\"")
+        assert result.ok
+        out = capsys.readouterr().out
+        assert out == "n=42\n"
 
 
 # ---------------------------------------------------------------------------
@@ -955,6 +978,33 @@ class TestBoundaryRendering:
         run_with_default_agent('let j: json = null\nlet x = prompt "data: ${j}"', agent)
         assert "<dsl-value" in prompts[0]
         assert "null" in prompts[0]
+
+    def test_text_interp_non_varref_has_no_name_attribute(self) -> None:
+        """Non-VarRef interpolation in an agent prompt has no ``name=`` tag.
+
+        When the interpolated expression is not a simple ``VarRef`` (e.g. a
+        field access like ``e.message``), the boundary tag omits the ``name=``
+        attribute (``var_name=None`` in ``_eval_template``).
+        """
+        prompts: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            prompts.append(req.prompt)
+            return "ok"
+
+        # ``e.message`` is a FieldAccess, not a VarRef — exercises the
+        # ``var_name = None`` branch in ``_eval_template``.
+        source = 'let x = prompt "saw ${e.message}"'
+        run_with_default_agent(
+            "record Err\n  message: text\n"
+            'let e = Err(message: "oops")\n' + source,
+            agent,
+        )
+        # The tag should not have a ``name=`` attribute.
+        assert 'name="e"' not in prompts[0]
+        # But the boundary marker is still present for text values.
+        assert "<dsl-value" in prompts[0]
+        assert "oops" in prompts[0]
 
 
 # ---------------------------------------------------------------------------
@@ -2623,6 +2673,14 @@ class TestInterpreterM3Stmts:
         root = _execute(body)
         assert root.snapshot() == {}
 
+    def test_exception_constructor_eval(self) -> None:
+        """Exception constructors (e.g. Abort) are evaluated to ExceptionValue."""
+        result = run('raise Abort(message: "stop now")')
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "Abort"
+        assert result.error.fields["message"] == "stop now"
+
 
 # ---------------------------------------------------------------------------
 # Coverage: let/var type annotation coercion (_exec_let, _exec_var)
@@ -3567,16 +3625,14 @@ class TestConvertInputDecimalToInt:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: template interpolation non-VarRef expr path (lines 408->410)
+# Template evaluation via _eval_expr (non-agent-call context uses console rendering)
 # ---------------------------------------------------------------------------
 
 
 class TestTemplateInterpSegment:
     def test_template_with_text_and_interp_segments(self) -> None:
-        """A template (routed through ``_eval_expr``) concatenates its segments.
-
-        The interpolation here is a non-VarRef (int literal), so the boundary
-        tag has no variable name — the rendered value is the bare scalar.
+        """A template evaluated via ``_eval_expr`` (non-agent-call context) concatenates
+        its segments using console rendering (no ``<dsl-value>`` boundary markers).
         """
         from agm.agl.eval.values import TextValue
 
@@ -3584,6 +3640,7 @@ class TestTemplateInterpSegment:
         value = _eval_value(template)
         assert isinstance(value, TextValue)
         assert value.value == "n=42"
+        assert "<dsl-value" not in value.value
 
 
 # ---------------------------------------------------------------------------

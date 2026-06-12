@@ -1590,12 +1590,21 @@ class TestRecordEnumInputs:
         )
         assert result.ok is True
 
-    def test_structured_input_must_be_string(self) -> None:
-        """Structured (non-text) inputs must be provided as a JSON string."""
+    def test_structured_input_accepts_python_list(self) -> None:
+        """Structured inputs may be provided as a Python list (JSON-compatible)."""
+        from agm.agl.eval.values import IntValue, ListValue
         from agm.agl.runtime.runtime import _convert_input
 
-        with pytest.raises(ValueError, match="JSON string"):
-            _convert_input("xs", [1, 2, 3], ListType(elem=IntType()))
+        result = _convert_input("xs", [1, 2, 3], ListType(elem=IntType()))
+        assert isinstance(result, ListValue)
+        assert result.elements == (IntValue(1), IntValue(2), IntValue(3))
+
+    def test_structured_input_must_be_string_or_compatible(self) -> None:
+        """Structured inputs that are not a string or JSON-compatible Python value raise."""
+        from agm.agl.runtime.runtime import _convert_input
+
+        with pytest.raises(ValueError, match="JSON"):
+            _convert_input("xs", object(), ListType(elem=IntType()))
 
     def test_invalid_structured_input_raises(self) -> None:
         """A JSON string that fails schema validation for the declared type raises."""

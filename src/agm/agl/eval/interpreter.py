@@ -104,6 +104,24 @@ def _make_exc_value(type_name: str, message: str, **extra: Value) -> ExceptionVa
     return ExceptionValue(type_name=type_name, fields=fields)
 
 
+def _make_match_error(subject: Value) -> "ExceptionValue":
+    """Create a ``MatchError`` ``ExceptionValue`` for a non-matching *subject*.
+
+    Populates ``scrutinee_type`` (the AgL type-name string of the value) and
+    ``scrutinee`` (the JSON-shaped representation of the value) per design §8.1.
+    """
+    from agm.agl.runtime.serialize import value_to_json_obj
+
+    scrutinee_type = _describe_value(subject)
+    scrutinee_json = value_to_json_obj(subject)
+    return _make_exc_value(
+        "MatchError",
+        f"Non-exhaustive case: no pattern matched value of type {scrutinee_type!r}",
+        scrutinee_type=TextValue(scrutinee_type),
+        scrutinee=JsonValue(scrutinee_json),
+    )
+
+
 class Interpreter:
     """Tree-walking interpreter for a checked AgL program.
 
@@ -228,8 +246,43 @@ class Interpreter:
         from agm.agl.runtime.render import render_for_console
 
         value = self._eval_expr(stmt.value, scope)
-        text = render_for_console(value)
-        print(text)
+        print(render_for_console(value))
+
+    def _eval_template_for_console(self, expr: Template, scope: Scope) -> str:
+        """Evaluate a template for console (``print``) output.
+
+        Segments without an explicit ``as X`` renderer use
+        :func:`render_for_console` (no boundary markers, plain text for text
+        values).  Segments with an explicit renderer (e.g. ``as bullets``)
+        apply the renderer function directly — the output is never wrapped in
+        ``<dsl-value>`` tags, which are for prompt interpolation only.
+        """
+        from agm.agl.runtime.render import render_for_console, render_for_prompt
+
+        parts: list[str] = []
+        for seg in expr.segments:
+            if isinstance(seg, TextSegment):
+                parts.append(seg.text)
+            elif isinstance(seg, InterpSegment):
+                value = self._eval_expr(seg.expr, scope)
+                if seg.render is None:
+                    # Default: console rendering (no boundary tags).
+                    parts.append(render_for_console(value))
+                else:
+                    # Explicit renderer: apply it.  Pass var_name=None because
+                    # console output never carries the boundary-tag ``name=``
+                    # attribute even for the default renderer.
+                    parts.append(
+                        render_for_prompt(
+                            value,
+                            renderer_name=seg.render,
+                            var_name=None,
+                            renderers=self._renderers,
+                        )
+                    )
+            else:
+                assert_never(seg)  # pragma: no cover
+        return "".join(parts)
 
     def _exec_do_until(self, stmt: DoUntil, scope: Scope) -> None:
         limit = stmt.limit if stmt.limit is not None else self._loop_limit
@@ -278,13 +331,8 @@ class Interpreter:
                 for s in branch.body:
                     self._exec_stmt(s, branch_scope)
                 return
-        # No match: raise MatchError.
-        raise AglRaise(
-            _make_exc_value(
-                "MatchError",
-                f"Non-exhaustive case: no pattern matched value {_describe_value(subject)!r}",
-            )
-        )
+        # No match: raise MatchError with scrutinee_type and scrutinee fields.
+        raise AglRaise(_make_match_error(subject))
 
     def _exec_try_catch(self, stmt: TryCatch, scope: Scope) -> None:
         try:
@@ -338,8 +386,11 @@ class Interpreter:
         if isinstance(expr, FieldAccess):
             return self._eval_field_access(expr, scope)
         # Compound expressions (templates, calls, operators, …).
+        # Template interpolation outside of agent-call prompts uses console
+        # rendering (no ``<dsl-value>`` boundary tags).  Agent-call prompts
+        # call ``_eval_template`` directly via ``_dispatch_agent_call``.
         if isinstance(expr, Template):
-            return self._eval_template(expr, scope)
+            return TextValue(self._eval_template_for_console(expr, scope))
         if isinstance(expr, AgentCall):
             return self._eval_agent_call(expr, scope)
         if isinstance(expr, Constructor):
@@ -566,8 +617,9 @@ class Interpreter:
         )
 
     def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:
-        """Evaluate a record or enum-variant constructor."""
-        # Evaluate arguments.
+        """Evaluate a record, enum-variant, or exception constructor."""
+        # Evaluate arguments.  Template expressions are handled by ``_eval_expr``
+        # (console rendering, no ``<dsl-value>`` boundary tags).
         arg_values: dict[str, Value] = {}
         for arg in expr.args:
             arg_values[arg.name] = self._eval_expr(arg.value, scope)
@@ -585,9 +637,21 @@ class Interpreter:
                 fname: _coerce(fval, typ.fields[fname]) for fname, fval in arg_values.items()
             }
             return RecordValue(type_name=typ.name, fields=coerced)
+
+        from agm.agl.typecheck.types import ExceptionType as ExcType
+
+        if isinstance(typ, ExcType):
+            # Exception constructor: inject ``trace_id`` (empty in M3; real
+            # trace IDs land in M4 with the trace store).
+            fields: dict[str, Value] = {"trace_id": TextValue("")}
+            for fname, fval in arg_values.items():
+                field_type = typ.fields.get(fname)
+                fields[fname] = _coerce(fval, field_type) if field_type is not None else fval
+            return ExceptionValue(type_name=typ.name, fields=fields)
+
         # Otherwise an enum-variant constructor.  The variant is the constructor's
         # own name (the qualifier, if any, only selects the enum).
-        assert isinstance(typ, EnumType), "constructor type must be record or enum"
+        assert isinstance(typ, EnumType), "constructor type must be record, enum, or exception"
         variant_name = expr.name
         variant_fields = typ.variants.get(variant_name, {})
         coerced2 = {
@@ -682,12 +746,7 @@ class Interpreter:
                         name, val, mutable=False, decl_span=branch.span
                     )
                 return self._eval_expr(branch.body, branch_scope)
-        raise AglRaise(
-            _make_exc_value(
-                "MatchError",
-                "Non-exhaustive case expression: no pattern matched",
-            )
-        )
+        raise AglRaise(_make_match_error(subject))
 
 
 # ---------------------------------------------------------------------------
@@ -940,7 +999,7 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
 def _describe_value(value: Value) -> str:
     """Return a brief human-readable description of *value* for error messages."""
     if isinstance(value, EnumValue):
-        return f"{value.type_name}.{value.variant}"
+        return value.type_name
     if isinstance(value, RecordValue):
         return value.type_name
     if isinstance(value, ExceptionValue):

@@ -642,6 +642,39 @@ class TestPipeContinuation:
         assert "_NEWLINE" not in types
         assert "_INDENT" not in types
 
+    def test_catch_suppresses_newline(self) -> None:
+        # ``catch`` at the start of a line suppresses the preceding _NEWLINE
+        # (§3.4 |/catch/until-continuation rule) so the ``try`` body and catch
+        # clause are lexically joined without an interior _NEWLINE.
+        source = "try\n  pass\ncatch _ =>\n  pass"
+        result = tok(source)
+        types = [t for t, _ in result]
+        catch_idx = next(i for i, t in enumerate(types) if t == "catch")
+        # No _NEWLINE should appear in the tokens leading up to ``catch``
+        # (only _DEDENT tokens may precede it after the try body).
+        for j in range(catch_idx - 1, -1, -1):
+            assert types[j] != "_NEWLINE", (
+                f"_NEWLINE found at position {j} before 'catch' at {catch_idx}"
+            )
+            if types[j] not in ("_DEDENT",):
+                break
+
+    def test_until_suppresses_newline(self) -> None:
+        # ``until`` at the start of a line suppresses the preceding _NEWLINE
+        # (§3.4 |/catch/until-continuation rule) so the do body and condition
+        # are lexically joined without an interior _NEWLINE.
+        source = "do[2]\n  pass\nuntil true"
+        result = tok(source)
+        types = [t for t, _ in result]
+        until_idx = next(i for i, t in enumerate(types) if t == "until")
+        # No _NEWLINE should appear in the tokens leading up to ``until``
+        for j in range(until_idx - 1, -1, -1):
+            assert types[j] != "_NEWLINE", (
+                f"_NEWLINE found at position {j} before 'until' at {until_idx}"
+            )
+            if types[j] not in ("_DEDENT",):
+                break
+
 
 # ---------------------------------------------------------------------------
 # _NEWLINE token value (indentation width)
@@ -724,10 +757,10 @@ class TestLexErrorSpan:
             tok("a\n    b\n  c")
         err = exc_info.value
         assert err.span is not None
-        # The dedent is signalled by the _NEWLINE positioned at the newline char
-        # that terminates line 2 and introduces the misaligned line 3 ("  c"):
-        # per the layout position rule that token sits on line 2.
-        assert err.span.start_line == 2
+        # The diagnostic is positioned at the first token on the offending line
+        # (the lookahead ``sig`` token) so that the reported line matches the
+        # line the user actually misindented — line 3 in this case ("  c").
+        assert err.span.start_line == 3
 
     def test_lex_error_message_not_empty(self) -> None:
         with pytest.raises(LexError) as exc_info:

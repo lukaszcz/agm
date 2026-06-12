@@ -604,13 +604,23 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
 
     # Structured types (list/dict/record/enum): delegate to JsonCodec.
     if isinstance(type_obj, (ListType, DictType, RecordType, EnumType)):
+        import decimal as _decimal_mod
+
         from agm.agl.runtime.codec import JsonCodec
         from agm.agl.runtime.schema import derive_schema
 
-        if not isinstance(raw, str):
+        # Accept either a JSON string or a Python native object (list/dict)
+        # that was already parsed from JSON (e.g. by the e2e test harness).
+        if isinstance(raw, str):
+            json_str = raw
+        elif isinstance(raw, (dict, list, bool, int, _decimal_mod.Decimal, float)):
+            # Serialise native Python object to JSON string so the codec can
+            # validate and convert it using the full type-aware path.
+            json_str = json.dumps(raw, default=str)
+        else:
             raise ValueError(
                 f"Input {name!r} has type {type_obj!r}; structured inputs must be "
-                "provided as a JSON string."
+                "provided as a JSON string or a JSON-compatible Python value."
             )
         codec = JsonCodec()
         # Precompute schema once (CARRY-IN 2: avoids re-derivation inside parse).
@@ -618,7 +628,7 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
         # Host-supplied --input values are not chatty agent output: they must be
         # exactly one bare JSON value (F7).  Strict parsing avoids json-repair
         # silently "fixing" user typos.
-        result = codec.parse(raw, type_obj, strict_json=True, schema=schema)
+        result = codec.parse(json_str, type_obj, strict_json=True, schema=schema)
         if not result.ok or result.value is None:
             raise ValueError(
                 f"Input {name!r}: could not parse as {type_obj!r}; structured "

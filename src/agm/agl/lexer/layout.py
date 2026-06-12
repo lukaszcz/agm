@@ -16,10 +16,16 @@ Key rules
   token on the next line is ``|``, ``catch``, or ``until``, the ``_NEWLINE`` is
   suppressed and only the ``_DEDENT`` s needed to pop the stack to levels
   strictly greater than the keyword's column are emitted.  These lines never push
-  an indent.
+  an indent.  This suppression rule is symmetric for both ``catch`` and ``until``
+  — a ``catch`` after a try body and an ``until`` after a do body both continue
+  their enclosing construct rather than starting a new statement.
 - At EOF: unwind remaining indent levels with ``_DEDENT`` s.
 - Template tokens never produce ``_NEWLINE`` s (the scanner does not emit them
   inside templates).
+- Misaligned-dedent diagnostics are positioned at the **first real token** on the
+  offending line (i.e. the lookahead ``sig`` token), not at the ``_NEWLINE`` that
+  precedes it.  This ensures the reported source line matches the line the user
+  actually misindented.
 """
 
 from __future__ import annotations
@@ -180,14 +186,18 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
                 yield _synthetic(DEDENT, "", tok)
 
             if indent_stack[-1] != indent_width:
-                # Misaligned dedent — the new indentation is not on the stack
-                start_off = tok.start_pos if tok.start_pos is not None else 0
-                end_off = tok.end_pos if tok.end_pos is not None else start_off
+                # Misaligned dedent — the new indentation is not on the stack.
+                # Use the lookahead token (``sig``) to position the diagnostic
+                # on the *offending* line rather than the preceding ``_NEWLINE``
+                # (which sits on the line before the misaligned content).
+                err_ref = sig if sig is not None else tok
+                start_off = err_ref.start_pos if err_ref.start_pos is not None else 0
+                end_off = err_ref.end_pos if err_ref.end_pos is not None else start_off
                 span = SourceSpan(
-                    start_line=tok.line or 1,
-                    start_col=tok.column or 1,
-                    end_line=tok.end_line or tok.line or 1,
-                    end_col=tok.end_column or tok.column or 1,
+                    start_line=err_ref.line or 1,
+                    start_col=err_ref.column or 1,
+                    end_line=err_ref.end_line or err_ref.line or 1,
+                    end_col=err_ref.end_column or err_ref.column or 1,
                     start_offset=start_off,
                     end_offset=end_off,
                 )

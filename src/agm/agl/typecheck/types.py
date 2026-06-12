@@ -310,6 +310,8 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
         fields={
             "message": TextType(),
             "trace_id": TextType(),
+            "scrutinee_type": TextType(),
+            "scrutinee": JsonType(),
         },
     ),
     "ArithmeticError": ExceptionType(

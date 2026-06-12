@@ -940,6 +940,21 @@ class TestConstructorErrors:
         assert line == 5
         assert "Same" in msg
 
+    def test_duplicate_pattern_field_rejected(self) -> None:
+        """Duplicate field in a constructor pattern is a type error."""
+        err = reject_type(
+            "enum R\n"
+            "  | Fail(issues: list[text])\n"
+            "  | Pass\n"
+            "let r: R = Pass\n"
+            "case r of\n"
+            "  | Fail(issues: a, issues: b) => pass\n"
+            "  | Pass => pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 6
+        assert "issues" in msg
+
 
 # ---------------------------------------------------------------------------
 # Arithmetic / operators (deferred: operators not parseable in M1)
@@ -947,37 +962,31 @@ class TestConstructorErrors:
 
 
 class TestOperators:
-    @pytest.mark.skip(reason="binary + not parseable in M1 — deferred to M3")
     def test_text_plus_int_error(self) -> None:
         err = reject_type('let x = "a" + 1')
         line, msg = diag(err)
         assert line == 1
 
-    @pytest.mark.skip(reason="unary minus not parseable in M1 — deferred to M3")
     def test_unary_minus_text(self) -> None:
         err = reject_type('let x = -"a"')
         line, msg = diag(err)
         assert line == 1
 
-    @pytest.mark.skip(reason="comparison operators not parseable in M1 — deferred to M3")
     def test_ord_on_bool(self) -> None:
         err = reject_type("let x = (true < false)")
         line, msg = diag(err)
         assert line == 1
 
-    @pytest.mark.skip(reason="equality operator not parseable in M1 — deferred to M3")
     def test_eq_type_mismatch(self) -> None:
         err = reject_type('let x = (1 = "one")')
         line, msg = diag(err)
         assert line == 1
 
-    @pytest.mark.skip(reason="'in' operator not parseable in M1 — deferred to M3")
     def test_in_bad_rhs(self) -> None:
         err = reject_type("let x = 1 in 2")
         line, msg = diag(err)
         assert line == 1
 
-    @pytest.mark.skip(reason="'is' test not parseable in M1 — deferred to M3")
     def test_is_on_non_enum(self) -> None:
         err = reject_type(
             "enum R\n  | Pass\n"
@@ -987,7 +996,6 @@ class TestOperators:
         line, msg = diag(err)
         assert line == 4
 
-    @pytest.mark.skip(reason="'is' test not parseable in M1 — deferred to M3")
     def test_is_wrong_variant(self) -> None:
         err = reject_type(
             "enum R\n  | Pass\n"
@@ -1043,7 +1051,6 @@ class TestRecordNotJson:
 
 
 class TestExceptionCatch:
-    @pytest.mark.skip(reason="try-catch not parseable in M1 — deferred to M4")
     def test_wildcard_catch_subtype_field_error(self) -> None:
         err = reject_type(
             "try\n  pass\n"
@@ -1054,12 +1061,36 @@ class TestExceptionCatch:
         assert line == 4
         assert "raw" in msg
 
-    @pytest.mark.skip(reason="try-catch not parseable in M1 — deferred to M4")
     def test_raise_exception_base_not_constructible(self) -> None:
         err = reject_type('raise Exception(message: "x")')
         line, msg = diag(err)
         assert line == 1
         assert "Exception" in msg
+
+    def test_abort_constructor_accepted(self) -> None:
+        """Concrete exception constructor (Abort) is a valid constructor call."""
+        r = accept_type('raise Abort(message: "stop")')
+        assert r is not None  # no type error raised
+
+    def test_exception_constructor_missing_field_error(self) -> None:
+        """Missing required field in exception constructor is a type error."""
+        err = reject_type("raise Abort()")
+        line, msg = diag(err)
+        assert line == 1
+        assert "message" in msg
+
+    def test_exception_constructor_unknown_field_error(self) -> None:
+        """Unknown field in exception constructor is a type error."""
+        err = reject_type('raise Abort(message: "x", nonexistent: "y")')
+        line, msg = diag(err)
+        assert line == 1
+        assert "nonexistent" in msg
+
+    def test_exception_constructor_type_mismatch(self) -> None:
+        """Wrong field type in exception constructor is a type error."""
+        err = reject_type("raise Abort(message: 42)")
+        line, msg = diag(err)
+        assert line == 1
 
 
 # ---------------------------------------------------------------------------

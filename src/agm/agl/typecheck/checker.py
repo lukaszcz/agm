@@ -586,7 +586,14 @@ class _Checker:
     def _check_template(self, node: Template) -> TextType:
         for seg in node.segments:
             if isinstance(seg, InterpSegment):
-                seg_type = self._check_expr(seg.expr, expected=None)
+                # Pass ``json`` as the expected type for interpolation segments:
+                # a dict/list literal inside ``${ … }`` may have mixed-kind
+                # values (e.g. ``{kind: "demo", tags: items}`` where one value
+                # is text and another is list[text]).  With ``expected=json``
+                # the dict-literal check accepts any JSON-shaped element type
+                # (design §5.8 rule 3).  A renderer override narrows the type
+                # expectation further below.
+                seg_type = self._check_expr(seg.expr, expected=JsonType())
                 # Validate renderer name if explicit.
                 if seg.render is not None and seg.render != "default":
                     if seg.render not in self._caps.renderer_names:
@@ -806,13 +813,16 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE):
-            # Ordering: only on numeric types (int, decimal); bool not allowed.
-            if not (
-                isinstance(left_type, (IntType, DecimalType))
-                and isinstance(right_type, (IntType, DecimalType))
-            ):
+            # Ordering: numeric (int/decimal) or text; bool not allowed
+            # (design §4.3 — "compare two numbers or two text values lexicographically").
+            numeric_pair = isinstance(left_type, (IntType, DecimalType)) and isinstance(
+                right_type, (IntType, DecimalType)
+            )
+            text_pair = isinstance(left_type, TextType) and isinstance(right_type, TextType)
+            if not (numeric_pair or text_pair):
                 raise AglTypeError(
-                    f"Ordering operators require numeric operands (int or decimal); "
+                    f"Ordering operators require both operands to be numeric "
+                    f"(int or decimal) or both to be text; "
                     f"got '{left_type!r}' and '{right_type!r}'.",
                     span=node.span,
                 )
@@ -1045,6 +1055,17 @@ class _Checker:
         rec = self._env.get_type(name)
         if isinstance(rec, RecordType):
             return self._check_record_call(node, rec)
+        # Try exception types (built-in constructors such as Abort, MatchError).
+        exc = self._env.get_type(name)
+        if isinstance(exc, ExceptionType):
+            # The abstract "Exception" base is not constructible.
+            if exc.name == "Exception":
+                raise AglTypeError(
+                    "The abstract 'Exception' base type is not constructible. "
+                    "Use a concrete exception type (e.g. 'Abort').",
+                    span=node.span,
+                )
+            return self._check_exception_call(node, exc)
         # Try enums (find a unique matching variant).
         candidates: list[tuple[EnumType, str]] = []
         for type_name in self._env.all_declared_type_names():
@@ -1068,6 +1089,37 @@ class _Checker:
             f"Unknown constructor '{name}'.",
             span=node.span,
         )
+
+    def _check_exception_call(self, node: Constructor, exc: ExceptionType) -> ExceptionType:
+        """Type-check a concrete exception constructor call (e.g. ``Abort(message: "…")``)."""
+        provided = {arg.name: arg for arg in node.args}
+        # Check for unknown fields.
+        # Note: duplicate argument names are rejected earlier by the parser.
+        for arg_name in provided:
+            if arg_name not in exc.fields:
+                raise AglTypeError(
+                    f"Exception type '{exc.name}' has no field '{arg_name}'.",
+                    span=provided[arg_name].span,
+                )
+        # Check for missing required fields.  The ``message`` field is required
+        # for all exception types; ``trace_id`` is injected by the runtime, so
+        # it may be omitted from the constructor call.
+        for field_name, field_type in exc.fields.items():
+            if field_name == "trace_id":
+                continue  # injected by the runtime; not required in source
+            if field_name not in provided:
+                raise AglTypeError(
+                    f"Missing field '{field_name}' in constructor call for "
+                    f"exception type '{exc.name}'.",
+                    span=node.span,
+                )
+        # Type-check supplied arguments.  By this point, every arg.name in
+        # node.args is a known field (unknown fields raised above).
+        for arg in node.args:
+            expected_field_type = exc.fields[arg.name]
+            arg_type = self._check_expr(arg.value, expected=expected_field_type)
+            self._assert_assignable(arg_type, expected_field_type, arg.span)
+        return exc
 
     def _check_record_call(self, node: Constructor, rec: RecordType) -> RecordType:
         provided = {arg.name: arg for arg in node.args}
@@ -1281,7 +1333,16 @@ class _Checker:
             # Look up variant field types and bind each sub-pattern.
             variant_name = pattern.name
             vfields = subj_type.variants.get(variant_name, {})
+            # Check for duplicate pattern fields (design §5.9).
+            seen_pf: set[str] = set()
             for pf in pattern.fields:
+                if pf.name in seen_pf:
+                    raise AglTypeError(
+                        f"Duplicate field '{pf.name}' in pattern for variant "
+                        f"'{variant_name}' — each field may appear at most once.",
+                        span=pf.span,
+                    )
+                seen_pf.add(pf.name)
                 if pf.name not in vfields:
                     raise AglTypeError(
                         f"Variant '{variant_name}' has no field '{pf.name}'.",

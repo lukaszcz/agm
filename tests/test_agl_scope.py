@@ -293,7 +293,6 @@ class TestReservedNames:
 
 
 class TestInputNotRoot:
-    @pytest.mark.skip(reason="if-stmt not parseable in M1 — deferred to M3")
     def test_input_inside_if(self) -> None:
         # matches tests/agl/rejections/scope/input_not_root.agl
         err = reject_scope(
@@ -306,14 +305,12 @@ class TestInputNotRoot:
         assert line == 2
         assert "input" in msg.lower()
 
-    @pytest.mark.skip(reason="do-loop not parseable in M1 — deferred to M3")
     def test_input_inside_do(self) -> None:
         err = reject_scope("do[2]\n  input x\nuntil true\n")
         line, msg = diag(err)
         assert line == 2
         assert "input" in msg.lower()
 
-    @pytest.mark.skip(reason="try-catch not parseable in M1 — deferred to M4")
     def test_input_inside_try(self) -> None:
         err = reject_scope("try\n  input x\ncatch _ =>\n  pass\n")
         line, msg = diag(err)
@@ -327,7 +324,6 @@ class TestInputNotRoot:
 
 
 class TestScopeEscape:
-    @pytest.mark.skip(reason="do-loop not parseable in M1 — deferred to M3")
     def test_loop_binding_escapes_after_loop(self) -> None:
         # matches tests/agl/rejections/scope/loop_binding_escapes.agl
         err = reject_scope(
@@ -342,7 +338,6 @@ class TestScopeEscape:
         assert line == 6
         assert "probe" in msg
 
-    @pytest.mark.skip(reason="case-stmt not parseable in M1 — deferred to M3")
     def test_pattern_var_escapes(self) -> None:
         # matches tests/agl/rejections/scope/pattern_var_escapes.agl
         err = reject_scope(
@@ -359,7 +354,6 @@ class TestScopeEscape:
         assert line == 8
         assert "issues" in msg
 
-    @pytest.mark.skip(reason="try-catch not parseable in M1 — deferred to M4")
     def test_catch_var_escapes(self) -> None:
         # matches tests/agl/rejections/scope/catch_var_escapes.agl
         err = reject_scope(

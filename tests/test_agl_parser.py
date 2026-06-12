@@ -1321,21 +1321,33 @@ class TestDictLit:
         assert isinstance(e.key, StringLit)
         assert e.key.value == "foo"
 
-    def test_interpolated_string_key(self) -> None:
-        """A dict key that is a template with interpolation is handled.
+    def test_interpolated_string_key_rejected(self) -> None:
+        """F5: a dict key carrying interpolation is rejected, not coerced.
 
-        An interpolated key (e.g. ``"${x}"``) only captures plain-text segments;
-        the interp segments are dropped, producing an empty-string StringLit key.
+        ``{"${a}": 1}`` previously silently produced an empty-string StringLit
+        key.  Per design §10.14 dict keys must be literal strings; the error
+        pins to the key's span.
         """
-        src = 'let d = {"${x}": 1}'
-        stmt = _parse_one(src)
+        src = 'let d = {"${a}": 1}'
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "interpolation" in str(err).lower()
+        span = err.source_span
+        assert span.start_line == 1
+        # The error points at the offending key (the opening quote).
+        key_col = src.index('"${a}"') + 1
+        assert span.start_col == key_col
+
+    def test_plain_string_key_still_parses(self) -> None:
+        """Accept-twin: a non-interpolated quoted key parses to StringLit."""
+        stmt = _parse_one('let d = {"k": 1}')
         assert isinstance(stmt, LetDecl)
         d = stmt.value
         assert isinstance(d, DictLit)
-        assert len(d.entries) == 1
         e = d.entries[0]
-        # Interpolated keys are normalised to StringLit (interp segments stripped).
         assert isinstance(e.key, StringLit)
+        assert e.key.value == "k"
         assert isinstance(e.value, IntLit)
 
 
@@ -1458,6 +1470,87 @@ class TestConstructor:
         assert isinstance(inner, Constructor)
         assert inner.name == "Author"
 
+    def test_double_payload_rejected(self) -> None:
+        """F3: ``Issue(a: 1)(b: 2)`` — a second payload is rejected.
+
+        Previously the first payload was silently dropped.  The error pins to
+        the second payload's span.
+        """
+        src = "let t = Issue(a: 1)(b: 2)"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "single argument list" in str(err).lower()
+        span = err.source_span
+        assert span.start_line == 1
+        # Second payload begins at the '(' right after the first ')'.
+        assert span.start_col == src.index("(b: 2)") + 1
+
+    def test_double_payload_after_empty_first_rejected(self) -> None:
+        """F3 edge: an empty first payload still counts as applied.
+
+        ``Empty()(b: 2)`` — the first ``()`` produces empty args; a second
+        payload is still rejected (state is tracked, not inferred from len).
+        """
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let t = Empty()(b: 2)")
+        assert "single argument list" in str(exc_info.value).lower()
+
+    def test_qualified_first_payload_still_parses(self) -> None:
+        """Accept-twin for F3: ``Status.Done(x: 1)`` — first payload is legal.
+
+        The qualified no-arg constructor produced by type_access has empty
+        args; attaching its first payload must still work.
+        """
+        stmt = _parse_one("let r = Status.Done(x: 1)")
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.qualifier == "Status"
+        assert c.name == "Done"
+        assert len(c.args) == 1
+        assert c.args[0].name == "x"
+
+    def test_empty_payload_still_parses(self) -> None:
+        """Accept-twin for F3: ``Empty()`` — a single empty payload is legal."""
+        stmt = _parse_one("let t = Empty()")
+        assert isinstance(stmt, LetDecl)
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.name == "Empty"
+        assert len(c.args) == 0
+
+    def test_method_call_syntax_rejected(self) -> None:
+        """F4: ``x.f(a: 1)`` — payload on a non-constructor base is rejected.
+
+        Previously this leaked an AssertionError wrapped as VisitError noise
+        with a degenerate span.  Now it is a clean AglSyntaxError carrying the
+        rule's meta span.
+        """
+        src = "let t = x.f(a: 1)"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        msg = str(err).lower()
+        assert "method-call syntax" in msg
+        assert "type name" in msg
+        span = err.source_span
+        assert span.start_line == 1
+        # Span covers the whole offending expression, not a degenerate 1:1 span.
+        assert span.end_offset > span.start_offset
+
+    def test_payload_on_field_access_rejected(self) -> None:
+        """F4 variant: ``issue.title(a: 1)`` — payload on a FieldAccess base."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let t = issue.title(a: 1)")
+        assert "method-call syntax" in str(exc_info.value).lower()
+
+    def test_payload_on_paren_expr_rejected(self) -> None:
+        """F4 variant: ``(x)(a: 1)`` — payload on a parenthesized expression."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let t = (x)(a: 1)")
+        assert "method-call syntax" in str(exc_info.value).lower()
+
 
 # ---------------------------------------------------------------------------
 # M2: Field access
@@ -1512,21 +1605,72 @@ class TestFieldAccess:
         assert isinstance(fa, FieldAccess)
         assert fa.field == "title"
 
-    def test_type_name_access_on_non_constructor(self) -> None:
-        """VAR_NAME.TypeName — type_access where LHS is not a Constructor.
+    def test_type_name_access_on_non_constructor_rejected(self) -> None:
+        """F1: ``x.Done`` (VAR_NAME LHS) is rejected, not silently dropped.
 
-        This covers the else-branch in type_access: when the object expression
-        is not a bare unqualified Constructor (e.g. a VarRef), the result is
-        a Constructor with no qualifier so the scope checker can report the error.
+        Only ``TYPE_NAME . TYPE_NAME`` qualification is legal (design §10.13).
+        Previously ``x`` was dropped and a bare ``Constructor('Done')`` was
+        fabricated; now it is a clean AglSyntaxError pinned at ``.Done``.
         """
-        stmt = _parse_one("let t = x.Done")
+        src = "let t = x.Done"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "type name" in str(err).lower()
+        span = err.source_span
+        assert span.start_line == 1
+        assert span.start_col == src.index("Done") + 1
+
+    def test_type_name_access_on_field_access_rejected(self) -> None:
+        """F1 variant: ``issue.title.Done`` — LHS is a record FieldAccess."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let t = issue.title.Done")
+        assert "type name" in str(exc_info.value).lower()
+
+    def test_double_qualified_type_access_rejected(self) -> None:
+        """F2: ``A.B.C`` — the LHS is already a qualified Constructor.
+
+        Previously ``A.B`` was dropped, yielding ``Constructor('C')``; now the
+        second ``.TypeName`` is rejected with the span pinned at ``.C``.
+        """
+        src = "let t = A.B.C"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        assert "type name" in str(err).lower()
+        assert err.source_span.start_col == src.rindex("C") + 1
+
+    def test_type_access_on_constructor_with_args_rejected(self) -> None:
+        """F2 variant: ``Empty(a: 1).Done`` — LHS already carries args."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let t = Empty(a: 1).Done")
+        assert "type name" in str(exc_info.value).lower()
+
+    def test_qualified_nullary_still_parses(self) -> None:
+        """Accept-twin for F1/F2: ``Status.Done`` is a valid qualified ctor."""
+        stmt = _parse_one("let x = Status.Done")
         assert isinstance(stmt, LetDecl)
-        # The result is a Constructor built from the TYPE_NAME part.
-        # Scope checking (M3) will validate whether this is legal.
-        ctor = stmt.value
-        assert isinstance(ctor, Constructor)
-        assert ctor.qualifier is None
-        assert ctor.name == "Done"
+        c = stmt.value
+        assert isinstance(c, Constructor)
+        assert c.qualifier == "Status"
+        assert c.name == "Done"
+        assert len(c.args) == 0
+
+    def test_field_access_on_constructor_result_still_parses(self) -> None:
+        """Accept-twin: ``Issue(a: 1).title`` — field access on a ctor result.
+
+        Per design §10.13 ``access ::= atom ("." VAR_NAME)*`` allows a
+        lowercase ``.field`` suffix over any atom, including a constructor
+        application.  This must keep parsing as a FieldAccess.
+        """
+        stmt = _parse_one("let t = Issue(a: 1).title")
+        assert isinstance(stmt, LetDecl)
+        fa = stmt.value
+        assert isinstance(fa, FieldAccess)
+        assert fa.field == "title"
+        assert isinstance(fa.obj, Constructor)
+        assert fa.obj.name == "Issue"
+        assert len(fa.obj.args) == 1
 
 
 # ---------------------------------------------------------------------------

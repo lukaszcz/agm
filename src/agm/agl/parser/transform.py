@@ -105,6 +105,12 @@ class AstBuilder(Transformer):
     def __init__(self) -> None:
         super().__init__()
         self._counter = count(0)
+        # node_ids of Constructor nodes that already had a constructor_payload
+        # applied via ctor_applied.  Used to reject a second payload
+        # (``Issue(a: 1)(b: 2)``) regardless of whether the first payload was
+        # empty (``Empty()``).  Tracking applied state explicitly avoids the
+        # ``len(args) == 0`` ambiguity between "no payload" and "empty payload".
+        self._payload_applied: set[int] = set()
 
     def _next_id(self) -> int:
         return next(self._counter)
@@ -502,9 +508,16 @@ class AstBuilder(Transformer):
     def type_access(self, meta: Meta, args: _Args) -> syntax.Constructor:
         """access DOT TYPE_NAME — qualified enum-variant constructor.
 
-        When ``access`` is an unqualified zero-arg Constructor, produces a
-        qualified Constructor: ``Status.Done`` → Constructor("Status","Done",()).
-        Any other form is surfaced as a bare Constructor for M2c error reporting.
+        Only ``TYPE_NAME . TYPE_NAME`` qualification is legal (design §10.13:
+        ``qualified_constructor ::= TYPE_NAME | TYPE_NAME "." TYPE_NAME``).  The
+        LHS must therefore be a bare, unqualified, no-arg ``Constructor``
+        (a lone ``TYPE_NAME``).  Any other LHS is rejected:
+
+        - ``x.Done``  — VAR_NAME / record / other expr on the LHS (F1).
+        - ``A.B.C``   — the LHS is already a qualified Constructor (F2).
+        - ``Empty(a: 1).Done`` — the LHS already carries constructor args.
+
+        The error span pinpoints the offending ``.TypeName`` suffix.
         """
         obj_expr = args[0]
         type_name_tok = next(
@@ -512,22 +525,24 @@ class AstBuilder(Transformer):
         )
         assert type_name_tok is not None, "type_access: no TYPE_NAME token"
         variant_name = str(type_name_tok)
-        span = _span_from_meta(meta)
-        nid = self._next_id()
-        if isinstance(obj_expr, syntax.Constructor) and obj_expr.qualifier is None:
+        if (
+            isinstance(obj_expr, syntax.Constructor)
+            and obj_expr.qualifier is None
+            and not obj_expr.args
+            and obj_expr.node_id not in self._payload_applied
+        ):
             return syntax.Constructor(
                 qualifier=obj_expr.name,
                 name=variant_name,
                 args=(),
-                span=span,
-                node_id=nid,
+                span=_span_from_meta(meta),
+                node_id=self._next_id(),
             )
-        return syntax.Constructor(
-            qualifier=None,
-            name=variant_name,
-            args=(),
-            span=span,
-            node_id=nid,
+        raise AglSyntaxError(
+            f"'.{variant_name}' may only follow a type name "
+            "(qualified constructor); chained or non-type qualification is "
+            "not allowed.",
+            span=_span_from_token(type_name_tok),
         )
 
     def ctor_applied(self, meta: Meta, args: _Args) -> syntax.Constructor:
@@ -537,24 +552,62 @@ class AstBuilder(Transformer):
         by taking the existing (possibly qualified) Constructor from the access
         position and attaching the named arguments from constructor_payload.
 
-        ``args`` is always ``[Constructor, list[NamedArg]]`` since
+        ``args`` is always ``[<access>, list[NamedArg]]`` since
         ``constructor_payload`` is required (not optional) in this rule.
+
+        Two forms are rejected as clean ``AglSyntaxError``s:
+
+        - F4: the access base is not a ``Constructor`` (``x.f(arg)``,
+          ``(x)(a: 1)``, ``1(a: 1)`` …).  Constructor arguments may only follow
+          a type name; method-call syntax is not part of v1.
+        - F3: the base ``Constructor`` already had a payload applied
+          (``Issue(a: 1)(b: 2)``).  A constructor takes a single argument list.
+          ``Status.Done`` followed by its *first* payload is still legal even
+          when the type-access produced empty args.
         """
         ctor = args[0]
         payload = args[1]
-        assert isinstance(ctor, syntax.Constructor), (
-            f"ctor_applied: expected Constructor base, got {type(ctor)}"
-        )
         assert isinstance(payload, list), (
             f"ctor_applied: expected list payload, got {type(payload)}"
         )
+        if not isinstance(ctor, syntax.Constructor):
+            raise AglSyntaxError(
+                "constructor arguments may only follow a type name; "
+                "method-call syntax is not supported.",
+                span=_span_from_meta(meta),
+            )
+        if ctor.node_id in self._payload_applied:
+            # A second payload on an already-applied constructor.  Pin the error
+            # to the second payload's span (everything after the base ctor).
+            raise AglSyntaxError(
+                "constructor takes a single argument list.",
+                span=self._span_after(ctor.span, meta),
+            )
         named_args = tuple(cast(_NamedArgList, payload))
+        new_id = self._next_id()
+        self._payload_applied.add(new_id)
         return syntax.Constructor(
             qualifier=ctor.qualifier,
             name=ctor.name,
             args=named_args,
             span=_span_from_meta(meta),
-            node_id=self._next_id(),
+            node_id=new_id,
+        )
+
+    @staticmethod
+    def _span_after(base: SourceSpan, meta: Meta) -> SourceSpan:
+        """Span covering the payload that follows ``base`` within the rule meta.
+
+        Used to pinpoint the *second* payload of ``Issue(a: 1)(b: 2)``: the
+        offending ``(b: 2)`` starts where the base constructor's span ends.
+        """
+        return SourceSpan(
+            start_line=base.end_line,
+            start_col=base.end_col,
+            end_line=meta.end_line,
+            end_col=meta.end_column,
+            start_offset=base.end_offset,
+            end_offset=meta.end_pos,
         )
 
     # ------------------------------------------------------------------
@@ -591,8 +644,10 @@ class AstBuilder(Transformer):
         """dict_entry: template COLON expr — quoted string key.
 
         The template transformer normalises plain strings to StringLit already.
-        Both StringLit (plain key) and Template (interpolated key) are accepted;
-        only the StringLit form is valid per v1 semantics (DictEntry.key: StringLit).
+        A plain ``StringLit`` key is valid (design §10.14: dict keys are
+        ``STRING`` or ``VAR_NAME``).  A key carrying any interpolation segment
+        (e.g. ``{"${a}": 1}``) is rejected — dict keys must be literal strings
+        (F5).
         """
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
         assert len(non_tokens) >= 2, (
@@ -606,13 +661,9 @@ class AstBuilder(Transformer):
             assert isinstance(key_node, syntax.Template), (
                 f"dict_entry_str: expected StringLit or Template for key, got {type(key_node)}"
             )
-            key_text = "".join(
-                seg.text for seg in key_node.segments if isinstance(seg, syntax.TextSegment)
-            )
-            key_lit = syntax.StringLit(
-                value=key_text,
+            raise AglSyntaxError(
+                "dict keys must be literal strings (no interpolation).",
                 span=key_node.span,
-                node_id=self._next_id(),
             )
         return syntax.DictEntry(
             key=key_lit,

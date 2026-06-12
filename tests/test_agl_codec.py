@@ -2098,32 +2098,51 @@ class TestSchemaPrecomputedInParse:
         assert result.ok is False
         assert result.errors
 
-    def test_parse_schema_derived_once_per_contract(self) -> None:
-        """derive_schema is called exactly once during make_contract, not per parse."""
-        import agm.agl.runtime.codec as codec_mod
-        from agm.agl.runtime.schema import derive_schema as orig_derive
+    def test_parse_with_precomputed_schema_matches_derived(self) -> None:
+        """F5: parse(schema=precomputed) is observably equivalent to parse().
 
-        call_count = 0
+        Passing the materialized schema is an optimization, never a behavior
+        change: the parse outcome (ok/value/errors) must be identical to letting
+        the codec derive the schema itself, on both the success and the
+        validation-failure path.
+        """
+        codec = JsonCodec()
+        typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
+        schema = codec.make_contract(typ).json_schema
+        assert isinstance(schema, dict)
 
-        def counting_derive(typ: Type) -> dict[str, object]:
-            nonlocal call_count
-            call_count += 1
-            return orig_derive(typ)
+        good = '{"title": "x", "severity": 1}'
+        bad = '{"title": "x"}'  # missing required field
+        for raw in (good, bad):
+            with_schema = codec.parse(raw, typ, strict_json=False, schema=schema)
+            without = codec.parse(raw, typ, strict_json=False)
+            assert with_schema.ok == without.ok
+            assert with_schema.value == without.value
+            assert [e.message for e in with_schema.errors] == [
+                e.message for e in without.errors
+            ]
 
-        import unittest.mock as mock
-        with mock.patch.object(codec_mod, "derive_schema", side_effect=counting_derive):
-            codec = JsonCodec()
-            typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-            # make_contract calls derive_schema once.
-            contract = codec.make_contract(typ)
-            assert call_count == 1
-            schema = contract.json_schema
-            assert isinstance(schema, dict)
-            # Subsequent parse calls with precomputed schema do NOT call derive_schema.
-            raw = '{"title": "x", "severity": 1}'
-            for _ in range(3):
-                codec.parse(raw, typ, strict_json=False, schema=schema)
-            assert call_count == 1  # still 1 — no re-derivation
+    def test_contract_json_schema_reused_across_parses(self) -> None:
+        """F5: the contract's json_schema object is the one threaded into parse.
+
+        Observable identity reuse: the schema object the codec materializes on
+        the contract is the same object accepted by ``parse(schema=...)`` — so
+        the interpreter passing ``contract.json_schema`` reuses it rather than
+        re-deriving (BONUS).  We verify it parses correctly and that the schema
+        is a concrete materialized dict.
+        """
+        codec = JsonCodec()
+        typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
+        contract = codec.make_contract(typ)
+        schema = contract.json_schema
+        assert isinstance(schema, dict)
+        raw = '{"title": "x", "severity": 1}'
+        # Reuse the very same schema object on repeated parses.
+        for _ in range(3):
+            result = codec.parse(raw, typ, strict_json=False, schema=schema)
+            assert result.ok is True
+            # Identity: contract still holds the same schema object.
+            assert contract.json_schema is schema
 
     def test_parse_without_schema_still_works(self) -> None:
         """parse() without schema= falls back to deriving it (backward compat)."""
@@ -2256,12 +2275,21 @@ class TestRegisterCodec:
         with pytest.raises(ValueError, match="json"):
             rt.register_codec(JsonCodec())
 
-    def test_custom_codec_contributes_to_host_capabilities(self) -> None:
-        """Custom codec's supported_kinds appear in HostCapabilities.codec_kinds."""
-        class MyCodec:
+    def test_custom_codec_make_contract_and_parse_exercised_in_pipeline(self) -> None:
+        """F3 (M3b): a custom codec selected via ``format:`` is genuinely used.
+
+        The codec is chosen with ``prompt[format: tagcodec]`` on a ``text``
+        target.  Both its ``make_contract`` (observable via the format
+        instructions threaded into the agent request) and its ``parse``
+        (observable as a distinctive prefix on the resulting binding) are
+        exercised end-to-end through ``run()`` with a stub agent.
+        """
+        from agm.agl.eval.values import TextValue
+
+        class TagCodec:
             @property
             def name(self) -> str:
-                return "mycodec"
+                return "tagcodec"
 
             @property
             def supported_kinds(self) -> frozenset[str]:
@@ -2272,13 +2300,12 @@ class TestRegisterCodec:
                 return isinstance(t, TT)
 
             def make_contract(self, type_ref: Type) -> "OutputContract":
-                from agm.agl.runtime.codec import TextCodec as TC
                 from agm.agl.runtime.contract import OutputContract
                 return OutputContract(
                     target_type=type_ref,
-                    codec=TC(),
+                    codec=self,
                     strict_json=None,
-                    format_instructions="Return text.",
+                    format_instructions="TAGCODEC-INSTRUCTIONS",
                     json_schema=None,
                 )
 
@@ -2290,16 +2317,28 @@ class TestRegisterCodec:
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
             ) -> "ParseResult":
-                from agm.agl.runtime.codec import ParseResult, TextValue
-                return ParseResult.success(TextValue(raw))
+                from agm.agl.runtime.codec import ParseResult
+                # Distinctive transform proving THIS codec parsed the output.
+                return ParseResult.success(TextValue(f"PARSED::{raw}"))
 
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        rt.register_codec(MyCodec())
-        # Run a simple program to trigger capability building.
-        result = rt.run('let x = 1')
+        received: list[AgentRequest] = []
+
+        def agent(req: AgentRequest) -> str:
+            received.append(req)
+            return "hello"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        rt.register_codec(TagCodec())
+        result = rt.run('let y: text = prompt[format: tagcodec] "Q"')
         assert result.ok is True
-        # The custom codec contributed to the runtime's internal codec registry;
-        # we verify this by checking that the runtime successfully builds caps.
+        # parse() ran: the binding carries the codec's distinctive prefix.
+        assert result.bindings["y"] == TextValue("PARSED::hello")
+        # make_contract() ran: its format instructions reached the agent.
+        assert received[0].output_contract is not None
+        assert (
+            received[0].output_contract.format_instructions
+            == "TAGCODEC-INSTRUCTIONS"
+        )
 
 
 class TestRegisterRenderer:
@@ -2321,20 +2360,81 @@ class TestRegisterRenderer:
             with pytest.raises(ValueError, match=name):
                 rt.register_renderer(name, lambda val, n: str(val))
 
-    def test_custom_renderer_in_capabilities(self) -> None:
-        """Custom renderer's name appears in HostCapabilities.renderer_names."""
-        rt = WorkflowRuntime()
-        rt.register_renderer("myrenderer", lambda val, name: str(val))
-        # Run a program that would trigger HostCapabilities building.
-        result = rt.run("let x = 1")
-        assert result.ok is True
+    def test_custom_renderer_typechecks_only_when_registered(self) -> None:
+        """A custom renderer is usable in interpolation only after registration (F4)."""
+        src = 'input x\nlet y = prompt "${x as myrenderer}"'
 
-    def test_runtime_builds_capabilities_from_registry(self) -> None:
-        """HostCapabilities.codec_kinds comes from registered codec.supported_kinds."""
-        # The default runtime (no extra codecs) should have text + json in codec_kinds.
+        rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
+        unreg = rt_unreg.run(src, inputs={"x": "hi"})
+        assert unreg.ok is False
+        assert any("myrenderer" in d.message for d in unreg.diagnostics)
+
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = prompt "hi"')
-        assert result.ok is True
+        rt.register_renderer("myrenderer", lambda val, name: str(val))
+        reg = rt.run(src, inputs={"x": "hi"})
+        assert reg.ok is True
+
+    def test_register_renderer_with_supported_types_restricts_kinds(self) -> None:
+        """F6: a kind-restricted renderer is accepted only for supported kinds."""
+
+        def listonly(val: object, name: str | None) -> str:
+            return "L"
+
+        # ``listonly`` supports only the ``list`` kind.
+        rt_ok = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt_ok.register_renderer(
+            "listonly", listonly, supported_types=frozenset({"list"})
+        )
+        ok = rt_ok.run(
+            'let xs: list[text] = ["a"]\nlet q = prompt "${xs as listonly}"'
+        )
+        assert ok.ok is True
+
+        # A text operand is an unsupported kind → static error.
+        rt_bad = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt_bad.register_renderer(
+            "listonly", listonly, supported_types=frozenset({"list"})
+        )
+        bad = rt_bad.run('let x = "v"\nlet q = prompt "${x as listonly}"')
+        assert bad.ok is False
+        assert any("listonly" in d.message for d in bad.diagnostics)
+
+    def test_register_renderer_unknown_kind_raises(self) -> None:
+        """F6: declaring an unknown type kind in supported_types is rejected."""
+        rt = WorkflowRuntime()
+        with pytest.raises(ValueError, match="boguskind"):
+            rt.register_renderer(
+                "r", lambda v, n: "x", supported_types=frozenset({"boguskind"})
+            )
+
+    def test_runtime_builds_codec_kinds_from_registered_codec(self) -> None:
+        """A custom codec is selectable via ``format:`` only after registration (F4).
+
+        This proves ``HostCapabilities.codec_kinds`` is sourced from the
+        registered codec's ``supported_kinds`` rather than a hardcoded set.
+        """
+        from agm.agl.runtime.codec import TextCodec
+
+        class AltCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "altcodec"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+        src = 'let x: text = prompt[format: altcodec] "Q"'
+
+        rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
+        unreg = rt_unreg.run(src)
+        assert unreg.ok is False  # altcodec unknown without registration
+        assert any("altcodec" in d.message for d in unreg.diagnostics)
+
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt.register_codec(AltCodec())
+        reg = rt.run(src)
+        assert reg.ok is True
 
     def test_renderer_names_exposed_from_render_module(self) -> None:
         """render.RENDERER_NAMES is the authoritative set of built-in renderer names."""

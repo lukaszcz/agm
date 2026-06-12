@@ -27,6 +27,24 @@ if TYPE_CHECKING:
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
 
+# The full v1 vocabulary of semantic type *kinds* (matches ``Type.kind`` for
+# every member of the ``Type`` union in ``agm.agl.typecheck.types``).  Used to
+# validate a renderer's ``supported_types`` capability descriptor (F6, §9.1).
+ALL_TYPE_KINDS: frozenset[str] = frozenset(
+    {
+        "text",
+        "json",
+        "bool",
+        "int",
+        "decimal",
+        "list",
+        "dict",
+        "record",
+        "enum",
+        "exception",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CallSiteInfo:
@@ -128,6 +146,8 @@ class WorkflowRuntime:
         # Extra codecs/renderers registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
         self._extra_renderers: dict[str, "RendererFn"] = {}
+        # Per-renderer supported type kinds (``None`` → type-agnostic / all kinds).
+        self._extra_renderer_kinds: dict[str, frozenset[str] | None] = {}
 
     def register_agent(self, name: str, fn: AgentFn) -> None:
         """Register a named agent callable.
@@ -179,8 +199,14 @@ class WorkflowRuntime:
             )
         self._extra_codecs[name] = codec
 
-    def register_renderer(self, name: str, fn: "RendererFn") -> None:
-        """Register a custom renderer function (§2.12 / design §7.6).
+    def register_renderer(
+        self,
+        name: str,
+        fn: "RendererFn",
+        *,
+        supported_types: "frozenset[str] | None" = None,
+    ) -> None:
+        """Register a custom renderer function (§2.12 / design §7.6, plan §9.1).
 
         *name* is the ``as <name>`` identifier used in prompt interpolation
         segments.  Built-in renderer names (``"default"``, ``"raw"``,
@@ -190,7 +216,16 @@ class WorkflowRuntime:
         *fn* must match the ``RendererFn`` signature:
         ``Callable[[Value, str | None], str]``.
 
-        Raises ``ValueError`` for reserved or duplicate names.
+        *supported_types* is the renderer's capability descriptor: a frozenset
+        of semantic type **kinds** (the same vocabulary as a codec's
+        ``supported_kinds`` — ``"text"``, ``"int"``, ``"list"``, ``"record"``,
+        …).  The type-checker rejects ``${x as <name>}`` when ``x``'s kind is
+        not in this set (F6, plan §9.1).  ``None`` (the default) means the
+        renderer is type-agnostic and accepts every kind, matching the built-in
+        renderers.
+
+        Raises ``ValueError`` for reserved or duplicate names, or for an
+        unknown type kind in *supported_types*.
         """
         from agm.agl.runtime.render import RENDERER_NAMES
 
@@ -204,7 +239,15 @@ class WorkflowRuntime:
                 f"A renderer named {name!r} is already registered. "
                 "Duplicate renderer registrations are not allowed."
             )
+        if supported_types is not None:
+            unknown = supported_types - ALL_TYPE_KINDS
+            if unknown:
+                raise ValueError(
+                    f"Renderer {name!r} declares unknown type kind(s) "
+                    f"{sorted(unknown)}. Valid kinds: {sorted(ALL_TYPE_KINDS)}."
+                )
         self._extra_renderers[name] = fn
+        self._extra_renderer_kinds[name] = supported_types
 
     def run(
         self,
@@ -240,7 +283,7 @@ class WorkflowRuntime:
         from agm.agl.capabilities import HostCapabilities
         from agm.agl.runtime.agents import AgentRegistry
         from agm.agl.runtime.codec import JsonCodec, TextCodec
-        from agm.agl.runtime.render import RENDERER_NAMES
+        from agm.agl.runtime.render import builtin_renderers
 
         text_codec = TextCodec()
         json_codec = JsonCodec()
@@ -252,10 +295,20 @@ class WorkflowRuntime:
             **self._extra_codecs,
         }
 
-        # Merge built-in renderer names with any host-registered extras.
-        all_renderer_names: frozenset[str] = RENDERER_NAMES | frozenset(
-            self._extra_renderers.keys()
-        )
+        # Merge built-in renderers with any host-registered extras.  This single
+        # table is the authoritative source for BOTH the static capability
+        # descriptors (names + supported kinds) AND the interpolation rendering
+        # at eval time, so a registered renderer is actually invoked (F1, M3b).
+        all_renderers: dict[str, "RendererFn"] = {
+            **builtin_renderers(),
+            **self._extra_renderers,
+        }
+        # Built-in renderers are type-agnostic (``None`` → all kinds); custom
+        # renderers carry the kinds declared at registration (F6, plan §9.1).
+        renderer_kinds: dict[str, frozenset[str] | None] = {
+            name: None for name in builtin_renderers()
+        }
+        renderer_kinds.update(self._extra_renderer_kinds)
 
         registry = AgentRegistry(
             named={name: fn for name, fn in self._agents.items()},
@@ -268,7 +321,8 @@ class WorkflowRuntime:
             codec_kinds={
                 name: codec.supported_kinds for name, codec in all_codecs.items()
             },
-            renderer_names=all_renderer_names,
+            renderer_names=frozenset(all_renderers),
+            renderer_kinds=renderer_kinds,
         )
 
         # ----------------------------------------------------------------
@@ -463,6 +517,7 @@ class WorkflowRuntime:
             registry=registry,
             contracts=typed_contracts,
             type_env=checked.type_env,
+            renderers=all_renderers,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
         )

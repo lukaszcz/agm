@@ -83,8 +83,11 @@ from agm.agl.typecheck.types import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.contract import OutputContract
+    from agm.agl.runtime.render import RendererFn
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
 
 
@@ -109,6 +112,9 @@ class Interpreter:
     ``contracts`` — materialized ``OutputContract`` per agent-call node_id.
     ``type_env`` — the ``TypeEnvironment`` from the checked program, used to
         resolve record/enum constructors at runtime.
+    ``renderers`` — the interpolation renderer table (built-ins merged with any
+        host-registered renderers); threaded into every ``${expr as name}``
+        rendering so registered renderers are actually invoked (F1, M3b).
     ``loop_limit`` — default bound for ``do`` loops without an explicit limit.
     ``strict_json`` — default strict-JSON flag for codec operations.
     """
@@ -119,14 +125,23 @@ class Interpreter:
         registry: "AgentRegistry",
         contracts: dict[int, "OutputContract"],
         type_env: "TypeEnvironment",
+        renderers: "Mapping[str, RendererFn] | None" = None,
         *,
         loop_limit: int,
         strict_json: bool,
     ) -> None:
+        from agm.agl.runtime.render import builtin_renderers
+
         self._checked = checked
         self._registry = registry
         self._contracts = contracts
         self._type_env = type_env
+        # ``WorkflowRuntime.run`` always passes the merged built-in + registered
+        # renderer table (F1).  ``None`` (e.g. direct construction in unit tests
+        # that exercise only built-in rendering) falls back to the built-ins.
+        self._renderers: "Mapping[str, RendererFn]" = (
+            renderers if renderers is not None else builtin_renderers()
+        )
         self._loop_limit = loop_limit
         self._strict_json = strict_json
         # Root scope — populated from inputs before execute() is called.
@@ -405,7 +420,12 @@ class Interpreter:
                 if isinstance(seg.expr, VarRef):
                     var_name = seg.expr.name
                 parts.append(
-                    render_for_prompt(value, renderer_name=seg.render, var_name=var_name)
+                    render_for_prompt(
+                        value,
+                        renderer_name=seg.render,
+                        var_name=var_name,
+                        renderers=self._renderers,
+                    )
                 )
             else:
                 assert_never(seg)  # pragma: no cover
@@ -504,8 +524,15 @@ class Interpreter:
             response = self._registry.dispatch(agent_name, request)
             raw = response.content
 
-            # Parse via the codec.
-            result = contract.codec.parse(raw, contract.target_type, strict_json=effective_strict)
+            # Parse via the codec.  Reuse the schema already materialized on the
+            # contract so the codec never re-derives it per attempt (BONUS, M3b).
+            schema = contract.json_schema if isinstance(contract.json_schema, dict) else None
+            result = contract.codec.parse(
+                raw,
+                contract.target_type,
+                strict_json=effective_strict,
+                schema=schema,
+            )
             if result.ok and result.value is not None:
                 return result.value
 

@@ -22,7 +22,7 @@ entry points used by the interpreter.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import assert_never
 
 from agm.agl.eval.values import (
@@ -177,20 +177,52 @@ _RENDERERS: dict[str, RendererFn] = {
 RENDERER_NAMES: frozenset[str] = frozenset(_RENDERERS)
 
 
-def render_for_prompt(value: Value, *, renderer_name: str | None, var_name: str | None) -> str:
+def builtin_renderers() -> dict[str, RendererFn]:
+    """Return a fresh mapping of the built-in renderer name → function.
+
+    ``WorkflowRuntime.run`` merges this with any host-registered renderers to
+    form the authoritative ``renderers`` table threaded into the interpreter,
+    so registered renderers are actually invoked at interpolation time
+    (F1, M3b).  A fresh copy is returned so callers cannot mutate the
+    module-level registry.
+    """
+    return dict(_RENDERERS)
+
+
+def render_for_prompt(
+    value: Value,
+    *,
+    renderer_name: str | None,
+    var_name: str | None,
+    renderers: Mapping[str, RendererFn] | None = None,
+) -> str:
     """Render *value* for use inside a prompt template (§2.12).
 
     ``renderer_name``  — the ``as X`` override (``None`` → ``"default"``).
     ``var_name``       — the variable name of the interpolated expression,
                          used as the ``name=`` attribute in boundary tags.
                          ``None`` when the expression is not a simple VarRef.
+    ``renderers``      — the name → function table to resolve ``renderer_name``
+                         against.  Built by ``WorkflowRuntime.run`` as
+                         ``{**builtin_renderers(), **registered}`` so that
+                         host-registered renderers are honoured (F1, M3b).
+                         ``None`` falls back to the built-in renderers only.
     """
+    if renderers is None:
+        renderers = _RENDERERS
     name = renderer_name if renderer_name is not None else "default"
-    fn = _RENDERERS.get(name)
+    fn = renderers.get(name)
     if fn is None:
-        # Unknown renderer: fall back to default (should not happen after
-        # typecheck validation, but is defensive here).
-        fn = _render_default
+        # Loud internal error.  After type-checking this is unreachable through
+        # ``WorkflowRuntime.run``: the checker validates every explicit
+        # ``as <name>`` against the registered renderer set, and ``default`` is
+        # always present in ``renderers``.  A miss here means the renderers
+        # table is inconsistent with the checker's capabilities — an internal
+        # invariant violation, never a user-facing fallback (F2, M3b).
+        raise AssertionError(
+            f"Renderer {name!r} is not in the renderers table; the checker must "
+            "reject unknown renderers before evaluation."
+        )
     return fn(value, var_name)
 
 

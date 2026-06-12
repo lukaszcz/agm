@@ -587,13 +587,24 @@ class _Checker:
         for seg in node.segments:
             if isinstance(seg, InterpSegment):
                 seg_type = self._check_expr(seg.expr, expected=None)
-                _ = seg_type  # type consumed by renderer check below
                 # Validate renderer name if explicit.
                 if seg.render is not None and seg.render != "default":
                     if seg.render not in self._caps.renderer_names:
                         raise AglTypeError(
                             f"Unknown renderer '{seg.render}'. "
                             f"Known renderers: {sorted(self._caps.renderer_names)}.",
+                            span=seg.span,
+                        )
+                    # A registered renderer may restrict the type kinds it
+                    # accepts (F6, plan §9.1).  ``None`` means type-agnostic
+                    # (accepts every kind — built-ins and renderers registered
+                    # without ``supported_types``).
+                    supported = self._caps.renderer_kinds.get(seg.render)
+                    if supported is not None and seg_type.kind not in supported:
+                        raise AglTypeError(
+                            f"Renderer '{seg.render}' does not support value of "
+                            f"type '{seg_type!r}' (kind '{seg_type.kind}'). "
+                            f"Supported kinds: {sorted(supported)}.",
                             span=seg.span,
                         )
         return TextType()

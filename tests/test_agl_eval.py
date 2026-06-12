@@ -1647,14 +1647,17 @@ class TestRenderUnit:
         text = render_for_prompt(v, renderer_name="bullets", var_name=None)
         assert "5" in text
 
-    def test_render_for_prompt_unknown_renderer_falls_back(self) -> None:
+    def test_render_for_prompt_unknown_renderer_raises(self) -> None:
         from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_for_prompt
 
         v = TextValue("hello")
-        text = render_for_prompt(v, renderer_name="nonexistent", var_name="x")
-        # Falls back to default: boundary-marked text
-        assert "<dsl-value" in text
+        # Unknown renderer is a loud internal error, not a silent default
+        # fallback (F2, M3b).
+        with pytest.raises(AssertionError, match="nonexistent"):
+            render_for_prompt(
+                v, renderer_name="nonexistent", var_name="x", renderers={}
+            )
 
     def test_render_default_json_value(self) -> None:
         from agm.agl.eval.values import JsonValue
@@ -3109,10 +3112,17 @@ class TestAgentCallEdgeCases:
 
         class RecordingCodec(TextCodec):
             def parse(
-                self, raw: str, target_type: Type, *, strict_json: bool = False
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
             ) -> ParseResult:
                 seen_strict.append(strict_json)
-                return super().parse(raw, target_type, strict_json=strict_json)
+                return super().parse(
+                    raw, target_type, strict_json=strict_json, schema=schema
+                )
 
         def my_fn(req: AgentRequest) -> str:
             return "ok"
@@ -3179,7 +3189,12 @@ class TestAgentCallEdgeCases:
 
         class AlwaysFailCodec(TextCodec):
             def parse(
-                self, raw: str, target_type: object, *, strict_json: bool = False
+                self,
+                raw: str,
+                target_type: object,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
             ) -> ParseResult:
                 return ParseResult.failure("always fails")
 
@@ -3248,7 +3263,12 @@ class TestAgentCallEdgeCases:
 
         class RecoveringFailCodec(TextCodec):
             def parse(
-                self, raw: str, target_type: object, *, strict_json: bool = False
+                self,
+                raw: str,
+                target_type: object,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
             ) -> ParseResult:
                 return ParseResult.failure(
                     "schema invalid", normalized_raw=recovered

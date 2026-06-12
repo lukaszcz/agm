@@ -305,6 +305,85 @@ class TestAcceptance:
 
 
 # ---------------------------------------------------------------------------
+# F6: renderer capability model (kind-restricted custom renderers)
+# ---------------------------------------------------------------------------
+
+
+def caps_with_renderer_kinds(
+    name: str, kinds: frozenset[str] | None
+) -> HostCapabilities:
+    """Default caps plus one custom renderer with a kind descriptor."""
+    return HostCapabilities(
+        agent_names=frozenset(),
+        has_fallback_agent=True,
+        has_default_agent=True,
+        codec_kinds={"text": frozenset({"text"})},
+        renderer_names=frozenset({"default", "raw", "json", "bullets", name}),
+        renderer_kinds={name: kinds},
+    )
+
+
+class TestRendererKinds:
+    """F6 (plan §9.1): a renderer may restrict the type kinds it accepts."""
+
+    def test_kind_restricted_renderer_accepts_supported_kind(self) -> None:
+        # ``listonly`` accepts only ``list`` kind; ``${xs as listonly}`` where
+        # ``xs`` is a list typechecks.
+        caps = caps_with_renderer_kinds("listonly", frozenset({"list"}))
+        r = parse_resolve_check(
+            'let xs: list[text] = ["a"]\nlet q = prompt "${xs as listonly}"',
+            capabilities=caps,
+        )
+        assert r.resolved.program is not None
+
+    def test_kind_restricted_renderer_rejects_unsupported_kind(self) -> None:
+        # The same renderer rejects a ``text`` operand (unsupported kind).
+        caps = caps_with_renderer_kinds("listonly", frozenset({"list"}))
+        err = reject_type(
+            'let x = "v"\nlet q = prompt "${x as listonly}"',
+            capabilities=caps,
+        )
+        line, msg = diag(err)
+        assert "listonly" in msg
+        assert "list" in msg  # mentions the supported kinds
+
+    def test_type_agnostic_renderer_accepts_any_kind(self) -> None:
+        # ``None`` supported_types → accepts every kind (text and list both ok).
+        caps = caps_with_renderer_kinds("anything", None)
+        r = parse_resolve_check(
+            'let x = "v"\nlet xs: list[text] = ["a"]\n'
+            'let q = prompt "${x as anything} ${xs as anything}"',
+            capabilities=caps,
+        )
+        assert r.resolved.program is not None
+
+    def test_builtin_renderers_accept_all_kinds(self) -> None:
+        # Built-ins are NOT pinned to any kind (absent from renderer_kinds →
+        # type-agnostic), so json/raw/bullets accept a text operand as before.
+        r = parse_resolve_check(
+            'let x = "v"\n'
+            'let a = prompt "${x as raw}"\n'
+            'let b = prompt "${x as json}"\n'
+            'let c = prompt "${x as bullets}"'
+        )
+        assert r.resolved.program is not None
+
+    def test_kind_restricted_multi_kind_renderer(self) -> None:
+        # A renderer supporting {text, int} accepts both but rejects a list.
+        caps = caps_with_renderer_kinds("scalars", frozenset({"text", "int"}))
+        ok = parse_resolve_check(
+            'let n = 1\nlet q = prompt "${n as scalars}"', capabilities=caps
+        )
+        assert ok.resolved.program is not None
+        err = reject_type(
+            'let xs: list[int] = [1]\nlet q = prompt "${xs as scalars}"',
+            capabilities=caps,
+        )
+        _, msg = diag(err)
+        assert "scalars" in msg
+
+
+# ---------------------------------------------------------------------------
 # Contract specs
 # ---------------------------------------------------------------------------
 

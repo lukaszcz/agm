@@ -785,21 +785,45 @@ class TestCapabilitiesBuiltFromRegistrations:
         result = rt.run("let x = 1")
         assert result.ok is True
 
-    def test_register_renderer_before_run_extends_renderer_names(self) -> None:
-        """A custom renderer registered before run() is visible to typecheck."""
-        rt = WorkflowRuntime()
-        rt.register_renderer("fancy", lambda val, name: str(val))
-        result = rt.run("let x = 1")
-        assert result.ok is True
+    def test_registered_renderer_makes_interpolation_typecheck(self) -> None:
+        """``${x as fancy}`` typechecks ONLY when ``fancy`` is registered (F4)."""
+        src = 'input x\nlet y = prompt "see ${x as fancy}"'
+
+        # Without registration: the renderer is unknown → static type error.
+        rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
+        unreg = rt_unreg.run(src, inputs={"x": "hi"})
+        assert unreg.ok is False
+        assert any("fancy" in d.message for d in unreg.diagnostics)
+
+        # With registration: the same program now passes static checking.
+        rt_reg = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt_reg.register_renderer("fancy", lambda val, name: str(val))
+        reg = rt_reg.run(src, inputs={"x": "hi"})
+        assert reg.ok is True
+
+    def test_unregistered_renderer_is_a_static_error(self) -> None:
+        """An ``as <name>`` for an unregistered renderer is rejected (F4)."""
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        result = rt.run(
+            'input x\nlet y = prompt "${x as nope}"', inputs={"x": "hi"}
+        )
+        assert result.ok is False
+        assert any("nope" in d.message for d in result.diagnostics)
 
     def test_no_duplicated_constant_in_runtime(self) -> None:
-        """runtime.py must not define its own hardcoded renderer name set."""
-        # The module should not have a hardcoded renderer-names frozenset literal.
-        # We check indirectly: WorkflowRuntime.run uses render.RENDERER_NAMES.
+        """runtime.py derives renderer names from the render module, not a literal.
+
+        Behavioral check: a renderer name that is a built-in (``json``) is
+        accepted in an interpolation without any registration, proving the
+        runtime sources the built-in set from ``render`` (F4).
+        """
         from agm.agl.runtime.render import RENDERER_NAMES
 
         assert isinstance(RENDERER_NAMES, frozenset)
-        assert len(RENDERER_NAMES) >= 4
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        # ``json`` is a built-in renderer → accepted with no registration.
+        result = rt.run('input x\nlet y = prompt "${x as json}"', inputs={"x": "hi"})
+        assert result.ok is True
 
 
 # ---------------------------------------------------------------------------
@@ -930,13 +954,20 @@ class TestRenderForPrompt:
         out = render_for_prompt(IntValue(3), renderer_name="bullets", var_name="n")
         assert "3" in out
 
-    def test_unknown_renderer_falls_back_to_default(self) -> None:
+    def test_unknown_renderer_raises_internal_error(self) -> None:
         from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_for_prompt
 
-        # Unknown renderer name → falls back to default (boundary-marked).
-        out = render_for_prompt(TextValue("x"), renderer_name="notarenderer", var_name="v")
-        assert 'type="text"' in out
+        # An unknown renderer name is a checker-invariant violation, not a silent
+        # fallback (F2, M3b): render_for_prompt fails loudly so a broken
+        # renderers table cannot masquerade as default output.
+        with pytest.raises(AssertionError, match="notarenderer"):
+            render_for_prompt(
+                TextValue("x"),
+                renderer_name="notarenderer",
+                var_name="v",
+                renderers={},
+            )
 
     def test_render_for_console_text(self) -> None:
         from agm.agl.eval.values import TextValue
@@ -1319,3 +1350,82 @@ class TestRuntimeErrorPaths:
 
         result = _convert_input("b", True, BoolType())
         assert result == BoolValue(True)
+
+
+class TestRegisteredRendererInvoked:
+    """F1 (M3b): a host-registered renderer is actually invoked at eval time.
+
+    Before F1 the registered renderer was never threaded into the interpreter,
+    so ``${x as myrender}`` silently produced the *default* boundary-marked
+    rendering.  These end-to-end tests run a program through ``run()`` with a
+    stub agent and assert the agent's received prompt contains the custom
+    renderer's distinctive output.
+    """
+
+    def test_custom_renderer_output_reaches_agent_prompt(self) -> None:
+        received: list[AgentRequest] = []
+
+        def agent(req: AgentRequest) -> str:
+            received.append(req)
+            return "ok"
+
+        def my_render(value: object, name: str | None) -> str:
+            # Distinctive marker the default renderer would never emit.
+            return "[[CUSTOM-RENDER]]"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        rt.register_renderer("myrender", my_render)
+        result = rt.run(
+            'input x\nlet y = prompt "see: ${x as myrender}"',
+            inputs={"x": "ignored-by-custom-renderer"},
+        )
+        assert result.ok is True
+        assert received, "agent should have been called"
+        prompt = received[0].prompt
+        assert "[[CUSTOM-RENDER]]" in prompt
+        # The default text boundary marker must NOT appear: the custom renderer
+        # fully replaced the default rendering.
+        assert "<dsl-value" not in prompt
+
+    def test_custom_renderer_receives_value_and_name(self) -> None:
+        received: list[AgentRequest] = []
+        seen: list[tuple[object, str | None]] = []
+
+        def agent(req: AgentRequest) -> str:
+            received.append(req)
+            return "ok"
+
+        def my_render(value: object, name: str | None) -> str:
+            seen.append((value, name))
+            from agm.agl.eval.values import TextValue
+
+            assert isinstance(value, TextValue)
+            return f"<{value.value}|{name}>"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        rt.register_renderer("tag", my_render)
+        result = rt.run(
+            'input x\nlet y = prompt "${x as tag}"', inputs={"x": "payload"}
+        )
+        assert result.ok is True
+        assert seen and seen[0][1] == "x"
+        assert "<payload|x>" in received[0].prompt
+
+    def test_builtin_renderer_still_used_when_no_override(self) -> None:
+        """A program with no ``as`` override still gets the default rendering."""
+        received: list[AgentRequest] = []
+
+        def agent(req: AgentRequest) -> str:
+            received.append(req)
+            return "ok"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        rt.register_renderer("unused", lambda v, n: "NOPE")
+        result = rt.run(
+            'input x\nlet y = prompt "${x}"', inputs={"x": "hello"}
+        )
+        assert result.ok is True
+        # Default text rendering is boundary-marked; the custom renderer is NOT
+        # applied to a plain ``${x}``.
+        assert "<dsl-value" in received[0].prompt
+        assert "NOPE" not in received[0].prompt

@@ -813,10 +813,16 @@ class Interpreter:
 
         command = self._eval_template_for_shell(expr.template, scope)
 
-        # Run the command via ``sh -c``.
+        # Run the command via ``sh -c``.  ``isolate_process_group=True`` is
+        # required by ``run_capture_result``'s idle-timeout contract: it runs
+        # ``sh`` in its own process group so the idle-timeout kill tears down the
+        # WHOLE process tree.  Without it, an orphaned grandchild (e.g. a
+        # ``sleep`` spawned by a compound command) keeps the stdout pipe open and
+        # the idle timeout never bounds wall time (F1).
         result = run_capture_result(
             ["sh", "-c", command],
             idle_timeout=self._shell_exec_timeout,
+            isolate_process_group=True,
         )
 
         exec_span = expr.span
@@ -872,8 +878,11 @@ class Interpreter:
         # §11.13 item 4 — mirrors ``$(...)`` command substitution behaviour).
         stdout = result.stdout.rstrip("\n")
 
-        # Emit exec_command trace record (success path, exit code 0).
-        self._trace.exec_command(
+        # Emit exec_command trace record (success path, exit code 0).  Its
+        # ``trace_id`` is threaded into the parse loop so a typed-target parse
+        # failure raises an ``AgentParseError`` that links back to THIS record
+        # (F3) rather than carrying an empty id.
+        exec_trace_id = self._trace.exec_command(
             command=command,
             exit_code=result.returncode if result.returncode is not None else 0,
             stdout=stdout,
@@ -905,7 +914,7 @@ class Interpreter:
             _last_raw: str | None,
             _last_errors: tuple[ValidationError, ...],
         ) -> tuple[str, str]:
-            return stdout, ""
+            return stdout, exec_trace_id
 
         def make_failure_message(_last_raw: str | None, max_attempts: int) -> str:
             return (

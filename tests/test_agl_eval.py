@@ -4668,6 +4668,70 @@ class TestShellExecInterpreter:
         assert result.bindings.get("x") == IntValue(7)
 
 
+class TestExecIdleTimeoutBoundsWallTime:
+    """Regression: exec idle timeout must bound wall time for compound commands (F1)."""
+
+    def test_compound_command_idle_timeout_kills_whole_tree(self) -> None:
+        """A compound ``sh -c "sleep N; echo x"`` must be torn down at the idle
+        timeout, not run to completion.
+
+        Without ``isolate_process_group=True`` at the exec call site, the
+        orphaned ``sleep`` grandchild keeps the stdout pipe open and the idle
+        timeout never fires — wall time would be ~N seconds.  With the fix the
+        whole process group is killed and wall time stays near the timeout.
+
+        A generous-but-bounding elapsed assertion (< 3s for a 5s sleep with a
+        0.3s timeout) avoids flakiness while still proving the tree was killed.
+        """
+        import time
+
+        rt = WorkflowRuntime(shell_exec_timeout=0.3)
+        start = time.monotonic()
+        result = rt.run('let x = exec "sleep 5; echo x"\n')
+        elapsed = time.monotonic() - start
+
+        # The command timed out → catchable ExecError (not a 5s run to success).
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "ExecError"
+        assert result.error.fields.get("timed_out") is True
+        # Wall time bounded well below the 5s sleep: the tree was actually killed.
+        assert elapsed < 3.0, f"exec did not bound wall time: {elapsed:.1f}s elapsed"
+
+
+class TestExecParseErrorTraceLinkage:
+    """F3: typed-exec parse failure links to the exec_command record's trace_id."""
+
+    def test_uncaught_exec_parse_failure_links_to_exec_command_record(
+        self, tmp_path: "object"
+    ) -> None:
+        """With logging on, an uncaught exec-parse AgentParseError carries the
+        SAME non-empty ``trace_id`` as the emitted ``exec_command`` record."""
+        import json
+        from pathlib import Path
+
+        log_file = Path(str(tmp_path)) / "trace.log"
+        rt = WorkflowRuntime()
+        result = rt.run('let x: int = exec "echo not-an-int"\n', log_file=log_file)
+
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "AgentParseError"
+        error_trace_id = result.error.fields.get("trace_id")
+        assert isinstance(error_trace_id, str)
+        assert error_trace_id != ""
+
+        # The exception's trace_id must equal the exec_command record's id.
+        records = [
+            json.loads(line)
+            for line in log_file.read_text().splitlines()
+            if line.strip()
+        ]
+        exec_records = [r for r in records if r["kind"] == "exec_command"]
+        assert len(exec_records) == 1
+        assert exec_records[0]["trace_id"] == error_trace_id
+
+
 class TestRenderForShell:
     """Unit tests for the render_for_shell function and _shell_plain_text helper."""
 

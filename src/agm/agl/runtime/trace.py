@@ -22,6 +22,7 @@ Design §12.6 record format followed:
 
 from __future__ import annotations
 
+import sys
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -57,6 +58,10 @@ class TraceStore:
     def __init__(self, path: Path | None) -> None:
         self._path = path
         self._run_id: str = new_trace_id()
+        # Set once a trace write fails: logging is disabled for the rest of the
+        # run and a single warning is emitted (F2b).  Program semantics are
+        # unaffected — a failed trace write must never abort the run.
+        self._disabled: bool = False
 
     def new_event_id(self) -> str:
         """Return a fresh event-level trace id.
@@ -82,14 +87,26 @@ class TraceStore:
         return self._run_id
 
     def _emit(self, kind: str, trace_id: str, extra: dict[str, object]) -> None:
-        """Append one JSONL record to the trace file."""
+        """Append one JSONL record to the trace file (best-effort).
+
+        A trace write must never corrupt program semantics: if the file becomes
+        unwritable mid-run (e.g. permissions change), the ``OSError`` is caught,
+        a single ``warning: trace logging disabled: <reason>`` line is emitted to
+        stderr, and the store is disabled for the rest of the run (F2b).
+        """
+        if self._disabled:
+            return
         record: dict[str, object] = {
             "run_id": self._run_id,
             "kind": kind,
             "trace_id": trace_id,
         }
         record.update(extra)
-        append_jsonl(self._path, record)
+        try:
+            append_jsonl(self._path, record)
+        except OSError as exc:
+            self._disabled = True
+            print(f"warning: trace logging disabled: {exc}", file=sys.stderr)
 
     def run_start(self) -> None:
         """Record the start of a run (boundary marker)."""
@@ -199,10 +216,17 @@ class TraceStore:
         stderr: str,
         timed_out: bool,
         span: "SourceSpan | None" = None,
-    ) -> None:
-        """Record a completed ``exec`` shell command (success or failure)."""
+    ) -> str:
+        """Record a completed ``exec`` shell command; return the event ``trace_id``.
+
+        Returns a fresh id even when logging is disabled (no record written) so
+        callers can always thread a valid ``trace_id`` through — mirroring
+        ``agent_call_attempt`` so a typed-exec ``AgentParseError`` can link to
+        the ``exec_command`` record (F3).
+        """
+        trace_id = new_trace_id()
         if self._path is None:
-            return
+            return trace_id
         extra: dict[str, object] = {
             "command": command,
             "exit_code": exit_code,
@@ -213,7 +237,8 @@ class TraceStore:
         if span is not None:
             extra["line"] = span.start_line
             extra["col"] = span.start_col
-        self._emit("exec_command", new_trace_id(), extra)
+        self._emit("exec_command", trace_id, extra)
+        return trace_id
 
     def exception(
         self,

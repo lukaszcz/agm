@@ -2530,7 +2530,7 @@ class TestCheckerViaAstRemaining:
         has its type recorded first), so it is verified as a unit contract here.
         """
         from agm.agl.scope.resolver import resolve
-        from agm.agl.scope.symbols import BindingRef
+        from agm.agl.scope.symbols import BinderKind, BindingRef
         from agm.agl.typecheck.checker import _Checker
         from agm.agl.typecheck.env import TypeEnvironment
 
@@ -2539,7 +2539,11 @@ class TestCheckerViaAstRemaining:
             env=TypeEnvironment(), resolved=resolved, capabilities=default_capabilities()
         )
         ref = BindingRef(
-            name="ghost", mutable=False, decl_span=_tc_sp(), decl_node_id=999999
+            name="ghost",
+            mutable=False,
+            decl_span=_tc_sp(),
+            decl_node_id=999999,
+            kind=BinderKind.let_binding,
         )
         with pytest.raises(AssertionError):
             checker._require_binding_type(ref)

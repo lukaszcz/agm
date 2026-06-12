@@ -14,6 +14,8 @@ Covers:
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from agm.agl import AglError, SourceSpan, WorkflowRuntime
@@ -1549,3 +1551,74 @@ class TestShellExecTimeoutProperty:
     def test_shell_exec_timeout_kwarg_is_observable(self) -> None:
         rt = WorkflowRuntime(shell_exec_timeout=30.0)
         assert rt.shell_exec_timeout == 30.0
+
+
+# Permission-based tests: chmod 0o444 has no effect for root, who can write
+# regardless.  Skip there rather than assert a false negative.
+_skip_if_root = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="permission tests are meaningless as root (root bypasses file modes)",
+)
+
+
+class TestTraceWriteFailureIsBestEffort:
+    """F2b: a mid-run trace write failure must not corrupt program semantics."""
+
+    def test_emit_failure_warns_once_and_disables_store(
+        self,
+        tmp_path: "object",
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failing ``append_jsonl`` is caught: one stderr warning is emitted,
+        the store disables itself, and no further writes are attempted."""
+        from pathlib import Path
+
+        from agm.agl.runtime.trace import TraceStore
+
+        store = TraceStore(path=Path(str(tmp_path)) / "trace.log")
+        calls = {"n": 0}
+
+        def failing_append(_path: object, _record: object) -> None:
+            calls["n"] += 1
+            raise OSError("disk gone")
+
+        import agm.agl.runtime.trace as trace_mod
+
+        monkeypatch.setattr(trace_mod, "append_jsonl", failing_append)
+        store.run_start()  # first emit → fails, warns, disables
+        store.print_stmt(rendered="hi")  # disabled → no further attempt
+        store.run_end(ok=True)
+
+        # Only the first emit attempted a write; the rest short-circuit.
+        assert calls["n"] == 1
+        err = capsys.readouterr().err
+        assert err.count("trace logging disabled") == 1
+        assert "disk gone" in err
+
+    @_skip_if_root
+    def test_run_completes_when_trace_becomes_unwritable_midrun(
+        self, tmp_path: "object", capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A real chmod-444 mid-run leaves the program semantics intact: every
+        statement still runs and the RunResult is a normal success."""
+        from pathlib import Path
+
+        log_file = Path(str(tmp_path)) / "trace.log"
+        rt = WorkflowRuntime()
+
+        # Pre-create the trace file and make it read-only so the first record
+        # write (run_start) fails — the run must still complete normally.
+        log_file.write_text("")
+        log_file.chmod(0o444)
+
+        program = 'print "a"\nprint "b"\nprint "c"\n'
+        result = rt.run(program, log_file=log_file)
+
+        # Program semantics unaffected: clean success, all prints emitted.
+        assert result.ok is True
+        assert result.error is None
+        out = capsys.readouterr()
+        assert out.out == "a\nb\nc\n"
+        # Exactly one warning about disabled trace logging.
+        assert out.err.count("trace logging disabled") == 1

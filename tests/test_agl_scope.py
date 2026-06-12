@@ -221,6 +221,46 @@ class TestSetErrors:
         assert line == 2
         assert "spec" in msg
 
+    def test_set_on_let_names_let(self) -> None:
+        # A genuine let binding still reports the 'let' phrasing (F8).
+        err = reject_scope("let stable = 1\nset stable = 2")
+        _, msg = diag(err)
+        assert "let" in msg
+        assert "immutable" in msg
+
+    def test_set_on_input_names_input_not_let(self) -> None:
+        # An input binding must NOT be mislabelled as declared with 'let' (F8).
+        err = reject_scope("input spec\nset spec = 2")
+        _, msg = diag(err)
+        assert "input" in msg
+        assert "declared with 'let'" not in msg
+
+    def test_set_on_catch_binder_names_catch_not_let(self) -> None:
+        # Mutating a catch binder must name the catch binder, not 'let' (F8).
+        err = reject_scope(
+            "try\n"
+            "  pass\n"
+            "catch _ as err =>\n"
+            "  set err = 1\n"
+        )
+        line, msg = diag(err)
+        assert line == 4
+        assert "catch binder" in msg
+        assert "declared with 'let'" not in msg
+
+    def test_set_on_pattern_binding_names_pattern_not_let(self) -> None:
+        # Mutating a pattern variable must name the pattern binding, not 'let' (F8).
+        err = reject_scope(
+            "let v = 1\n"
+            "case v of\n"
+            "  | n =>\n"
+            "    set n = 2\n"
+        )
+        line, msg = diag(err)
+        assert line == 4
+        assert "pattern binding" in msg
+        assert "declared with 'let'" not in msg
+
 
 # ---------------------------------------------------------------------------
 # Rejection: undefined name reads

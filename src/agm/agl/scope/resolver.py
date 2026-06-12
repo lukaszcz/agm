@@ -42,7 +42,14 @@ already in place.
 
 from __future__ import annotations
 
-from agm.agl.scope.symbols import AglScopeError, BindingRef, CallKind, ResolvedProgram, ScopeNode
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    BinderKind,
+    BindingRef,
+    CallKind,
+    ResolvedProgram,
+    ScopeNode,
+)
 from agm.agl.syntax.nodes import (
     AgentCall,
     CaseExprBranch,
@@ -75,6 +82,22 @@ from agm.agl.syntax.visitor import Visitor
 
 # Reserved contextual keyword names that may not be used as variable names.
 _RESERVED_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
+
+# Per-binder phrasing for the ``set``-on-immutable rejection (F8).  Each phrase
+# completes ``Cannot assign to 'x': <phrase> (immutable).`` and names the ACTUAL
+# binder kind so a catch binder or pattern binding is not mislabelled as a
+# ``let``.  ``var`` is mutable so it never reaches this table.
+_IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
+    BinderKind.let_binding: "it was declared with 'let'",
+    BinderKind.input_binding: "it is an 'input' binding",
+    BinderKind.catch_binder: "it is a catch binder",
+    BinderKind.pattern_binding: "it is a pattern binding",
+}
+
+
+def _immutable_binder_phrase(kind: BinderKind) -> str:
+    """Return the ``set``-rejection phrase naming *kind*'s binder (F8)."""
+    return _IMMUTABLE_BINDER_PHRASES[kind]
 
 
 class _Resolver(Visitor):
@@ -195,6 +218,7 @@ class _Resolver(Visitor):
             mutable=False,
             decl_span=stmt.span,
             decl_node_id=stmt.node_id,
+            kind=BinderKind.let_binding,
         )
         self._define(stmt.name, ref)
 
@@ -206,6 +230,7 @@ class _Resolver(Visitor):
             mutable=True,
             decl_span=stmt.span,
             decl_node_id=stmt.node_id,
+            kind=BinderKind.var_binding,
         )
         self._define(stmt.name, ref)
 
@@ -218,7 +243,8 @@ class _Resolver(Visitor):
             )
         if not ref.mutable:
             raise AglScopeError(
-                f"Cannot assign to '{stmt.target}': it was declared with 'let' (immutable).",
+                f"Cannot assign to '{stmt.target}': "
+                f"{_immutable_binder_phrase(ref.kind)} (immutable).",
                 span=stmt.span,
             )
         self._resolution[stmt.node_id] = ref
@@ -237,6 +263,7 @@ class _Resolver(Visitor):
             mutable=False,
             decl_span=stmt.span,
             decl_node_id=stmt.node_id,
+            kind=BinderKind.input_binding,
         )
         self._define(stmt.name, ref)
 
@@ -314,6 +341,7 @@ class _Resolver(Visitor):
                 mutable=False,
                 decl_span=clause.span,
                 decl_node_id=clause.node_id,
+                kind=BinderKind.catch_binder,
             )
             catch_scope.define(clause.binding, ref)
         for s in clause.body:
@@ -333,6 +361,7 @@ class _Resolver(Visitor):
                 mutable=False,
                 decl_span=pattern.span,
                 decl_node_id=pattern.node_id,
+                kind=BinderKind.pattern_binding,
             )
             scope.define(pattern.name, ref)
         elif isinstance(pattern, ConstructorPattern):

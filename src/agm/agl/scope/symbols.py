@@ -27,6 +27,31 @@ from agm.agl.syntax.spans import SourceSpan
 # ---------------------------------------------------------------------------
 
 
+class BinderKind(enum.Enum):
+    """How an immutable (or mutable) binding was introduced.
+
+    Used to phrase a precise ``set`` rejection message that names the ACTUAL
+    binder kind, rather than always blaming ``let`` (F8).
+
+    ``let_binding``
+        A ``let`` declaration (immutable).
+    ``var_binding``
+        A ``var`` declaration (mutable).
+    ``input_binding``
+        An ``input`` declaration (immutable, root-scope).
+    ``catch_binder``
+        The binder introduced by a ``catch e`` clause (immutable, branch-local).
+    ``pattern_binding``
+        A variable introduced by a ``case``/``match`` pattern (immutable).
+    """
+
+    let_binding = "let_binding"
+    var_binding = "var_binding"
+    input_binding = "input_binding"
+    catch_binder = "catch_binder"
+    pattern_binding = "pattern_binding"
+
+
 class CallKind(enum.Enum):
     """Classification of a resolved agent call.
 
@@ -62,12 +87,17 @@ class BindingRef:
     ``decl_node_id``
         The ``node_id`` of the declaration node (``LetDecl``, ``VarDecl``,
         ``InputDecl``, ``VarPattern``, or ``CatchClause``).
+    ``kind``
+        How the binding was introduced (``let``/``var``/``input``/catch
+        binder/pattern binding).  Drives the precise ``set`` rejection message
+        so a mutation of a catch binder is not mislabelled as a ``let`` (F8).
     """
 
     name: str
     mutable: bool
     decl_span: SourceSpan
     decl_node_id: int
+    kind: BinderKind
 
 
 # ---------------------------------------------------------------------------

@@ -40,7 +40,7 @@ from agm.config.context import current_config_context
 from agm.config.general import load_exec_config
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
-from agm.core.fs import read_text_arg
+from agm.core.fs import append_text, mkdir, read_text_arg
 from agm.core.log import resolve_log_file
 
 
@@ -72,6 +72,20 @@ def run(args: ExecArgs) -> None:
             no_log=args.no_log,
             log_file=args.log_file,
         )
+
+    # Validate/create the trace path up front so a non-writable --log-file
+    # surfaces as a clean ``Error: ...`` + exit 1 BEFORE any program statement
+    # runs, instead of a raw PermissionError traceback mid-run (F2a).
+    if log_file is not None:
+        try:
+            mkdir(log_file.parent, parents=True, exist_ok=True)
+            # Touch-append to confirm the path is actually writable.  An empty
+            # append creates the file without writing a record, so a later
+            # successful run starts from a clean (empty) trace.
+            append_text(log_file, "", encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot write trace log to {log_file}: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
     runtime = WorkflowRuntime(
         default_loop_limit=loop_limit,

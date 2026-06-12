@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Protocol
 
@@ -276,7 +277,9 @@ class TestExecCommandBehavior:
         assert captured.err
 
 
-def _exec_args(agl_file: Path, *, inputs: list[str] | None = None) -> ExecArgs:
+def _exec_args(
+    agl_file: Path, *, inputs: list[str] | None = None, log_file: str | None = None
+) -> ExecArgs:
     """Build ExecArgs for *agl_file* with all optional flags defaulted."""
     return ExecArgs(
         file=str(agl_file),
@@ -285,8 +288,45 @@ def _exec_args(agl_file: Path, *, inputs: list[str] | None = None) -> ExecArgs:
         max_iters=None,
         runner=None,
         no_log=False,
-        log_file=None,
+        log_file=log_file,
     )
+
+
+_skip_if_root = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="permission tests are meaningless as root (root bypasses file modes)",
+)
+
+
+class TestExecLogFileValidatedUpFront:
+    """F2a: a non-writable --log-file fails up front with a clean Error + exit 1."""
+
+    @_skip_if_root
+    def test_unwritable_log_dir_exits_1_with_clean_error_before_running(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A --log-file under a read-only directory yields ``Error: ...`` + exit 1
+        BEFORE any program statement runs (no raw PermissionError traceback)."""
+        agl_file = tmp_path / "test.agl"
+        # If the program ran, it would print to stdout — it must NOT.
+        agl_file.write_text('print "should-not-run"\n')
+
+        ro_dir = tmp_path / "ro"
+        ro_dir.mkdir()
+        ro_dir.chmod(0o555)
+        log_path = ro_dir / "trace.log"
+
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                exec_command.run(_exec_args(agl_file, log_file=str(log_path)))
+        finally:
+            ro_dir.chmod(0o755)  # restore so tmp_path cleanup succeeds
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        # Up-front failure: the program never ran, so no program output.
+        assert "should-not-run" not in captured.out
 
 
 class TestExecCommandEdgePaths:

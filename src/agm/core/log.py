@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 from agm.core.fs import append_text, mkdir
@@ -48,3 +51,30 @@ def prepare_log_file(
         return
     print(f"Logging to {display_path(log_file)}")
     mkdir(log_file.parent, parents=True, exist_ok=True)
+
+
+def _jsonl_default(obj: object) -> str:
+    """JSON serializer for types not handled by the stdlib encoder.
+
+    ``Decimal`` is emitted as exact fixed-point text (never via float).
+    """
+    if isinstance(obj, Decimal):
+        return format(obj, "f")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def append_jsonl(path: Path | None, record: Mapping[str, object]) -> None:
+    """Append *record* as a single JSONL line to *path*.
+
+    A DSL-agnostic helper (plan §11.1): any command that needs structured
+    append-a-record logging can use this rather than writing its own JSONL
+    emitter.  ``Decimal`` values are serialized exactly (no float round-trip,
+    design §5.1).
+
+    If *path* is ``None`` this is a no-op (logging disabled).
+    """
+    if path is None:
+        return
+    obj: dict[str, object] = {k: v for k, v in record.items()}
+    line = json.dumps(obj, default=_jsonl_default, ensure_ascii=False) + "\n"
+    append_text(path, line, encoding="utf-8")

@@ -405,10 +405,10 @@ Options:
   JSON), then validates it strictly against the schema. The recovered (normalized) value is
   traced alongside the raw output.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
-- `--runner COMMAND`: Override the default agent runner command (**not yet active**, lands
-  in M5).
-- `--log-file PATH`: Write trace log to PATH (**not yet active**, lands in M5).
-- `--no-log`: Disable trace logging (**not yet active**, lands in M5).
+- `--runner COMMAND`: Override the default agent runner command (not yet active, lands in M5).
+- `--log-file PATH`: Write a structured JSONL trace log to PATH (default: auto-generated under
+  `.agent-files/`).
+- `--no-log`: Disable trace logging entirely.
 - `--dry-run`: Run the full static pipeline, input validation, and contract
   materialization, then stop before executing any statement (static errors exit 1; a clean
   check exits 0 with no program output).  When the check succeeds and one or more agent-call

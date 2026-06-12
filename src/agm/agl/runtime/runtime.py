@@ -18,6 +18,8 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.runtime.agents import AgentFn
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from agm.agl.eval.values import ExceptionValue, Value
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.render import RendererFn
@@ -112,6 +114,10 @@ class RunResult:
         Static call-site inventory populated when ``check_only=True``
         (``agm exec --dry-run``).  One entry per agent-call/exec site in
         source order.  Empty for ordinary runs.
+    ``trace_path``
+        Path of the JSONL trace file written during this run, or ``None``
+        when logging was disabled (``--no-log``) or the run was a dry-run.
+        This is the handle referred to in plan §8.3.
     """
 
     ok: bool
@@ -120,6 +126,7 @@ class RunResult:
     warnings: list[Diagnostic] = field(default_factory=list)
     bindings: dict[str, Value] = field(default_factory=dict)
     call_sites: tuple[CallSiteInfo, ...] = field(default_factory=tuple)
+    trace_path: Path | None = field(default=None)
 
 
 class WorkflowRuntime:
@@ -269,6 +276,7 @@ class WorkflowRuntime:
         *,
         inputs: Mapping[str, object] | None = None,
         check_only: bool = False,
+        log_file: "Path | None" = None,
     ) -> RunResult:
         """Parse, analyse, and (unless ``check_only``) execute an AgL program.
 
@@ -283,6 +291,11 @@ class WorkflowRuntime:
         output; static/input errors still return ``ok=False``.  On a clean
         ``check_only`` run the §10.1 static call-site inventory is populated on
         ``RunResult.call_sites`` (printed by ``agm exec --dry-run``).
+
+        ``log_file`` is the path of the JSONL trace file to write.  When
+        ``None`` (the default) no trace is written.  Dry-run (``check_only``)
+        never writes a trace regardless of *log_file* (plan §10.1: dry-run
+        is side-effect-free).
 
         Returns a ``RunResult`` capturing the outcome.
         """
@@ -514,6 +527,7 @@ class WorkflowRuntime:
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement (no program output, no side effects).
         # Build the §10.1 static call-site inventory before returning.
+        # Dry-run is side-effect-free: no trace is written (plan §10.1).
         # ----------------------------------------------------------------
         if check_only:
             inventory = _build_call_inventory(checked, contracts)
@@ -524,6 +538,7 @@ class WorkflowRuntime:
                 warnings=list(warnings),
                 bindings={},
                 call_sites=tuple(inventory),
+                trace_path=None,
             )
 
         # ----------------------------------------------------------------
@@ -532,6 +547,16 @@ class WorkflowRuntime:
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.runtime.trace import TraceStore
+
+        # Create the trace store for this run.  When log_file is None the
+        # store is a no-op and no file is touched.
+        trace = TraceStore(path=log_file)
+        if log_file is not None:
+            from agm.core.fs import mkdir
+
+            mkdir(log_file.parent, parents=True, exist_ok=True)
+        trace.run_start()
 
         typed_contracts: dict[int, OutputContract] = {
             nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
@@ -547,6 +572,7 @@ class WorkflowRuntime:
             strict_json=self._default_strict_json,
             source=source,
             shell_exec_timeout=self._shell_exec_timeout,
+            trace=trace,
         )
 
         try:
@@ -557,16 +583,26 @@ class WorkflowRuntime:
             # exception is an interpreter bug and must propagate (crash loudly)
             # rather than masquerade as a user-facing pre-execution diagnostic.
             error = _exception_value_to_run_error(exc.exc)
+            # Record the uncaught exception in the trace.
+            trace_id = str(error.fields.get("trace_id", ""))
+            trace.exception(
+                type_name=error.type_name,
+                message=str(error.fields.get("message", "")),
+                trace_id=trace_id,
+            )
+            trace.run_end(ok=False)
             return RunResult(
                 ok=False,
                 diagnostics=[],
                 error=error,
                 warnings=list(warnings),
                 bindings={},
+                trace_path=log_file,
             )
 
         # Successful run: snapshot root bindings.
         root_bindings = root_scope.snapshot()
+        trace.run_end(ok=True)
 
         return RunResult(
             ok=True,
@@ -574,6 +610,7 @@ class WorkflowRuntime:
             error=None,
             warnings=list(warnings),
             bindings=root_bindings,
+            trace_path=log_file,
         )
 
     @property

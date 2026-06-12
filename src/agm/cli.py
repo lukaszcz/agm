@@ -821,7 +821,7 @@ def exec_cmd(
     strict_json: bool | None = typer.Option(
         None,
         "--strict-json/--no-strict-json",
-        help="Require bare JSON output from agents (lenient recovery not yet active, lands in M2).",
+        help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
     ),
     max_iters: int | None = typer.Option(
         None,
@@ -836,13 +836,13 @@ def exec_cmd(
     log_file: str | None = typer.Option(
         None,
         "--log-file",
-        help="Write trace log to PATH (not yet active, lands in M5).",
+        help="Write a structured JSONL trace log to PATH.",
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(
         False,
         "--no-log",
-        help="Disable trace logging (not yet active, lands in M5).",
+        help="Disable trace logging.",
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),

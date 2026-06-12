@@ -21,8 +21,12 @@ Flag notes:
       return exactly one bare JSON value; the default is lenient recovery
       (fence/prose stripping + trivial repair, then strict schema validation).
       A source-level ``strict_json`` call option overrides this default.
-    - ``--runner`` and ``--log-file``/``--no-log`` are accepted but inert until
-      the runner-backed default agent and trace logging land in M5.
+    - ``--log-file PATH`` writes a structured JSONL trace under the given path.
+    - ``--no-log`` disables trace logging entirely.
+    - ``--runner`` is accepted but inert until the runner-backed default agent
+      lands in M5.
+    - ``--dry-run`` (global flag) runs only the static pipeline + contract
+      materialization and never writes a trace (side-effect-free).
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from agm.config.general import load_exec_config
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
 from agm.core.fs import read_text_arg
+from agm.core.log import resolve_log_file
 
 
 def run(args: ExecArgs) -> None:
@@ -57,6 +62,17 @@ def run(args: ExecArgs) -> None:
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
     loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
 
+    # Resolve the trace log file.  --dry-run is side-effect-free: no trace
+    # is written regardless of --log-file (plan §10.1).
+    if dry_run.enabled():
+        log_file = None
+    else:
+        log_file = resolve_log_file(
+            command_name="exec",
+            no_log=args.no_log,
+            log_file=args.log_file,
+        )
+
     runtime = WorkflowRuntime(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
@@ -65,7 +81,12 @@ def run(args: ExecArgs) -> None:
 
     # ``parse_inputs`` returns ``dict[str, str]``; ``run`` accepts a
     # ``Mapping[str, object]``, so no widening copy is needed.
-    result = runtime.run(source, inputs=inputs, check_only=dry_run.enabled())
+    result = runtime.run(
+        source,
+        inputs=inputs,
+        check_only=dry_run.enabled(),
+        log_file=log_file,
+    )
 
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.

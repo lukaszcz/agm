@@ -1,0 +1,713 @@
+"""Behavior tests for the AgL trace store (M4d).
+
+All assertions are on *observable* outcomes: what ends up in the trace file,
+whether a file is created at all, and whether exception trace_ids match
+records in the file.  No internal TraceStore methods are called directly.
+"""
+
+from __future__ import annotations
+
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+import agm.commands.exec as exec_command
+from agm.agl import WorkflowRuntime
+from agm.agl.runtime import AgentRequest, AgentResponse
+from agm.commands.args import ExecArgs
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _agent_returning(text: str):
+    """Return a stub agent callable that always returns *text*."""
+
+    def agent(request: AgentRequest) -> AgentResponse:
+        return AgentResponse(content=text)
+
+    return agent
+
+
+def _load_jsonl(path: Path) -> list[dict[str, object]]:
+    """Read a JSONL file and return a list of decoded records."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+def _exec_args(
+    agl_file: Path,
+    *,
+    log_file: str | None = None,
+    no_log: bool = False,
+    inputs: list[str] | None = None,
+) -> ExecArgs:
+    return ExecArgs(
+        file=str(agl_file),
+        inputs=inputs or [],
+        strict_json=None,
+        max_iters=None,
+        runner=None,
+        no_log=no_log,
+        log_file=log_file,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 1. Trace file created at a custom --log-file path
+# ---------------------------------------------------------------------------
+
+
+class TestTraceFileCreated:
+    def test_trace_file_created_at_custom_path(self, tmp_path: Path) -> None:
+        """A custom --log-file path receives JSONL trace output after a run."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        result = rt.run('let x = 1\nprint "hello"', log_file=log_path)
+        assert result.ok
+        assert log_path.exists(), "trace file must be created when log_file is given"
+
+    def test_trace_file_has_jsonl_content(self, tmp_path: Path) -> None:
+        """Each line of the trace file is a valid JSON object."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('let x = 1\nprint "hello"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        assert len(records) >= 1
+        for rec in records:
+            assert isinstance(rec, dict)
+
+    def test_trace_file_not_created_when_no_log(self, tmp_path: Path) -> None:
+        """When log_file is None (no-log semantics), no trace file is written."""
+        rt = WorkflowRuntime()
+        result = rt.run('let x = 1\nprint "hello"', log_file=None)
+        assert result.ok
+        # No trace file: any file created would be under .agent-files/ which
+        # we cannot check here, but RunResult.trace_path should be None.
+        assert result.trace_path is None
+
+    def test_run_result_exposes_trace_path(self, tmp_path: Path) -> None:
+        """RunResult.trace_path is the Path of the written JSONL file."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        result = rt.run('let x = 1', log_file=log_path)
+        assert result.ok
+        assert result.trace_path == log_path
+
+
+# ---------------------------------------------------------------------------
+# 2. Record kinds: print, mutation (set), exec command, agent call
+# ---------------------------------------------------------------------------
+
+
+class TestPrintRecord:
+    def test_print_produces_trace_record(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('print "hello world"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        assert "print" in kinds
+
+    def test_print_record_has_value(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('print "hello world"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        print_recs = [r for r in records if r.get("kind") == "print"]
+        assert print_recs
+        # The rendered value should contain the printed text.
+        assert any("hello world" in str(r.get("rendered", "")) for r in print_recs)
+
+    def test_print_record_has_span(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('print "hello"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        print_recs = [r for r in records if r.get("kind") == "print"]
+        assert print_recs
+        rec = print_recs[0]
+        assert "line" in rec or "span" in rec
+
+
+class TestMutationRecord:
+    def test_set_produces_mutation_record(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run("var x = 1\nset x = 2", log_file=log_path)
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        assert "mutation" in kinds
+
+    def test_mutation_record_has_name_and_value(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run("var x = 1\nset x = 42", log_file=log_path)
+        records = _load_jsonl(log_path)
+        mut_recs = [r for r in records if r.get("kind") == "mutation"]
+        assert mut_recs
+        rec = mut_recs[0]
+        assert rec.get("name") == "x"
+
+
+class TestExecCommandRecord:
+    def test_exec_produces_exec_record(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('let x: text = exec "echo hi"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        assert "exec_command" in kinds
+
+    def test_exec_record_has_exit_code(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('let x: text = exec "echo hi"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
+        assert exec_recs
+        rec = exec_recs[0]
+        assert rec.get("exit_code") == 0
+
+    def test_exec_record_has_stdout(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('let x: text = exec "echo captured"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
+        assert exec_recs
+        rec = exec_recs[0]
+        assert "captured" in rec.get("stdout", "")
+
+    def test_exec_record_has_command(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('let x: text = exec "echo hello"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
+        assert exec_recs
+        assert "echo hello" in exec_recs[0].get("command", "")
+
+
+class TestAgentCallRecord:
+    def test_agent_call_produces_attempt_record(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.register_agent("reviewer", _agent_returning("good"))
+        rt.run('let x: text = reviewer "check this"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        assert "agent_call_attempt" in kinds
+
+    def test_agent_call_record_has_agent_name(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.register_agent("critic", _agent_returning("ok"))
+        rt.run('let x: text = critic "review"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        assert call_recs
+        assert call_recs[0].get("agent") == "critic"
+
+    def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.register_agent("impl", _agent_returning("result"))
+        rt.run('let x: text = impl "do work"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        assert call_recs
+        assert isinstance(call_recs[0].get("attempt"), int)
+
+
+# ---------------------------------------------------------------------------
+# 3. Retry: multiple agent_call_attempt records
+# ---------------------------------------------------------------------------
+
+
+class TestRetryRecords:
+    def test_retry_produces_multiple_attempt_records(self, tmp_path: Path) -> None:
+        """With on_parse_error: retry[2], failed attempts appear in the trace."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        call_count = 0
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                return AgentResponse(content="not json")  # will fail to parse
+            return AgentResponse(content="42")
+
+        rt.register_agent("impl", agent)
+        rt.run(
+            'let x: int = impl[on_parse_error: retry[2]] "get int"',
+            log_file=log_path,
+        )
+        records = _load_jsonl(log_path)
+        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        assert len(call_recs) == 3
+
+    def test_retry_records_carry_attempt_index(self, tmp_path: Path) -> None:
+        """Attempt indices should be 0, 1, 2 for three attempts."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        call_count = 0
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                return AgentResponse(content="not json")
+            return AgentResponse(content="42")
+
+        rt.register_agent("impl", agent)
+        rt.run(
+            'let x: int = impl[on_parse_error: retry[2]] "get int"',
+            log_file=log_path,
+        )
+        records = _load_jsonl(log_path)
+        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        attempts = [r.get("attempt") for r in call_recs]
+        assert attempts == [0, 1, 2]
+
+    def test_parse_result_record_emitted_for_each_attempt(self, tmp_path: Path) -> None:
+        """A parse_result record follows each agent_call_attempt."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="not json at all")
+
+        rt.register_agent("impl", agent)
+        try:
+            rt.run(
+                'let x: int = impl[on_parse_error: retry[1]] "get int"',
+                log_file=log_path,
+            )
+        except SystemExit:
+            pass
+
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        assert "parse_result" in kinds
+
+
+# ---------------------------------------------------------------------------
+# 4. Exception record + trace_id linkage
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionRecord:
+    def test_uncaught_exception_produces_exception_record(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="not json")
+
+        rt.register_agent("impl", agent)
+        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        assert not result.ok
+        assert result.error is not None
+
+        records = _load_jsonl(log_path)
+        exc_recs = [r for r in records if r.get("kind") == "exception"]
+        assert exc_recs
+
+    def test_exception_record_has_type_name(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="not json")
+
+        rt.register_agent("impl", agent)
+        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        assert not result.ok
+
+        records = _load_jsonl(log_path)
+        exc_recs = [r for r in records if r.get("kind") == "exception"]
+        assert exc_recs[0].get("type_name") == "AgentParseError"
+
+    def test_exception_record_has_trace_id(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="not json")
+
+        rt.register_agent("impl", agent)
+        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        assert not result.ok
+
+        records = _load_jsonl(log_path)
+        exc_recs = [r for r in records if r.get("kind") == "exception"]
+        trace_id = exc_recs[0].get("trace_id")
+        assert isinstance(trace_id, str) and trace_id
+
+    def test_exception_trace_id_matches_agl_exception_field(self, tmp_path: Path) -> None:
+        """The trace_id in the exception record matches the .trace_id field on
+        the uncaught AgL exception (RunResult.error.fields['trace_id'])."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="not json")
+
+        rt.register_agent("impl", agent)
+        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        assert not result.ok
+        assert result.error is not None
+
+        records = _load_jsonl(log_path)
+        exc_recs = [r for r in records if r.get("kind") == "exception"]
+        assert exc_recs
+
+        # The trace_id in the exception record must match the one on the raised
+        # AgL exception (RunResult.error.fields['trace_id']).
+        rec_trace_id = exc_recs[0].get("trace_id")
+        agl_trace_id = result.error.fields.get("trace_id")
+        assert rec_trace_id == agl_trace_id
+        assert isinstance(rec_trace_id, str) and rec_trace_id
+
+    def test_caught_exception_does_not_produce_exception_record(
+        self, tmp_path: Path
+    ) -> None:
+        """An exception caught by try/catch is NOT written as an 'exception' record
+        (it was handled in-language and did not escape the program)."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="not json")
+
+        rt.register_agent("impl", agent)
+        # The AgentParseError is caught and the result is a fallback string.
+        result = rt.run(
+            'try\n'
+            '  let x: int = impl "get int"\n'
+            'catch AgentParseError as e =>\n'
+            '  let x = 0\n',
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        exc_recs = [r for r in records if r.get("kind") == "exception"]
+        assert not exc_recs, "caught exception must not produce an exception record"
+
+
+# ---------------------------------------------------------------------------
+# 5. run_start / run_end records
+# ---------------------------------------------------------------------------
+
+
+class TestRunBoundaryRecords:
+    def test_run_start_record_present(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run("let x = 1", log_file=log_path)
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        assert "run_start" in kinds
+
+    def test_run_end_record_present(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run("let x = 1", log_file=log_path)
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        assert "run_end" in kinds
+
+    def test_run_start_before_run_end(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run("let x = 1", log_file=log_path)
+        records = _load_jsonl(log_path)
+        kinds = [r.get("kind") for r in records]
+        start_idx = kinds.index("run_start")
+        end_idx = kinds.index("run_end")
+        assert start_idx < end_idx
+
+    def test_all_records_share_run_id(self, tmp_path: Path) -> None:
+        """Every record in a trace file carries the same run_id."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('var x = 1\nset x = 2\nprint "done"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        assert len(records) >= 3
+        run_ids = {r.get("run_id") for r in records}
+        assert len(run_ids) == 1
+        (run_id,) = run_ids
+        assert isinstance(run_id, str) and run_id
+
+
+# ---------------------------------------------------------------------------
+# 6. No-log semantics
+# ---------------------------------------------------------------------------
+
+
+class TestNoLog:
+    def test_no_log_writes_nothing(self, tmp_path: Path) -> None:
+        """With log_file=None the trace store is a no-op and no files are created."""
+        rt = WorkflowRuntime()
+        result = rt.run('let x = 1\nprint "silent"', log_file=None)
+        assert result.ok
+        # No JSONL files created anywhere in tmp_path.
+        jsonl_files = list(tmp_path.rglob("*.jsonl"))
+        assert not jsonl_files
+
+    def test_no_log_result_trace_path_is_none(self, tmp_path: Path) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1", log_file=None)
+        assert result.trace_path is None
+
+    def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
+        rt = WorkflowRuntime()
+        rt.register_agent("a", _agent_returning("hello"))
+        result = rt.run('let x: text = a "hi"', log_file=None)
+        assert result.ok
+        jsonl_files = list(tmp_path.rglob("*.jsonl"))
+        assert not jsonl_files
+
+
+# ---------------------------------------------------------------------------
+# 7. --no-log flag via exec command writes nothing
+# ---------------------------------------------------------------------------
+
+
+class TestExecNoLog:
+    def test_exec_no_log_flag_writes_nothing(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "hello"\n')
+        args = _exec_args(agl_file, no_log=True)
+        exec_command.run(args)
+        # No JSONL files created under tmp_path or any default path.
+        jsonl_files = list(tmp_path.rglob("*.jsonl"))
+        assert not jsonl_files
+
+    def test_exec_log_file_flag_creates_file(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let x = 1\nprint "hi"\n')
+        log_path = tmp_path / "out.jsonl"
+        args = _exec_args(agl_file, log_file=str(log_path))
+        exec_command.run(args)
+        assert log_path.exists()
+        records = _load_jsonl(log_path)
+        assert len(records) >= 1
+
+
+# ---------------------------------------------------------------------------
+# 8. Dry-run must NOT write a trace
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunNoTrace:
+    def test_dry_run_does_not_write_trace(self, tmp_path: Path) -> None:
+        """check_only=True (--dry-run) must produce no trace output."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1", log_file=log_path, check_only=True)
+        assert result.ok
+        # No trace file created for dry-run.
+        assert not log_path.exists()
+
+    def test_dry_run_trace_path_is_none(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1", log_file=log_path, check_only=True)
+        assert result.trace_path is None
+
+
+# ---------------------------------------------------------------------------
+# 9. Decimal exactness in traced values
+# ---------------------------------------------------------------------------
+
+
+class TestDecimalExactness:
+    def test_decimal_value_traced_exactly(self, tmp_path: Path) -> None:
+        """A Decimal in a mutation trace must survive round-trip without float error."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        # 0.1 + 0.2 should NOT produce the float approximation 0.30000000000000004.
+        rt.run(
+            "var x: decimal = 0.1\nset x = x + 0.2",
+            log_file=log_path,
+        )
+        records = _load_jsonl(log_path)
+        mut_recs = [r for r in records if r.get("kind") == "mutation"]
+        assert mut_recs
+        # The last mutation should have the value 0.3 (exact decimal semantics).
+        last_val = mut_recs[-1].get("value")
+        # Parsed from JSON: the serialized form must be "0.3" (not "0.30000...")
+        assert last_val == "0.3" or last_val == Decimal("0.3") or str(last_val) == "0.3"
+
+
+# ---------------------------------------------------------------------------
+# 10. Source spans in records
+# ---------------------------------------------------------------------------
+
+
+class TestSourceSpans:
+    def test_exec_record_has_source_span(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('let x: text = exec "echo hi"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
+        assert exec_recs
+        rec = exec_recs[0]
+        # Must have either top-level "line"/"col" or a "span" sub-object.
+        has_span = "line" in rec or ("span" in rec and isinstance(rec["span"], dict))
+        assert has_span
+
+    def test_agent_record_has_source_span(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.register_agent("impl", _agent_returning("hello"))
+        rt.run('let x: text = impl "do work"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
+        assert call_recs
+        rec = call_recs[0]
+        has_span = "line" in rec or ("span" in rec and isinstance(rec["span"], dict))
+        assert has_span
+
+
+# ---------------------------------------------------------------------------
+# 11. append_jsonl general helper in core/log
+# ---------------------------------------------------------------------------
+
+
+class TestAppendJsonl:
+    def test_append_jsonl_creates_file(self, tmp_path: Path) -> None:
+        from agm.core.log import append_jsonl
+
+        path = tmp_path / "out.jsonl"
+        append_jsonl(path, {"kind": "test", "value": 1})
+        assert path.exists()
+
+    def test_append_jsonl_writes_valid_json_line(self, tmp_path: Path) -> None:
+        from agm.core.log import append_jsonl
+
+        path = tmp_path / "out.jsonl"
+        append_jsonl(path, {"kind": "test", "value": 42})
+        content = path.read_text(encoding="utf-8")
+        assert content.strip()
+        obj = json.loads(content.strip())
+        assert obj["kind"] == "test"
+        assert obj["value"] == 42
+
+    def test_append_jsonl_appends_multiple_lines(self, tmp_path: Path) -> None:
+        from agm.core.log import append_jsonl
+
+        path = tmp_path / "out.jsonl"
+        append_jsonl(path, {"kind": "a"})
+        append_jsonl(path, {"kind": "b"})
+        records = _load_jsonl(path)
+        assert len(records) == 2
+        assert records[0]["kind"] == "a"
+        assert records[1]["kind"] == "b"
+
+    def test_append_jsonl_none_path_is_noop(self) -> None:
+        from agm.core.log import append_jsonl
+
+        # Must not raise when path is None.
+        append_jsonl(None, {"kind": "noop"})
+
+    def test_append_jsonl_decimal_exact(self, tmp_path: Path) -> None:
+        from agm.core.log import append_jsonl
+
+        path = tmp_path / "out.jsonl"
+        append_jsonl(path, {"value": Decimal("0.1")})
+        content = path.read_text(encoding="utf-8")
+        assert '"0.1"' in content or "0.1" in content
+        # Must NOT contain float-approximation digits.
+        assert "0.10000000000000001" not in content
+
+    def test_append_jsonl_unserializable_type_raises(self, tmp_path: Path) -> None:
+        """Non-JSON-serializable, non-Decimal values raise TypeError."""
+        from agm.core.log import append_jsonl
+
+        path = tmp_path / "out.jsonl"
+        with pytest.raises(TypeError):
+            append_jsonl(path, {"value": object()})
+
+
+# ---------------------------------------------------------------------------
+# 12. TraceStore properties and no-span branches
+# ---------------------------------------------------------------------------
+
+
+class TestTraceStoreProperties:
+    def test_trace_store_path_property(self, tmp_path: Path) -> None:
+        from agm.agl.runtime.trace import TraceStore
+
+        p = tmp_path / "t.jsonl"
+        ts = TraceStore(path=p)
+        assert ts.path == p
+
+    def test_trace_store_none_path_property(self) -> None:
+        from agm.agl.runtime.trace import TraceStore
+
+        ts = TraceStore(path=None)
+        assert ts.path is None
+
+    def test_trace_store_run_id_property(self, tmp_path: Path) -> None:
+        from agm.agl.runtime.trace import TraceStore
+
+        ts = TraceStore(path=tmp_path / "t.jsonl")
+        assert isinstance(ts.run_id, str) and ts.run_id
+
+    def test_trace_store_records_without_span(self, tmp_path: Path) -> None:
+        """Methods called with span=None still emit valid JSONL (no line/col keys)."""
+        import json as _json
+
+        from agm.agl.eval.values import IntValue
+        from agm.agl.runtime.trace import TraceStore
+
+        p = tmp_path / "t.jsonl"
+        ts = TraceStore(path=p)
+        ts.run_start()
+        ts.agent_call_attempt(agent="x", attempt=0, prompt="p", span=None)
+        ts.parse_result(ok=True, raw="r", normalized_raw="n", error_summary="", span=None)
+        ts.mutation(name="v", value=IntValue(1), span=None)
+        ts.print_stmt(rendered="hi", span=None)
+        ts.exec_command(
+            command="echo", exit_code=0, stdout="", stderr="", timed_out=False, span=None
+        )
+        ts.exception(type_name="Abort", message="stop", trace_id="abc", span=None)
+        ts.run_end(ok=True)
+
+        lines = p.read_text(encoding="utf-8").splitlines()
+        records = [_json.loads(ln) for ln in lines if ln.strip()]
+        # None of the records should carry "line" or "col" (span was None).
+        for rec in records:
+            assert "line" not in rec
+            assert "col" not in rec
+
+    def test_trace_store_exception_with_span(self, tmp_path: Path) -> None:
+        """exception() records line/col when a span is provided."""
+        import json as _json
+
+        from agm.agl.runtime.trace import TraceStore
+        from agm.agl.syntax.spans import SourceSpan
+
+        p = tmp_path / "t.jsonl"
+        ts = TraceStore(path=p)
+        span = SourceSpan(
+            start_line=5, start_col=3, end_line=5, end_col=10,
+            start_offset=40, end_offset=47,
+        )
+        ts.exception(type_name="Abort", message="stop", trace_id="abc", span=span)
+
+        content = p.read_text(encoding="utf-8").strip()
+        rec = _json.loads(content)
+        assert rec["line"] == 5
+        assert rec["col"] == 3

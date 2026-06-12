@@ -89,6 +89,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.render import RendererFn
+    from agm.agl.runtime.trace import TraceStore
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
 
@@ -104,11 +105,19 @@ _Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
 _AGL_DECIMAL_CONTEXT = decimal.Context(prec=28, rounding=decimal.ROUND_HALF_EVEN)
 
 
-def _make_exc_value(type_name: str, message: str, **extra: Value) -> ExceptionValue:
-    """Create an ``ExceptionValue`` with ``message`` and optional extra fields."""
+def _make_exc_value(
+    type_name: str, message: str, *, trace_id: str = "", **extra: Value
+) -> ExceptionValue:
+    """Create an ``ExceptionValue`` with ``message`` and optional extra fields.
+
+    *trace_id* links this exception to the corresponding record in the trace
+    file (design §8.1 / §12.6).  When a trace store is active the caller
+    passes the event trace_id obtained from the store; otherwise the empty
+    string is used (no-log mode).
+    """
     fields: dict[str, Value] = {
         "message": TextValue(message),
-        "trace_id": TextValue(""),  # M1: no trace store yet
+        "trace_id": TextValue(trace_id),
     }
     fields.update(extra)
     return ExceptionValue(type_name=type_name, fields=fields)
@@ -163,8 +172,10 @@ class Interpreter:
         strict_json: bool,
         source: str = "",
         shell_exec_timeout: float | None = None,
+        trace: "TraceStore | None" = None,
     ) -> None:
         from agm.agl.runtime.render import builtin_renderers
+        from agm.agl.runtime.trace import noop_trace
 
         self._checked = checked
         self._registry = registry
@@ -184,6 +195,8 @@ class Interpreter:
         self._loop_limit = loop_limit
         self._strict_json = strict_json
         self._shell_exec_timeout = shell_exec_timeout
+        # Trace store: no-op when not provided (no-log mode or direct tests).
+        self._trace: "TraceStore" = trace if trace is not None else noop_trace()
         # Root scope — populated from inputs before execute() is called.
         self._root_scope: Scope = Scope(parent=None)
 
@@ -257,7 +270,9 @@ class Interpreter:
         # Coerce toward the mutable binding's declared type (design §5.8).
         ref = self._checked.resolved.resolution[stmt.node_id]
         target_type = self._binding_type_for(ref.decl_node_id)
-        scope.set_value(stmt.target, _coerce(value, target_type))
+        coerced = _coerce(value, target_type)
+        scope.set_value(stmt.target, coerced)
+        self._trace.mutation(name=stmt.target, value=coerced, span=stmt.span)
 
     def _binding_type_for(self, decl_node_id: int) -> Type:
         """Return the declared type the checker recorded for a binding node.
@@ -273,7 +288,9 @@ class Interpreter:
         from agm.agl.runtime.render import render_for_console
 
         value = self._eval_expr(stmt.value, scope)
-        print(render_for_console(value))
+        rendered = render_for_console(value)
+        print(rendered)
+        self._trace.print_stmt(rendered=rendered, span=stmt.span)
 
     def _eval_template_for_console(self, expr: Template, scope: Scope) -> str:
         """Evaluate a template for console (``print``) output.
@@ -612,7 +629,15 @@ class Interpreter:
         last_raw: str | None = None
         last_normalized: str | None = None
         last_errors: tuple[ValidationError, ...] = ()
+        call_span = expr.span
         for attempt in range(max_attempts):
+            # Emit agent_call_attempt record.
+            attempt_trace_id = self._trace.agent_call_attempt(
+                agent=agent_name,
+                attempt=attempt,
+                prompt=prompt_text,
+                span=call_span,
+            )
             request = AgentRequest(
                 agent=agent_name,
                 prompt=prompt_text,
@@ -633,6 +658,15 @@ class Interpreter:
                 strict_json=effective_strict,
                 schema=schema,
             )
+            # Emit parse_result record.
+            error_summary = "; ".join(e.message for e in result.errors) if result.errors else ""
+            self._trace.parse_result(
+                ok=result.ok and result.value is not None,
+                raw=raw,
+                normalized_raw=result.normalized_raw or "",
+                error_summary=error_summary,
+                span=call_span,
+            )
             if result.ok and result.value is not None:
                 return result.value
 
@@ -649,11 +683,14 @@ class Interpreter:
         # could be recovered at all.
         errors_json: list[object] = [e.to_json_obj() for e in last_errors]
         normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
+        # The trace_id links this exception to the last attempt_trace_id so the
+        # exception record in the trace file can be cross-referenced (§8.1/§12.6).
         raise AglRaise(
             _make_exc_value(
                 "AgentParseError",
                 f"Agent {agent_name!r} failed to produce a valid {contract.target_type!r} "
                 f"after {max_attempts} attempt(s). Last output: {last_raw!r}",
+                trace_id=attempt_trace_id,
                 raw=TextValue(last_raw or ""),
                 normalized_raw=TextValue(normalized_text),
                 agent=TextValue(agent_name),
@@ -717,8 +754,18 @@ class Interpreter:
             idle_timeout=self._shell_exec_timeout,
         )
 
+        exec_span = expr.span
+
         # Spawn failure: sh itself could not be launched.
         if result.spawn_error is not None:
+            self._trace.exec_command(
+                command=command,
+                exit_code=-1,
+                stdout="",
+                stderr=result.spawn_error,
+                timed_out=False,
+                span=exec_span,
+            )
             raise AglRaise(
                 _make_exc_value(
                     "ExecError",
@@ -734,6 +781,14 @@ class Interpreter:
         # Nonzero exit or timeout → ExecError (design §11.13 item 3).
         if result.timed_out or (result.returncode is not None and result.returncode != 0):
             exit_code = result.returncode if result.returncode is not None else -1
+            self._trace.exec_command(
+                command=command,
+                exit_code=exit_code,
+                stdout=result.stdout.rstrip("\n"),
+                stderr=result.stderr.rstrip("\n"),
+                timed_out=result.timed_out,
+                span=exec_span,
+            )
             raise AglRaise(
                 _make_exc_value(
                     "ExecError",
@@ -749,6 +804,16 @@ class Interpreter:
         # Success: strip trailing newlines from stdout (design §4.12 item 4,
         # §11.13 item 4 — mirrors ``$(...)`` command substitution behaviour).
         stdout = result.stdout.rstrip("\n")
+
+        # Emit exec_command trace record (success path, exit code 0).
+        self._trace.exec_command(
+            command=command,
+            exit_code=result.returncode if result.returncode is not None else 0,
+            stdout=stdout,
+            stderr=result.stderr.rstrip("\n"),
+            timed_out=False,
+            span=exec_span,
+        )
 
         # Determine the target type and contract for this call site.
         contract = self._contracts.get(expr.node_id)
@@ -842,9 +907,14 @@ class Interpreter:
         from agm.agl.typecheck.types import ExceptionType as ExcType
 
         if isinstance(typ, ExcType):
-            # Exception constructor: inject ``trace_id`` (empty in M3; real
-            # trace IDs land in M4 with the trace store).
-            fields: dict[str, Value] = {"trace_id": TextValue("")}
+            # Exception constructor: inject a real ``trace_id`` from the trace
+            # store (plan §9.6 / design §8.1). A fresh event-level id is
+            # generated so the raised exception can be cross-referenced with
+            # any matching record in the trace file.
+            from agm.agl.runtime.trace import _new_id
+
+            exc_trace_id = _new_id()
+            fields: dict[str, Value] = {"trace_id": TextValue(exc_trace_id)}
             for fname, fval in arg_values.items():
                 field_type = typ.fields.get(fname)
                 fields[fname] = _coerce(fval, field_type) if field_type is not None else fval

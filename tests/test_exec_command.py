@@ -388,6 +388,7 @@ class TestExecExitCodeMapping:
             *,
             inputs: object = None,
             check_only: bool = False,
+            **_kwargs: object,
         ) -> RunResult:
             return RunResult(
                 ok=False,
@@ -435,6 +436,7 @@ class TestExecCommandWarnings:
             *,
             inputs: object = None,
             check_only: bool = False,
+            **_kwargs: object,
         ) -> RunResult:
             return RunResult(ok=True, diagnostics=[], error=None, warnings=[warning])
 
@@ -480,6 +482,7 @@ class TestExecCommandWarnings:
             *,
             inputs: object = None,
             check_only: bool = False,
+            **_kwargs: object,
         ) -> RunResult:
             return RunResult(
                 ok=False, diagnostics=[error], error=None, warnings=[warning]

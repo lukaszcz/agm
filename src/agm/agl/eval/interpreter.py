@@ -720,8 +720,8 @@ class Interpreter:
         construction when every attempt fails (design §4.12, §7.5/§7.9).
 
         The caller supplies *acquire*, which performs source acquisition for a
-        given attempt — re-dispatching with feedback (agent path) or returning a
-        fixed output (``exec`` path) — and returns ``(raw, trace_id)``.
+        given attempt — re-dispatching an agent or re-running ``exec`` — and
+        returns ``(raw, trace_id)``.
         *make_failure_message* builds the path-specific ``AgentParseError``
         message from ``(last_raw, max_attempts)``.  When provided, *on_parsed* is
         invoked after each parse so the agent path can emit its per-attempt
@@ -858,85 +858,81 @@ class Interpreter:
 
         command = self._eval_template_for_shell(expr.template, scope)
 
-        # Run the command via ``sh -c``.  ``isolate_process_group=True`` is
-        # required by ``run_capture_result``'s idle-timeout contract: it runs
-        # ``sh`` in its own process group so the idle-timeout kill tears down the
-        # WHOLE process tree.  Without it, an orphaned grandchild (e.g. a
-        # ``sleep`` spawned by a compound command) keeps the stdout pipe open and
-        # the idle timeout never bounds wall time (F1).
-        result = run_capture_result(
-            ["sh", "-c", command],
-            idle_timeout=self._shell_exec_timeout,
-            isolate_process_group=True,
-        )
-
         exec_span = expr.span
 
-        # Spawn failure: sh itself could not be launched.
-        if result.spawn_error is not None:
-            self._trace.exec_command(
+        def execute_command() -> tuple[str, str]:
+            # ``isolate_process_group=True`` ensures an idle timeout tears down
+            # the whole process tree, including grandchildren.
+            result = run_capture_result(
+                ["sh", "-c", command],
+                idle_timeout=self._shell_exec_timeout,
+                isolate_process_group=True,
+            )
+
+            # Spawn failure: sh itself could not be launched.
+            if result.spawn_error is not None:
+                self._trace.exec_command(
+                    command=command,
+                    exit_code=-1,
+                    duration=result.elapsed,
+                    stdout="",
+                    stderr=result.spawn_error,
+                    timed_out=False,
+                    span=exec_span,
+                )
+                raise AglRaise(
+                    _make_exc_value(
+                        "ExecError",
+                        f"Failed to spawn shell: {result.spawn_error}",
+                        trace_id=self._trace.new_event_id(),
+                        command=TextValue(command),
+                        exit_code=IntValue(-1),
+                        stdout=TextValue(""),
+                        stderr=TextValue(""),
+                        timed_out=BoolValue(False),
+                    ),
+                    span=exec_span,
+                )
+
+            # Nonzero exit or timeout → ExecError (design §11.13 item 3).
+            if result.timed_out or (result.returncode is not None and result.returncode != 0):
+                exit_code = result.returncode if result.returncode is not None else -1
+                self._trace.exec_command(
+                    command=command,
+                    exit_code=exit_code,
+                    duration=result.elapsed,
+                    stdout=result.stdout.rstrip("\n"),
+                    stderr=result.stderr.rstrip("\n"),
+                    timed_out=result.timed_out,
+                    span=exec_span,
+                )
+                raise AglRaise(
+                    _make_exc_value(
+                        "ExecError",
+                        f"Shell command exited with code {exit_code}: {command!r}",
+                        trace_id=self._trace.new_event_id(),
+                        command=TextValue(command),
+                        exit_code=IntValue(exit_code),
+                        stdout=TextValue(result.stdout.rstrip("\n")),
+                        stderr=TextValue(result.stderr.rstrip("\n")),
+                        timed_out=BoolValue(result.timed_out),
+                    ),
+                    span=exec_span,
+                )
+
+            stdout = result.stdout.rstrip("\n")
+            trace_id = self._trace.exec_command(
                 command=command,
-                exit_code=-1,
-                stdout="",
-                stderr=result.spawn_error,
+                exit_code=result.returncode if result.returncode is not None else 0,
+                duration=result.elapsed,
+                stdout=stdout,
+                stderr=result.stderr.rstrip("\n"),
                 timed_out=False,
                 span=exec_span,
             )
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Failed to spawn shell: {result.spawn_error}",
-                    trace_id=self._trace.new_event_id(),
-                    command=TextValue(command),
-                    exit_code=IntValue(-1),
-                    stdout=TextValue(""),
-                    stderr=TextValue(""),
-                    timed_out=BoolValue(False),
-                ),
-                span=exec_span,  # F7: thread raise-site span for §12.6 source location
-            )
+            return stdout, trace_id
 
-        # Nonzero exit or timeout → ExecError (design §11.13 item 3).
-        if result.timed_out or (result.returncode is not None and result.returncode != 0):
-            exit_code = result.returncode if result.returncode is not None else -1
-            self._trace.exec_command(
-                command=command,
-                exit_code=exit_code,
-                stdout=result.stdout.rstrip("\n"),
-                stderr=result.stderr.rstrip("\n"),
-                timed_out=result.timed_out,
-                span=exec_span,
-            )
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Shell command exited with code {exit_code}: {command!r}",
-                    trace_id=self._trace.new_event_id(),
-                    command=TextValue(command),
-                    exit_code=IntValue(exit_code),
-                    stdout=TextValue(result.stdout.rstrip("\n")),
-                    stderr=TextValue(result.stderr.rstrip("\n")),
-                    timed_out=BoolValue(result.timed_out),
-                ),
-                span=exec_span,  # F7: thread raise-site span for §12.6 source location
-            )
-
-        # Success: strip trailing newlines from stdout (design §4.12 item 4,
-        # §11.13 item 4 — mirrors ``$(...)`` command substitution behaviour).
-        stdout = result.stdout.rstrip("\n")
-
-        # Emit exec_command trace record (success path, exit code 0).  Its
-        # ``trace_id`` is threaded into the parse loop so a typed-target parse
-        # failure raises an ``AgentParseError`` that links back to THIS record
-        # (F3) rather than carrying an empty id.
-        exec_trace_id = self._trace.exec_command(
-            command=command,
-            exit_code=result.returncode if result.returncode is not None else 0,
-            stdout=stdout,
-            stderr=result.stderr.rstrip("\n"),
-            timed_out=False,
-            span=exec_span,
-        )
+        stdout, exec_trace_id = execute_command()
 
         # Determine the target type and contract for this call site.
         contract = self._contracts.get(expr.node_id)
@@ -948,37 +944,28 @@ class Interpreter:
         if isinstance(contract.target_type, TextType):
             return TextValue(stdout)
 
-        # Non-text target: parse + validate via the SAME codec/parse-policy path
-        # as agent output (design §4.12 item 4).  ``exec`` does not re-run on a
-        # parse failure — the stdout is fixed — so ``acquire`` returns that same
-        # stdout for every attempt (honouring the on_parse_error policy for
-        # consistency with the agent-call path, even though additional attempts
-        # cannot change the outcome here).  No per-attempt ``parse_result`` trace
-        # record is emitted: exec already logged a single ``exec_command`` record
-        # above, so ``on_parsed`` is omitted.
+        # Non-text target: parse + validate via the same codec/parse-policy path
+        # as agent output. Retry attempts re-run the command and each invocation
+        # emits its own ``exec_command`` trace record.
         def acquire(
-            _attempt: int,
+            attempt: int,
             _last_raw: str | None,
             _last_errors: tuple[ValidationError, ...],
         ) -> tuple[str, str]:
-            return stdout, exec_trace_id
+            if attempt == 0:
+                return stdout, exec_trace_id
+            return execute_command()
 
-        def make_failure_message(_last_raw: str | None, max_attempts: int) -> str:
+        def make_failure_message(last_raw: str | None, max_attempts: int) -> str:
             return (
                 f"exec output failed to parse as {contract.target_type!r} "
-                f"after {max_attempts} attempt(s). Output: {stdout!r}"
+                f"after {max_attempts} attempt(s). Last output: {last_raw!r}"
             )
 
-        # F5: exec is always clamped to ONE parse attempt regardless of any
-        # on_parse_error policy.  The checker already warns that such a policy
-        # has no effect on exec (the command does not re-run, so extra parse
-        # attempts can never change the outcome — design §7.2/§7.10).  The
-        # interpreter enforces this by passing parse_policy=None (abort → 1
-        # attempt) so AgentParseError.attempts is always 1 for exec.
         return self._run_parse_attempts(
             acquire=acquire,
             contract=contract,
-            parse_policy=None,  # force abort / 1 attempt (F5)
+            parse_policy=expr.options.parse_policy,
             agent_label="exec",
             make_failure_message=make_failure_message,
             raise_span=exec_span,  # F7: thread exec span for §12.6 source location

@@ -1,7 +1,7 @@
 """AgL trace store — records every significant runtime event as JSONL.
 
 Records every agent-call attempt, parse result, retry, mutation, ``print``,
-``exec`` command (with exit code and outputs), and exception, with a
+``exec`` command (with exit code, duration, and outputs), and exception, with a
 ``trace_id`` + source span.  Persisted under ``.agent-files/`` via
 ``core/log`` helpers.  Honors ``--no-log``/``--log-file`` (plan §9.6,
 §10.1).
@@ -13,7 +13,7 @@ Design §12.6 record format followed:
 - ``parse_result``: ok flag, normalized output, error summary.
 - ``mutation``: binding name and serialized new value.
 - ``print``: rendered console output.
-- ``exec_command``: command text, exit_code, stdout, stderr, timed_out.
+- ``exec_command``: command text, exit_code, duration, stdout, stderr, timed_out.
 - ``exception``: exception type_name + trace_id (for linkage to
   ``ExceptionValue.fields['trace_id']``).
 - ``run_start`` / ``run_end``: boundary markers; ``run_end`` carries
@@ -212,6 +212,7 @@ class TraceStore:
         *,
         command: str,
         exit_code: int,
+        duration: float,
         stdout: str,
         stderr: str,
         timed_out: bool,
@@ -230,6 +231,7 @@ class TraceStore:
         extra: dict[str, object] = {
             "command": command,
             "exit_code": exit_code,
+            "duration": duration,
             "stdout": stdout,
             "stderr": stderr,
             "timed_out": timed_out,

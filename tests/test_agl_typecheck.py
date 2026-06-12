@@ -149,6 +149,23 @@ def caps_with_shell_exec() -> HostCapabilities:
     )
 
 
+def caps_with_typed_shell_exec() -> HostCapabilities:
+    """Capabilities that support typed shell ``exec`` calls."""
+    return HostCapabilities(
+        agent_names=frozenset(),
+        has_fallback_agent=True,
+        has_default_agent=True,
+        supports_shell_exec=True,
+        codec_kinds={
+            "text": frozenset({"text"}),
+            "json": frozenset(
+                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+            ),
+        },
+        renderer_names=frozenset({"default", "raw", "json", "bullets"}),
+    )
+
+
 def caps_with_json_codec() -> HostCapabilities:
     """Capabilities that include the JSON codec (simulates M2+)."""
     return HostCapabilities(
@@ -968,42 +985,23 @@ class TestExhaustivenessWarnings:
 class TestParsePolicyNoOpWarnings:
     """A parse policy that can never take effect is a *warning* (design §7.2/§7.10).
 
-    Two cases are no-ops:
-
-    * ``on_parse_error: retry[N]`` on an ``exec`` call — exec's stdout is fixed,
-      so it never re-runs; the retry is dead.
-    * ``on_parse_error`` on a *text* target — a text target never fails parsing,
-      so the policy can never fire.
-
-    Both still type-check (the program runs); the warning lands on the call's
-    source line and has severity ``warning``.
+    A policy on a *text* target is a no-op because text never fails parsing.
+    Typed exec calls can fail parsing and honor their retry policy.
     """
 
-    def test_retry_on_exec_warns(self) -> None:
+    def test_retry_on_typed_exec_does_not_warn(self) -> None:
         checked = accept_type(
-            'let x = exec[on_parse_error: retry[2]] "echo hi"\n',
-            caps_with_shell_exec(),
+            'let x: int = exec[on_parse_error: retry[2]] "echo hi"\n',
+            caps_with_typed_shell_exec(),
         )
-        warns = _warnings(checked)
-        assert len(warns) == 1
-        line, msg, severity = warns[0]
-        assert severity == "warning"
-        assert line == 1
-        assert "exec" in msg
+        assert _warnings(checked) == []
 
-    def test_abort_on_exec_warns(self) -> None:
-        # ``abort`` is also a no-op on exec — there is nothing to abort *vs.* on a
-        # successful parse, but more importantly the policy can never alter the
-        # single fixed-output parse outcome, so it is flagged for any explicit
-        # policy on exec.
+    def test_abort_on_typed_exec_does_not_warn(self) -> None:
         checked = accept_type(
-            'let x = exec[on_parse_error: abort] "echo hi"\n',
-            caps_with_shell_exec(),
+            'let x: int = exec[on_parse_error: abort] "echo hi"\n',
+            caps_with_typed_shell_exec(),
         )
-        warns = _warnings(checked)
-        assert len(warns) == 1
-        assert warns[0][2] == "warning"
-        assert "exec" in warns[0][1]
+        assert _warnings(checked) == []
 
     def test_exec_without_parse_policy_no_warning(self) -> None:
         checked = accept_type(

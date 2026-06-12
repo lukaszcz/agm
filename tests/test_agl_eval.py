@@ -4643,20 +4643,80 @@ class TestShellExecInterpreter:
         assert result.error.type_name == "AgentParseError"
         assert result.error.fields.get("agent") == "exec"
 
-    def test_exec_typed_target_retry_policy(self) -> None:
-        """F5: exec is clamped to ONE parse attempt regardless of on_parse_error policy.
+    def test_exec_typed_target_retry_policy_reruns_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A typed exec retry re-runs the command so later valid output can succeed."""
+        from agm.agl.eval.values import IntValue
+        from agm.core import process as process_mod
+        from agm.core.process import ProcessCaptureResult
 
-        The checker already warns that on_parse_error has no effect on exec (the
-        command does not re-run, so extra parse attempts can never change the
-        outcome).  The interpreter enforces this by ignoring any parse policy on
-        exec and running exactly one attempt.  The AgentParseError.attempts field
-        therefore reports 1, not 1+retry_extra.
-        """
-        result = run('let x: int = exec[on_parse_error: retry[2]] "echo bad"\n')
+        outputs = iter(("bad\n", "7\n"))
+        calls = 0
+
+        def fake_run_capture_result(
+            cmd: list[str],
+            *,
+            idle_timeout: object = None,
+            **_kwargs: object,
+        ) -> ProcessCaptureResult:
+            nonlocal calls
+            calls += 1
+            return ProcessCaptureResult(
+                returncode=0,
+                stdout=next(outputs),
+                stderr="",
+                elapsed=0.1,
+                timed_out=False,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        monkeypatch.setattr(process_mod, "run_capture_result", fake_run_capture_result)
+
+        result = run('let x: int = exec[on_parse_error: retry[2]] "ignored"\n')
+
+        assert result.ok is True
+        assert result.bindings.get("x") == IntValue(7)
+        assert calls == 2
+
+    def test_exec_retry_failure_reports_last_output(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When every retry fails, the AgentParseError reflects the LAST attempt's output."""
+        from agm.core import process as process_mod
+        from agm.core.process import ProcessCaptureResult
+
+        outputs = iter(("first-bad\n", "last-bad\n"))
+
+        def fake_run_capture_result(
+            cmd: list[str],
+            *,
+            idle_timeout: object = None,
+            **_kwargs: object,
+        ) -> ProcessCaptureResult:
+            return ProcessCaptureResult(
+                returncode=0,
+                stdout=next(outputs),
+                stderr="",
+                elapsed=0.1,
+                timed_out=False,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        monkeypatch.setattr(process_mod, "run_capture_result", fake_run_capture_result)
+
+        result = run('let x: int = exec[on_parse_error: retry[1]] "ignored"\n')
+
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentParseError"
-        assert result.error.fields.get("attempts") == 1  # always 1 for exec
+        assert result.error.fields.get("raw") == "last-bad"
+        message = result.error.fields.get("message")
+        assert isinstance(message, str)
+        assert "last-bad" in message
+        assert "first-bad" not in message
 
     def test_exec_typed_target_strict_json_branch(self) -> None:
         """strict_json per-call option flows through exec typed-target parsing.
@@ -4849,5 +4909,4 @@ class TestShellExecTemplateInterpolation:
         from agm.agl.eval.values import TextValue
 
         assert result.bindings.get("out") == TextValue("hello world")
-
 

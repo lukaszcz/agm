@@ -191,6 +191,17 @@ class TestExecCommandRecord:
         assert exec_recs
         assert "echo hello" in exec_recs[0].get("command", "")
 
+    def test_exec_record_has_duration(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime()
+        rt.run('let x: text = exec "echo hello"', log_file=log_path)
+        records = _load_jsonl(log_path)
+        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
+        assert exec_recs
+        duration = exec_recs[0].get("duration")
+        assert isinstance(duration, float)
+        assert duration >= 0
+
 
 class TestAgentCallRecord:
     def test_agent_call_produces_attempt_record(self, tmp_path: Path) -> None:
@@ -807,7 +818,13 @@ class TestTraceStoreProperties:
         ts.mutation(name="v", value=IntValue(1), span=None)
         ts.print_stmt(rendered="hi", span=None)
         ts.exec_command(
-            command="echo", exit_code=0, stdout="", stderr="", timed_out=False, span=None
+            command="echo",
+            exit_code=0,
+            duration=0.1,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            span=None,
         )
         ts.exception(type_name="Abort", message="stop", trace_id="abc", span=None)
         ts.run_end(ok=True)

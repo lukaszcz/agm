@@ -760,34 +760,16 @@ class _Checker:
         return target_type
 
     def _warn_noop_parse_policy(
-        self, node: AgentCall, kind: CallKind, target_type: Type
+        self, node: AgentCall, _kind: CallKind, target_type: Type
     ) -> None:
         """Warn when an ``on_parse_error`` policy can never fire (design §7.2/§7.10).
 
-        Two forms are no-ops and earn a *warning* (not an error — the program
-        still runs):
-
-        * an explicit policy on an ``exec`` call: exec's stdout is fixed, so the
-          call never re-runs and an extra parse attempt cannot change the
-          outcome (reviewed ruling: exec never re-runs);
-        * an ``on_parse_error`` policy on a *text* target: a text target never
-          fails parsing, so the policy is dead.
+        A policy on a *text* target is a no-op because text never fails parsing.
+        Typed agent and exec calls can both fail parsing and honor their policy.
         """
         if node.options.parse_policy is None:
             return
-        if kind == CallKind.shell_exec:
-            self._warnings.append(
-                Diagnostic(
-                    message=(
-                        "'on_parse_error' has no effect on an 'exec' call: the "
-                        "command output is fixed, so exec never re-runs and the "
-                        "policy can never fire."
-                    ),
-                    line=node.span.start_line,
-                    severity="warning",
-                )
-            )
-        elif isinstance(target_type, TextType):
+        if isinstance(target_type, TextType):
             self._warnings.append(
                 Diagnostic(
                     message=(

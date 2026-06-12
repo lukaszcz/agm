@@ -79,7 +79,7 @@ def run(args: ExecArgs) -> None:
                     f", policy: {site.parse_policy}" if site.parse_policy != "default" else ""
                 )
                 print(
-                    f"  line {site.line}: {site.callee} "
+                    f"  line {site.line}:{site.col}: {site.callee} "
                     f"→ {site.target_type} "
                     f"[{site.codec_name}{schema_tag}{policy_tag}]"
                 )

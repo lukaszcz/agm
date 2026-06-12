@@ -15,9 +15,6 @@ from agm.agl.runtime.agents import AgentFn
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import ExceptionValue, Value
-    from agm.agl.syntax.nodes import AgentCall as AgentCallNode
-    from agm.agl.syntax.nodes import Program as AglProgram
-    from agm.agl.syntax.nodes import Template as TemplateNode
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.types import Type as AglType
 
@@ -362,7 +359,7 @@ class WorkflowRuntime:
         # Build the §10.1 static call-site inventory before returning.
         # ----------------------------------------------------------------
         if check_only:
-            inventory = _build_call_inventory(checked, contracts, program)
+            inventory = _build_call_inventory(checked, contracts)
             return RunResult(
                 ok=True,
                 diagnostics=list(warnings),
@@ -550,153 +547,45 @@ def _exception_value_to_run_error(exc: "ExceptionValue") -> RunError:
     return RunError(type_name=exc.type_name, fields=fields)
 
 
-def _collect_agent_calls(program: AglProgram) -> list[AgentCallNode]:
-    """Walk *program* depth-first and return all ``AgentCall`` nodes in source order.
-
-    Only nodes whose ``node_id`` appears in the checked contract-spec table will
-    be included in the inventory; the walk simply collects all candidates.
-    """
-    from agm.agl.syntax.nodes import (
-        AgentCall,
-        BinaryOp,
-        CaseExpr,
-        CaseStmt,
-        Constructor,
-        DictLit,
-        DoUntil,
-        ExprStmt,
-        FieldAccess,
-        IfStmt,
-        IsTest,
-        LetDecl,
-        ListLit,
-        PrintStmt,
-        Program,
-        Raise,
-        SetStmt,
-        Template,
-        TryCatch,
-        UnaryNeg,
-        UnaryNot,
-        VarDecl,
-    )
-
-    result: list[AgentCall] = []
-
-    def _visit_expr(expr: object) -> None:
-        if isinstance(expr, AgentCall):
-            result.append(expr)
-            _visit_template(expr.template)
-        elif isinstance(expr, Template):
-            _visit_template(expr)
-        elif isinstance(expr, BinaryOp):
-            _visit_expr(expr.left)
-            _visit_expr(expr.right)
-        elif isinstance(expr, (UnaryNot, UnaryNeg)):
-            _visit_expr(expr.operand)
-        elif isinstance(expr, IsTest):
-            _visit_expr(expr.expr)
-        elif isinstance(expr, CaseExpr):
-            _visit_expr(expr.subject)
-            for branch in expr.branches:
-                _visit_expr(branch.body)
-        elif isinstance(expr, FieldAccess):
-            _visit_expr(expr.obj)
-        elif isinstance(expr, Constructor):
-            for arg in expr.args:
-                _visit_expr(arg.value)
-        elif isinstance(expr, ListLit):
-            for elem in expr.elements:
-                _visit_expr(elem)
-        elif isinstance(expr, DictLit):
-            for entry in expr.entries:
-                _visit_expr(entry.value)
-
-    def _visit_template(tmpl: TemplateNode) -> None:
-        from agm.agl.syntax.nodes import InterpSegment
-        for seg in tmpl.segments:
-            if isinstance(seg, InterpSegment):
-                _visit_expr(seg.expr)
-
-    def _visit_stmts(stmts: tuple[object, ...]) -> None:
-        for stmt in stmts:
-            _visit_stmt(stmt)
-
-    def _visit_stmt(stmt: object) -> None:
-        if isinstance(stmt, (LetDecl, VarDecl)):
-            _visit_expr(stmt.value)
-        elif isinstance(stmt, SetStmt):
-            _visit_expr(stmt.value)
-        elif isinstance(stmt, PrintStmt):
-            _visit_expr(stmt.value)
-        elif isinstance(stmt, ExprStmt):
-            _visit_expr(stmt.expr)
-        elif isinstance(stmt, Raise):
-            _visit_expr(stmt.exc)
-        elif isinstance(stmt, DoUntil):
-            _visit_stmts(stmt.body)
-            _visit_expr(stmt.condition)
-        elif isinstance(stmt, IfStmt):
-            for branch in stmt.branches:
-                _visit_stmts(branch.body)
-        elif isinstance(stmt, CaseStmt):
-            _visit_expr(stmt.subject)
-            for case_branch in stmt.branches:
-                _visit_stmts(case_branch.body)
-        elif isinstance(stmt, TryCatch):
-            _visit_stmts(stmt.body)
-            for clause in stmt.handlers:
-                _visit_stmts(clause.body)
-        elif isinstance(stmt, Program):
-            _visit_stmts(stmt.body)
-
-    assert isinstance(program, Program)
-    _visit_stmts(program.body)
-    return result
-
-
 def _build_call_inventory(
     checked: CheckedProgramType,
     contracts: dict[int, object],
-    program: AglProgram,
 ) -> list[CallSiteInfo]:
     """Build the §10.1 static call-site inventory from the checked program.
+
+    The inventory is derived entirely from the checker's work: each
+    ``CallSiteRecord`` (recorded in source order while type-checking) supplies the
+    callee, parse policy, and span; ``contract_specs`` supplies the codec and
+    target type; and the materialized ``contracts`` table supplies schema
+    presence.  No second AST walk is performed.
 
     Returns one ``CallSiteInfo`` per agent-call/exec site, in source order.
     """
     from agm.agl.runtime.contract import OutputContract
-    from agm.agl.syntax.nodes import AbortPolicy, RetryPolicy
 
-    call_nodes = _collect_agent_calls(program)
     inventory: list[CallSiteInfo] = []
 
-    for node in call_nodes:
-        spec = checked.contract_specs.get(node.node_id)
-        if spec is None:
-            continue  # not a resolved call site (shouldn't happen after typecheck)
+    for record in checked.call_sites:
+        # The checker records a CallSiteRecord and an OutputContractSpec together
+        # in ``_check_agent_call`` (both keyed by the call's node_id), so every
+        # recorded call site has a spec.  A missing spec is a checker-invariant
+        # violation, not a normal skip.
+        spec = checked.contract_specs[record.node_id]
 
-        contract = contracts.get(node.node_id)
+        contract = contracts.get(record.node_id)
         has_schema = (
             isinstance(contract, OutputContract) and contract.json_schema is not None
         )
 
-        policy = node.options.parse_policy
-        if isinstance(policy, AbortPolicy):
-            parse_policy_str = "abort"
-        elif isinstance(policy, RetryPolicy):
-            parse_policy_str = f"retry[{policy.extra}]"
-        else:
-            parse_policy_str = "default"
-
         inventory.append(
             CallSiteInfo(
-                callee=node.agent,
+                callee=record.callee,
                 target_type=repr(spec.target_type),
                 codec_name=spec.codec_name,
                 has_schema=has_schema,
-                parse_policy=parse_policy_str,
-                line=node.span.start_line,
-                col=node.span.start_col,
+                parse_policy=record.parse_policy,
+                line=record.line,
+                col=record.col,
             )
         )
 

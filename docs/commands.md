@@ -412,10 +412,11 @@ Options:
 
   ```
   call-sites:
-    line N: <callee> → <target-type> [<codec>[, schema: yes][, policy: <policy>]]
+    line N:C: <callee> → <target-type> [<codec>[, schema: yes][, policy: <policy>]]
   ```
 
-  Each entry shows the 1-based source line, the callee name (`prompt`, `exec`, or a
+  Each entry shows the 1-based source line and column (`N:C`), the callee name
+  (`prompt`, `exec`, or a
   registered agent name), the target type, the selected codec (`text` or `json`), and
   optionally whether a JSON Schema is attached (`schema: yes`) and the effective
   parse-failure policy (`abort` or `retry[N]`).  When no agent calls are present, no

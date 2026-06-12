@@ -840,6 +840,10 @@ class TestDryRunInventory:
         assert "call-sites" in captured.out
         assert "prompt" in captured.out
         assert "text" in captured.out
+        # The entry surfaces both the source line and column as "line N:C:"
+        # (F7: the captured call-site column is not dead).  `prompt` starts at
+        # column 9 of `let x = prompt "Hello"`.
+        assert "line 1:9:" in captured.out
 
     def test_dry_run_inventory_named_agent(
         self,
@@ -859,6 +863,25 @@ class TestDryRunInventory:
         assert exec_command.run(args) is None
         captured = capsys.readouterr()
         assert "reviewer" in captured.out
+
+    def test_dry_run_inventory_abort_policy(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An explicit on_parse_error: abort policy surfaces in the inventory."""
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let x = prompt[on_parse_error: abort] "Hello"\n')
+
+        args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
+        assert exec_command.run(args) is None
+        captured = capsys.readouterr()
+        assert "policy: abort" in captured.out
 
     def test_dry_run_inventory_no_call_sites_empty(
         self,

@@ -1187,232 +1187,11 @@ class TestTypeEnvironment:
 
 
 # ============================================================
-# checker.py _TypeBuilder (type declarations)
-# ============================================================
-
-
-class TestTypeBuilderViaAst:
-    """Exercise the _TypeBuilder pre-pass via direct AST construction."""
-
-    def test_record_def_simple(self) -> None:
-        rec = RecordDef(
-            name="Point",
-            fields=(_tc_field("x", _tc_int_t()), _tc_field("y", _tc_int_t())),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        r = resolve_and_check(rec)
-        assert r.resolved.program is not None
-
-    def test_record_def_duplicate_field(self) -> None:
-        rec = RecordDef(
-            name="Point",
-            fields=(_tc_field("x", _tc_int_t()), _tc_field("x", _tc_text_t())),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        err = reject_ast(rec)
-        assert "x" in err.to_diagnostic().message
-
-    def test_record_def_unknown_field_type(self) -> None:
-        rec = RecordDef(
-            name="Point",
-            fields=(_tc_field("x", _tc_name_t("Ghost")),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        err = reject_ast(rec)
-        assert "Ghost" in err.to_diagnostic().message
-
-    def test_record_def_recursive_error(self) -> None:
-        rec = RecordDef(
-            name="Node",
-            fields=(_tc_field("next", _tc_name_t("Node")),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        err = reject_ast(rec)
-        assert "Node" in err.to_diagnostic().message
-
-    def test_record_def_field_uses_list(self) -> None:
-        rec = RecordDef(
-            name="Bag",
-            fields=(_tc_field("items", _tc_list_t(_tc_int_t())),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        r = resolve_and_check(rec)
-        assert r.resolved.program is not None
-
-    def test_record_def_field_uses_dict(self) -> None:
-        from agm.agl.syntax.types import DictT
-        rec = RecordDef(
-            name="Map",
-            fields=(
-                _tc_field("data", DictT(value=_tc_text_t(), span=_tc_sp(), node_id=_tc_nid())),
-            ),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        r = resolve_and_check(rec)
-        assert r.resolved.program is not None
-
-    def test_enum_def_simple(self) -> None:
-        vd = VariantDef(name="Pass", fields=(), span=_tc_sp(), node_id=_tc_nid())
-        vd2 = VariantDef(
-            name="Fail", fields=(_tc_field("reason", _tc_text_t()),),
-            span=_tc_sp(), node_id=_tc_nid(),
-        )
-        enum_def = EnumDef(name="Result", variants=(vd, vd2), span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(enum_def)
-        assert r.resolved.program is not None
-
-    def test_enum_def_duplicate_variant(self) -> None:
-        vd = VariantDef(name="A", fields=(), span=_tc_sp(), node_id=_tc_nid())
-        vd2 = VariantDef(name="A", fields=(), span=_tc_sp(), node_id=_tc_nid())
-        enum_def = EnumDef(name="E", variants=(vd, vd2), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(enum_def)
-        assert "A" in err.to_diagnostic().message
-
-    def test_enum_def_duplicate_variant_field(self) -> None:
-        vd = VariantDef(
-            name="Fail",
-            fields=(_tc_field("msg", _tc_text_t()), _tc_field("msg", _tc_int_t())),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        enum_def = EnumDef(name="E", variants=(vd,), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(enum_def)
-        assert "msg" in err.to_diagnostic().message
-
-    def test_type_alias_simple(self) -> None:
-        alias = TypeAlias(name="MyText", type_expr=_tc_text_t(), span=_tc_sp(), node_id=_tc_nid())
-        r = resolve_and_check(alias)
-        assert r.resolved.program is not None
-
-    def test_type_alias_cycle(self) -> None:
-        alias_a = TypeAlias(name="A", type_expr=_tc_name_t("B"), span=_tc_sp(), node_id=_tc_nid())
-        alias_b = TypeAlias(name="B", type_expr=_tc_name_t("A"), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(alias_a, alias_b)
-        assert isinstance(err, AglTypeError)
-
-    def test_duplicate_type_name(self) -> None:
-        rec1 = RecordDef(name="Point", fields=(), span=_tc_sp(), node_id=_tc_nid())
-        rec2 = RecordDef(name="Point", fields=(), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(rec1, rec2)
-        assert "Point" in err.to_diagnostic().message
-
-    def test_builtin_type_name_shadow(self) -> None:
-        rec = RecordDef(name="text", fields=(), span=_tc_sp(), node_id=_tc_nid())
-        err = reject_ast(rec)
-        assert "text" in err.to_diagnostic().message
-
-    def test_record_def_nested_record_field(self) -> None:
-        """Nested record in a field type is checked for recursive types."""
-        rec_a = RecordDef(
-            name="A", fields=(_tc_field("x", _tc_int_t()),), span=_tc_sp(), node_id=_tc_nid()
-        )
-        rec_b = RecordDef(
-            name="B", fields=(_tc_field("a", _tc_name_t("A")),), span=_tc_sp(), node_id=_tc_nid()
-        )
-        r = resolve_and_check(rec_a, rec_b)
-        assert r.resolved.program is not None
-
-    def test_record_def_indirect_recursion(self) -> None:
-        """B->A->B indirect cycle is caught."""
-        rec_a = RecordDef(
-            name="A", fields=(_tc_field("b", _tc_name_t("B")),), span=_tc_sp(), node_id=_tc_nid()
-        )
-        rec_b = RecordDef(
-            name="B", fields=(_tc_field("a", _tc_name_t("A")),), span=_tc_sp(), node_id=_tc_nid()
-        )
-        err = reject_ast(rec_a, rec_b)
-        assert isinstance(err, AglTypeError)
-
-    def test_record_def_list_of_self_is_recursive(self) -> None:
-        """list[Node] inside Node is still considered recursive."""
-        rec = RecordDef(
-            name="Node",
-            fields=(_tc_field("children", _tc_list_t(_tc_name_t("Node"))),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        err = reject_ast(rec)
-        assert "Node" in err.to_diagnostic().message
-
-    def test_record_field_of_enum_type_ok(self) -> None:
-        """A record field typed as an enum is fully resolved (exercises _ensure_built_enum)."""
-        from agm.agl.syntax.nodes import VariantDef
-
-        color = EnumDef(
-            name="Color",
-            variants=(
-                VariantDef(name="Red", fields=(), span=_tc_sp(), node_id=_tc_nid()),
-            ),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        rec = RecordDef(
-            name="R",
-            fields=(_tc_field("c", _tc_name_t("Color")),),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        r = resolve_and_check(color, rec)
-        assert r.resolved.program is not None
-
-    def test_record_two_fields_same_enum_type(self) -> None:
-        """Two record fields of the same enum type: second call to _ensure_built_enum is no-op."""
-        from agm.agl.syntax.nodes import VariantDef
-
-        color = EnumDef(
-            name="Color",
-            variants=(
-                VariantDef(name="Red", fields=(), span=_tc_sp(), node_id=_tc_nid()),
-            ),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        rec = RecordDef(
-            name="Pair",
-            fields=(
-                _tc_field("a", _tc_name_t("Color")),
-                _tc_field("b", _tc_name_t("Color")),
-            ),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        r = resolve_and_check(color, rec)
-        assert r.resolved.program is not None
-
-    def test_recursive_enum_error(self) -> None:
-        """An enum variant whose field references the enclosing enum is recursive."""
-        from agm.agl.syntax.nodes import VariantDef
-
-        node_enum = EnumDef(
-            name="Tree",
-            variants=(
-                VariantDef(
-                    name="Branch",
-                    fields=(_tc_field("child", _tc_name_t("Tree")),),
-                    span=_tc_sp(),
-                    node_id=_tc_nid(),
-                ),
-            ),
-            span=_tc_sp(),
-            node_id=_tc_nid(),
-        )
-        err = reject_ast(node_enum)
-        assert isinstance(err, AglTypeError)
-        assert "Tree" in err.to_diagnostic().message
-
-
-# ============================================================
-# TestTypeBuilderViaSource — M2 carry-in constructs via parse_program
+# TestTypeBuilderViaSource — _TypeBuilder via parse_program
 #
-# These tests re-express the AST-level TestTypeBuilderViaAst checks
-# through real parsed source now that the grammar supports records,
-# enums, type aliases, constructors, collections, and field-access.
+# These tests exercise the _TypeBuilder pre-pass (type declarations: records,
+# enums, type aliases, forward references, duplicate names, recursion, and
+# alias cycles) through real parsed source.
 # ============================================================
 
 
@@ -1483,6 +1262,75 @@ class TestTypeBuilderViaSource:
         """A dict literal type-checks as dict[json]."""
         r = accept_type('let d = {"k": 1}\n')
         assert r.resolved.program is not None
+
+    def test_enum_referenced_by_two_fields_via_source(self) -> None:
+        """Two record fields of the same enum: the enum is built once (early return)."""
+        r = accept_type("enum Color | Red\nrecord Pair\n  a: Color\n  b: Color\n")
+        assert r.resolved.program is not None
+
+    def test_duplicate_variant_field_via_source(self) -> None:
+        """A variant with two fields of the same name is rejected."""
+        err = reject_type("enum E | V(x: int, x: text)\n")
+        assert "x" in err.to_diagnostic().message
+
+    def test_record_dict_field_via_source(self) -> None:
+        """A record field typed as dict[text, T] resolves the value type."""
+        r = accept_type("record M\n  data: dict[text, int]\n")
+        assert r.resolved.program is not None
+
+
+# ============================================================
+# TestRecursionThroughAlias (F1) — recursion routed through a `type` alias
+#
+# A record/enum that refers to itself *through an alias* is still a recursive
+# nominal type and must be rejected with the design-§5.9 recursive-type
+# diagnostic — never silently accepted with a corrupt empty-shell type.
+# ============================================================
+
+
+class TestRecursionThroughAlias:
+    """Recursion that hops through a `type` alias must be detected (design §5.9)."""
+
+    @staticmethod
+    def _assert_recursive(err: AglTypeError) -> None:
+        """The diagnostic must be the recursive-type one, not unknown / alias-cycle."""
+        msg = err.to_diagnostic().message
+        assert "recursive" in msg.lower()
+        # Distinct from the unknown-type diagnostic ...
+        assert "Unknown type" not in msg
+        # ... and from the pure alias-cycle diagnostic.
+        assert "part of a cycle" not in msg
+
+    def test_alias_to_record_then_field_back_through_alias(self) -> None:
+        """type T = R + record R { t: T } — R is recursive via T."""
+        err = reject_type("type T = R\nrecord R\n  t: T\n")
+        self._assert_recursive(err)
+
+    def test_alias_named_differently_to_record(self) -> None:
+        """type T = A + record A { t: T } — A is recursive via T."""
+        err = reject_type("type T = A\nrecord A\n  t: T\n")
+        self._assert_recursive(err)
+
+    def test_alias_to_enum_then_variant_field_back(self) -> None:
+        """type T = E + enum E | V(t: T) — E is recursive via T."""
+        err = reject_type("type T = E\nenum E | V(t: T)\n")
+        self._assert_recursive(err)
+
+    def test_record_list_field_through_alias_back_to_record(self) -> None:
+        """record A { xs: list[T] } + type T = A — A is recursive via list[T]."""
+        err = reject_type("record A\n  xs: list[T]\ntype T = A\n")
+        self._assert_recursive(err)
+
+    def test_multi_hop_alias_chain_back_to_record(self) -> None:
+        """type T = U + type U = A + record A { t: T } — recursive via T -> U."""
+        err = reject_type("type T = U\ntype U = A\nrecord A\n  t: T\n")
+        self._assert_recursive(err)
+
+    def test_record_field_reaches_pure_alias_cycle(self) -> None:
+        """A record field through a pure alias cycle (T -> U -> T) stops following
+        and surfaces the alias-cycle diagnostic, not an infinite loop."""
+        err = reject_type("record R\n  t: T\ntype T = U\ntype U = T\n")
+        assert "part of a cycle" in err.to_diagnostic().message
 
 
 # ============================================================

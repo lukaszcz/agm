@@ -40,6 +40,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.scope.symbols import BindingRef, CallKind, ResolvedProgram
 from agm.agl.syntax.nodes import (
+    AbortPolicy,
     AgentCall,
     BinaryOp,
     BinOp,
@@ -72,6 +73,7 @@ from agm.agl.syntax.nodes import (
     Program,
     Raise,
     RecordDef,
+    RetryPolicy,
     SetStmt,
     Stmt,
     StringLit,
@@ -87,7 +89,13 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
-from agm.agl.typecheck.env import AglTypeError, CheckedProgram, OutputContractSpec, TypeEnvironment
+from agm.agl.typecheck.env import (
+    AglTypeError,
+    CallSiteRecord,
+    CheckedProgram,
+    OutputContractSpec,
+    TypeEnvironment,
+)
 from agm.agl.typecheck.types import (
     BUILTIN_EXCEPTION_NAMES,
     BoolType,
@@ -112,6 +120,15 @@ from agm.agl.typecheck.types import (
 _BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
     {"text", "json", "bool", "int", "decimal"}
 ) | BUILTIN_EXCEPTION_NAMES
+
+
+def _parse_policy_str(policy: AbortPolicy | RetryPolicy | None) -> str:
+    """Render a parse policy as the inventory string (``"abort"``/``"retry[N]"``/``"default"``)."""
+    if isinstance(policy, AbortPolicy):
+        return "abort"
+    if isinstance(policy, RetryPolicy):
+        return f"retry[{policy.extra}]"
+    return "default"
 
 
 # ---------------------------------------------------------------------------
@@ -284,8 +301,20 @@ class _TypeBuilder:
         self._ensure_referenced_type_built(fd.type_expr)
         return self._env.resolve_type_expr(fd.type_expr, span=fd.span)
 
-    def _ensure_referenced_type_built(self, type_expr: object) -> None:
-        """Recursively ensure that all user-declared types in *type_expr* are built."""
+    def _ensure_referenced_type_built(
+        self, type_expr: object, _alias_seen: frozenset[str] = frozenset()
+    ) -> None:
+        """Recursively ensure that all user-declared types in *type_expr* are built.
+
+        A ``NameT`` may name a record, an enum, or a ``type`` alias.  Aliases are
+        transparent, so recursion that hops through one — e.g. ``type T = R`` with
+        ``record R { t: T }`` — is still recursion into ``R`` and must trip the
+        ``_building`` guard.  When a ``NameT`` names an alias we therefore recurse
+        into the alias's raw target ``TypeExpr``.  ``_alias_seen`` guards against
+        pure alias-alias cycles (``type A = B``/``type B = A``), which are diagnosed
+        separately by ``_validate_alias``; here we simply stop following them so the
+        on-demand build cannot loop forever.
+        """
         from agm.agl.syntax.types import DictT, ListT, NameT
 
         if isinstance(type_expr, NameT):
@@ -294,12 +323,21 @@ class _TypeBuilder:
                 self._ensure_built_record(name)
             elif name in self._enum_defs:
                 self._ensure_built_enum(name)
+            elif self._env.get_alias_target_expr(name) is not None:
+                # Transparent alias: follow its raw target so recursion routed
+                # through the alias still reaches the underlying record/enum and
+                # trips the ``_building`` cycle guard.
+                if name not in _alias_seen:
+                    self._ensure_referenced_type_built(
+                        self._env.get_alias_target_expr(name),
+                        _alias_seen | {name},
+                    )
             # Built-in names (text, int, etc.) and unknown names are handled by
             # resolve_type_expr; we only handle user declarations here.
         elif isinstance(type_expr, ListT):
-            self._ensure_referenced_type_built(type_expr.elem)
+            self._ensure_referenced_type_built(type_expr.elem, _alias_seen)
         elif isinstance(type_expr, DictT):
-            self._ensure_referenced_type_built(type_expr.value)
+            self._ensure_referenced_type_built(type_expr.value, _alias_seen)
         # Primitive types (TextT, IntT, etc.) have no nested declarations.
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
@@ -335,6 +373,7 @@ class _Checker:
         self._caps = capabilities
         self._node_types: dict[int, Type] = {}
         self._contract_specs: dict[int, OutputContractSpec] = {}
+        self._call_sites: list[CallSiteRecord] = []
         self._warnings: list[Diagnostic] = []
 
     # ------------------------------------------------------------------
@@ -654,6 +693,20 @@ class _Checker:
             strict_json=effective_strict,
         )
         self._contract_specs[node.node_id] = spec
+
+        # Record the static call-site descriptor for the §10.1 dry-run inventory.
+        # Everything the inventory needs about the call form (callee, parse policy,
+        # span) is in hand here; recording it now avoids a second AST walk at
+        # dry-run time.  Appending in check order preserves source order.
+        self._call_sites.append(
+            CallSiteRecord(
+                node_id=node.node_id,
+                callee=node.agent,
+                parse_policy=_parse_policy_str(node.options.parse_policy),
+                line=node.span.start_line,
+                col=node.span.start_col,
+            )
+        )
 
         return target_type
 
@@ -1168,6 +1221,7 @@ class _Checker:
             resolved=resolved,
             node_types=self._node_types,
             contract_specs=self._contract_specs,
+            call_sites=tuple(self._call_sites),
             warnings=tuple(self._warnings),
             type_env=self._env,
         )

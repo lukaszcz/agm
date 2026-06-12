@@ -48,6 +48,35 @@ class AglTypeError(AglError):
 
 
 @dataclass(frozen=True, slots=True)
+class CallSiteRecord:
+    """Static call-site descriptor recorded by the checker for one agent/exec call.
+
+    Captured in ``_check_agent_call`` — the one place where the call's resolved
+    callee kind, parse policy, and source span are all already in hand — so the
+    ``--dry-run`` inventory (design §10.1) is derived from the checker's work
+    rather than from a second AST walk.
+
+    ``node_id``
+        The ``AgentCall`` node id; keys into ``contract_specs`` (codec / target
+        type) and into the host's materialized-contract table (schema presence).
+    ``callee``
+        The agent or executor name (``"prompt"``, ``"exec"``, or a registered
+        agent name).
+    ``parse_policy``
+        ``"abort"`` / ``"retry[N]"`` / ``"default"`` (when the call set no
+        explicit ``on_parse_error`` policy).
+    ``line`` / ``col``
+        1-based source line and column of the call site.
+    """
+
+    node_id: int
+    callee: str
+    parse_policy: str
+    line: int
+    col: int
+
+
+@dataclass(frozen=True, slots=True)
 class OutputContractSpec:
     """Statically derived output contract for one ``AgentCall`` node.
 
@@ -85,6 +114,11 @@ class CheckedProgram:
     ``contract_specs``
         Maps ``AgentCall.node_id`` → ``OutputContractSpec`` for every agent
         call site.
+    ``call_sites``
+        Tuple of ``CallSiteRecord`` — one per agent-call/exec site, in source
+        order — captured by the checker.  The ``--dry-run`` inventory (§10.1) is
+        built from this plus ``contract_specs``; it is never re-derived by
+        re-walking the AST.
     ``warnings``
         Tuple of warning-severity ``Diagnostic`` records collected during the
         pass.  The checker raises on the first *error*; warnings are
@@ -100,6 +134,7 @@ class CheckedProgram:
     resolved: ResolvedProgram
     node_types: dict[int, Type]
     contract_specs: dict[int, OutputContractSpec]
+    call_sites: tuple[CallSiteRecord, ...]
     warnings: tuple[Diagnostic, ...]
     type_env: TypeEnvironment
 

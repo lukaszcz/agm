@@ -19,6 +19,8 @@ from agm.agl.runtime.agents import AgentFn
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import ExceptionValue, Value
+    from agm.agl.runtime.codec import OutputCodec
+    from agm.agl.runtime.render import RendererFn
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.types import Type as AglType
 
@@ -123,6 +125,9 @@ class WorkflowRuntime:
         self._default_strict_json = default_strict_json
         self._default_agent = default_agent
         self._agents: dict[str, AgentFn] = {}
+        # Extra codecs/renderers registered by the host (beyond the built-ins).
+        self._extra_codecs: dict[str, "OutputCodec"] = {}
+        self._extra_renderers: dict[str, "RendererFn"] = {}
 
     def register_agent(self, name: str, fn: AgentFn) -> None:
         """Register a named agent callable.
@@ -141,6 +146,65 @@ class WorkflowRuntime:
                 "Duplicate registrations are not allowed."
             )
         self._agents[name] = fn
+
+    def register_codec(self, codec: "OutputCodec") -> None:
+        """Register a custom output codec.
+
+        The codec's ``name`` property is the registration key.  The built-in
+        codec names (``"text"`` and ``"json"``) are reserved and cannot be
+        overridden.  Duplicate registrations (same name, regardless of
+        implementation) are rejected.
+
+        The codec must expose ``supported_kinds: frozenset[str]``; those kinds
+        are surfaced in ``HostCapabilities.codec_kinds`` so the type-checker
+        can validate ``format`` options at a call site (design §7.6 / CARRY-IN 1).
+
+        Raises ``ValueError`` for reserved or duplicate names.
+        """
+        from agm.agl.runtime.codec import JsonCodec, TextCodec
+
+        _reserved_codec_names: frozenset[str] = frozenset({
+            TextCodec().name, JsonCodec().name
+        })
+        name = codec.name
+        if name in _reserved_codec_names:
+            raise ValueError(
+                f"Cannot register codec with reserved name {name!r}. "
+                f"Reserved codec names: {sorted(_reserved_codec_names)}"
+            )
+        if name in self._extra_codecs:
+            raise ValueError(
+                f"A codec named {name!r} is already registered. "
+                "Duplicate codec registrations are not allowed."
+            )
+        self._extra_codecs[name] = codec
+
+    def register_renderer(self, name: str, fn: "RendererFn") -> None:
+        """Register a custom renderer function (§2.12 / design §7.6).
+
+        *name* is the ``as <name>`` identifier used in prompt interpolation
+        segments.  Built-in renderer names (``"default"``, ``"raw"``,
+        ``"json"``, ``"bullets"``) are reserved.  Duplicate names are
+        rejected.
+
+        *fn* must match the ``RendererFn`` signature:
+        ``Callable[[Value, str | None], str]``.
+
+        Raises ``ValueError`` for reserved or duplicate names.
+        """
+        from agm.agl.runtime.render import RENDERER_NAMES
+
+        if name in RENDERER_NAMES:
+            raise ValueError(
+                f"Cannot register renderer with reserved name {name!r}. "
+                f"Reserved renderer names: {sorted(RENDERER_NAMES)}"
+            )
+        if name in self._extra_renderers:
+            raise ValueError(
+                f"A renderer named {name!r} is already registered. "
+                "Duplicate renderer registrations are not allowed."
+            )
+        self._extra_renderers[name] = fn
 
     def run(
         self,
@@ -170,13 +234,29 @@ class WorkflowRuntime:
 
         # ----------------------------------------------------------------
         # Build HostCapabilities from registrations.
+        # (CARRY-IN 1: codec_kinds and renderer_names are derived from the
+        # actual codec/renderer registries, not from duplicated constants.)
         # ----------------------------------------------------------------
         from agm.agl.capabilities import HostCapabilities
         from agm.agl.runtime.agents import AgentRegistry
         from agm.agl.runtime.codec import JsonCodec, TextCodec
+        from agm.agl.runtime.render import RENDERER_NAMES
 
         text_codec = TextCodec()
         json_codec = JsonCodec()
+
+        # Merge built-in codecs with any host-registered extras.
+        all_codecs: dict[str, "OutputCodec"] = {
+            text_codec.name: text_codec,
+            json_codec.name: json_codec,
+            **self._extra_codecs,
+        }
+
+        # Merge built-in renderer names with any host-registered extras.
+        all_renderer_names: frozenset[str] = RENDERER_NAMES | frozenset(
+            self._extra_renderers.keys()
+        )
+
         registry = AgentRegistry(
             named={name: fn for name, fn in self._agents.items()},
             default_agent=self._default_agent,
@@ -186,12 +266,9 @@ class WorkflowRuntime:
             has_fallback_agent=registry.has_fallback,
             has_default_agent=registry.has_default_agent,
             codec_kinds={
-                text_codec.name: frozenset({"text"}),
-                json_codec.name: frozenset(
-                    {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-                ),
+                name: codec.supported_kinds for name, codec in all_codecs.items()
             },
-            renderer_names=frozenset({"default", "raw", "json", "bullets"}),
+            renderer_names=all_renderer_names,
         )
 
         # ----------------------------------------------------------------
@@ -305,13 +382,10 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         # [5] Materialize output contracts (text codec only in M1)
         # ----------------------------------------------------------------
-        from agm.agl.runtime.codec import OutputCodec
         from agm.agl.runtime.contract import materialize_contract
 
-        codecs: dict[str, OutputCodec] = {
-            text_codec.name: text_codec,
-            json_codec.name: json_codec,
-        }
+        # Reuse the merged codec map built for HostCapabilities above.
+        codecs = all_codecs
         contracts: dict[int, object] = {}
         contract_errors: list[Diagnostic] = []
 
@@ -476,6 +550,7 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
     # Structured types (list/dict/record/enum): delegate to JsonCodec.
     if isinstance(type_obj, (ListType, DictType, RecordType, EnumType)):
         from agm.agl.runtime.codec import JsonCodec
+        from agm.agl.runtime.schema import derive_schema
 
         if not isinstance(raw, str):
             raise ValueError(
@@ -483,10 +558,12 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
                 "provided as a JSON string."
             )
         codec = JsonCodec()
+        # Precompute schema once (CARRY-IN 2: avoids re-derivation inside parse).
+        schema = derive_schema(type_obj)
         # Host-supplied --input values are not chatty agent output: they must be
         # exactly one bare JSON value (F7).  Strict parsing avoids json-repair
         # silently "fixing" user typos.
-        result = codec.parse(raw, type_obj, strict_json=True)
+        result = codec.parse(raw, type_obj, strict_json=True, schema=schema)
         if not result.ok or result.value is None:
             raise ValueError(
                 f"Input {name!r}: could not parse as {type_obj!r}; structured "

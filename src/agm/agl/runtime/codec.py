@@ -37,6 +37,7 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.runtime.request import ValidationError
+from agm.agl.runtime.schema import derive_schema
 from agm.agl.typecheck.types import (
     BoolType,
     DecimalType,
@@ -52,7 +53,6 @@ from agm.agl.typecheck.types import (
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
-    from agm.agl.typecheck.env import TypeEnvironment
 
 # ---------------------------------------------------------------------------
 # ParseResult — outcome of codec.parse()
@@ -122,19 +122,33 @@ class OutputCodec(Protocol):
 
     Every codec exposes:
     - ``name`` — the codec identifier (e.g. ``"text"``, ``"json"``).
+    - ``supported_kinds`` — frozenset of semantic type-kind strings this codec handles.
+      This is the authoritative source for ``HostCapabilities.codec_kinds`` (CARRY-IN 1).
     - ``supports_type(t)`` — True iff this codec can handle the given type.
-    - ``make_contract(type_ref, env)`` — build an ``OutputContract``.
-    - ``parse(raw, target_type, strict_json)`` — parse a raw string.
+    - ``make_contract(type_ref)`` — build an ``OutputContract``.
+    - ``parse(raw, target_type, *, strict_json, schema)`` — parse a raw string.
+      *schema* is an optional precomputed JSON Schema (CARRY-IN 2); when provided,
+      ``JsonCodec`` skips re-deriving it from *target_type*.
     """
 
     @property
     def name(self) -> str: ...
 
+    @property
+    def supported_kinds(self) -> frozenset[str]: ...
+
     def supports_type(self, t: Type) -> bool: ...
 
-    def make_contract(self, type_ref: Type, env: "TypeEnvironment") -> "OutputContract": ...
+    def make_contract(self, type_ref: Type) -> "OutputContract": ...
 
-    def parse(self, raw: str, target_type: Type, *, strict_json: bool = False) -> ParseResult: ...
+    def parse(
+        self,
+        raw: str,
+        target_type: Type,
+        *,
+        strict_json: bool = False,
+        schema: dict[str, object] | None = None,
+    ) -> ParseResult: ...
 
 
 # ---------------------------------------------------------------------------
@@ -146,17 +160,31 @@ class TextCodec:
     """The built-in ``text`` codec: passthrough, no parsing needed.
 
     For a ``text`` target, the raw agent response is returned as-is, wrapped
-    in a ``TextValue``.  ``strict_json`` is ignored (inapplicable).
+    in a ``TextValue``.  ``strict_json`` and ``schema`` are ignored (inapplicable).
     """
 
     @property
     def name(self) -> str:
         return "text"
 
+    @property
+    def supported_kinds(self) -> frozenset[str]:
+        """The set of type-kind strings this codec can handle.
+
+        Single source of truth for ``HostCapabilities.codec_kinds["text"]``
+        (CARRY-IN 1 — eliminates the duplicated literal in ``runtime.py``).
+        """
+        return frozenset({"text"})
+
     def supports_type(self, t: Type) -> bool:
         return isinstance(t, TextType)
 
-    def make_contract(self, type_ref: Type, env: "TypeEnvironment") -> "OutputContract":
+    def make_contract(self, type_ref: Type) -> "OutputContract":
+        """Build an ``OutputContract`` for *type_ref*.
+
+        The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
+        never used by this implementation.
+        """
         from agm.agl.runtime.contract import OutputContract
 
         return OutputContract(
@@ -167,8 +195,16 @@ class TextCodec:
             json_schema=None,
         )
 
-    def parse(self, raw: str, target_type: Type, *, strict_json: bool = False) -> ParseResult:
+    def parse(
+        self,
+        raw: str,
+        target_type: Type,
+        *,
+        strict_json: bool = False,
+        schema: dict[str, object] | None = None,
+    ) -> ParseResult:
         # Text codec: always succeeds; the raw string is the value.
+        # ``strict_json`` and ``schema`` are inapplicable for text targets.
         return ParseResult.success(TextValue(raw))
 
 
@@ -715,19 +751,41 @@ class JsonCodec:
 
     Schema validation is always strict in both modes (rules 3–6 of §2.8 are
     never relaxed).
+
+    CARRY-IN 2: The ``parse`` method accepts an optional precomputed *schema*
+    keyword argument.  When provided (e.g. by runtime-side callers that already
+    hold the materialized ``OutputContract``), ``derive_schema`` is skipped.
+    This ensures schema derivation happens once per ``make_contract`` call
+    rather than once per parse attempt.
     """
 
     @property
     def name(self) -> str:
         return "json"
 
+    @property
+    def supported_kinds(self) -> frozenset[str]:
+        """The set of type-kind strings this codec can handle.
+
+        Single source of truth for ``HostCapabilities.codec_kinds["json"]``
+        (CARRY-IN 1 — eliminates the duplicated literal in ``runtime.py``).
+        Matches ``_JSON_CODEC_KINDS`` (kept in this module as a local constant
+        to drive ``supports_type``; the runtime no longer duplicates it).
+        """
+        return _JSON_CODEC_KINDS
+
     def supports_type(self, t: Type) -> bool:
         return t.kind in _JSON_CODEC_KINDS
 
-    def make_contract(self, type_ref: Type, env: "TypeEnvironment") -> "OutputContract":
-        """Build an ``OutputContract`` for *type_ref* (design §7.7)."""
+    def make_contract(self, type_ref: Type) -> "OutputContract":
+        """Build an ``OutputContract`` for *type_ref* (design §7.7).
+
+        The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
+        never used by this implementation.  ``derive_schema`` is called exactly
+        once here; callers that subsequently invoke ``parse`` should pass
+        ``schema=contract.json_schema`` to avoid re-derivation.
+        """
         from agm.agl.runtime.contract import OutputContract
-        from agm.agl.runtime.schema import derive_schema
 
         schema = derive_schema(type_ref)
         instructions = _build_format_instructions(type_ref)
@@ -739,7 +797,14 @@ class JsonCodec:
             json_schema=schema,
         )
 
-    def parse(self, raw: str, target_type: Type, *, strict_json: bool = False) -> ParseResult:
+    def parse(
+        self,
+        raw: str,
+        target_type: Type,
+        *,
+        strict_json: bool = False,
+        schema: dict[str, object] | None = None,
+    ) -> ParseResult:
         """Parse *raw* agent output into the typed ``Value`` for *target_type*.
 
         Lenient mode (``strict_json=False``, the default per design §2.8):
@@ -753,14 +818,20 @@ class JsonCodec:
              stripping.  Fails if there is any surrounding non-whitespace.
           2. Validate and convert as in lenient mode.
 
+        *schema* (CARRY-IN 2): optional precomputed JSON Schema dict.  When
+        ``None`` (the default — e.g. when called from the interpreter which
+        does not hold the contract), ``derive_schema`` is called to produce it.
+        Runtime-side callers that already have the materialized
+        ``OutputContract`` should pass ``schema=contract.json_schema`` to
+        avoid redundant schema derivation.
+
         Decimal exactness (design §5.1): ``json-repair`` always produces a
         JSON *string* (not Python objects), which is then re-parsed via
         ``json.loads(parse_float=Decimal)``.  Decimal values are never
         routed through Python ``float``.
         """
-        from agm.agl.runtime.schema import derive_schema
-
-        schema = derive_schema(target_type)
+        if schema is None:
+            schema = derive_schema(target_type)
 
         if strict_json:
             return self._parse_strict(raw, target_type, schema)

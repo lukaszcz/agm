@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from agm.agl.runtime.codec import OutputCodec
-from agm.agl.typecheck.env import OutputContractSpec, TypeEnvironment
+from agm.agl.typecheck.env import OutputContractSpec
 from agm.agl.typecheck.types import Type
 
 
@@ -59,8 +59,8 @@ def materialize_contract(
             "This is a host-configuration error."
         )
     # Delegate format_instructions and json_schema derivation to the codec.
-    env = TypeEnvironment()
-    base = codec.make_contract(spec.target_type, env)
+    # (CARRY-IN 2: TypeEnvironment() was constructed here but never used.)
+    base = codec.make_contract(spec.target_type)
     # Overlay the per-call strict_json from the spec (the codec's make_contract
     # sets a default; the static spec overrides it for the specific call site).
     return OutputContract(

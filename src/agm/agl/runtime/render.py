@@ -170,6 +170,12 @@ _RENDERERS: dict[str, RendererFn] = {
     "bullets": _render_bullets,
 }
 
+# Public constant: the set of built-in renderer names.
+# ``WorkflowRuntime.run`` uses this as the authoritative source so that
+# ``HostCapabilities.renderer_names`` is derived from the implementation,
+# not from a duplicated literal in the runtime layer (CARRY-IN 1, M3b).
+RENDERER_NAMES: frozenset[str] = frozenset(_RENDERERS)
+
 
 def render_for_prompt(value: Value, *, renderer_name: str | None, var_name: str | None) -> str:
     """Render *value* for use inside a prompt template (§2.12).

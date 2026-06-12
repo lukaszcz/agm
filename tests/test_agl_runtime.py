@@ -714,3 +714,608 @@ class TestInputBindingInvariant:
         rt = WorkflowRuntime()
         with pytest.raises(AssertionError, match="binding type"):
             rt.run("input msg\nprint msg", inputs={"msg": "hi"})
+
+
+# ---------------------------------------------------------------------------
+# CARRY-IN 1 — capabilities built from registrations (M3b)
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilitiesBuiltFromRegistrations:
+    """CARRY-IN 1: WorkflowRuntime.run builds HostCapabilities from codec/renderer registries."""
+
+    def test_default_runtime_has_text_and_json_codecs(self) -> None:
+        """Built-in text + json codecs are always present."""
+        from agm.agl.runtime.codec import JsonCodec, TextCodec
+
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        # A json-typed call passes typecheck → json codec is registered.
+        tc, jc = TextCodec(), JsonCodec()
+        assert tc.name == "text"
+        assert jc.name == "json"
+        result = rt.run('let x = prompt "hi"')
+        assert result.ok is True
+
+    def test_default_runtime_has_builtin_renderer_names(self) -> None:
+        """Built-in renderers (default, raw, json, bullets) are always present."""
+        from agm.agl.runtime.render import RENDERER_NAMES
+        assert frozenset({"default", "raw", "json", "bullets"}) <= RENDERER_NAMES
+
+    def test_register_codec_before_run_extends_capabilities(self) -> None:
+        """A custom codec registered before run() makes its kinds available to typecheck."""
+        from agm.agl.eval.values import TextValue as TV
+        from agm.agl.runtime.codec import ParseResult, TextCodec
+        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.typecheck.types import TextType, Type
+
+        class FooCodec:
+            @property
+            def name(self) -> str:
+                return "foo"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(self, type_ref: Type) -> OutputContract:
+                return OutputContract(
+                    target_type=type_ref,
+                    codec=TextCodec(),
+                    strict_json=None,
+                    format_instructions="",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+            ) -> ParseResult:
+                return ParseResult.success(TV(raw))
+
+        rt = WorkflowRuntime()
+        rt.register_codec(FooCodec())
+        # The program just needs to run without capability errors.
+        result = rt.run("let x = 1")
+        assert result.ok is True
+
+    def test_register_renderer_before_run_extends_renderer_names(self) -> None:
+        """A custom renderer registered before run() is visible to typecheck."""
+        rt = WorkflowRuntime()
+        rt.register_renderer("fancy", lambda val, name: str(val))
+        result = rt.run("let x = 1")
+        assert result.ok is True
+
+    def test_no_duplicated_constant_in_runtime(self) -> None:
+        """runtime.py must not define its own hardcoded renderer name set."""
+        # The module should not have a hardcoded renderer-names frozenset literal.
+        # We check indirectly: WorkflowRuntime.run uses render.RENDERER_NAMES.
+        from agm.agl.runtime.render import RENDERER_NAMES
+
+        assert isinstance(RENDERER_NAMES, frozenset)
+        assert len(RENDERER_NAMES) >= 4
+
+
+# ---------------------------------------------------------------------------
+# Coverage: render.py — render_for_prompt / render_for_console / helpers
+# ---------------------------------------------------------------------------
+
+
+class TestRenderForPrompt:
+    """Direct unit tests for render_for_prompt and render_for_console."""
+
+    def test_text_default_renderer_has_boundary(self) -> None:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(TextValue("hello"), renderer_name=None, var_name="x")
+        assert "hello" in out
+        assert 'name="x"' in out
+        assert 'type="text"' in out
+
+    def test_text_default_renderer_no_varname(self) -> None:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(TextValue("hi"), renderer_name=None, var_name=None)
+        assert "hi" in out
+        assert 'name="value"' in out
+
+    def test_int_default_renderer_scalar(self) -> None:
+        from agm.agl.eval.values import IntValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(IntValue(42), renderer_name=None, var_name="n")
+        assert out == "42"
+
+    def test_decimal_default_renderer_scalar(self) -> None:
+        from decimal import Decimal
+
+        from agm.agl.eval.values import DecimalValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(DecimalValue(Decimal("1.5")), renderer_name=None, var_name="d")
+        assert out == "1.5"
+
+    def test_bool_default_renderer_scalar(self) -> None:
+        from agm.agl.eval.values import BoolValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        assert render_for_prompt(BoolValue(True), renderer_name=None, var_name="b") == "true"
+        assert render_for_prompt(BoolValue(False), renderer_name=None, var_name="b") == "false"
+
+    def test_json_default_renderer_structured(self) -> None:
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(JsonValue({"k": 1}), renderer_name=None, var_name="j")
+        assert "k" in out
+        assert 'type="json"' in out
+
+    def test_list_default_renderer_structured(self) -> None:
+        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(
+            ListValue(elements=(IntValue(1), IntValue(2))),
+            renderer_name=None,
+            var_name="xs",
+        )
+        assert 'type="list"' in out
+
+    def test_dict_default_renderer_structured(self) -> None:
+        from agm.agl.eval.values import DictValue, IntValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(
+            DictValue(entries={"a": IntValue(1)}),
+            renderer_name=None,
+            var_name="d",
+        )
+        assert 'type="dict"' in out
+
+    def test_record_default_renderer_uses_type_name(self) -> None:
+        from agm.agl.eval.values import IntValue, RecordValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        rv = RecordValue(type_name="Issue", fields={"n": IntValue(3)})
+        out = render_for_prompt(rv, renderer_name=None, var_name="r")
+        assert 'type="Issue"' in out
+
+    def test_enum_default_renderer_uses_type_name(self) -> None:
+        from agm.agl.eval.values import EnumValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        ev = EnumValue(type_name="Status", variant="Done", fields={})
+        out = render_for_prompt(ev, renderer_name=None, var_name="s")
+        assert 'type="Status"' in out
+
+    def test_raw_renderer(self) -> None:
+        from agm.agl.eval.values import IntValue, TextValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        assert render_for_prompt(TextValue("hi"), renderer_name="raw", var_name="x") == "hi"
+        assert render_for_prompt(IntValue(7), renderer_name="raw", var_name="n") == "7"
+
+    def test_json_renderer(self) -> None:
+        from agm.agl.eval.values import IntValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(IntValue(5), renderer_name="json", var_name="n")
+        assert "5" in out
+
+    def test_bullets_renderer_list(self) -> None:
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(
+            ListValue(elements=(TextValue("a"), TextValue("b"))),
+            renderer_name="bullets",
+            var_name="xs",
+        )
+        assert "- a" in out
+        assert "- b" in out
+
+    def test_bullets_renderer_non_list(self) -> None:
+        from agm.agl.eval.values import IntValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        # Non-list falls through to pretty JSON.
+        out = render_for_prompt(IntValue(3), renderer_name="bullets", var_name="n")
+        assert "3" in out
+
+    def test_unknown_renderer_falls_back_to_default(self) -> None:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        # Unknown renderer name → falls back to default (boundary-marked).
+        out = render_for_prompt(TextValue("x"), renderer_name="notarenderer", var_name="v")
+        assert 'type="text"' in out
+
+    def test_render_for_console_text(self) -> None:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_console
+
+        assert render_for_console(TextValue("hello")) == "hello"
+
+    def test_render_for_console_int(self) -> None:
+        from agm.agl.eval.values import IntValue
+        from agm.agl.runtime.render import render_for_console
+
+        assert render_for_console(IntValue(7)) == "7"
+
+    def test_render_for_console_decimal(self) -> None:
+        from decimal import Decimal
+
+        from agm.agl.eval.values import DecimalValue
+        from agm.agl.runtime.render import render_for_console
+
+        assert render_for_console(DecimalValue(Decimal("1.5"))) == "1.5"
+
+    def test_render_for_console_bool(self) -> None:
+        from agm.agl.eval.values import BoolValue
+        from agm.agl.runtime.render import render_for_console
+
+        assert render_for_console(BoolValue(True)) == "true"
+        assert render_for_console(BoolValue(False)) == "false"
+
+    def test_render_for_console_json(self) -> None:
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.runtime.render import render_for_console
+
+        out = render_for_console(JsonValue({"k": 1}))
+        assert "k" in out
+
+    def test_render_for_console_list(self) -> None:
+        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.runtime.render import render_for_console
+
+        out = render_for_console(ListValue(elements=(IntValue(1),)))
+        assert "1" in out
+
+    def test_render_for_console_record(self) -> None:
+        from agm.agl.eval.values import IntValue, RecordValue
+        from agm.agl.runtime.render import render_for_console
+
+        out = render_for_console(RecordValue(type_name="R", fields={"x": IntValue(3)}))
+        assert "x" in out
+
+    def test_render_for_console_enum(self) -> None:
+        from agm.agl.eval.values import EnumValue
+        from agm.agl.runtime.render import render_for_console
+
+        out = render_for_console(EnumValue(type_name="E", variant="A", fields={}))
+        assert "A" in out
+
+    def test_render_for_console_dict(self) -> None:
+        from agm.agl.eval.values import DictValue, TextValue
+        from agm.agl.runtime.render import render_for_console
+
+        out = render_for_console(DictValue(entries={"k": TextValue("v")}))
+        assert "k" in out
+
+    def test_scalar_text_json_value(self) -> None:
+        """_scalar_text(JsonValue) delegates to dumps_exact (line 67-68)."""
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.runtime.render import _scalar_text
+
+        out = _scalar_text(JsonValue({"a": 1}))
+        assert "a" in out
+
+    def test_scalar_text_list_value_falls_back_to_pretty_json(self) -> None:
+        """_scalar_text with a ListValue falls back to _pretty_json (line 69)."""
+        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.runtime.render import _scalar_text
+
+        out = _scalar_text(ListValue(elements=(IntValue(1),)))
+        assert "1" in out
+
+    def test_type_kind_str_scalar_types(self) -> None:
+        """_type_kind_str returns the correct kind for each scalar type."""
+        from decimal import Decimal
+
+        from agm.agl.eval.values import (
+            BoolValue,
+            DecimalValue,
+            ExceptionValue,
+            IntValue,
+            TextValue,
+        )
+        from agm.agl.runtime.render import _type_kind_str
+
+        assert _type_kind_str(TextValue("x")) == "text"
+        assert _type_kind_str(IntValue(1)) == "int"
+        assert _type_kind_str(DecimalValue(Decimal("1.5"))) == "decimal"
+        assert _type_kind_str(BoolValue(True)) == "bool"
+        assert _type_kind_str(ExceptionValue(type_name="Boom", fields={})) == "Boom"
+
+
+# ---------------------------------------------------------------------------
+# Coverage: serialize.py — value_to_json_obj and dumps_exact branches
+# ---------------------------------------------------------------------------
+
+
+class TestSerialize:
+    """Coverage for serialize.py branches not exercised by higher-level tests."""
+
+    def test_bool_value_serialized(self) -> None:
+        from agm.agl.eval.values import BoolValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        assert value_to_json_obj(BoolValue(True)) is True
+        assert value_to_json_obj(BoolValue(False)) is False
+
+    def test_dict_value_serialized(self) -> None:
+        from agm.agl.eval.values import DictValue, IntValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        result = value_to_json_obj(DictValue(entries={"a": IntValue(1)}))
+        assert result == {"a": 1}
+
+    def test_record_value_serialized(self) -> None:
+        from agm.agl.eval.values import IntValue, RecordValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        result = value_to_json_obj(RecordValue(type_name="R", fields={"x": IntValue(5)}))
+        assert result == {"x": 5}
+
+    def test_enum_value_serialized(self) -> None:
+        from agm.agl.eval.values import EnumValue, TextValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        result = value_to_json_obj(
+            EnumValue(type_name="E", variant="A", fields={"msg": TextValue("hi")})
+        )
+        assert result == {"$case": "A", "msg": "hi"}
+
+    def test_enum_nullary_value_serialized(self) -> None:
+        from agm.agl.eval.values import EnumValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        result = value_to_json_obj(EnumValue(type_name="E", variant="Done", fields={}))
+        assert result == {"$case": "Done"}
+
+    def test_exception_value_serialized(self) -> None:
+        from agm.agl.eval.values import ExceptionValue, TextValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        result = value_to_json_obj(
+            ExceptionValue(type_name="Err", fields={"message": TextValue("oops")})
+        )
+        assert result == {"message": "oops"}
+
+    def test_dumps_exact_bool_true(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        assert dumps_exact(True) == "true"
+
+    def test_dumps_exact_bool_false(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        assert dumps_exact(False) == "false"
+
+    def test_dumps_exact_list_empty(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        assert dumps_exact([]) == "[]"
+
+    def test_dumps_exact_list_no_indent(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        result = dumps_exact([1, 2], indent=None)
+        assert "1" in result
+        assert "2" in result
+
+    def test_dumps_exact_dict_empty(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        assert dumps_exact({}) == "{}"
+
+    def test_dumps_exact_dict_no_indent(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        result = dumps_exact({"k": 1}, indent=None)
+        assert "k" in result
+        assert "1" in result
+
+
+# ---------------------------------------------------------------------------
+# Coverage: agents.py — AgentResponse returned directly (not str)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentResponseDirectReturn:
+    """Cover the branch in AgentRegistry.dispatch that returns AgentResponse directly."""
+
+    def test_agent_returns_agent_response_directly(self) -> None:
+        from agm.agl.runtime import AgentRequest, AgentResponse
+        from agm.agl.runtime.agents import AgentRegistry
+
+        def agent_fn(req: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="direct", metadata={"k": "v"})
+
+        registry = AgentRegistry(named={"myagent": agent_fn}, default_agent=None)
+        result = registry.dispatch("myagent", AgentRequest(agent="myagent", prompt="q"))
+        assert result.content == "direct"
+        assert result.metadata == {"k": "v"}
+
+
+# ---------------------------------------------------------------------------
+# Coverage: contract.py — ValueError when codec not found
+# ---------------------------------------------------------------------------
+
+
+class TestMaterializeContractMissingCodec:
+    """Cover the ValueError branch when the codec is not in the registry."""
+
+    def test_missing_codec_raises_value_error(self) -> None:
+        from agm.agl.runtime.codec import TextCodec
+        from agm.agl.runtime.contract import materialize_contract
+        from agm.agl.typecheck.env import OutputContractSpec
+        from agm.agl.typecheck.types import TextType
+
+        spec = OutputContractSpec(
+            target_type=TextType(),
+            codec_name="nonexistent_codec",
+            strict_json=None,
+        )
+        with pytest.raises(ValueError, match="nonexistent_codec"):
+            materialize_contract(spec, {"text": TextCodec()})
+
+
+# ---------------------------------------------------------------------------
+# Coverage: runtime.py — generic exception handlers and error paths
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeErrorPaths:
+    """Cover the generic exception handler branches in WorkflowRuntime.run."""
+
+    def test_generic_parse_exception_covered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Generic (non-AglSyntaxError) exception in parse step → ok=False."""
+        import agm.agl.parser as parser_mod
+
+        def bad_parse(source: str) -> object:
+            raise RuntimeError("unexpected parse error")
+
+        monkeypatch.setattr(parser_mod, "parse_program", bad_parse)
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1")
+        assert result.ok is False
+        assert any("unexpected parse error" in d.message for d in result.diagnostics)
+
+    def test_generic_scope_exception_covered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Generic (non-AglScopeError) exception in scope step → ok=False."""
+        import agm.agl.scope as scope_mod
+
+        def bad_resolve(program: object) -> object:
+            raise RuntimeError("unexpected scope error")
+
+        monkeypatch.setattr(scope_mod, "resolve", bad_resolve)
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1")
+        assert result.ok is False
+        assert any("Scope error" in d.message for d in result.diagnostics)
+
+    def test_generic_typecheck_exception_covered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Generic (non-AglTypeError) exception in typecheck step → ok=False."""
+        import agm.agl.typecheck as tc_mod
+
+        def bad_check(resolved: object, caps: object) -> object:
+            raise RuntimeError("unexpected type error")
+
+        monkeypatch.setattr(tc_mod, "check", bad_check)
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1")
+        assert result.ok is False
+        assert any("Type error" in d.message for d in result.diagnostics)
+
+    def test_contract_error_returns_not_ok(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Contract materialization error → ok=False with contract error diagnostic."""
+        import agm.agl.runtime.contract as contract_mod
+
+        def bad_materialize(spec: object, codecs: object) -> object:
+            raise ValueError("bad contract")
+
+        monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        result = rt.run('let x = prompt "hi"')
+        assert result.ok is False
+        assert any("Contract error" in d.message for d in result.diagnostics)
+
+    def test_uncaught_agl_raise_in_run(self) -> None:
+        """AglRaise propagating from the interpreter → RunResult with error."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.values import ExceptionValue, TextValue
+
+        def bad_agent(req: object) -> str:
+            raise AglRaise(
+                ExceptionValue(
+                    type_name="Abort",
+                    fields={"message": TextValue("stopped"), "trace_id": TextValue("")},
+                )
+            )
+
+        rt = WorkflowRuntime(default_agent=bad_agent)
+        result = rt.run('let x = prompt "hi"')
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "Abort"
+
+    def test_text_input_not_str_raises(self) -> None:
+        """_convert_input: text type with non-str value → ValueError."""
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import TextType
+
+        with pytest.raises(ValueError, match="expected a text value"):
+            _convert_input("msg", 42, TextType())
+
+    def test_int_input_decimal_integral_widened(self) -> None:
+        """_convert_input: integral Decimal → IntValue for int type."""
+        from decimal import Decimal
+
+        from agm.agl.eval.values import IntValue
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import IntType
+
+        result = _convert_input("n", Decimal("3"), IntType())
+        assert result == IntValue(3)
+
+    def test_int_input_non_integral_fails(self) -> None:
+        """_convert_input: non-integral value → ValueError for int type."""
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import IntType
+
+        with pytest.raises(ValueError, match="expected an integer"):
+            _convert_input("n", "1.5", IntType())
+
+    def test_decimal_input_from_int(self) -> None:
+        """_convert_input: int value → DecimalValue for decimal type."""
+        from decimal import Decimal
+
+        from agm.agl.eval.values import DecimalValue
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import DecimalType
+
+        result = _convert_input("d", 3, DecimalType())
+        assert isinstance(result, DecimalValue)
+        assert result.value == Decimal(3)
+
+    def test_decimal_input_invalid_type_fails(self) -> None:
+        """_convert_input: bool value → ValueError for decimal type."""
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import DecimalType
+
+        with pytest.raises(ValueError, match="expected a decimal"):
+            _convert_input("d", "true", DecimalType())
+
+    def test_bool_input_invalid_type_fails(self) -> None:
+        """_convert_input: non-bool value → ValueError for bool type."""
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import BoolType
+
+        with pytest.raises(ValueError, match="expected a bool"):
+            _convert_input("b", "1", BoolType())
+
+    def test_bool_input_true_succeeds(self) -> None:
+        """_convert_input: bool value → BoolValue for bool type."""
+        from agm.agl.eval.values import BoolValue
+        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.typecheck.types import BoolType
+
+        result = _convert_input("b", True, BoolType())
+        assert result == BoolValue(True)

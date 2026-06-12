@@ -741,6 +741,9 @@ class _Checker:
         )
         self._contract_specs[node.node_id] = spec
 
+        # Warn about parse policies that can never take effect (design §7.2/§7.10).
+        self._warn_noop_parse_policy(node, kind, target_type)
+
         # Record the static call-site descriptor for the §10.1 dry-run inventory.
         # Everything the inventory needs about the call form (callee, parse policy,
         # span) is in hand here; recording it now avoids a second AST walk at
@@ -756,6 +759,46 @@ class _Checker:
         )
 
         return target_type
+
+    def _warn_noop_parse_policy(
+        self, node: AgentCall, kind: CallKind, target_type: Type
+    ) -> None:
+        """Warn when an ``on_parse_error`` policy can never fire (design §7.2/§7.10).
+
+        Two forms are no-ops and earn a *warning* (not an error — the program
+        still runs):
+
+        * an explicit policy on an ``exec`` call: exec's stdout is fixed, so the
+          call never re-runs and an extra parse attempt cannot change the
+          outcome (reviewed ruling: exec never re-runs);
+        * an ``on_parse_error`` policy on a *text* target: a text target never
+          fails parsing, so the policy is dead.
+        """
+        if node.options.parse_policy is None:
+            return
+        if kind == CallKind.shell_exec:
+            self._warnings.append(
+                Diagnostic(
+                    message=(
+                        "'on_parse_error' has no effect on an 'exec' call: the "
+                        "command output is fixed, so exec never re-runs and the "
+                        "policy can never fire."
+                    ),
+                    line=node.span.start_line,
+                    severity="warning",
+                )
+            )
+        elif isinstance(target_type, TextType):
+            self._warnings.append(
+                Diagnostic(
+                    message=(
+                        "'on_parse_error' has no effect on a text target: a text "
+                        "result never fails parsing, so the policy can never fire."
+                    ),
+                    line=node.span.start_line,
+                    severity="warning",
+                )
+            )
 
     def _select_codec(self, target_type: Type, span: SourceSpan) -> str:
         """Select the codec name for *target_type* from capabilities.

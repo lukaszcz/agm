@@ -498,6 +498,23 @@ def run_capture_result(
             spawn_error=str(exc),
             spawn_errno=exc.errno,
         )
+    except ValueError as exc:
+        # ``subprocess.Popen`` raises a plain ``ValueError`` (no ``errno``)
+        # before the child is launched for malformed arguments — most notably
+        # ``ValueError('embedded null byte')`` when an argv element contains a
+        # NUL.  Map it to the same spawn-failure result as the OS-level spawn
+        # errors so no raw exception escapes; ``spawn_errno`` is ``None`` since
+        # there is no OS error number.
+        elapsed = time.monotonic() - start
+        return ProcessCaptureResult(
+            returncode=None,
+            stdout="",
+            stderr="",
+            elapsed=elapsed,
+            timed_out=False,
+            spawn_error=str(exc),
+            spawn_errno=None,
+        )
 
     stdout, stderr, timed_out = _drain_process_streams(
         process,

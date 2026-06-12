@@ -84,11 +84,13 @@ from agm.agl.typecheck.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.runtime.codec import ParseResult
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.render import RendererFn
+    from agm.agl.runtime.request import ValidationError
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
@@ -606,32 +608,27 @@ class Interpreter:
         contract: "OutputContract",
         parse_policy: object,  # ParsePolicy | None
     ) -> Value:
-        """Execute an agent call with the given contract and parse policy."""
-        from agm.agl.runtime.request import AgentRequest, ValidationError
-        from agm.agl.syntax.nodes import RetryPolicy
+        """Execute an agent call with the given contract and parse policy.
 
-        # Determine max retries.
-        if isinstance(parse_policy, RetryPolicy):
-            max_attempts = 1 + parse_policy.extra
-        else:
-            max_attempts = 1  # AbortPolicy or None → one attempt only
+        Re-dispatches per attempt, feeding the previous invalid output and
+        validation errors back to the agent (corrective retry).  The per-attempt
+        parse and the final ``AgentParseError`` construction are delegated to the
+        shared :meth:`_run_parse_attempts` helper; this method owns only the
+        agent-specific concern of *source acquisition* (dispatch + the
+        ``agent_call_attempt``/``parse_result`` trace records).
+        """
+        from agm.agl.runtime.request import AgentRequest
 
         # Render the template once (re-used on retries per design).
-        rendered_template = self._eval_template(expr.template, scope)
-        prompt_text = rendered_template.value
-
-        # Determine effective strict_json.
-        if contract.strict_json is not None:
-            effective_strict = contract.strict_json
-        else:
-            effective_strict = self._strict_json
-
-        last_raw: str | None = None
-        last_normalized: str | None = None
-        last_errors: tuple[ValidationError, ...] = ()
+        prompt_text = self._eval_template(expr.template, scope).value
         call_span = expr.span
-        for attempt in range(max_attempts):
-            # Emit agent_call_attempt record.
+
+        def acquire(
+            attempt: int,
+            last_raw: str | None,
+            last_errors: tuple[ValidationError, ...],
+        ) -> tuple[str, str]:
+            # Emit agent_call_attempt record, dispatch, and return (raw, trace_id).
             attempt_trace_id = self._trace.agent_call_attempt(
                 agent=agent_name,
                 attempt=attempt,
@@ -647,18 +644,10 @@ class Interpreter:
                 output_contract=contract,
             )
             response = self._registry.dispatch(agent_name, request)
-            raw = response.content
+            return response.content, attempt_trace_id
 
-            # Parse via the codec.  Reuse the schema already materialized on the
-            # contract so the codec never re-derives it per attempt (BONUS, M3b).
-            schema = contract.json_schema if isinstance(contract.json_schema, dict) else None
-            result = contract.codec.parse(
-                raw,
-                contract.target_type,
-                strict_json=effective_strict,
-                schema=schema,
-            )
-            # Emit parse_result record.
+        def on_parsed(raw: str, result: "ParseResult") -> None:
+            # Emit a parse_result record per attempt (agent path only).
             error_summary = "; ".join(e.message for e in result.errors) if result.errors else ""
             self._trace.parse_result(
                 ok=result.ok and result.value is not None,
@@ -667,9 +656,83 @@ class Interpreter:
                 error_summary=error_summary,
                 span=call_span,
             )
+
+        def make_failure_message(last_raw: str | None, max_attempts: int) -> str:
+            return (
+                f"Agent {agent_name!r} failed to produce a valid "
+                f"{contract.target_type!r} after {max_attempts} attempt(s). "
+                f"Last output: {last_raw!r}"
+            )
+
+        return self._run_parse_attempts(
+            acquire=acquire,
+            contract=contract,
+            parse_policy=parse_policy,
+            agent_label=agent_name,
+            make_failure_message=make_failure_message,
+            on_parsed=on_parsed,
+        )
+
+    def _run_parse_attempts(
+        self,
+        *,
+        acquire: "Callable[[int, str | None, tuple[ValidationError, ...]], tuple[str, str]]",
+        contract: "OutputContract",
+        parse_policy: object,  # ParsePolicy | None
+        agent_label: str,
+        make_failure_message: "Callable[[str | None, int], str]",
+        on_parsed: "Callable[[str, ParseResult], None] | None" = None,
+    ) -> Value:
+        """Run the shared parse/retry loop and return the parsed value.
+
+        Owns everything common to the agent-call and ``exec`` paths: the
+        attempt count derived from ``parse_policy``, the effective ``strict_json``
+        resolution, the per-attempt codec parse, and the ``AgentParseError``
+        construction when every attempt fails (design §4.12, §7.5/§7.9).
+
+        The caller supplies *acquire*, which performs source acquisition for a
+        given attempt — re-dispatching with feedback (agent path) or returning a
+        fixed output (``exec`` path) — and returns ``(raw, trace_id)``.
+        *make_failure_message* builds the path-specific ``AgentParseError``
+        message from ``(last_raw, max_attempts)``.  When provided, *on_parsed* is
+        invoked after each parse so the agent path can emit its per-attempt
+        ``parse_result`` trace record; ``exec`` passes ``None`` (it emits a single
+        ``exec_command`` record outside this loop).
+        """
+        from agm.agl.syntax.nodes import RetryPolicy
+
+        # Determine max attempts (AbortPolicy or None → one attempt only).
+        if isinstance(parse_policy, RetryPolicy):
+            max_attempts = 1 + parse_policy.extra
+        else:
+            max_attempts = 1
+
+        # Determine effective strict_json (per-call override, else runtime default).
+        if contract.strict_json is not None:
+            effective_strict = contract.strict_json
+        else:
+            effective_strict = self._strict_json
+
+        # Reuse the schema already materialized on the contract so the codec never
+        # re-derives it per attempt (BONUS, M3b).
+        schema = contract.json_schema if isinstance(contract.json_schema, dict) else None
+
+        last_raw: str | None = None
+        last_normalized: str | None = None
+        last_errors: tuple[ValidationError, ...] = ()
+        last_trace_id = ""
+        for attempt in range(max_attempts):
+            raw, last_trace_id = acquire(attempt, last_raw, last_errors)
+            result = contract.codec.parse(
+                raw,
+                contract.target_type,
+                strict_json=effective_strict,
+                schema=schema,
+            )
+            if on_parsed is not None:
+                on_parsed(raw, result)
             if result.ok and result.value is not None:
                 return result.value
-
             last_raw = raw
             last_normalized = result.normalized_raw
             last_errors = result.errors
@@ -680,20 +743,18 @@ class Interpreter:
         # exception field schema (design §7.5 / §7.9).  ``normalized_raw`` carries
         # the recovered/extracted JSON text when the failure was a schema or
         # conversion error (F5); it falls back to the raw output when no value
-        # could be recovered at all.
+        # could be recovered at all.  ``trace_id`` links to the last attempt's
+        # record so the exception can be cross-referenced (§8.1/§12.6).
         errors_json: list[object] = [e.to_json_obj() for e in last_errors]
         normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
-        # The trace_id links this exception to the last attempt_trace_id so the
-        # exception record in the trace file can be cross-referenced (§8.1/§12.6).
         raise AglRaise(
             _make_exc_value(
                 "AgentParseError",
-                f"Agent {agent_name!r} failed to produce a valid {contract.target_type!r} "
-                f"after {max_attempts} attempt(s). Last output: {last_raw!r}",
-                trace_id=attempt_trace_id,
+                make_failure_message(last_raw, max_attempts),
+                trace_id=last_trace_id,
                 raw=TextValue(last_raw or ""),
                 normalized_raw=TextValue(normalized_text),
-                agent=TextValue(agent_name),
+                agent=TextValue(agent_label),
                 attempts=IntValue(max_attempts),
                 target_type=TextValue(str(contract.target_type)),
                 expected_schema=JsonValue(contract.json_schema),
@@ -825,61 +886,33 @@ class Interpreter:
         if isinstance(contract.target_type, TextType):
             return TextValue(stdout)
 
-        # Non-text target: parse + validate via the codec/parse-policy path,
-        # exactly as agent output (design §4.12 item 4).
-        parse_policy = expr.options.parse_policy
+        # Non-text target: parse + validate via the SAME codec/parse-policy path
+        # as agent output (design §4.12 item 4).  ``exec`` does not re-run on a
+        # parse failure — the stdout is fixed — so ``acquire`` returns that same
+        # stdout for every attempt (honouring the on_parse_error policy for
+        # consistency with the agent-call path, even though additional attempts
+        # cannot change the outcome here).  No per-attempt ``parse_result`` trace
+        # record is emitted: exec already logged a single ``exec_command`` record
+        # above, so ``on_parsed`` is omitted.
+        def acquire(
+            _attempt: int,
+            _last_raw: str | None,
+            _last_errors: tuple[ValidationError, ...],
+        ) -> tuple[str, str]:
+            return stdout, ""
 
-        from agm.agl.runtime.request import ValidationError
-        from agm.agl.syntax.nodes import RetryPolicy
-
-        if isinstance(parse_policy, RetryPolicy):
-            max_attempts = 1 + parse_policy.extra
-        else:
-            max_attempts = 1
-
-        if contract.strict_json is not None:
-            effective_strict = contract.strict_json
-        else:
-            effective_strict = self._strict_json
-
-        schema = contract.json_schema if isinstance(contract.json_schema, dict) else None
-
-        # exec does not re-run on parse failure — the stdout is fixed.
-        # Retries re-parse the same output (honouring the on_parse_error policy
-        # for consistency with the agent-call path, even though additional
-        # attempts cannot change the outcome here).
-        last_normalized: str | None = None
-        last_errors: tuple[ValidationError, ...] = ()
-        for _ in range(max_attempts):
-            parse_result = contract.codec.parse(
-                stdout,
-                contract.target_type,
-                strict_json=effective_strict,
-                schema=schema,
-            )
-            if parse_result.ok and parse_result.value is not None:
-                return parse_result.value
-            last_normalized = parse_result.normalized_raw
-            last_errors = parse_result.errors
-
-        # All parse attempts failed → AgentParseError (design §4.12: "same
-        # parsing, validation, and on_parse_error policies as agent output").
-        errors_json: list[object] = [e.to_json_obj() for e in last_errors]
-        normalized_text = last_normalized if last_normalized is not None else stdout
-        raise AglRaise(
-            _make_exc_value(
-                "AgentParseError",
+        def make_failure_message(_last_raw: str | None, max_attempts: int) -> str:
+            return (
                 f"exec output failed to parse as {contract.target_type!r} "
-                f"after {max_attempts} attempt(s). Output: {stdout!r}",
-                raw=TextValue(stdout),
-                normalized_raw=TextValue(normalized_text),
-                agent=TextValue("exec"),
-                attempts=IntValue(max_attempts),
-                target_type=TextValue(str(contract.target_type)),
-                expected_schema=JsonValue(contract.json_schema),
-                validation_errors=JsonValue(errors_json),
-                metadata=JsonValue(None),
+                f"after {max_attempts} attempt(s). Output: {stdout!r}"
             )
+
+        return self._run_parse_attempts(
+            acquire=acquire,
+            contract=contract,
+            parse_policy=expr.options.parse_policy,
+            agent_label="exec",
+            make_failure_message=make_failure_message,
         )
 
     def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:

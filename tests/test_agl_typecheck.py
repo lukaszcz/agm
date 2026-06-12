@@ -965,6 +965,77 @@ class TestExhaustivenessWarnings:
         assert _warnings(checked) == []
 
 
+class TestParsePolicyNoOpWarnings:
+    """A parse policy that can never take effect is a *warning* (design §7.2/§7.10).
+
+    Two cases are no-ops:
+
+    * ``on_parse_error: retry[N]`` on an ``exec`` call — exec's stdout is fixed,
+      so it never re-runs; the retry is dead.
+    * ``on_parse_error`` on a *text* target — a text target never fails parsing,
+      so the policy can never fire.
+
+    Both still type-check (the program runs); the warning lands on the call's
+    source line and has severity ``warning``.
+    """
+
+    def test_retry_on_exec_warns(self) -> None:
+        checked = accept_type(
+            'let x = exec[on_parse_error: retry[2]] "echo hi"\n',
+            caps_with_shell_exec(),
+        )
+        warns = _warnings(checked)
+        assert len(warns) == 1
+        line, msg, severity = warns[0]
+        assert severity == "warning"
+        assert line == 1
+        assert "exec" in msg
+
+    def test_abort_on_exec_warns(self) -> None:
+        # ``abort`` is also a no-op on exec — there is nothing to abort *vs.* on a
+        # successful parse, but more importantly the policy can never alter the
+        # single fixed-output parse outcome, so it is flagged for any explicit
+        # policy on exec.
+        checked = accept_type(
+            'let x = exec[on_parse_error: abort] "echo hi"\n',
+            caps_with_shell_exec(),
+        )
+        warns = _warnings(checked)
+        assert len(warns) == 1
+        assert warns[0][2] == "warning"
+        assert "exec" in warns[0][1]
+
+    def test_exec_without_parse_policy_no_warning(self) -> None:
+        checked = accept_type(
+            'let x = exec "echo hi"\n',
+            caps_with_shell_exec(),
+        )
+        assert _warnings(checked) == []
+
+    def test_on_parse_error_on_text_target_warns(self) -> None:
+        # ``blank`` is untyped → defaults to a text target; a text target never
+        # fails parsing, so the on_parse_error policy is a no-op (design §7.10).
+        checked = accept_type('let blank = prompt[on_parse_error: retry[1]] "Hi"\n')
+        warns = _warnings(checked)
+        assert len(warns) == 1
+        line, msg, severity = warns[0]
+        assert severity == "warning"
+        assert line == 1
+        assert "text" in msg
+
+    def test_text_target_without_parse_policy_no_warning(self) -> None:
+        checked = accept_type('let blank = prompt "Hi"\n')
+        assert _warnings(checked) == []
+
+    def test_typed_target_with_parse_policy_no_warning(self) -> None:
+        # A non-text (int) target legitimately uses the parse policy — no warning.
+        checked = accept_type(
+            'let n: int = prompt[on_parse_error: retry[1]] "Number"\n',
+            caps_with_json_codec(),
+        )
+        assert _warnings(checked) == []
+
+
 class TestConstructorPatternVariantMembership:
     """F4: a constructor pattern's variant name must belong to the scrutinee's
     enum (mirroring ``is`` variant-membership checks); a phantom variant is a

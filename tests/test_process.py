@@ -261,6 +261,37 @@ class TestRunCaptureResultSpawnError:
         assert result.stderr == ""
 
 
+class TestRunCaptureResultEmbeddedNullByte:
+    """A NUL byte in an argv element is a spawn failure, not a raw ValueError.
+
+    ``subprocess.Popen`` raises ``ValueError('embedded null byte')`` before the
+    child is launched.  ``run_capture_result`` must map that to a spawn-failure
+    result (spawn_error set, returncode None) rather than letting the
+    ``ValueError`` escape — mirroring the FileNotFoundError/PermissionError
+    handling so every spawn outcome is represented in the result.
+    """
+
+    def test_null_byte_arg_sets_spawn_error(self) -> None:
+        result = run_capture_result(["sh", "-c", "echo \x00bad"])
+        assert result.spawn_error is not None
+        assert len(result.spawn_error) > 0
+
+    def test_null_byte_arg_returncode_is_none(self) -> None:
+        result = run_capture_result(["sh", "-c", "echo \x00bad"])
+        assert result.returncode is None
+
+    def test_null_byte_arg_does_not_raise(self) -> None:
+        # Must not raise ValueError("embedded null byte") or anything else.
+        result = run_capture_result(["sh", "-c", "echo \x00bad"])
+        assert result.spawn_error is not None
+        assert result.spawn_errno is None
+
+    def test_null_byte_arg_streams_empty(self) -> None:
+        result = run_capture_result(["sh", "-c", "echo \x00bad"])
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+
 class TestRunCaptureResultIdleTimeout:
     """Idle timeout fires: timed_out=True, returncode reflects kill, no SystemExit raised."""
 

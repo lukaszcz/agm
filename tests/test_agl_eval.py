@@ -3861,6 +3861,41 @@ class TestAgentCallShellExec:
         assert result.error.fields["exit_code"] == 1
         assert result.error.fields["timed_out"] is False
 
+    def test_exec_null_byte_in_interpolation_raises_catchable_exec_error(self) -> None:
+        """A NUL byte in an interpolated exec value surfaces as a catchable
+        ``ExecError`` (spawn failure), never a raw Python ``ValueError`` (F1).
+
+        ``subprocess.Popen`` rejects an argv element containing an embedded NUL
+        byte with ``ValueError('embedded null byte')``.  That must be mapped to
+        the spawn-failure ``ExecError`` so it stays inside the AgL exception
+        model and can be caught by a ``try``/``catch``.
+        """
+        result = run(
+            'input bad\nlet x = exec "echo ${bad as raw}"\n',
+            inputs={"bad": "a\x00b"},
+        )
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "ExecError"
+        assert result.error.fields["exit_code"] == -1
+
+    def test_exec_null_byte_in_interpolation_is_catchable(self) -> None:
+        """The NUL-induced ExecError is catchable like any spawn-failure (F1)."""
+        from agm.agl.eval.values import TextValue
+
+        result = run(
+            "input bad\n"
+            'var ok = "no"\n'
+            "try\n"
+            '  let x = exec "echo ${bad as raw}"\n'
+            "catch ExecError as e =>\n"
+            '  set ok = "caught"\n',
+            inputs={"bad": "a\x00b"},
+        )
+        assert result.ok is True
+        assert result.error is None
+        assert result.bindings["ok"] == TextValue("caught")
+
     def test_exec_checker_admits_exec_with_supports_shell_exec_true(self) -> None:
         """With ``supports_shell_exec=True`` the checker accepts ``exec`` calls.
 

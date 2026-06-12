@@ -122,11 +122,13 @@ def _render_default(value: Value, name: str | None) -> str:
 def _type_kind_str(value: Value) -> str:
     """Return the AgL type-kind label for a value (used in boundary tags).
 
-    The structured-value boundary ``type=`` attribute (``list``/``dict``/the
-    record or enum ``<RecordName>``) is **provisional**: the M5 acceptance suite
-    currently pins only the ``text`` boundary, so the exact labels emitted here
-    for non-text values are not yet finalized against §2.12 pins and may change
-    when M5 locks them in.
+    The ``type=`` attribute in structured-value boundary tags follows the §2.12
+    convention (finalized in M5):
+
+    - Scalar values: ``"text"``, ``"int"``, ``"decimal"``, ``"bool"``, ``"json"``
+    - Homogeneous collections: ``"list"``, ``"dict"``
+    - Named types (records, enums, exceptions): the declared type name
+      (e.g. ``"Review"``, ``"Status"``, ``"AgentParseError"``)
     """
     if isinstance(value, TextValue):
         return "text"

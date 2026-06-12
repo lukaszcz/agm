@@ -617,11 +617,14 @@ class TestExecCommandM1:
             exec_command.run(args)
         assert exc_info.value.code == 1
 
-    def test_prompt_program_exits_1_with_no_default_agent(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_prompt_program_dispatches_to_runner_backed_agent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """F1b: ``agm exec`` on an agent-calling program with no default agent
-        exits 1 with the static no-default-agent diagnostic and no stdout."""
+        """M5a: ``agm exec`` always wires a runner-backed default agent; prompt
+        calls are dispatched at runtime (not rejected statically), producing an
+        AgentCallError (exit 2) when the runner subprocess fails."""
+        import agm.commands.exec as exec_mod
+        from agm.agl.runtime.agents import AgentCallHostError
         from agm.commands.args import ExecArgs
 
         agl_file = tmp_path / "prog.agl"
@@ -633,15 +636,20 @@ class TestExecCommandM1:
             strict_json=None,
             max_iters=None,
             runner=None,
-            no_log=False,
+            no_log=True,
             log_file=None,
         )
+        # Patch the runner factory to return an agent that raises AgentCallHostError
+        # (simulating a subprocess that fails), which exec.py surfaces as exit 2.
+        def failing_agent(req: object) -> str:
+            raise AgentCallHostError(
+                cause="spawn_failure", exit_code=None, stderr_tail="no runner", elapsed=0.0
+            )
+
+        monkeypatch.setattr(exec_mod, "runner_backed_agent_factory", lambda **_: failing_agent)
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert captured.out == ""
-        assert "default agent" in captured.err.lower()
+        assert exc_info.value.code == 2
 
     def test_dry_run_printing_program_exits_0_no_stdout(
         self,
@@ -1202,3 +1210,107 @@ class TestJsonInputsCLI:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# F7: uncaught-exception output includes source line/col and trace_id
+# ---------------------------------------------------------------------------
+
+
+class TestUncaughtExceptionOutputFormat:
+    """F7: exec.py's exit-2 stderr must include source location and trace_id.
+
+    Design §12.6: every runtime error should include source location and
+    trace id.  The exec command's error-printing region should include the
+    line (and col if available) of the raise site, and the trace_id field
+    from the exception when present.
+    """
+
+    def _exec_args_nolog(self, agl_file: Path) -> "ExecArgs":
+        from agm.commands.args import ExecArgs
+        return ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+
+    def test_uncaught_exception_stderr_includes_line(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Exit-2 stderr must include the source line number of the raise site."""
+        agl_file = tmp_path / "prog.agl"
+        # Force an uncaught AgentParseError from an exec call on line 1.
+        agl_file.write_text('let x: int = exec "echo not-an-int"\n')
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(self._exec_args_nolog(agl_file))
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        err = captured.err
+        # The output must include a line reference (line 1).
+        assert "line 1" in err or "line:1" in err or ":1:" in err, (
+            f"Expected line reference in stderr, got: {err!r}"
+        )
+
+    def test_uncaught_exception_stderr_includes_trace_id(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Exit-2 stderr must include the trace_id when it is non-empty."""
+        import re
+        log_file = tmp_path / "trace.jsonl"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let x: int = exec "echo not-an-int"\n')
+        from agm.commands.args import ExecArgs
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=str(log_file),
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        err = captured.err
+        # The trace_id is a UUID hex string (32 chars); it should appear in stderr.
+        assert re.search(r'[0-9a-f]{32}', err), (
+            f"Expected trace_id (hex string) in stderr, got: {err!r}"
+        )
+
+    def test_uncaught_exception_line_only_no_col(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Exit-2 stderr includes 'line N' when only line is set (col is None)."""
+        from unittest.mock import patch
+
+        from agm.agl.runtime.runtime import RunError, RunResult
+        from agm.commands import exec as exec_command
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        args = self._exec_args_nolog(agl_file)
+        # Synthesize a RunResult whose error has line set but col=None.
+        fake_result = RunResult(
+            ok=False,
+            diagnostics=[],
+            error=RunError(
+                type_name="SomeError",
+                fields={"message": "oops"},
+                line=5,
+                col=None,
+            ),
+        )
+        with patch("agm.commands.exec.WorkflowRuntime") as mock_rt:
+            mock_rt.return_value.run.return_value = fake_result
+            with pytest.raises(SystemExit) as exc_info:
+                exec_command.run(args)
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "line 5" in err
+        assert "col" not in err

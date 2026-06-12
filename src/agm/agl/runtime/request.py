@@ -18,17 +18,22 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
 
 
-# The documented validation-error categories (design §7.5):
+# The documented validation-error categories (design §7.5, extended for F4):
 # - ``missing_field``  — a required field was absent.
 # - ``unknown_field``  — an undeclared field was present (``additionalProperties``).
 # - ``wrong_type``     — a field's JSON type did not match the schema.
 # - ``bad_case``       — an enum object's ``$case`` did not name a known variant
 #                        (or was missing / not a string).
+# - ``invalid_json``   — the agent response contained no extractable JSON value
+#                        at all (design §7.5 extension, F4: an honest category for
+#                        totally-unparseable output so the reason is fed back on
+#                        the next retry attempt rather than being silently dropped).
 ValidationErrorCategory = Literal[
     "missing_field",
     "unknown_field",
     "wrong_type",
     "bad_case",
+    "invalid_json",
 ]
 
 

@@ -362,7 +362,8 @@ class Interpreter:
                 condition=TextValue(self._source_slice(stmt.condition.span)),
                 last_condition_value=BoolValue(last_cond),
                 metadata=JsonValue(None),
-            )
+            ),
+            span=stmt.span,  # F7: thread raise-site span for §12.6 source location
         )
 
     def _source_slice(self, span: "SourceSpan") -> str:
@@ -407,7 +408,10 @@ class Interpreter:
                     self._exec_stmt(s, branch_scope)
                 return
         # No match: raise MatchError with scrutinee_type and scrutinee fields.
-        raise AglRaise(_make_match_error(subject, trace_id=self._trace.new_event_id()))
+        raise AglRaise(
+            _make_match_error(subject, trace_id=self._trace.new_event_id()),
+            span=stmt.span,  # F7: thread raise-site span for §12.6 source location
+        )
 
     def _exec_try_catch(self, stmt: TryCatch, scope: Scope) -> None:
         try:
@@ -434,7 +438,10 @@ class Interpreter:
     def _exec_raise(self, stmt: Raise, scope: Scope) -> None:
         exc_val = self._eval_expr(stmt.exc, scope)
         if isinstance(exc_val, ExceptionValue):
-            raise AglRaise(exc_val)
+            raise AglRaise(
+                exc_val,
+                span=stmt.span,  # F7: thread raise-site span for §12.6 source location
+            )
         # Unreachable: the checker requires an exception-typed operand for
         # 'raise' (design §8.3).
         raise AssertionError(  # pragma: no cover
@@ -652,7 +659,13 @@ class Interpreter:
 
         def on_parsed(raw: str, result: "ParseResult") -> None:
             # Emit a parse_result record per attempt (agent path only).
-            error_summary = "; ".join(e.message for e in result.errors) if result.errors else ""
+            # F4: use result.error_msg as fallback when errors is empty so that
+            # totally-unparseable output (no structured validation errors) still
+            # produces a non-empty error_summary in the trace record.
+            if result.errors:
+                error_summary = "; ".join(e.message for e in result.errors)
+            else:
+                error_summary = result.error_msg
             self._trace.parse_result(
                 ok=result.ok and result.value is not None,
                 raw=raw,
@@ -675,6 +688,7 @@ class Interpreter:
             agent_label=agent_name,
             make_failure_message=make_failure_message,
             on_parsed=on_parsed,
+            raise_span=call_span,  # F7: thread call span for §12.6 source location
         )
 
     def _run_parse_attempts(
@@ -686,6 +700,7 @@ class Interpreter:
         agent_label: str,
         make_failure_message: "Callable[[str | None, int], str]",
         on_parsed: "Callable[[str, ParseResult], None] | None" = None,
+        raise_span: "SourceSpan | None" = None,
     ) -> Value:
         """Run the shared parse/retry loop and return the parsed value.
 
@@ -739,7 +754,26 @@ class Interpreter:
                 return result.value
             last_raw = raw
             last_normalized = result.normalized_raw
-            last_errors = result.errors
+            # F4: when the codec returns no structured errors but does have an
+            # error_msg (e.g. "Strict JSON parse failed: …" for totally-
+            # unparseable output), synthesize an ``invalid_json`` ValidationError
+            # so the failure reason is fed back to the agent on the next retry
+            # attempt and recorded in the parse_result trace (design §7.5 ext).
+            if result.errors:
+                last_errors = result.errors
+            elif result.error_msg:
+                from agm.agl.runtime.request import ValidationError as _VE
+
+                last_errors = (
+                    _VE(
+                        category="invalid_json",
+                        message=result.error_msg,
+                        path="$",
+                        field=None,
+                    ),
+                )
+            else:
+                last_errors = ()
 
         # All attempts exhausted → raise AgentParseError.  Validation errors are
         # threaded as JSON-shaped values (a list of per-error objects) so the
@@ -764,7 +798,8 @@ class Interpreter:
                 expected_schema=JsonValue(contract.json_schema),
                 validation_errors=JsonValue(errors_json),
                 metadata=JsonValue(None),
-            )
+            ),
+            span=raise_span,  # F7: thread raise-site span for §12.6 source location
         )
 
     def _eval_template_for_shell(self, expr: Template, scope: Scope) -> str:
@@ -847,7 +882,8 @@ class Interpreter:
                     stdout=TextValue(""),
                     stderr=TextValue(""),
                     timed_out=BoolValue(False),
-                )
+                ),
+                span=exec_span,  # F7: thread raise-site span for §12.6 source location
             )
 
         # Nonzero exit or timeout → ExecError (design §11.13 item 3).
@@ -871,7 +907,8 @@ class Interpreter:
                     stdout=TextValue(result.stdout.rstrip("\n")),
                     stderr=TextValue(result.stderr.rstrip("\n")),
                     timed_out=BoolValue(result.timed_out),
-                )
+                ),
+                span=exec_span,  # F7: thread raise-site span for §12.6 source location
             )
 
         # Success: strip trailing newlines from stdout (design §4.12 item 4,
@@ -922,12 +959,19 @@ class Interpreter:
                 f"after {max_attempts} attempt(s). Output: {stdout!r}"
             )
 
+        # F5: exec is always clamped to ONE parse attempt regardless of any
+        # on_parse_error policy.  The checker already warns that such a policy
+        # has no effect on exec (the command does not re-run, so extra parse
+        # attempts can never change the outcome — design §7.2/§7.10).  The
+        # interpreter enforces this by passing parse_policy=None (abort → 1
+        # attempt) so AgentParseError.attempts is always 1 for exec.
         return self._run_parse_attempts(
             acquire=acquire,
             contract=contract,
-            parse_policy=expr.options.parse_policy,
+            parse_policy=None,  # force abort / 1 attempt (F5)
             agent_label="exec",
             make_failure_message=make_failure_message,
+            raise_span=exec_span,  # F7: thread exec span for §12.6 source location
         )
 
     def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:

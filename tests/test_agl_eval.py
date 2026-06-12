@@ -4644,16 +4644,19 @@ class TestShellExecInterpreter:
         assert result.error.fields.get("agent") == "exec"
 
     def test_exec_typed_target_retry_policy(self) -> None:
-        """on_parse_error: retry[N] is honoured for exec typed targets.
+        """F5: exec is clamped to ONE parse attempt regardless of on_parse_error policy.
 
-        The retry count field (``attempts``) is 1 + retry_extra even though
-        exec re-parses the same stdout each time (the command does not re-run).
+        The checker already warns that on_parse_error has no effect on exec (the
+        command does not re-run, so extra parse attempts can never change the
+        outcome).  The interpreter enforces this by ignoring any parse policy on
+        exec and running exactly one attempt.  The AgentParseError.attempts field
+        therefore reports 1, not 1+retry_extra.
         """
         result = run('let x: int = exec[on_parse_error: retry[2]] "echo bad"\n')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentParseError"
-        assert result.error.fields.get("attempts") == 3  # 1 + retry[2]
+        assert result.error.fields.get("attempts") == 1  # always 1 for exec
 
     def test_exec_typed_target_strict_json_branch(self) -> None:
         """strict_json per-call option flows through exec typed-target parsing.

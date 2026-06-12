@@ -405,7 +405,9 @@ Options:
   JSON), then validates it strictly against the schema. The recovered (normalized) value is
   traced alongside the raw output.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
-- `--runner COMMAND`: Override the default agent runner command (not yet active, lands in M5).
+- `--runner COMMAND`: Override the default agent runner command. When set, this command is used
+  as the runner for all agents not listed in `[exec.agents]`. Falls back to `[exec] runner`
+  from config, then to the shared loop/review default (`[loop] runner` or `claude -p`).
 - `--log-file PATH`: Write a structured JSONL trace log to PATH (default: auto-generated under
   `.agent-files/`).
 - `--no-log`: Disable trace logging entirely.

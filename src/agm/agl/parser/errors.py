@@ -14,6 +14,8 @@ from agm.agl.syntax.spans import SourceSpan
 
 # Token type for the "==" error token (mirrors tokens.EQ_EQ).
 _EQ_EQ = "EQ_EQ"
+# Token type for the "=" comparison operator (mirrors tokens.EQ).
+_EQ = "EQ"
 
 
 class AglSyntaxError(AglError):
@@ -64,6 +66,22 @@ def _make_eq_eq_error(span: SourceSpan) -> AglSyntaxError:
     return AglSyntaxError("Use `=` for equality.", span=span)
 
 
+def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
+    """Targeted diagnostic for chained comparison (design §4.3).
+
+    Comparison is non-associative in AgL: ``x = y = z`` is not valid.
+    When the parser sees a second ``=`` after a complete comparison expression,
+    the expected-token set will not include ``EQ`` (a fresh comparison has
+    already been consumed).  This helper produces a friendly message instead of
+    the generic "Unexpected token" fallback.
+    """
+    return AglSyntaxError(
+        "Comparison is non-associative: `x = y = z` is not valid. "
+        "Parenthesize comparisons explicitly, e.g. `(x = y) = z`.",
+        span=span,
+    )
+
+
 def syntax_error_from_lark(
     exc: Exception,
     *,
@@ -95,6 +113,13 @@ def syntax_error_from_lark(
         span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
         if tok.type == _EQ_EQ:
             return _make_eq_eq_error(span)
+        # Chained comparison detection (design §4.3): ``=`` is the unexpected
+        # token AND ``EQ`` is NOT in the expected set.  When ``EQ`` IS expected,
+        # we are before the first comparison operator (valid start of ``x = y``);
+        # when it is absent, a comparison expression was already consumed and the
+        # parser cannot continue — i.e. the user wrote ``x = y = z``.
+        if tok.type == _EQ and _EQ not in exc.expected:
+            return _make_chained_comparison_error(span)
         return AglSyntaxError(
             f"Unexpected token {tok!r}.",
             span=span,

@@ -2846,3 +2846,37 @@ class TestM3CoverageEdgeCases:
         assert isinstance(stmt, CaseStmt)
         b = stmt.branches[0]
         assert len(b.body) == 2
+
+
+# ---------------------------------------------------------------------------
+# F8: Targeted diagnostics for chained comparison and bar-safe violations
+# ---------------------------------------------------------------------------
+
+
+class TestTargetedDiagnostics:
+    """F8/§4.4: the design promises targeted diagnostic messages.
+
+    Chained comparison (x = y = z) is non-associative per §4.3/§12.5 and
+    must produce a targeted error about non-associativity, not a generic
+    "Unexpected token" message.
+    """
+
+    def test_chained_comparison_targeted_message(self) -> None:
+        """Chained comparison rejects with a targeted non-associative message."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let x = 1\nlet ok = (x = 1 = 2)")
+        err = exc_info.value
+        msg = str(err).lower()
+        # The message must reference associativity, parenthesization, or
+        # comparison non-associativity — not just "unexpected token".
+        assert (
+            "non-associative" in msg
+            or "associative" in msg
+            or "parenthes" in msg
+            or "comparison" in msg
+            or "chain" in msg
+        ), f"Expected targeted chained-comparison message, got: {err}"
+        # Must not be a generic "unexpected token" message.
+        assert "unexpected token" not in msg or any(
+            kw in msg for kw in ("non-associative", "parenthes", "comparison", "chain")
+        ), f"Message is too generic: {err}"

@@ -569,3 +569,72 @@ class TestDisplayPath:
         path = tmp_path / ".agent-files" / "loop-20250101-120000.log"
         result = display_path(path, cwd=tmp_path)
         assert result == str(Path(".agent-files") / "loop-20250101-120000.log")
+
+
+# ===========================================================================
+# F6: resolve_log_file — unique=True makes concurrent calls differ
+# ===========================================================================
+
+
+class TestResolveLogFileUnique:
+    """F6: two default filenames resolved in the same second must differ.
+
+    Without a uniquifying component (pid/run-id), two concurrent invocations
+    that both hit the second-granularity timestamp would produce the same path
+    and collide.  resolve_log_file(..., unique=True) appends a pid/run-id
+    component so the names are always distinct.
+    """
+
+    def test_two_unique_resolutions_differ(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two processes with the same timestamp but different PIDs get different paths."""
+        from datetime import datetime as _dt
+        from unittest.mock import patch
+
+        from agm.core.log import resolve_log_file
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
+
+        # Pin the clock so both calls share the same timestamp, but simulate
+        # two different processes by providing distinct PIDs.  In practice the
+        # two paths belong to two separate invocations of ``agm exec``; within a
+        # single process the PIDs are identical (which is fine — the uniqueness
+        # guarantee is cross-process, not within-call).
+        fixed = _dt(2026, 1, 1, 12, 0, 0)
+        with patch("agm.core.log.datetime") as mock_dt, patch("agm.core.log.os.getpid") as mock_pid:
+            mock_dt.now.return_value = fixed
+            mock_pid.return_value = 11111
+            path_a = resolve_log_file(command_name="exec", no_log=False, log_file=None, unique=True)
+            mock_pid.return_value = 22222
+            path_b = resolve_log_file(command_name="exec", no_log=False, log_file=None, unique=True)
+
+        assert path_a is not None
+        assert path_b is not None
+        assert path_a != path_b, (
+            f"Two unique resolutions with different PIDs must differ but both gave {path_a}"
+        )
+
+    def test_unique_false_is_default_behavior(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """unique=False (default) preserves existing behavior: same stamp → same name."""
+        from datetime import datetime as _dt
+        from unittest.mock import patch
+
+        from agm.core.log import resolve_log_file
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
+
+        fixed = _dt(2026, 1, 1, 12, 0, 0)
+        with patch("agm.core.log.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed
+            path_a = resolve_log_file(command_name="exec", no_log=False, log_file=None)
+            path_b = resolve_log_file(command_name="exec", no_log=False, log_file=None)
+
+        assert path_a is not None
+        assert path_b is not None
+        # Default behavior: same timestamp → same filename.
+        assert path_a == path_b

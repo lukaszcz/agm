@@ -1073,6 +1073,85 @@ class TestRenderForPrompt:
         assert _type_kind_str(BoolValue(True)) == "bool"
         assert _type_kind_str(ExceptionValue(type_name="Boom", fields={})) == "Boom"
 
+    def test_exception_default_renderer_fenced_pretty_json(self) -> None:
+        """§8.1 / §2.12: ${e} interpolation renders as fenced pretty JSON.
+
+        When an exception value is interpolated via the default renderer, the
+        output must be fenced with <dsl-value> boundary tags carrying the
+        exception's type name and contain the field values as pretty JSON.
+        This pins the ${e} rendering behavior described in §8.1 (whole-value
+        interpolation) and §2.12 (exceptions → fenced pretty JSON).
+        """
+        from agm.agl.eval.values import ExceptionValue, TextValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        exc_val = ExceptionValue(
+            type_name="Abort",
+            fields={
+                "message": TextValue("fatal"),
+                "trace_id": TextValue("abc123"),
+            },
+        )
+        out = render_for_prompt(exc_val, renderer_name=None, var_name="e")
+        # Must be boundary-marked with the exception's type name.
+        assert 'type="Abort"' in out, f"Expected type=Abort in output: {out!r}"
+        assert 'name="e"' in out, f"Expected name=e in output: {out!r}"
+        # Must contain the field values as JSON (fenced pretty JSON).
+        assert "fatal" in out, f"Expected message value in output: {out!r}"
+        assert "abc123" in out, f"Expected trace_id value in output: {out!r}"
+        # Must be wrapped in dsl-value tags.
+        assert "<dsl-value" in out and "</dsl-value>" in out, (
+            f"Expected dsl-value tags in output: {out!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §2.12: type= attribute finalization — list/dict/<TypeName> convention
+# ---------------------------------------------------------------------------
+
+
+class TestTypeAttributeFinalization:
+    """§2.12 finalization: verify type= attribute convention for boundary tags.
+
+    §2.12 says a conforming runtime may choose its boundary format (stable
+    and traceable).  Ruling: list/dict/<TypeName> convention.  These tests
+    pin the finalized convention after removing the provisional marker.
+    """
+
+    def test_list_type_attribute_is_list(self) -> None:
+        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(
+            ListValue(elements=(IntValue(1),)), renderer_name=None, var_name="xs"
+        )
+        assert 'type="list"' in out, f"Expected type=list: {out!r}"
+
+    def test_dict_type_attribute_is_dict(self) -> None:
+        from agm.agl.eval.values import DictValue, TextValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        out = render_for_prompt(
+            DictValue(entries={"k": TextValue("v")}), renderer_name=None, var_name="d"
+        )
+        assert 'type="dict"' in out, f"Expected type=dict: {out!r}"
+
+    def test_record_type_attribute_is_type_name(self) -> None:
+        from agm.agl.eval.values import IntValue, RecordValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        rv = RecordValue(type_name="Review", fields={"score": IntValue(5)})
+        out = render_for_prompt(rv, renderer_name=None, var_name="r")
+        assert 'type="Review"' in out, f"Expected type=Review: {out!r}"
+
+    def test_enum_type_attribute_is_type_name(self) -> None:
+        from agm.agl.eval.values import EnumValue
+        from agm.agl.runtime.render import render_for_prompt
+
+        ev = EnumValue(type_name="Status", variant="Pass", fields={})
+        out = render_for_prompt(ev, renderer_name=None, var_name="s")
+        assert 'type="Status"' in out, f"Expected type=Status: {out!r}"
+
 
 # ---------------------------------------------------------------------------
 # Coverage: serialize.py — value_to_json_obj and dumps_exact branches

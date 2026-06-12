@@ -831,7 +831,7 @@ def exec_cmd(
     runner: str | None = typer.Option(
         None,
         "--runner",
-        help="Override the default agent runner command (not yet active, lands in M5).",
+        help="Override the default agent runner command.",
     ),
     log_file: str | None = typer.Option(
         None,

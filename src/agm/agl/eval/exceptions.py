@@ -15,7 +15,12 @@ is raised; it propagates up the Python call stack and is caught by:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from agm.agl.eval.values import ExceptionValue
+
+if TYPE_CHECKING:
+    from agm.agl.syntax.spans import SourceSpan
 
 
 class AglRaise(Exception):
@@ -25,8 +30,13 @@ class AglRaise(Exception):
     (parse failures, loop exhaustion, pattern-match failures, etc.).
 
     ``exc`` is the ``ExceptionValue`` being propagated.
+    ``span`` is the source span of the statement that raised this exception
+    (when known — design §12.6: source location is part of runtime error
+    reporting).  ``None`` when the raise site does not have span information
+    available (e.g. binary-op arithmetic errors).
     """
 
-    def __init__(self, exc: ExceptionValue) -> None:
+    def __init__(self, exc: ExceptionValue, *, span: "SourceSpan | None" = None) -> None:
         super().__init__(exc.type_name)
         self.exc = exc
+        self.span: SourceSpan | None = span

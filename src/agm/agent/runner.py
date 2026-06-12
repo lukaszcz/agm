@@ -13,7 +13,7 @@ from tempfile import NamedTemporaryFile
 from agm.agent.prompt import expand_prompt_env_vars, preprocess_prompt_file
 from agm.core import dry_run
 from agm.core.fs import is_file
-from agm.core.process import run_capture
+from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
 
 
 @dataclass(slots=True)
@@ -32,6 +32,24 @@ class PreparedPromptRun:
     effective_file: Path
     env: dict[str, str]
     temp_files: list[Path]
+
+
+@dataclass(slots=True)
+class PromptRunResult:
+    """Structured result of a runner-backed agent prompt run.
+
+    Unlike the existing ``run_prompt_command`` helper, this never prints to
+    stderr and never raises ``SystemExit``.  All outcomes — spawn failure,
+    nonzero exit, and idle-timeout — are represented here so that callers can
+    map them to structured AgL exceptions (``AgentCallError``).
+    """
+
+    returncode: int | None
+    stdout: str
+    stderr: str
+    elapsed: float
+    timed_out: bool
+    spawn_error: str | None
 
 
 def split_command(command: str, *, kind: str) -> list[str]:
@@ -224,3 +242,62 @@ def cleanup_temp_files(temp_files: list[Path]) -> None:
             temp_file.unlink()
         except FileNotFoundError:
             pass
+
+
+def prepare_rendered_prompt_run(
+    rendered_prompt: str,
+    *,
+    runner: str,
+    temp_files: list[Path],
+    env: dict[str, str],
+) -> PreparedPromptRun:
+    """Prepare a runner invocation for an already-rendered AgL prompt.
+
+    Writes *rendered_prompt* verbatim to a temporary file.  Crucially:
+
+    - Does **not** call ``expand_prompt_env_vars``: AgL interpolation has
+      already produced the final text and interpolated values may legitimately
+      contain ``$NAME``/``${NAME}`` syntax (plan §9.5).
+    - Does **not** call ``validate_command``: that helper prints to stderr and
+      raises ``SystemExit``, bypassing the ``AgentCallError`` structured path.
+      Executable-not-found is instead represented in the ``PromptRunResult``
+      returned by ``run_prepared_prompt_result``.
+    """
+    command = split_command(runner, kind="exec-runner")
+    with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
+        handle.write(rendered_prompt)
+        temp_path = Path(handle.name)
+    temp_files.append(temp_path)
+    return PreparedPromptRun(
+        command=command,
+        effective_file=temp_path,
+        env=env,
+        temp_files=temp_files,
+    )
+
+
+def run_prepared_prompt_result(
+    prepared: PreparedPromptRun,
+    *,
+    idle_timeout: float | None,
+) -> PromptRunResult:
+    """Run a prepared runner invocation and return a structured result.
+
+    Unlike ``run_prepared_prompt`` / ``run_prompt_command``, this function
+    **never prints to stderr** and **never raises SystemExit**.  All outcomes
+    are represented in the returned :class:`PromptRunResult`.
+    """
+    capture: ProcessCaptureResult = run_capture_result(
+        command_with_prompt_target(prepared.command, prepared.effective_file),
+        env=prepared.env if prepared.env else None,
+        idle_timeout=idle_timeout,
+        isolate_process_group=True,
+    )
+    return PromptRunResult(
+        returncode=capture.returncode,
+        stdout=capture.stdout,
+        stderr=capture.stderr,
+        elapsed=capture.elapsed,
+        timed_out=capture.timed_out,
+        spawn_error=capture.spawn_error,
+    )

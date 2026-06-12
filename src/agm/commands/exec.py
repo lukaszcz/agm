@@ -23,8 +23,8 @@ Flag notes:
       A source-level ``strict_json`` call option overrides this default.
     - ``--log-file PATH`` writes a structured JSONL trace under the given path.
     - ``--no-log`` disables trace logging entirely.
-    - ``--runner`` is accepted but inert until the runner-backed default agent
-      lands in M5.
+    - ``--runner COMMAND`` overrides the default agent runner command from config.
+      When set, it is used as the default runner for all unnamed agents.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
       materialization and never writes a trace (side-effect-free).
 """
@@ -35,6 +35,8 @@ import sys
 from pathlib import Path
 
 from agm.agl import WorkflowRuntime
+from agm.agl.runtime.agents import runner_backed_agent_factory
+from agm.commands.agent_io import default_agent_runner
 from agm.commands.args import ExecArgs
 from agm.config.context import current_config_context
 from agm.config.general import load_exec_config
@@ -71,6 +73,7 @@ def run(args: ExecArgs) -> None:
             command_name="exec",
             no_log=args.no_log,
             log_file=args.log_file,
+            unique=True,  # F6: add pid to avoid collisions on second-granularity stamp
         )
 
     # Validate/create the trace path up front so a non-writable --log-file
@@ -87,9 +90,27 @@ def run(args: ExecArgs) -> None:
             print(f"Error: cannot write trace log to {log_file}: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
 
+    # ----------------------------------------------------------------
+    # Resolve the runner command: CLI flag > [exec] config > shared loop
+    # default (the same default used by agm loop/review, per plan §9.5).
+    # ----------------------------------------------------------------
+    runner_cmd = args.runner or config.runner or default_agent_runner()
+
+    # Build a runner-backed agent as both the ``prompt`` default and the
+    # fallback for arbitrary named agents (plan §9.5).  This means any
+    # agent name appearing in the AgL source resolves at runtime even if
+    # not explicitly registered; names listed in ``[exec.agents]`` get their
+    # own dedicated runner command.
+    runner_agent = runner_backed_agent_factory(
+        default_runner_cmd=runner_cmd,
+        per_agent_cmds=config.agents,
+        idle_timeout=config.timeout,
+    )
+
     runtime = WorkflowRuntime(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
+        default_agent=runner_agent,
         shell_exec_timeout=config.timeout,
     )
 
@@ -131,10 +152,20 @@ def run(args: ExecArgs) -> None:
             print(f"line {diag.line}: {diag.message}", file=sys.stderr)
         raise SystemExit(1)
 
-    # Uncaught AgL exception: print and exit 2.
+    # Uncaught AgL exception: print and exit 2 (design §12.6: include source
+    # location and trace_id in the error line so the caller can correlate the
+    # error with the trace file and the source program).
     message = result.error.fields.get("message")
+    trace_id = result.error.fields.get("trace_id")
+    parts: list[str] = [f"AgL exception: {result.error.type_name}"]
     if isinstance(message, str) and message:
-        print(f"AgL exception: {result.error.type_name}: {message}", file=sys.stderr)
-    else:
-        print(f"AgL exception: {result.error.type_name}", file=sys.stderr)
+        parts.append(message)
+    if result.error.line is not None:
+        if result.error.col is not None:
+            parts.append(f"at line {result.error.line}, col {result.error.col}")
+        else:
+            parts.append(f"at line {result.error.line}")
+    if isinstance(trace_id, str) and trace_id:
+        parts.append(f"trace_id={trace_id}")
+    print(": ".join(parts), file=sys.stderr)
     raise SystemExit(2)

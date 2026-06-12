@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +26,17 @@ def resolve_log_file(
     command_name: str,
     no_log: bool,
     log_file: str | None,
+    unique: bool = False,
 ) -> Path | None:
+    """Resolve the trace log file path.
+
+    When *unique* is ``True``, a pid-based component is appended to the
+    default (timestamp-based) filename so that two concurrent invocations in
+    the same second produce different paths instead of colliding (F6, §11.1).
+    *unique* has no effect when *log_file* is provided explicitly — the caller
+    already owns the path.  loop/review behavior is unchanged unless they opt in
+    (they pass ``unique=False``, the default).
+    """
     if no_log:
         return None
     if log_file is not None:
@@ -34,6 +45,9 @@ def resolve_log_file(
             resolved = Path.cwd() / resolved
         return resolved
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if unique:
+        pid = os.getpid()
+        return default_agent_files_dir() / f"{command_name}-{timestamp}-{pid}.log"
     return default_agent_files_dir() / f"{command_name}-{timestamp}.log"
 
 

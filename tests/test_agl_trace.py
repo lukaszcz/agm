@@ -838,3 +838,102 @@ class TestTraceStoreProperties:
         rec = _json.loads(content)
         assert rec["line"] == 5
         assert rec["col"] == 3
+
+
+# ---------------------------------------------------------------------------
+# F4: Unparseable output synthesizes a validation error for retry feedback
+# ---------------------------------------------------------------------------
+
+
+class TestUnparseableFeedback:
+    """F4: when agent output is totally unparseable (no JSON at all), the next
+    retry attempt must carry the failure reason as a ValidationError, and the
+    parse_result trace record must have a non-empty error_summary."""
+
+    def test_retry_request_carries_reason_when_totally_unparseable(
+        self, tmp_path: Path
+    ) -> None:
+        """Second attempt's validation_errors is non-empty with the parse reason."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        captured_requests: list[AgentRequest] = []
+        call_count = 0
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            nonlocal call_count
+            captured_requests.append(request)
+            call_count += 1
+            if call_count == 1:
+                return AgentResponse(content="totally not json #@!")
+            return AgentResponse(content="42")
+
+        rt.register_agent("impl", agent)
+        result = rt.run(
+            'let x: int = impl[on_parse_error: retry[1]] "get int"',
+            log_file=log_path,
+        )
+        assert result.ok
+        assert len(captured_requests) == 2
+        # The second request must carry validation_errors describing the failure.
+        second_request = captured_requests[1]
+        assert len(second_request.validation_errors) > 0, (
+            "retry request.validation_errors must be non-empty when output was unparseable"
+        )
+        # The category must be "invalid_json" (the extension for unparseable output).
+        assert any(
+            e.category == "invalid_json" for e in second_request.validation_errors
+        ), f"Expected category 'invalid_json', got: {second_request.validation_errors}"
+
+    def test_parse_result_error_summary_non_empty_when_unparseable(
+        self, tmp_path: Path
+    ) -> None:
+        """parse_result trace record's error_summary is non-empty for unparseable output."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="totally not json #@!")
+
+        rt.register_agent("impl", agent)
+        rt.run(
+            'let x: int = impl[on_parse_error: retry[1]] "get int"',
+            log_file=log_path,
+        )
+        records = _load_jsonl(log_path)
+        parse_recs = [r for r in records if r.get("kind") == "parse_result"]
+        assert parse_recs
+        # All failed parse_result records must have a non-empty error_summary.
+        failed = [r for r in parse_recs if not r.get("ok", True)]
+        assert failed, "Expected at least one failed parse_result record"
+        for rec in failed:
+            assert rec.get("error_summary"), (
+                f"parse_result error_summary must be non-empty, got: {rec}"
+            )
+
+    def test_empty_errors_and_empty_error_msg_fallback(self) -> None:
+        """When a codec returns ok=False with no errors and no error_msg, the
+        AgentParseError still raises (defensive fallback — last_errors = ())."""
+        from unittest.mock import patch
+
+        from agm.agl.runtime.codec import ParseResult
+
+        rt = WorkflowRuntime(default_strict_json=True)
+
+        def agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="42")
+
+        rt.register_agent("impl", agent)
+        # Patch JsonCodec.parse to return a failure with no details at all.
+        bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
+        with patch("agm.agl.runtime.codec.JsonCodec.parse", return_value=bare_fail):
+            result = rt.run(
+                'let x: int = impl[on_parse_error: abort] "q"'
+            )
+        # The program raises AgentParseError; run returns ok=False.
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "AgentParseError"
+        # With empty errors the validation_errors list is empty.
+        val_errs = result.error.fields.get("validation_errors")
+        assert val_errs == []

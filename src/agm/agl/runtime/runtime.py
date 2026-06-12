@@ -77,10 +77,16 @@ class RunError:
 
     ``type_name`` is the exception's declared type name (e.g. ``"AgentParseError"``).
     ``fields`` is a mapping from field names to JSON-shaped Python values.
+    ``line`` is the 1-based source line of the raise site when known (design
+    §12.6: source location is part of runtime error reporting); ``None`` when
+    the span was not threaded through (e.g. arithmetic errors inside expressions).
+    ``col`` is the 1-based source column of the raise site; ``None`` when unknown.
     """
 
     type_name: str
     fields: dict[str, object]
+    line: int | None = None
+    col: int | None = None
 
 
 @dataclass(slots=True)
@@ -582,13 +588,15 @@ class WorkflowRuntime:
             # ONLY the AgL exception carrier is caught here: an unexpected Python
             # exception is an interpreter bug and must propagate (crash loudly)
             # rather than masquerade as a user-facing pre-execution diagnostic.
-            error = _exception_value_to_run_error(exc.exc)
-            # Record the uncaught exception in the trace.
+            error = _exception_value_to_run_error(exc.exc, span=exc.span)
+            # Record the uncaught exception in the trace (design §12.6: include
+            # the source span when the raise site threaded it through AglRaise).
             trace_id = str(error.fields.get("trace_id", ""))
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
                 trace_id=trace_id,
+                span=exc.span,
             )
             trace.run_end(ok=False)
             return RunResult(
@@ -751,18 +759,33 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
     return JsonValue(value)
 
 
-def _exception_value_to_run_error(exc: "ExceptionValue") -> RunError:
+def _exception_value_to_run_error(
+    exc: "ExceptionValue",
+    *,
+    span: "object" = None,  # SourceSpan | None — avoids import cycle
+) -> RunError:
     """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
     Field values are converted via the shared serializer, which preserves
     ``Decimal`` exactness (never routed through binary ``float``; design §5.1).
+
+    *span* is the optional raise-site source span threaded from ``AglRaise``
+    (design §12.6); when present, ``RunError.line`` and ``RunError.col`` are
+    populated from it so the CLI can include the source location in its
+    exit-2 error output.
     """
     from agm.agl.runtime.serialize import value_to_json_obj
+    from agm.agl.syntax.spans import SourceSpan
 
     fields: dict[str, object] = {
         k: value_to_json_obj(v) for k, v in exc.fields.items()
     }
-    return RunError(type_name=exc.type_name, fields=fields)
+    line: int | None = None
+    col: int | None = None
+    if isinstance(span, SourceSpan):
+        line = span.start_line
+        col = span.start_col
+    return RunError(type_name=exc.type_name, fields=fields, line=line, col=col)
 
 
 def _build_call_inventory(

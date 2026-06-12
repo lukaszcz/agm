@@ -688,12 +688,15 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
             default_agent: object | None = None,
+            shell_exec_timeout: float | None = None,
         ) -> None:
             captured["default_loop_limit"] = default_loop_limit
             captured["default_strict_json"] = default_strict_json
+            captured["shell_exec_timeout"] = shell_exec_timeout
             super().__init__(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
+                shell_exec_timeout=shell_exec_timeout,
             )
 
     monkeypatch.setattr(exec_command, "WorkflowRuntime", RecordingRuntime)
@@ -773,6 +776,40 @@ class TestExecConfigWiring:
         assert captured["default_strict_json"] is False
         assert captured["default_loop_limit"] == 7
 
+    def test_timeout_config_flows_to_shell_exec_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """[exec] timeout config is wired to shell_exec_timeout on WorkflowRuntime."""
+        from agm.commands.args import ExecArgs
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[exec]\ntimeout = 60\n")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["shell_exec_timeout"] == 60.0
+
 
 class TestParseKeyValue:
     """Tests for the general key=value parser helper."""
@@ -838,11 +875,13 @@ def _exec_args_with_fallback_runtime(
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
             default_agent: AgentFn | None = None,
+            shell_exec_timeout: float | None = None,
         ) -> None:
             super().__init__(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 default_agent=stub_agent,
+                shell_exec_timeout=shell_exec_timeout,
             )
 
     monkeypatch.setattr(exec_command, "WorkflowRuntime", FallbackRuntime)
@@ -981,11 +1020,13 @@ class TestDryRunInventory:
                 default_loop_limit: int = 5,
                 default_strict_json: bool = False,
                 default_agent: AgentFn | None = None,
+                shell_exec_timeout: float | None = None,
             ) -> None:
                 super().__init__(
                     default_loop_limit=default_loop_limit,
                     default_strict_json=default_strict_json,
                     default_agent=spy_agent,
+                    shell_exec_timeout=shell_exec_timeout,
                 )
 
         monkeypatch.setattr(exec_command, "WorkflowRuntime", SpyRuntime)

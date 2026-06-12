@@ -16,12 +16,21 @@ Two rendering contexts:
    - exceptions as their diagnostic JSON.
    No boundary markers anywhere in console rendering.
 
-The ``render_for_prompt`` and ``render_for_console`` functions are the main
-entry points used by the interpreter.
+3. **Shell-exec rendering** for ``exec`` templates (§4.12, §11.13):
+   - Default: render the value to its plain-text representation (scalar text,
+     compact JSON for structured values) then pass through ``shlex.quote``.
+   - ``as raw``: bypass quoting, inserting the plain text verbatim — the
+     caller is responsible for injection safety.
+   - Other explicit renderers (e.g. ``as json``) are applied and then quoted
+     unless the renderer is ``"raw"``.
+
+The ``render_for_prompt``, ``render_for_console``, and ``render_for_shell``
+functions are the main entry points used by the interpreter.
 """
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable, Mapping
 from typing import assert_never
 
@@ -247,3 +256,68 @@ def render_for_console(value: Value) -> str:
         return _scalar_text(value)
     # Structured: pretty JSON.
     return _pretty_json(value)
+
+
+# ---------------------------------------------------------------------------
+# Shell-exec rendering for ``exec`` templates (§4.12, §11.13)
+# ---------------------------------------------------------------------------
+
+
+def _shell_plain_text(value: Value) -> str:
+    """Render a value to its plain-text shell representation (no boundary markers).
+
+    Scalars become plain text; structured values become compact (single-line) JSON
+    so the shell sees a single token before quoting.
+    """
+    if isinstance(value, (TextValue, IntValue, DecimalValue, BoolValue)):
+        return _scalar_text(value)
+    # Structured values: compact JSON (no indent) so the whole thing is one token.
+    from agm.agl.runtime.serialize import dumps_exact
+
+    return dumps_exact(value_to_json_obj(value), indent=None)
+
+
+def render_for_shell(
+    value: Value,
+    *,
+    renderer_name: str | None,
+    renderers: Mapping[str, RendererFn] | None = None,
+) -> str:
+    """Render *value* for use inside an ``exec`` shell template (§4.12, §11.13).
+
+    ``renderer_name``
+        The ``as X`` override on the interpolation segment (``None`` → default
+        shell-quoted rendering).  ``"raw"`` bypasses quoting entirely.
+        Any other explicit renderer (e.g. ``"json"``) is applied first, then the
+        result is shell-quoted.
+    ``renderers``
+        The full renderer table (built-ins + host-registered).  ``None`` falls
+        back to the built-in renderers.
+
+    Shell-quoting semantics (design §4.12):
+    - Default (``None`` or ``"default"``): render to plain text then
+      ``shlex.quote`` — injection-safe.
+    - ``as raw``: insert the plain text verbatim — quoting is bypassed;
+      the caller accepts the injection risk.
+    - ``as <other>``: apply the named renderer then ``shlex.quote`` the result.
+    """
+    if renderer_name is None or renderer_name == "default":
+        # Default: plain text → shlex.quote.
+        return shlex.quote(_shell_plain_text(value))
+
+    if renderer_name == "raw":
+        # ``as raw``: bypass quoting entirely, insert verbatim.
+        return _shell_plain_text(value)
+
+    # Explicit non-raw renderer: apply it (possibly with boundary tags if someone
+    # registered a custom renderer), then shell-quote the whole result.
+    if renderers is None:
+        renderers = _RENDERERS
+    fn = renderers.get(renderer_name)
+    if fn is None:
+        raise AssertionError(
+            f"Renderer {renderer_name!r} is not in the renderers table; the checker must "
+            "reject unknown renderers before evaluation."
+        )
+    rendered = fn(value, None)
+    return shlex.quote(rendered)

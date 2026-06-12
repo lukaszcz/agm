@@ -3830,32 +3830,43 @@ class TestTemplateInterpSegment:
 
 
 # ---------------------------------------------------------------------------
-# F6: exec calls are rejected statically (shell exec lands in M4)
+# M4: exec shell executor (design §4.12, §11.13)
 # ---------------------------------------------------------------------------
 
 
 class TestAgentCallShellExec:
-    def test_exec_call_rejected_statically(self) -> None:
-        """An ``exec`` call is a static error in M1 (no ``supports_shell_exec``).
+    def test_exec_call_succeeds_with_text_output(self) -> None:
+        """An ``exec`` call runs the shell command and returns stdout (M4).
 
-        ``exec "cmd"`` is M1-parseable, but the checker rejects it before any
-        statement runs: the result is a pre-execution failure (``error is None``)
-        with a diagnostic mentioning exec — NOT a fabricated runtime ExecError.
+        ``exec "echo hi"`` runs via ``sh -c``, strips trailing newlines, and
+        binds the stdout text.  The run succeeds (no static error, no exception).
         """
-        result = run('exec "cmd"')
-        assert result.ok is False
+        result = run('let x = exec "echo hi"\n')
+        assert result.ok is True
         assert result.error is None
-        assert any("exec" in d.message for d in result.diagnostics)
+        from agm.agl.eval.values import TextValue
 
-    def test_exec_reaching_interpreter_is_internal_error(self) -> None:
-        """If a shell_exec call slips past the checker (hand-built program), the
-        interpreter raises a loud internal AssertionError — NOT a catchable AgL
-        exception. Drives the Interpreter directly with caps that (unlike M1)
-        admit exec, to reach the unreachable-in-M1 guard.
+        assert result.bindings["x"] == TextValue("hi")
+
+    def test_exec_nonzero_exit_raises_exec_error(self) -> None:
+        """A nonzero exit from a shell command raises a catchable ExecError (M4).
+
+        The ExecError carries ``exit_code`` and ``timed_out=False``; the run
+        ends with an uncaught AgL exception (``result.error``).
+        """
+        result = run('let x = exec "false"\n')
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "ExecError"
+        assert result.error.fields["exit_code"] == 1
+        assert result.error.fields["timed_out"] is False
+
+    def test_exec_checker_admits_exec_with_supports_shell_exec_true(self) -> None:
+        """With ``supports_shell_exec=True`` the checker accepts ``exec`` calls.
+
+        M4: WorkflowRuntime sets this flag so exec passes static checking.
         """
         from agm.agl.capabilities import HostCapabilities
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.runtime.agents import AgentRegistry
         from agm.agl.scope import resolve
         from agm.agl.syntax.nodes import CallOptions, Program
         from agm.agl.typecheck import check
@@ -3866,13 +3877,12 @@ class TestAgentCallShellExec:
                 format=None, strict_json=None, parse_policy=None,
                 span=_sp(), node_id=_nid(),
             ),
-            template=_template(_text_seg("cmd")),
+            template=_template(_text_seg("true")),
             span=_sp(),
             node_id=_nid(),
         )
         program = Program(body=(_let("x", exec_call),), span=_sp(), node_id=_nid())
         resolved = resolve(program)
-        # Caps that admit exec (simulates M4) so the checker does NOT reject it.
         caps = HostCapabilities(
             agent_names=frozenset(),
             has_fallback_agent=True,
@@ -3881,17 +3891,9 @@ class TestAgentCallShellExec:
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default", "raw"}),
         )
+        # Should not raise — exec is admitted by the checker.
         checked = check(resolved, caps)
-        interp = Interpreter(
-            checked=checked,
-            registry=AgentRegistry(named={}, default_agent=None),
-            contracts={},
-            type_env=checked.type_env,
-            loop_limit=3,
-            strict_json=False,
-        )
-        with pytest.raises(AssertionError, match="shell_exec"):
-            interp.execute(Scope(parent=None))
+        assert checked is not None
 
 
 # ---------------------------------------------------------------------------
@@ -4433,5 +4435,311 @@ class TestAgentCallErrorSchema:
         )
         assert exc.fields["name"] == TextValue("x")
         assert exc.fields["operation"] == TextValue("set")
+
+
+# ---------------------------------------------------------------------------
+# M4: exec shell executor — interpreter coverage for exec code paths
+# (design §4.12, §11.13)
+# ---------------------------------------------------------------------------
+
+
+class TestShellExecInterpreter:
+    """Unit tests for the _exec_shell_exec interpreter code paths."""
+
+    def test_exec_spawn_error_raises_exec_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Spawn failure of sh itself maps to ExecError with exit_code=-1 (§11.13)."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.runtime.agents import AgentRegistry
+        from agm.core.process import ProcessCaptureResult
+
+        def fake_run_capture_result(
+            cmd: list[str],
+            *,
+            idle_timeout: object = None,
+            **_kwargs: object,
+        ) -> ProcessCaptureResult:
+            return ProcessCaptureResult(
+                returncode=None,
+                stdout="",
+                stderr="",
+                elapsed=0.0,
+                timed_out=False,
+                spawn_error="[Errno 2] No such file or directory: 'sh'",
+                spawn_errno=2,
+            )
+
+        from agm.core import process as process_mod
+
+        monkeypatch.setattr(process_mod, "run_capture_result", fake_run_capture_result)
+
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.scope import resolve
+        from agm.agl.syntax.nodes import CallOptions, Program
+        from agm.agl.typecheck import check
+
+        exec_call = ast.AgentCall(
+            agent="exec",
+            options=CallOptions(
+                format=None, strict_json=None, parse_policy=None,
+                span=_sp(), node_id=_nid(),
+            ),
+            template=_template(_text_seg("cmd")),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        program = Program(body=(_let("x", exec_call),), span=_sp(), node_id=_nid())
+        resolved = resolve(program)
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_fallback_agent=True,
+            has_default_agent=True,
+            supports_shell_exec=True,
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default", "raw"}),
+        )
+        checked = check(resolved, caps)
+        interp = Interpreter(
+            checked=checked,
+            registry=AgentRegistry(named={}, default_agent=None),
+            contracts={},
+            type_env=checked.type_env,
+            loop_limit=3,
+            strict_json=False,
+        )
+        from agm.agl.eval.values import BoolValue, IntValue
+
+        with pytest.raises(AglRaise) as exc_info:
+            interp.execute(Scope(parent=None))
+        exc = exc_info.value.exc
+        assert exc.type_name == "ExecError"
+        assert exc.fields["exit_code"] == IntValue(-1)
+        assert exc.fields["timed_out"] == BoolValue(False)
+
+    def test_exec_no_contract_returns_text_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When no contract exists for an exec node the result is plain TextValue.
+
+        This exercises the ``contract is None`` fallback path which mirrors the
+        same defensive fallback in ``_eval_agent_call``.  We drive the interpreter
+        directly with an empty ``contracts`` dict so the node has no entry.
+        """
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.agents import AgentRegistry
+        from agm.core import process as process_mod
+        from agm.core.process import ProcessCaptureResult
+
+        def fake_run_capture_result(
+            cmd: list[str],
+            *,
+            idle_timeout: object = None,
+            **_kwargs: object,
+        ) -> ProcessCaptureResult:
+            return ProcessCaptureResult(
+                returncode=0,
+                stdout="hello\n",
+                stderr="",
+                elapsed=0.01,
+                timed_out=False,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        monkeypatch.setattr(process_mod, "run_capture_result", fake_run_capture_result)
+
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.scope import resolve
+        from agm.agl.syntax.nodes import CallOptions, Program
+        from agm.agl.typecheck import check
+
+        exec_call = ast.AgentCall(
+            agent="exec",
+            options=CallOptions(
+                format=None, strict_json=None, parse_policy=None,
+                span=_sp(), node_id=_nid(),
+            ),
+            template=_template(_text_seg("echo hello")),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        program = Program(body=(_let("x", exec_call),), span=_sp(), node_id=_nid())
+        resolved = resolve(program)
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_fallback_agent=True,
+            has_default_agent=True,
+            supports_shell_exec=True,
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default", "raw"}),
+        )
+        checked = check(resolved, caps)
+        # Pass contracts={} so the node has no contract entry.
+        interp = Interpreter(
+            checked=checked,
+            registry=AgentRegistry(named={}, default_agent=None),
+            contracts={},
+            type_env=checked.type_env,
+            loop_limit=3,
+            strict_json=False,
+        )
+        root = Scope(parent=None)
+        interp.execute(root)
+        assert root.snapshot()["x"] == TextValue("hello")
+
+    def test_exec_parse_failure_raises_agent_parse_error(self) -> None:
+        """Exec with a non-text typed target raises AgentParseError on bad output.
+
+        Exercises the parse-failure path (lines 797-804): the codec cannot parse
+        the stdout as the declared type and the parse policy is abort (1 attempt).
+        """
+        result = run('let x: int = exec "echo not-an-int"\n')
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "AgentParseError"
+        assert result.error.fields.get("agent") == "exec"
+
+    def test_exec_typed_target_retry_policy(self) -> None:
+        """on_parse_error: retry[N] is honoured for exec typed targets.
+
+        The retry count field (``attempts``) is 1 + retry_extra even though
+        exec re-parses the same stdout each time (the command does not re-run).
+        """
+        result = run('let x: int = exec[on_parse_error: retry[2]] "echo bad"\n')
+        assert result.ok is False
+        assert result.error is not None
+        assert result.error.type_name == "AgentParseError"
+        assert result.error.fields.get("attempts") == 3  # 1 + retry[2]
+
+    def test_exec_typed_target_strict_json_branch(self) -> None:
+        """strict_json per-call option flows through exec typed-target parsing.
+
+        When ``strict_json: true`` is set on the call, the codec uses strict
+        mode.  A valid bare JSON value succeeds even in strict mode.
+        """
+        result = run('let x: int = exec[strict_json: true] "echo 7"\n')
+        assert result.ok is True
+        from agm.agl.eval.values import IntValue
+
+        assert result.bindings.get("x") == IntValue(7)
+
+
+class TestRenderForShell:
+    """Unit tests for the render_for_shell function and _shell_plain_text helper."""
+
+    def test_shell_plain_text_structured_value_is_compact_json(self) -> None:
+        """Structured values are rendered as compact (single-line) JSON for quoting.
+
+        Exercises the ``from agm.agl.runtime.serialize import dumps_exact`` path
+        in ``_shell_plain_text`` (lines 275-277).
+        """
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.render import render_for_shell
+
+        val = ListValue(elements=(TextValue("a"), TextValue("b")))
+        result = render_for_shell(val, renderer_name=None)
+        # Quoted compact JSON — no newlines inside the shell argument.
+        import json
+        import shlex
+
+        # shlex.quote wraps in single quotes or leaves safe strings bare.
+        # The result is a valid shell-quoted string containing compact JSON.
+        # We verify it unquotes to the expected list.
+        unquoted = shlex.split(result)
+        assert len(unquoted) == 1
+        assert json.loads(unquoted[0]) == ["a", "b"]
+
+    def test_render_for_shell_explicit_non_raw_renderer_quotes_result(self) -> None:
+        """An explicit non-raw renderer is applied then the result is shell-quoted.
+
+        Exercises the else-branch of render_for_shell: a named renderer other
+        than ``"default"`` or ``"raw"`` is looked up, applied, and the output is
+        passed through shlex.quote.  Passes no ``renderers`` arg so the None→fallback
+        path (line 314→315) is taken.
+        """
+        import shlex
+
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.render import render_for_shell
+
+        val = ListValue(elements=(TextValue("x"), TextValue("y")))
+        result = render_for_shell(val, renderer_name="json")
+        # "json" renderer produces pretty-printed JSON; the result is shell-quoted.
+        unquoted = shlex.split(result)
+        assert len(unquoted) == 1
+        import json
+
+        assert json.loads(unquoted[0]) == ["x", "y"]
+
+    def test_render_for_shell_explicit_renderer_with_renderers_table(self) -> None:
+        """Exercises the path where ``renderers`` is not None (line 314->316).
+
+        Passes an explicit renderers table; ``render_for_shell`` uses it directly
+        without falling back to the built-in default.
+        """
+        import shlex
+
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_shell
+
+        custom_renderers = {"myrender": lambda v, name: "CUSTOM"}
+        val = TextValue("anything")
+        result = render_for_shell(val, renderer_name="myrender", renderers=custom_renderers)
+        assert shlex.split(result) == ["CUSTOM"]
+
+    def test_render_for_shell_unknown_renderer_raises_assertion_error(self) -> None:
+        """An unknown renderer name raises AssertionError (internal invariant, line 318).
+
+        After type-checking this is unreachable through WorkflowRuntime.run
+        because the checker validates renderer references.
+        """
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_shell
+
+        val = TextValue("x")
+        with pytest.raises(AssertionError, match="not in the renderers table"):
+            render_for_shell(val, renderer_name="no_such_renderer", renderers={})
+
+    def test_render_for_shell_scalar_default_quotes(self) -> None:
+        """Default rendering of a scalar text value quotes it with shlex.quote."""
+        import shlex
+
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_shell
+
+        val = TextValue("hello world")
+        result = render_for_shell(val, renderer_name=None)
+        assert shlex.split(result) == ["hello world"]
+
+    def test_render_for_shell_raw_bypasses_quoting(self) -> None:
+        """``as raw`` returns plain text without shell-quoting."""
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_for_shell
+
+        val = TextValue("a b c")
+        result = render_for_shell(val, renderer_name="raw")
+        # Raw: no quoting, value is inserted verbatim.
+        assert result == "a b c"
+
+
+class TestShellExecTemplateInterpolation:
+    """Tests for _eval_template_for_shell interpolation path in the interpreter."""
+
+    def test_exec_with_interpolated_value(self) -> None:
+        """An interpolated value in exec template is shell-quoted by default."""
+        # exec "printf '%s' ${name}" where name = "hello world" should produce
+        # "hello world" (the shell-quoted value prevents word-splitting).
+        result = run(
+            'input name\n'
+            'let out = exec "printf \'%s\' ${name}"\n',
+            inputs={"name": "hello world"},
+        )
+        assert result.ok is True
+        from agm.agl.eval.values import TextValue
+
+        assert result.bindings.get("out") == TextValue("hello world")
 
 

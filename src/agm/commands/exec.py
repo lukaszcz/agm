@@ -60,6 +60,7 @@ def run(args: ExecArgs) -> None:
     runtime = WorkflowRuntime(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
+        shell_exec_timeout=config.timeout,
     )
 
     # ``parse_inputs`` returns ``dict[str, str]``; ``run`` accepts a

@@ -137,6 +137,11 @@ class WorkflowRuntime:
         The callable used for the built-in ``prompt`` agent.  ``None`` means
         no default agent is configured (only explicitly registered agents will
         be available).
+    shell_exec_timeout : float or None
+        Idle timeout (in seconds) applied to every ``exec`` shell call (design
+        §4.12, §11.13).  ``None`` means no timeout (the shell command may run
+        indefinitely).  This is the ``[exec] timeout`` config value, threaded
+        in from the CLI (plan §10.3).
     """
 
     def __init__(
@@ -145,10 +150,12 @@ class WorkflowRuntime:
         default_loop_limit: int = 5,
         default_strict_json: bool = False,
         default_agent: AgentFn | None = None,
+        shell_exec_timeout: float | None = None,
     ) -> None:
         self._default_loop_limit = default_loop_limit
         self._default_strict_json = default_strict_json
         self._default_agent = default_agent
+        self._shell_exec_timeout = shell_exec_timeout
         self._agents: dict[str, AgentFn] = {}
         # Extra codecs/renderers registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
@@ -325,6 +332,7 @@ class WorkflowRuntime:
             agent_names=registry.agent_names,
             has_fallback_agent=registry.has_fallback,
             has_default_agent=registry.has_default_agent,
+            supports_shell_exec=True,
             codec_kinds={
                 name: codec.supported_kinds for name, codec in all_codecs.items()
             },
@@ -538,6 +546,7 @@ class WorkflowRuntime:
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             source=source,
+            shell_exec_timeout=self._shell_exec_timeout,
         )
 
         try:
@@ -576,6 +585,11 @@ class WorkflowRuntime:
     def default_strict_json(self) -> bool:
         """Whether strict JSON parsing is the default."""
         return self._default_strict_json
+
+    @property
+    def shell_exec_timeout(self) -> float | None:
+        """Idle timeout in seconds for ``exec`` shell calls (``None`` = no timeout)."""
+        return self._shell_exec_timeout
 
 
 # ---------------------------------------------------------------------------

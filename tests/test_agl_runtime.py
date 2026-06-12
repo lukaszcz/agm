@@ -1537,3 +1537,15 @@ class TestExhaustivenessWarningSurfaces:
         assert "Fail" in result.warnings[0].message
         # The matched branch executed.
         assert capsys.readouterr().out == "ok\n"
+
+
+class TestShellExecTimeoutProperty:
+    """M4: shell_exec_timeout is a readable constructor parameter."""
+
+    def test_default_shell_exec_timeout_is_none(self) -> None:
+        rt = WorkflowRuntime()
+        assert rt.shell_exec_timeout is None
+
+    def test_shell_exec_timeout_kwarg_is_observable(self) -> None:
+        rt = WorkflowRuntime(shell_exec_timeout=30.0)
+        assert rt.shell_exec_timeout == 30.0

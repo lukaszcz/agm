@@ -162,6 +162,7 @@ class Interpreter:
         loop_limit: int,
         strict_json: bool,
         source: str = "",
+        shell_exec_timeout: float | None = None,
     ) -> None:
         from agm.agl.runtime.render import builtin_renderers
 
@@ -182,6 +183,7 @@ class Interpreter:
         )
         self._loop_limit = loop_limit
         self._strict_json = strict_json
+        self._shell_exec_timeout = shell_exec_timeout
         # Root scope — populated from inputs before execute() is called.
         self._root_scope: Scope = Scope(parent=None)
 
@@ -543,15 +545,7 @@ class Interpreter:
 
         call_kind = self._checked.resolved.call_kinds.get(expr.node_id)
         if call_kind == CallKind.shell_exec:
-            # Unreachable through the public ``run`` pipeline: the checker rejects
-            # ``exec`` calls statically until M4 (``supports_shell_exec``).  Reaching
-            # here means the interpreter was driven with a hand-built
-            # CheckedProgram that bypassed that gate — an internal invariant
-            # violation, NOT a user-facing AgL exception.  Fail loudly.
-            raise AssertionError(
-                "shell_exec call reached the interpreter; the checker must reject "
-                "'exec' until M4 (supports_shell_exec). Real exec support lands in M4."
-            )
+            return self._exec_shell_exec(expr, scope)
 
         # Determine the agent name for dispatch.
         if call_kind is None or call_kind == CallKind.default_agent:
@@ -663,6 +657,158 @@ class Interpreter:
                 raw=TextValue(last_raw or ""),
                 normalized_raw=TextValue(normalized_text),
                 agent=TextValue(agent_name),
+                attempts=IntValue(max_attempts),
+                target_type=TextValue(str(contract.target_type)),
+                expected_schema=JsonValue(contract.json_schema),
+                validation_errors=JsonValue(errors_json),
+                metadata=JsonValue(None),
+            )
+        )
+
+    def _eval_template_for_shell(self, expr: Template, scope: Scope) -> str:
+        """Render a template for use as a shell command (design §4.12, §11.13).
+
+        Each interpolated segment is rendered to its plain-text representation
+        and passed through ``shlex.quote`` by default (shell-safe interpolation).
+        ``${x as raw}`` bypasses quoting — the plain text is inserted verbatim.
+        Any other explicit renderer is applied first, then the result is quoted.
+        """
+        from agm.agl.runtime.render import render_for_shell
+
+        parts: list[str] = []
+        for seg in expr.segments:
+            if isinstance(seg, TextSegment):
+                parts.append(seg.text)
+            elif isinstance(seg, InterpSegment):
+                value = self._eval_expr(seg.expr, scope)
+                parts.append(
+                    render_for_shell(
+                        value,
+                        renderer_name=seg.render,
+                        renderers=self._renderers,
+                    )
+                )
+            else:
+                assert_never(seg)  # pragma: no cover
+        return "".join(parts)
+
+    def _exec_shell_exec(self, expr: AgentCall, scope: Scope) -> Value:
+        """Execute an ``exec`` shell call and return the typed result (§11.13).
+
+        Steps:
+        1. Render the template with shell-safe interpolation.
+        2. Run via ``sh -c <command>`` under the configured idle timeout.
+        3. Nonzero exit or timeout → raise ``ExecError``.
+        4. Spawn failure (``sh`` itself not found) → raise ``ExecError`` with
+           ``exit_code=-1`` (host-broken environment — not a user program error,
+           but ``ExecError`` is the closest in-language representation since the
+           design §4.12/§11.13 names only ``ExecError`` for shell failures and
+           does not define a separate spawn-failure exception for ``exec``).
+        5. Success: stdout with trailing newlines stripped, parsed through the
+           same codec/parse-policy path as agent output (§4.12 item 4).
+        """
+        from agm.core.process import run_capture_result
+
+        command = self._eval_template_for_shell(expr.template, scope)
+
+        # Run the command via ``sh -c``.
+        result = run_capture_result(
+            ["sh", "-c", command],
+            idle_timeout=self._shell_exec_timeout,
+        )
+
+        # Spawn failure: sh itself could not be launched.
+        if result.spawn_error is not None:
+            raise AglRaise(
+                _make_exc_value(
+                    "ExecError",
+                    f"Failed to spawn shell: {result.spawn_error}",
+                    command=TextValue(command),
+                    exit_code=IntValue(-1),
+                    stdout=TextValue(""),
+                    stderr=TextValue(""),
+                    timed_out=BoolValue(False),
+                )
+            )
+
+        # Nonzero exit or timeout → ExecError (design §11.13 item 3).
+        if result.timed_out or (result.returncode is not None and result.returncode != 0):
+            exit_code = result.returncode if result.returncode is not None else -1
+            raise AglRaise(
+                _make_exc_value(
+                    "ExecError",
+                    f"Shell command exited with code {exit_code}: {command!r}",
+                    command=TextValue(command),
+                    exit_code=IntValue(exit_code),
+                    stdout=TextValue(result.stdout.rstrip("\n")),
+                    stderr=TextValue(result.stderr.rstrip("\n")),
+                    timed_out=BoolValue(result.timed_out),
+                )
+            )
+
+        # Success: strip trailing newlines from stdout (design §4.12 item 4,
+        # §11.13 item 4 — mirrors ``$(...)`` command substitution behaviour).
+        stdout = result.stdout.rstrip("\n")
+
+        # Determine the target type and contract for this call site.
+        contract = self._contracts.get(expr.node_id)
+        if contract is None:
+            # No contract → text target (fallback, mirrors _eval_agent_call).
+            return TextValue(stdout)
+
+        # For text targets return verbatim (no parsing needed).
+        if isinstance(contract.target_type, TextType):
+            return TextValue(stdout)
+
+        # Non-text target: parse + validate via the codec/parse-policy path,
+        # exactly as agent output (design §4.12 item 4).
+        parse_policy = expr.options.parse_policy
+
+        from agm.agl.runtime.request import ValidationError
+        from agm.agl.syntax.nodes import RetryPolicy
+
+        if isinstance(parse_policy, RetryPolicy):
+            max_attempts = 1 + parse_policy.extra
+        else:
+            max_attempts = 1
+
+        if contract.strict_json is not None:
+            effective_strict = contract.strict_json
+        else:
+            effective_strict = self._strict_json
+
+        schema = contract.json_schema if isinstance(contract.json_schema, dict) else None
+
+        # exec does not re-run on parse failure — the stdout is fixed.
+        # Retries re-parse the same output (honouring the on_parse_error policy
+        # for consistency with the agent-call path, even though additional
+        # attempts cannot change the outcome here).
+        last_normalized: str | None = None
+        last_errors: tuple[ValidationError, ...] = ()
+        for _ in range(max_attempts):
+            parse_result = contract.codec.parse(
+                stdout,
+                contract.target_type,
+                strict_json=effective_strict,
+                schema=schema,
+            )
+            if parse_result.ok and parse_result.value is not None:
+                return parse_result.value
+            last_normalized = parse_result.normalized_raw
+            last_errors = parse_result.errors
+
+        # All parse attempts failed → AgentParseError (design §4.12: "same
+        # parsing, validation, and on_parse_error policies as agent output").
+        errors_json: list[object] = [e.to_json_obj() for e in last_errors]
+        normalized_text = last_normalized if last_normalized is not None else stdout
+        raise AglRaise(
+            _make_exc_value(
+                "AgentParseError",
+                f"exec output failed to parse as {contract.target_type!r} "
+                f"after {max_attempts} attempt(s). Output: {stdout!r}",
+                raw=TextValue(stdout),
+                normalized_raw=TextValue(normalized_text),
+                agent=TextValue("exec"),
                 attempts=IntValue(max_attempts),
                 target_type=TextValue(str(contract.target_type)),
                 expected_schema=JsonValue(contract.json_schema),

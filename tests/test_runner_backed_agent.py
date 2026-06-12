@@ -1385,3 +1385,52 @@ class TestCliRunnerIntegration:
         # Must show AgentCallError, not a raw OSError traceback
         assert "AgentCallError" in result.stderr
         assert "Traceback" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (MAJOR): split_command ValueError guard — malformed quoting → clean exit
+# ---------------------------------------------------------------------------
+
+
+class TestSplitCommandMalformedQuoting:
+    """split_command must catch ValueError from shlex.split (e.g. unclosed quote)
+    and produce a clean 'Error: <kind> command: <reason>' + SystemExit(1).
+
+    This covers the lazy path (prepare_rendered_prompt_run → split_command)
+    so that a malformed-quote runner config also exits cleanly.
+    """
+
+    def test_malformed_quote_raises_system_exit(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """split_command with unclosed quote → SystemExit(1), not ValueError."""
+        from agm.agent.runner import split_command
+
+        with pytest.raises(SystemExit) as exc_info:
+            split_command('"foo', kind="runner")
+        assert exc_info.value.code == 1
+
+    def test_malformed_quote_prints_clean_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """split_command with unclosed quote prints clean 'Error:' to stderr."""
+        from agm.agent.runner import split_command
+
+        with pytest.raises(SystemExit):
+            split_command('"foo', kind="runner")
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "runner" in captured.err.lower()
+        assert "Traceback" not in captured.err
+        assert "ValueError" not in captured.err
+
+    def test_valid_command_still_works(self) -> None:
+        """split_command('claude -p') still returns the split tokens."""
+        from agm.agent.runner import split_command
+
+        result = split_command("claude -p", kind="runner")
+        assert result == ["claude", "-p"]
+
+    def test_empty_command_still_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The existing empty-command guard still works after adding the ValueError guard."""
+        from agm.agent.runner import split_command
+
+        with pytest.raises(SystemExit) as exc_info:
+            split_command("   ", kind="runner")
+        assert exc_info.value.code == 1

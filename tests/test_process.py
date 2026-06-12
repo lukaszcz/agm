@@ -509,3 +509,34 @@ class TestRunCaptureResultLargeStdin:
         )
         assert result.returncode == 0
         assert "hello from stdin" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (MINOR): NUL-byte spawn failure — run_capture must re-raise ValueError
+# ---------------------------------------------------------------------------
+
+
+class TestRunCaptureNullByteReraise:
+    """run_capture with a NUL-byte argv element must re-raise the original ValueError.
+
+    At origin/main the ValueError from subprocess.Popen propagated to the caller.
+    The Task 2 fix restored that behaviour: _run_capture_result_impl stores the
+    ValueError alongside OSError, and run_capture re-raises it.
+    run_capture_result continues to discard and return the structured result.
+    """
+
+    def test_null_byte_in_run_capture_raises_value_error(self) -> None:
+        """run_capture(['sh', '-c', 'echo \\x00bad']) raises ValueError, not returns."""
+        with pytest.raises(ValueError):
+            run_capture(["sh", "-c", "echo \x00bad"])
+
+    def test_null_byte_run_capture_error_message(self) -> None:
+        """The re-raised ValueError retains the 'embedded null byte' message."""
+        with pytest.raises(ValueError, match="null"):
+            run_capture(["sh", "-c", "echo \x00bad"])
+
+    def test_null_byte_run_capture_result_still_returns_structured(self) -> None:
+        """run_capture_result is unchanged: NUL byte still returns spawn-error result."""
+        result = run_capture_result(["sh", "-c", "echo \x00bad"])
+        assert result.spawn_error is not None
+        assert result.returncode is None

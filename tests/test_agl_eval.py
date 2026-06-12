@@ -1412,6 +1412,62 @@ class TestJsonEquality:
         result = jv.__eq__("not a json value")
         assert result is NotImplemented
 
+    def test_dict_value_order_permuted_json_payload_equal_and_equal_hashes(self) -> None:
+        """DictValue with order-permuted JsonValue dict payloads: equal AND same hash.
+
+        Regression for repr-based hashing: two DictValues whose entries map to
+        identical JsonValue(dict) payloads but with different insertion order must
+        hash the same (because _json_hash is order-insensitive for dicts).
+        """
+        from agm.agl.eval.values import DictValue, JsonValue
+
+        # Same key/value content, different insertion order in the JsonValue dict.
+        jv1 = JsonValue({"a": 1, "b": 2})
+        jv2 = JsonValue({"b": 2, "a": 1})
+
+        # The two JsonValues compare equal (order-insensitive __eq__).
+        assert jv1 == jv2
+        # They must also hash the same.
+        assert hash(jv1) == hash(jv2)
+
+        d1 = DictValue(entries={"data": jv1})
+        d2 = DictValue(entries={"data": jv2})
+
+        # The two DictValues compare equal.
+        assert d1 == d2
+        # Their hashes must also be equal (eq/hash contract).
+        assert hash(d1) == hash(d2)
+        # A set collapses them to one element.
+        assert len({d1, d2}) == 1
+
+    def test_record_value_int_vs_decimal_json_payload_equal_and_equal_hashes(self) -> None:
+        """RecordValue with int vs Decimal("1.0") JsonValue payloads: equal AND same hash.
+
+        Regression for repr-based hashing: repr(JsonValue(1)) != repr(JsonValue(Decimal("1.0")))
+        but the two values compare equal under _json_eq, so their hashes must match.
+        """
+        import decimal as _decimal
+
+        from agm.agl.eval.values import JsonValue, RecordValue
+
+        jv_int = JsonValue(1)
+        jv_dec = JsonValue(_decimal.Decimal("1.0"))
+
+        # The two JsonValues compare equal (numeric equivalence).
+        assert jv_int == jv_dec
+        # They must hash the same.
+        assert hash(jv_int) == hash(jv_dec)
+
+        r1 = RecordValue(type_name="R", fields={"n": jv_int})
+        r2 = RecordValue(type_name="R", fields={"n": jv_dec})
+
+        # The two RecordValues compare equal.
+        assert r1 == r2
+        # Their hashes must also be equal.
+        assert hash(r1) == hash(r2)
+        # A set collapses them to one element.
+        assert len({r1, r2}) == 1
+
 
 # ---------------------------------------------------------------------------
 # Print with var refs
@@ -4912,10 +4968,10 @@ class TestNullLiteralPatternSource:
         assert result.bindings.get("r") == IntValue(1)
 
     def test_null_pattern_fallback_for_non_null_json(self) -> None:
-        """``null`` pattern does NOT match JSON false, 0, or empty string."""
+        """``null`` pattern does NOT match JSON false, 0, empty string, {}, or []."""
         from agm.agl.eval.values import IntValue
 
-        for src_val in ("false", "0", '""'):
+        for src_val in ("false", "0", '""', "{}", "[]"):
             source = (
                 f"let j: json = {src_val}\n"
                 "let r: int = case j of\n"

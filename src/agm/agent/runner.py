@@ -53,7 +53,11 @@ class PromptRunResult:
 
 
 def split_command(command: str, *, kind: str) -> list[str]:
-    split = shlex.split(command)
+    try:
+        split = shlex.split(command)
+    except ValueError as exc:
+        print(f"Error: invalid {kind} command: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     if split:
         return split
     print(f"Error: {kind} command is empty.", file=sys.stderr)

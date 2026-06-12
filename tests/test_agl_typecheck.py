@@ -3027,3 +3027,233 @@ class TestCaseExprBranchUnification:
             "  | _ => Pt(x: 2)\n"
         )
         assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (review): template json-expectation confinement is one level deep
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateInterpolationConfinement:
+    """_check_template must confine the fabricated JsonType expectation to the
+    structure of the literal itself; it must NOT propagate into non-literal
+    child expressions (AgentCall, CaseExpr, VarRef, etc.).
+
+    Design §11.4: agent-call target type comes from annotation / set-target /
+    else text.  Fabricating expected=json inside ``${...}`` gives agent calls a
+    wrong json contract.  The fix applies a dedicated template-literal checking
+    path that propagates JsonType only to literal (scalar/container) children.
+    """
+
+    # --- AgentCall inside list/dict literal in template ---
+
+    def test_agent_call_in_list_inside_template_gets_text_contract(self) -> None:
+        """``${[prompt "x"]}`` — inner agent call must default to text, not json."""
+        src = 'let t = "${[prompt "x"]}"\n'
+        r = accept_type(src, capabilities=caps_with_json_codec())
+        from agm.agl.syntax.nodes import LetDecl, ListLit, Template
+
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        tmpl = stmt.value
+        assert isinstance(tmpl, Template)
+        seg = next(s for s in tmpl.segments if isinstance(s, InterpSegment))
+        assert isinstance(seg.expr, ListLit)
+        # Extract the AgentCall from inside the list literal.
+        call = seg.expr.elements[0]
+        assert isinstance(call, AgentCall)
+        spec = r.contract_specs[call.node_id]
+        assert isinstance(spec.target_type, TextType), (
+            f"Expected TextType target, got {spec.target_type!r}"
+        )
+        assert spec.codec_name == "text"
+
+    def test_agent_call_in_dict_inside_template_gets_text_contract(self) -> None:
+        """``${{\"k\": prompt \"x\"}}`` — inner agent call must default to text."""
+        src = 'let t = "${ {k: prompt "x"} }"\n'
+        r = accept_type(src, capabilities=caps_with_json_codec())
+        from agm.agl.syntax.nodes import LetDecl, Template
+
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        tmpl = stmt.value
+        assert isinstance(tmpl, Template)
+        seg = next(s for s in tmpl.segments if isinstance(s, InterpSegment))
+        assert isinstance(seg.expr, DictLit)
+        # Extract the AgentCall from inside the dict literal.
+        call = seg.expr.entries[0].value
+        assert isinstance(call, AgentCall)
+        spec = r.contract_specs[call.node_id]
+        assert isinstance(spec.target_type, TextType), (
+            f"Expected TextType target, got {spec.target_type!r}"
+        )
+        assert spec.codec_name == "text"
+
+    # --- Genuine annotation keeps json contract ---
+
+    def test_genuine_json_annotation_keeps_json_contract(self) -> None:
+        """``let x: json = [prompt "y"]`` — genuine annotation, agent call must
+        get json target (unchanged by the template fix)."""
+        src = 'let x: json = [prompt "y"]\n'
+        r = accept_type(src, capabilities=caps_with_json_codec())
+        from agm.agl.syntax.nodes import LetDecl, ListLit
+
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        lit = stmt.value
+        assert isinstance(lit, ListLit)
+        call = lit.elements[0]
+        assert isinstance(call, AgentCall)
+        spec = r.contract_specs[call.node_id]
+        assert isinstance(spec.target_type, JsonType), (
+            f"Expected JsonType target, got {spec.target_type!r}"
+        )
+
+    # --- Empty nested list under json context is legal ---
+
+    def test_nested_empty_list_inside_template_accepted(self) -> None:
+        """``${[[]]}`` — the non-empty outer list gets template treatment;
+        the inner empty list receives expected=JsonType() and is accepted."""
+        r = accept_type('let t = "${[[]]}"\n')
+        assert r.resolved.program is not None
+
+    # --- VarRef leaf (list[text]) is json-assignable → accepted ---
+
+    def test_varref_json_assignable_in_template_list_accepted(self) -> None:
+        """``${[items]}`` where items: list[text] — list[text] is json-shaped,
+        so the VarRef leaf passes json-assignability and the whole expression
+        is accepted."""
+        src = 'let items: list[text] = ["a"]\nlet t = "${[items]}"\n'
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+    # --- Non-json-assignable leaf gives clean diagnostic ---
+
+    def test_non_json_assignable_leaf_in_template_literal_rejected(self) -> None:
+        """A record value nested in a template literal is not json-assignable
+        and must produce a clean 'Type mismatch' diagnostic."""
+        src = (
+            "record Pt\n  x: int\n"
+            "let p = Pt(x: 1)\n"
+            'let t = "${[p]}"\n'
+        )
+        err = reject_type(src, capabilities=caps_with_json_codec())
+        msg = err.to_diagnostic().message
+        assert "mismatch" in msg.lower() or "json" in msg.lower()
+
+    # --- Duplicate keys in a template dict literal ---
+
+    def test_duplicate_key_in_template_dict_literal_rejected(self) -> None:
+        """``${ {a: 1, a: 2} }`` — the template-literal path must reject
+        duplicate dict keys like the normal dict-literal path does."""
+        err = reject_type('let t = "${ {a: 1, a: 2} }"\n')
+        line, msg = diag(err)
+        assert line == 1
+        assert "a" in msg
+
+    # --- Nested NON-empty containers recurse through the template path ---
+
+    def test_nested_nonempty_list_in_template_accepted(self) -> None:
+        """``${[[1]]}`` — the inner non-empty list recurses through the
+        template-literal path and stays json-shaped."""
+        r = accept_type('let t = "${[[1]]}"\n')
+        assert r.resolved.program is not None
+
+    def test_nested_empty_dict_in_template_accepted(self) -> None:
+        """``${[{}]}`` — the inner empty dict receives expected=JsonType()
+        and is accepted as dict[text, json]."""
+        r = accept_type('let t = "${[{}]}"\n')
+        assert r.resolved.program is not None
+
+    def test_agent_call_nested_two_levels_gets_text_contract(self) -> None:
+        """``${ {a: {b: prompt "x"}} }`` — the confinement must hold at any
+        nesting depth: the agent call two containers deep still defaults to a
+        text contract."""
+        src = 'let t = "${ {a: {b: prompt "x"}} }"\n'
+        r = accept_type(src, capabilities=caps_with_json_codec())
+        from agm.agl.syntax.nodes import DictLit, LetDecl, Template
+
+        stmt = r.resolved.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        tmpl = stmt.value
+        assert isinstance(tmpl, Template)
+        seg = next(s for s in tmpl.segments if isinstance(s, InterpSegment))
+        assert isinstance(seg.expr, DictLit)
+        inner = seg.expr.entries[0].value
+        assert isinstance(inner, DictLit)
+        call = inner.entries[0].value
+        assert isinstance(call, AgentCall)
+        spec = r.contract_specs[call.node_id]
+        assert isinstance(spec.target_type, TextType), (
+            f"Expected TextType target, got {spec.target_type!r}"
+        )
+        assert spec.codec_name == "text"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (review): constructor unknown-field diagnostic text
+# ---------------------------------------------------------------------------
+
+
+class TestConstructorUnknownFieldMessage:
+    """The merged _check_constructor_call helper must emit the clean original
+    diagnostic forms:
+      Record 'Pt' has no field 'y'.
+      Variant 'E.V' has no field 'b'.
+      Exception type 'Abort' has no field 'nope'.
+    The old code wrapped type_label in outer quotes, producing doubled-quote
+    forms like ``'record 'Pt'' has no field 'y'.``.
+    """
+
+    def test_record_unknown_field_exact_message(self) -> None:
+        err = reject_type("record Pt\n  x: int\nlet p = Pt(x: 1, y: 2)\n")
+        msg = err.to_diagnostic().message
+        assert msg == "Record 'Pt' has no field 'y'."
+
+    def test_variant_unknown_field_exact_message(self) -> None:
+        err = reject_type("enum E\n  | V(a: int)\nlet v = E.V(a: 1, b: 2)\n")
+        msg = err.to_diagnostic().message
+        assert msg == "Variant 'E.V' has no field 'b'."
+
+    def test_exception_unknown_field_exact_message(self) -> None:
+        err = reject_type('raise Abort(message: "x", nope: "y")')
+        msg = err.to_diagnostic().message
+        assert msg == "Exception type 'Abort' has no field 'nope'."
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (review): exception constructor duplicate-arg has no test
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionConstructorDuplicateArg:
+    """The duplicate-argument guard in _check_constructor_call for exception
+    constructors (added in the merge) must be exercised via direct AST
+    construction (source-level duplicates are rejected by the parser first).
+    Mirrors test_record_constructor_duplicate_arg and
+    test_variant_constructor_duplicate_arg in TestViaAst.
+    """
+
+    def test_exception_constructor_duplicate_arg(self) -> None:
+        """The checker's exception-constructor duplicate-arg guard (defensive:
+        the parser normally rejects duplicates first)."""
+        from agm.agl.syntax.nodes import Constructor, NamedArg, Raise
+
+        ctor = Constructor(
+            qualifier=None, name="Abort",
+            args=(
+                NamedArg(
+                    name="message", value=_tc_strlit("a"),
+                    span=_tc_sp(), node_id=_tc_nid(),
+                ),
+                NamedArg(
+                    name="message", value=_tc_strlit("b"),
+                    span=_tc_sp(), node_id=_tc_nid(),
+                ),
+            ),
+            span=_tc_sp(), node_id=_tc_nid(),
+        )
+        raise_stmt = Raise(exc=ctor, span=_tc_sp(), node_id=_tc_nid())
+        with pytest.raises(AglTypeError) as exc_info:
+            resolve_and_check(raise_stmt)
+        assert "message" in exc_info.value.to_diagnostic().message

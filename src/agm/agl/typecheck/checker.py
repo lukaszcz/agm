@@ -611,22 +611,30 @@ class _Checker:
     def _check_template(self, node: Template) -> TextType:
         for seg in node.segments:
             if isinstance(seg, InterpSegment):
-                # Pass ``expected=json`` only for *non-empty* inline dict/list
-                # literals so that mixed-value-kind dicts (e.g.
-                # ``{kind: "demo", tags: xs}``) inside ``${ … }`` are accepted
-                # under design §5.8 rule 3.  Empty ``[]`` / ``{}`` literals
-                # receive ``expected=None`` so they produce the standard
-                # "needs annotation" diagnostic (design §5.6).
-                # For all other expression kinds — in particular ``AgentCall``
-                # and ``CaseExpr`` — pass ``expected=None`` so that agent calls
-                # default to the §11.4 text contract.
-                is_nonempty_literal = (
+                # Use the template-literal checking path for non-empty inline
+                # container literals so that mixed-value-kind structures (e.g.
+                # ``{kind: "demo", tags: xs}``) are accepted under design §5.8
+                # rule 3, but the fabricated json expectation is confined to
+                # literal STRUCTURE only and does NOT propagate into non-literal
+                # child expressions (AgentCall, VarRef, CaseExpr, etc.).
+                # Empty ``[]`` / ``{}`` and all other expression kinds receive
+                # ``expected=None`` so that:
+                # - empty literals emit the standard "needs annotation" diagnostic
+                #   (design §5.6);
+                # - agent calls default to the §11.4 text contract.
+                is_nonempty_container_literal = (
                     isinstance(seg.expr, DictLit) and bool(seg.expr.entries)
                 ) or (
                     isinstance(seg.expr, ListLit) and bool(seg.expr.elements)
                 )
-                seg_expected: JsonType | None = JsonType() if is_nonempty_literal else None
-                seg_type = self._check_expr(seg.expr, expected=seg_expected)
+                if is_nonempty_container_literal:
+                    assert isinstance(seg.expr, (ListLit, DictLit))
+                    seg_type = self._check_template_literal(seg.expr)
+                    # _check_expr is not called for the container itself in this
+                    # path; record the type manually so the side-table is complete.
+                    self._node_types[seg.expr.node_id] = seg_type
+                else:
+                    seg_type = self._check_expr(seg.expr, expected=None)
                 # Validate renderer name if explicit.
                 if seg.render is not None and seg.render != "default":
                     if seg.render not in self._caps.renderer_names:
@@ -648,6 +656,74 @@ class _Checker:
                             span=seg.span,
                         )
         return TextType()
+
+    def _check_template_literal(self, expr: ListLit | DictLit) -> Type:
+        """Check a non-empty container literal in a ``${ … }`` context.
+
+        Propagates ``JsonType`` only to child nodes that are themselves literals
+        (scalars or container literals recursively).  Non-literal children
+        (``VarRef``, ``AgentCall``, ``FieldAccess``, ``CaseExpr``, ``BinaryOp``,
+        ``Constructor``, etc.) are checked with ``expected=None`` so that, in
+        particular, agent calls default to the §11.4 text contract instead of
+        acquiring a fabricated json contract.
+
+        After checking each non-literal child, its inferred type is validated
+        for json-assignability using the same ``is_assignable`` machinery as the
+        normal literal-against-json path.
+        """
+        if isinstance(expr, ListLit):
+            # Caller guarantees non-empty.
+            for elem in expr.elements:
+                self._check_template_literal_child(elem)
+            return ListType(elem=JsonType())
+        # DictLit — caller guarantees non-empty.
+        seen_keys: dict[str, SourceSpan] = {}
+        for entry in expr.entries:
+            key = entry.key.value
+            if key in seen_keys:
+                raise AglTypeError(
+                    f"Duplicate key '{key}' in dict literal.",
+                    span=entry.span,
+                )
+            seen_keys[key] = entry.span
+        for entry in expr.entries:
+            self._check_template_literal_child(entry.value)
+        return DictType(value=JsonType())
+
+    def _check_template_literal_child(self, expr: Expr) -> Type:
+        """Check a single child expression of a template container literal.
+
+        Scalar literals and empty container literals receive ``expected=JsonType()``
+        (structurally sound and always json-shaped).  Non-empty container literals
+        are handled recursively by ``_check_template_literal`` to avoid propagating
+        the fabricated json expectation into their non-literal children.
+        Non-literal expressions are checked with ``expected=None`` and then their
+        inferred type is asserted to be json-assignable.
+        """
+        if isinstance(expr, (StringLit, IntLit, DecimalLit, BoolLit, NullLit)):
+            # Scalar literals: always json-shaped; check normally (expected is
+            # ignored by the literal inference rules but kept for consistency).
+            return self._check_expr(expr, expected=JsonType())
+        if isinstance(expr, ListLit):
+            if not expr.elements:
+                # Empty list under json context: legal (→ list[json]).
+                return self._check_expr(expr, expected=JsonType())
+            # Non-empty: recurse via the template-literal path.
+            result = self._check_template_literal(expr)
+            self._node_types[expr.node_id] = result
+            return result
+        if isinstance(expr, DictLit):
+            if not expr.entries:
+                # Empty dict under json context: legal (→ dict[text, json]).
+                return self._check_expr(expr, expected=JsonType())
+            # Non-empty: recurse via the template-literal path.
+            result = self._check_template_literal(expr)
+            self._node_types[expr.node_id] = result
+            return result
+        # Non-literal: check without expectation, then assert json-assignable.
+        child_type = self._check_expr(expr, expected=None)
+        self._assert_assignable(child_type, JsonType(), expr.span)
+        return child_type
 
     # --- VarRef ---
 
@@ -1180,13 +1256,13 @@ class _Checker:
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
             fields = owner.variants[variant]
-            type_label = f"variant '{owner.name}.{variant}'"
+            type_label = f"Variant '{owner.name}.{variant}'"
         elif isinstance(owner, RecordType):
             fields = owner.fields
-            type_label = f"record '{owner.name}'"
+            type_label = f"Record '{owner.name}'"
         else:
             fields = owner.fields
-            type_label = f"exception type '{owner.name}'"
+            type_label = f"Exception type '{owner.name}'"
 
         provided = {arg.name: arg for arg in node.args}
 
@@ -1205,13 +1281,9 @@ class _Checker:
         for arg_name in provided:
             if arg_name not in fields:
                 raise AglTypeError(
-                    f"'{type_label}' has no field '{arg_name}'.",
+                    f"{type_label} has no field '{arg_name}'.",
                     span=provided[arg_name].span,
                 )
-        # Normalise the error message form to match what the old helpers produced
-        # so callers that pattern-match on message text keep working.
-        # The error message above uses the type_label; downstream tests check for
-        # the field name, which is preserved.
 
         # 3. Missing-field check.
         for field_name in fields:

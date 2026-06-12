@@ -1234,6 +1234,29 @@ class TestTypeDeclarationNotAtRoot:
         assert line == 2
         assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
 
+    # --- inline (semicolon) form of do body ---
+
+    def test_type_alias_inline_do_body_rejected(self) -> None:
+        """do[2] type T = int until true — inline form must also be rejected."""
+        err = reject_scope("do[2] type T = int until true\n")
+        line, msg = diag(err)
+        assert line == 1
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_enum_inline_do_body_rejected(self) -> None:
+        """do[2] enum E | A until true — inline form must also be rejected."""
+        err = reject_scope("do[2] enum E | A until true\n")
+        line, msg = diag(err)
+        assert line == 1
+        assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
+
+    def test_input_inline_do_body_rejected(self) -> None:
+        """do[2] input x until true — InputDecl in inline body must be rejected."""
+        err = reject_scope("do[2] input x until true\n")
+        line, msg = diag(err)
+        assert line == 1
+        assert "input" in msg.lower()
+
     # --- top-level still accepted ---
 
     def test_record_at_root_accepted(self) -> None:

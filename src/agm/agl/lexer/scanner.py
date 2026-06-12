@@ -543,7 +543,21 @@ class _Scanner:
             boundaries.append(offset)
             offset += len(seg.text)
 
-        dedented, pos_map = _apply_triple_dedent_with_map(combined)
+        # Build an indent probe for hole-aware min-indent measurement.
+        # Each interpolation hole is replaced by a single non-whitespace
+        # placeholder ("X") so that a line whose only non-whitespace content
+        # is a hole (e.g. "  ${x}") is treated as non-blank.  The probe is
+        # used ONLY for measuring indentation — never for reassembly — so a
+        # placeholder collision with literal content is irrelevant.
+        indent_probe = "".join(
+            seg.text if isinstance(seg, _LitSeg) else "X" for seg in segments
+        )
+        # Apply the same step-1 (leading-newline drop) that
+        # _apply_triple_dedent_with_map applies, so the line split matches.
+        probe_body = indent_probe[1:] if indent_probe.startswith("\n") else indent_probe
+        probe_min_indent = _compute_min_indent(probe_body.split("\n"))
+
+        dedented, pos_map = _apply_triple_dedent_with_map(combined, probe_min_indent)
 
         # Use the position map to find where each literal segment starts in dedented.
         def _mapped(pre: int) -> int:
@@ -755,7 +769,7 @@ def _compute_min_indent(lines: list[str]) -> int:
     return min_ind if min_ind is not None else 0
 
 
-def _apply_triple_dedent_with_map(text: str) -> tuple[str, list[int]]:
+def _apply_triple_dedent_with_map(text: str, min_indent: int) -> tuple[str, list[int]]:
     """Apply the triple-quoted dedent rule and return a position map.
 
     Rule:
@@ -766,6 +780,12 @@ def _apply_triple_dedent_with_map(text: str) -> tuple[str, list[int]]:
     This order (dedent after leading-strip, trailing-strip after dedent)
     produces the natural result for the common pattern where the closing
     delimiter's indentation defines the common indent level.
+
+    *min_indent* is supplied by the triple-template scanner as a hole-aware
+    value measured from a probe string that treats each interpolation hole as
+    a non-whitespace character, preventing hole-only lines from being
+    classified as blank (it must NOT be computed from *text*, which has the
+    holes removed).
 
     Returns ``(dedented, pos_map)`` where ``pos_map[i]`` is the index in
     *dedented* that corresponds to position *i* in *text*.  The map has
@@ -785,9 +805,11 @@ def _apply_triple_dedent_with_map(text: str) -> tuple[str, list[int]]:
     # Step 2: strip the minimum common indentation.  Every character in
     # line[:min_indent] is whitespace: non-blank lines carry at least
     # min_indent leading whitespace by construction, and blank lines are
-    # whitespace throughout.
+    # whitespace throughout.  When *min_indent* is supplied by the caller
+    # (hole-aware measurement), a hole line's literal prefix in *text* may
+    # be shorter than min_indent (the hole consumed part of the line); the
+    # ``min(min_indent, len(line))`` guard already handles that safely.
     lines = text[pre_start:].split("\n")
-    min_indent = _compute_min_indent(lines)
     pos = pre_start
     for line in lines:
         for offset in range(min(min_indent, len(line))):

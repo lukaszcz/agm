@@ -421,9 +421,14 @@ def run_capture(
 
     This is a compatibility adapter over :func:`_run_capture_result_impl`.  On idle-timeout
     it prints a diagnostic to stderr and raises ``SystemExit(124)`` — matching the
-    original behaviour.  Spawn errors re-raise the *original* OSError (with
-    ``errno``/``filename`` intact) so callers such as vcs/git.py get faithful exception
-    types: ``FileNotFoundError``, ``PermissionError``, or any other ``OSError`` subclass.
+    original behaviour.  Spawn errors re-raise the *original* exception object so callers
+    get faithful exception types with all attributes intact:
+    - ``OSError`` subclasses (``FileNotFoundError``, ``PermissionError``,
+      ``OSError(ENOEXEC)``, etc.) are re-raised with ``errno``/``filename`` intact.
+    - ``ValueError`` (e.g. ``'embedded null byte'`` from ``subprocess.Popen``) is
+      re-raised as-is, restoring the original exception semantics.
+    ``run_capture_result`` continues to discard spawn exceptions and return a
+    structured :class:`ProcessCaptureResult` instead.
     """
     result, spawn_exc = _run_capture_result_impl(
         cmd,
@@ -486,13 +491,18 @@ def _run_capture_result_impl(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
-) -> tuple[ProcessCaptureResult, OSError | None]:
+) -> tuple[ProcessCaptureResult, OSError | ValueError | None]:
     """Internal implementation of ``run_capture_result``.
 
     Returns ``(result, original_spawn_exc)`` so that ``run_capture`` can
-    re-raise the *original* ``OSError`` (with ``errno``/``filename`` intact)
-    rather than reconstructing it from a string.  ``run_capture_result``
-    discards the exception object and returns only the result.
+    re-raise the *original* exception intact:
+    - For ``OSError`` (``FileNotFoundError``, ``PermissionError``, ``OSError(ENOEXEC)``
+      etc.) the original object is returned so callers get faithful exception types
+      with ``errno``/``filename`` intact.
+    - For ``ValueError`` (e.g. ``'embedded null byte'`` from ``subprocess.Popen``
+      before the child is launched) the original object is also returned so
+      ``run_capture`` can re-raise it, restoring the original exception semantics.
+    ``run_capture_result`` discards the exception object and returns only the result.
     """
     start = time.monotonic()
 
@@ -528,8 +538,9 @@ def _run_capture_result_impl(
         # before the child is launched for malformed arguments — most notably
         # ``ValueError('embedded null byte')`` when an argv element contains a
         # NUL.  Map it to the same spawn-failure result as the OS-level spawn
-        # errors so no raw exception escapes; ``spawn_errno`` is ``None`` since
-        # there is no OS error number.
+        # errors; ``spawn_errno`` is ``None`` since there is no OS error number.
+        # The original exception object is returned so ``run_capture`` can
+        # re-raise it, preserving original exception semantics for all callers.
         elapsed = time.monotonic() - start
         return (
             ProcessCaptureResult(
@@ -541,7 +552,7 @@ def _run_capture_result_impl(
                 spawn_error=str(exc),
                 spawn_errno=None,
             ),
-            None,
+            exc,
         )
 
     stdout, stderr, timed_out = _drain_process_streams(

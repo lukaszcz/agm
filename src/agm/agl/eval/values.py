@@ -156,12 +156,11 @@ class DictValue:
     entries: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
-        # Serialise the entries to a canonical string and hash that, so nested
-        # JsonValue payloads (which wrap unhashable dicts/lists) are handled
-        # gracefully.  The repr of a Value is deterministic for all Value kinds
-        # (frozen dataclasses with deterministic field repr) and unique enough
-        # for a hash (collisions are acceptable; correctness lives in __eq__).
-        return hash(tuple(sorted((k, repr(v)) for k, v in self.entries.items())))
+        # Hash via hash(v) so that the contract hash(a) == hash(b) whenever a == b
+        # is preserved.  JsonValue.__hash__ uses _json_hash (order-insensitive,
+        # numeric-canonical), so equal-but-differently-ordered or int-vs-Decimal
+        # payloads hash the same.
+        return hash(tuple(sorted((k, hash(v)) for k, v in self.entries.items())))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, DictValue):
@@ -177,8 +176,10 @@ class RecordValue:
     fields: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
+        # Use hash(v) rather than repr(v) so that the eq/hash contract holds:
+        # equal values (e.g. JsonValue(1) == JsonValue(Decimal("1.0"))) hash the same.
         return hash(
-            (self.type_name, tuple(sorted((k, repr(v)) for k, v in self.fields.items())))
+            (self.type_name, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
         )
 
     def __eq__(self, other: object) -> bool:
@@ -196,11 +197,12 @@ class EnumValue:
     fields: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
+        # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
         return hash(
             (
                 self.type_name,
                 self.variant,
-                tuple(sorted((k, repr(v)) for k, v in self.fields.items())),
+                tuple(sorted((k, hash(v)) for k, v in self.fields.items())),
             )
         )
 
@@ -228,8 +230,9 @@ class ExceptionValue:
     fields: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
+        # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
         return hash(
-            (self.type_name, tuple(sorted((k, repr(v)) for k, v in self.fields.items())))
+            (self.type_name, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
         )
 
     def __eq__(self, other: object) -> bool:

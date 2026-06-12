@@ -1286,3 +1286,90 @@ class TestIdentifierAsciiOnly:
             tok("aé")
         err = exc_info.value
         assert err.span is not None
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: triple-quoted dedent over-strips when interpolation hole
+# is on the minimum-indented line (Task 3)
+# ---------------------------------------------------------------------------
+
+
+class TestTripleDedentHoleAwareMinIndent:
+    """The dedent rule must treat a line containing only an interpolation hole
+    (e.g. ``  ${x}``) as non-blank when computing min-indent.  Previously,
+    holes were stripped from the combined literal before computing min-indent,
+    turning ``  ${x}`` into pure whitespace ``  `` which was classified as a
+    blank line and excluded.  This caused the wrong (larger) indent to be
+    stripped, over-removing indentation from other content lines.
+
+    Design rule (§10.1): a line with a hole IS non-blank; the indent of that
+    line counts toward the minimum.  Hole values are never dedented.
+    """
+
+    def test_hole_line_is_unique_minimum_indent(self) -> None:
+        # Source (indent shown as explicit spaces):
+        #   """
+        #       deep    <- indent 6
+        #   ${x}        <- indent 2 (the true minimum)
+        #   """         <- closing at indent 2 (same as hole)
+        #
+        # Correct dedent: strip 2.  "deep" ends up with 4 leading spaces.
+        # Buggy dedent: strip 6.  "deep" ends up with 0 leading spaces.
+        source = '"""\n      deep\n  ${x}\n  """'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        # Fragment before ${x}: "    deep\n" (4 leading spaces kept after strip 2)
+        assert frags[0] == "    deep\n"
+        # Fragment after ${x}: "" — the closing "  """ segment strips to nothing
+        # ("\n  " → "\n" after strip 2 → trailing \n removed → "").
+        assert frags[1] == ""
+
+    def test_hole_only_line_between_content_lines(self) -> None:
+        # Source:
+        #   """
+        #     content   <- indent 4
+        #   ${x}        <- indent 2 (minimum)
+        #     more      <- indent 4
+        #   """         <- closing at indent 2 (same as hole)
+        #
+        # Correct dedent: strip 2.  Both content lines keep 2 leading spaces.
+        source = '"""\n    content\n  ${x}\n    more\n  """'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags[0] == "  content\n"
+        # Fragment after ${x}: "\n  more" — newline + 2 spaces before "more"
+        assert frags[1] == "\n  more"
+
+    def test_hole_at_line_start_with_trailing_literal_text(self) -> None:
+        # Source:
+        #   """
+        #     prefix    <- indent 4
+        #   ${x}tail    <- indent 2 (minimum, hole at col 2, literal "tail" follows)
+        #   """         <- closing at indent 2
+        #
+        # Correct dedent: strip 2.
+        source = '"""\n    prefix\n  ${x}tail\n  """'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        # Before the hole: "  prefix\n" (4-2=2 leading spaces preserved)
+        assert frags[0] == "  prefix\n"
+        # After the hole on the same line: "tail\n" then closing line strips away
+        # "\n  " → after strip 2 → "\n" → trailing \n removed → so "tail"
+        assert frags[1] == "tail"
+
+    def test_existing_dedent_no_holes_unchanged(self) -> None:
+        # Regression guard: no-hole case must still work correctly.
+        source = '"""\n    hello\n      world\n    """'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        content = "".join(frags)
+        assert content == "hello\n  world"
+
+    def test_sentinel_collision_still_passes(self) -> None:
+        # Literal \x00INTERP\x00 content alongside a real interpolation must
+        # still work (verifies the old sentinel-collision regression fix).
+        source = '"""\n\\u0000INTERP\\u0000 ${x}\n"""'
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags[0] == "\x00INTERP\x00 "
+        assert len([v for t, v in result if t == "INTERP_START"]) == 1

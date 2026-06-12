@@ -1144,13 +1144,11 @@ class AstBuilder(Transformer):
 
     def inline_seq(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
         """inline_seq: closed_stmt (SEMICOLON closed_stmt)* (SEMICOLON do_tail)? | do_tail"""
+        # Filter out only SEMICOLON tokens; all AST node types (closed_stmt and
+        # do_tail results) are preserved so the scope resolver can reject type/input
+        # declarations that appear at a non-root position.
         return tuple(
-            s for s in args
-            if s is not None and not isinstance(s, Token) and isinstance(s, (
-                syntax.LetDecl, syntax.VarDecl, syntax.SetStmt, syntax.PassStmt,
-                syntax.PrintStmt, syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
-                syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch,
-            ))
+            cast(syntax.Stmt, s) for s in args if s is not None and not isinstance(s, Token)
         )
 
     def do_tail(self, meta: Meta, args: _Args) -> syntax.Stmt:

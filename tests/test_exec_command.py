@@ -1478,3 +1478,93 @@ class TestExecWhitespaceRunner:
             exec_command.run(args)
         captured = capsys.readouterr()
         assert "should-not-run" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (MAJOR): malformed-quoting --runner exits 1 with clean Error, no traceback
+# ---------------------------------------------------------------------------
+
+
+class TestExecMalformedQuotingRunner:
+    """--runner with malformed quoting must exit 1 with a clean Error: on stderr,
+    no traceback, and no program statement executed.
+
+    ``shlex.split('"foo')`` raises ``ValueError('No closing quotation')``.
+    The old code inlined shlex.split and let the ValueError propagate as a raw
+    traceback.  The fix adds a ValueError guard to ``split_command`` itself.
+    """
+
+    def test_malformed_quote_runner_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--runner '\"foo' exits 1 before any statement runs."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "should-not-run"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner='"foo',  # unclosed quote
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+
+    def test_malformed_quote_runner_prints_clean_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--runner '\"foo' prints a clean 'Error:' on stderr — no raw traceback."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "should-not-run"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner='"foo',
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit):
+            exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "Traceback" not in captured.err
+        assert "ValueError" not in captured.err
+
+    def test_malformed_quote_runner_no_stdout_before_exit(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """With a malformed-quoting runner, the program must NOT execute."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "should-not-run"\n')
+
+        args = ExecArgs(
+            file=str(agl_file),
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner='"foo',
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit):
+            exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "should-not-run" not in captured.out
+
+    def test_valid_runner_still_works(self, tmp_path: Path) -> None:
+        """'claude -p' (valid quoting) continues to work after the fix."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "ok"\n')
+
+        # Use recorded_runs style: just validate split_command works for valid input
+        from agm.agent.runner import split_command
+
+        result = split_command("claude -p", kind="runner")
+        assert result == ["claude", "-p"]

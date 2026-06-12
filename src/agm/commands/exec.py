@@ -31,10 +31,10 @@ Flag notes:
 
 from __future__ import annotations
 
-import shlex
 import sys
 from pathlib import Path
 
+from agm.agent.runner import split_command
 from agm.agl import WorkflowRuntime
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.commands.agent_io import default_agent_runner
@@ -101,16 +101,12 @@ def run(args: ExecArgs) -> None:
     # ----------------------------------------------------------------
     runner_cmd = args.runner or config.runner or default_agent_runner()
 
-    # Validate the resolved runner command: shlex.split must yield at least
-    # one token.  A whitespace-only CLI --runner value is truthy but useless;
-    # catching it here (before runtime.run) honours the exit-1 = pre-execution
-    # contract (plan §10.1).
-    if not shlex.split(runner_cmd):
-        print(
-            f"Error: invalid runner command {runner_cmd!r}: empty after parsing",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    # Validate the resolved runner command eagerly: malformed quoting (e.g.
+    # unclosed quote) and whitespace-only values are caught here via
+    # split_command, which also handles the ValueError from shlex.split for
+    # malformed quoting.  This honours the exit-1 = pre-execution contract
+    # (plan §10.1) and deduplicates the logic already in split_command.
+    split_command(runner_cmd, kind="runner")
 
     # Build a runner-backed agent as both the ``prompt`` default and the
     # fallback for arbitrary named agents (plan §9.5).  This means any

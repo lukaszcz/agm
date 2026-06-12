@@ -811,20 +811,24 @@ class TestTypeAnnotationEdgeCases:
     # --- Task 2: dict_type head validation ---
 
     def test_dict_head_foo_rejected(self) -> None:
-        """foo[text, int] must be rejected — head must be 'dict'."""
+        """foo[text, int] must be rejected with a quoted type name in the message."""
         src = "let x: foo[text, int] = null"
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(src)
         err = exc_info.value
-        assert "'foo'" in str(err) or "foo" in str(err)
+        assert "'foo'" in str(err)
+        head_col = src.index("foo[") + 1
+        assert err.source_span.start_col == head_col
 
     def test_dict_head_list_rejected(self) -> None:
-        """list[text, int] must be rejected — list takes one type argument."""
+        """list[text, int] must be rejected — Unknown generic type: 'list'."""
         src = "let x: list[text, int] = null"
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(src)
         err = exc_info.value
-        assert "'list'" in str(err) or "list" in str(err)
+        assert "'list'" in str(err)
+        head_col = src.index("list[") + 1
+        assert err.source_span.start_col == head_col
 
     def test_dict_head_dict_still_accepted(self) -> None:
         """dict[text, int] must still parse to DictT(IntT)."""
@@ -2092,6 +2096,27 @@ class TestDoUntil:
         assert stmt.limit == 5
         # Last stmt in body is IfStmt
         assert isinstance(stmt.body[-1], IfStmt)
+
+    def test_inline_type_alias_survives_to_ast(self) -> None:
+        """do[2] type T = int until true — TypeAlias must appear in body, not be dropped."""
+        stmt = _parse_one("do[2] type T = int until true")
+        assert isinstance(stmt, DoUntil)
+        assert len(stmt.body) == 1
+        assert isinstance(stmt.body[0], TypeAlias)
+
+    def test_inline_enum_survives_to_ast(self) -> None:
+        """do[2] enum E | A until true — EnumDef must appear in body, not be dropped."""
+        stmt = _parse_one("do[2] enum E | A until true")
+        assert isinstance(stmt, DoUntil)
+        assert len(stmt.body) == 1
+        assert isinstance(stmt.body[0], EnumDef)
+
+    def test_inline_input_decl_survives_to_ast(self) -> None:
+        """do[2] input x until true — InputDecl must appear in body, not be dropped."""
+        stmt = _parse_one("do[2] input x until true")
+        assert isinstance(stmt, DoUntil)
+        assert len(stmt.body) == 1
+        assert isinstance(stmt.body[0], InputDecl)
 
     def test_bare_case_expr_after_until_rejected(self) -> None:
         """bare case_expr after until must be rejected (bar-safe violation)."""

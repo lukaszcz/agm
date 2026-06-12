@@ -1,4 +1,4 @@
-// AgL grammar — M1 subset.
+// AgL grammar — M3a: full control-flow grammar.
 //
 // Terminals are %declare'd or generated from string literals; the custom
 // AglLexer supplies all token values (remapping lowercase keyword types to
@@ -18,27 +18,28 @@
 // VAR_NAME tokens; AstBuilder.type_ann() maps the string value to the
 // appropriate TypeExpr node (TextT, JsonT, etc.).
 //
-// M1 statement forms:
-//   closed_stmt  — self-contained; safe anywhere inline
-//   (open_stmt, bar_closed_stmt, and bar_expr are added in M3)
+// Statement taxonomy (bar-safe stratification — §4.1):
+//   closed_stmt      — self-contained; safe anywhere inline, may be followed by ;
+//   open_stmt        — extends open to the right (if/case/try); last in inline block
+//   bar_closed_stmt  — bar-safe twin of closed_stmt: trailing exprs use bar_expr
 //
-// M1 implements:
-//   Statements:  input, let, var, set, pass, print, expr_stmt
-//   Expressions: VAR_NAME ref, scalar literals, template strings, agent calls,
-//                parenthesized expr
-//   Type annotations: text, json, bool, int, decimal, TYPE_NAME, list[T], dict[text, T]
-//   Template:    TEMPLATE_START (STRING_FRAGMENT | interp)* TEMPLATE_END
-//   Interp:      INTERP_START expr ("as" VAR_NAME)? INTERP_END
-//   EQ_EQ:       produces AglSyntaxError "Use `=` for equality."
+// Expression stratification:
+//   expr     — general: admits bare case_expr
+//   bar_expr — bar-safe: case_expr only via "(" expr ")" (= or_expr alias)
 //
-// M2 adds:
-//   record_def, enum_def, type_alias
-//   Constructor expressions (qualified + named args), list/dict literals
-//   Field access: postfix .VAR_NAME chains (access level)
+// Operator precedence (highest to lowest):
+//   access > unary(-) > multiplicative > additive > comparison (non-associative)
+//   > not > and > or
+//   `in` and `is`/`is not` at comparison level.
 //
-// Not in M2 (additive additions in M3+):
-//   do_until, if_stmt, case_stmt/expr, try_stmt, raise_stmt
-//   Binary/unary operators, is/in/and/or/not
+// M3a adds:
+//   Binary/unary operators: or, and, not, comparisons (= != < <= > >= in), + - * /
+//   is / is not tests
+//   do_until with optional loop bound [N] (zero/negative → AglSyntaxError)
+//   if_stmt with | branch lists, optional else
+//   case_stmt and case_expr (parenthesized in bar positions)
+//   try/catch + raise_stmt
+//   Patterns: wildcard, literal, var, constructor+fields
 
 // ---------------------------------------------------------------------------
 // Synthetic tokens (custom lexer — no regex; underscore-prefixed are filtered)
@@ -53,7 +54,10 @@
 
 %declare VAR_NAME TYPE_NAME
 %declare INT DECIMAL
-%declare EQ EQ_EQ ARROW LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE DOT
+%declare EQ EQ_EQ NEQ LT LE GT GE
+%declare PLUS MINUS STAR SLASH
+%declare ARROW LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE DOT
+%declare LOOP_BOUND
 
 // ---------------------------------------------------------------------------
 // Program root
@@ -64,12 +68,10 @@ start: block_stmts
 block_stmts: stmt ((_NEWLINE | SEMICOLON) stmt)* (_NEWLINE | SEMICOLON)?
 
 // ---------------------------------------------------------------------------
-// Statement dispatch
+// Statement dispatch (M3: full taxonomy)
 // ---------------------------------------------------------------------------
 
-// M1: stmt = closed_stmt only.  M3 will change to: ?stmt: closed_stmt | open_stmt
-// open_stmt (if_stmt | case_stmt | try_stmt | do_until) is added in M3.
-?stmt: closed_stmt
+?stmt: closed_stmt | open_stmt
 
 closed_stmt: record_def
            | enum_def
@@ -80,7 +82,22 @@ closed_stmt: record_def
            | set_stmt
            | pass_stmt
            | print_stmt
+           | raise_stmt
            | expr_stmt
+           | do_until
+
+open_stmt: if_stmt | case_stmt | try_stmt
+
+// Bar-safe twin of closed_stmt: identical forms but trailing expr slots use bar_expr.
+bar_closed_stmt: type_alias
+               | bar_let_decl
+               | bar_var_decl
+               | bar_set_stmt
+               | pass_stmt
+               | bar_print_stmt
+               | bar_raise_stmt
+               | expr_stmt
+               | do_until
 
 // ---------------------------------------------------------------------------
 // Declarations and statements
@@ -91,9 +108,6 @@ closed_stmt: record_def
 // ---------------------------------------------------------------------------
 
 // record_def: indented block of field definitions (design §10.4).
-//   The lexer emits _INDENT directly after the name line (the first real content
-//   line at a greater indentation starts the indent block).  Fields are separated
-//   by _NEWLINE tokens within the block; there is no _NEWLINE before _INDENT.
 record_def: "record" TYPE_NAME _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
 
 field_def: VAR_NAME COLON type_expr
@@ -121,12 +135,21 @@ let_decl:   "let"  VAR_NAME type_ann? EQ expr
 var_decl:   "var"  VAR_NAME type_ann? EQ expr
 set_stmt:   "set"  VAR_NAME          EQ expr
 
+// Bar-safe twins for let/var/set/print/raise: trailing expr is bar_expr.
+bar_let_decl:   "let"  VAR_NAME type_ann? EQ bar_expr
+bar_var_decl:   "var"  VAR_NAME type_ann? EQ bar_expr
+bar_set_stmt:   "set"  VAR_NAME          EQ bar_expr
+bar_print_stmt: "print" bar_expr
+bar_raise_stmt: "raise" bar_expr
+
 pass_stmt:  "pass"
 
 print_stmt: "print" expr
 
+raise_stmt: "raise" expr
+
 // expr_stmt uses or_expr (not expr) so that statement-level bare case_expr
-// is always case_stmt (M3), not expr_stmt; in M1 or_expr == all exprs.
+// is always case_stmt, not expr_stmt.
 expr_stmt: or_expr
 
 // Type annotation: COLON followed by a type_expr.
@@ -138,8 +161,6 @@ type_ann: COLON type_expr
 // Type keywords (text, json, bool, int, decimal, list, dict) are NOT reserved
 // by the scanner; they arrive as VAR_NAME tokens.  TYPE_NAME handles named
 // user types.  The AstBuilder maps VAR_NAME values to the right TypeExpr.
-// "list" and "dict" arrive as VAR_NAME and are distinguished by the rule
-// structure (followed by LSQB ... RSQB).
 // ---------------------------------------------------------------------------
 
 type_expr: VAR_NAME                              -> prim_type_or_name
@@ -148,29 +169,140 @@ type_expr: VAR_NAME                              -> prim_type_or_name
          | VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB -> dict_type
 
 // ---------------------------------------------------------------------------
+// do_until (closed_stmt: right-delimited by `until`)
+// ---------------------------------------------------------------------------
+
+do_until: "do" loop_bound? body "until" bar_expr
+
+// loop_bound: [N] as a single LOOP_BOUND token emitted by the lexer.
+// The lexer merges DO LSQB INT RSQB → DO LOOP_BOUND to avoid the LALR(1)
+// conflict between loop_bound and lit_list (both match LSQB INT RSQB).
+// N must be positive — checked in AstBuilder.
+loop_bound: LOOP_BOUND
+
+// do body:
+//   suite                               — indented block
+//   inline_seq: closed (";" closed)* (";" do_tail)?  — inline, may end in open
+//   do_tail:     open_stmt (if/case/try; sealed by `until`)
+body: suite | inline_seq
+
+inline_seq: closed_stmt (SEMICOLON closed_stmt)* (SEMICOLON do_tail)?
+          | do_tail
+
+do_tail: if_stmt | case_stmt | try_stmt
+
+// ---------------------------------------------------------------------------
+// if_stmt (open_stmt)
+// ---------------------------------------------------------------------------
+
+if_stmt: "if" if_branch (PIPE if_branch)*
+
+if_branch: bar_expr ARROW branch_body     -> if_cond_branch
+         | "else" ARROW branch_body       -> if_else_branch
+
+// ---------------------------------------------------------------------------
+// case_stmt (open_stmt)
+// ---------------------------------------------------------------------------
+
+case_stmt: "case" expr "of" (PIPE case_stmt_branch)+
+
+case_stmt_branch: pattern ARROW branch_body
+
+// ---------------------------------------------------------------------------
+// try_stmt (open_stmt)
+// ---------------------------------------------------------------------------
+
+try_stmt: "try" try_body (catch_clause)+
+
+// try body: inline form allows only closed statements (no open_stmt); a
+// trailing open_stmt would put a nested catch-list directly before this
+// try's own `catch` (dangling-catch problem).
+try_body: suite | closed_stmt (SEMICOLON closed_stmt)*
+
+catch_clause: "catch" catch_pattern ARROW catch_body
+
+// catch_pattern: TYPE_NAME ("as" VAR_NAME)?  |  VAR_NAME ("as" VAR_NAME)?
+// Note: "_" arrives as VAR_NAME (not a keyword). The transformer checks the
+// value — "_" becomes a wildcard catch, any other VAR_NAME is a type-name error
+// (but the grammar rule for TYPE_NAME covers named exception types).
+catch_pattern: TYPE_NAME ("as" VAR_NAME)?    -> catch_type_pattern
+             | VAR_NAME ("as" VAR_NAME)?     -> catch_wildcard_pattern
+
+// catch_body: single bar-safe statement; suite for multiple/open constructs.
+catch_body: suite | bar_closed_stmt
+
+// branch_body: single bar-safe statement, a try_stmt, or a suite.
+branch_body: suite | bar_closed_stmt | try_stmt
+
+suite: _INDENT block_stmts _DEDENT
+
+// ---------------------------------------------------------------------------
 // Expressions
 // ---------------------------------------------------------------------------
 
-// ?expr — general form; admits bare case_expr (M3+ adds the case_expr branch)
-?expr: or_expr
+// ?expr — general form; admits bare case_expr.
+?expr: case_expr | or_expr
 
-// Precedence chain (M2: access level added).
-// M3 will expand or_expr -> and_expr -> not_expr -> comparison -> additive ->
-// multiplicative -> unary -> access -> atom (one rule at a time, additive).
-?or_expr: access
+// case_expr: "case" expr "of" ("|" case_expr_branch)+
+// Arm RHS is bar_expr (bar-safe by construction).
+case_expr: "case" expr "of" (PIPE case_expr_branch)+
+
+case_expr_branch: pattern ARROW bar_expr
+
+// ?bar_expr — bar-safe alias for or_expr.
+// A case_expr in a bar-safe position must be parenthesized (re-enters via
+// paren_expr: LPAR expr RPAR which accepts any expr including case_expr).
+?bar_expr: or_expr
+
+// ---------------------------------------------------------------------------
+// Operator precedence chain (highest to lowest):
+//   or_expr > and_expr > not_expr > comparison > additive > multiplicative
+//   > unary(-) > access > atom
+// ---------------------------------------------------------------------------
+
+?or_expr:  or_expr "or" and_expr   -> bin_or
+         | and_expr
+
+?and_expr: and_expr "and" not_expr -> bin_and
+         | not_expr
+
+?not_expr: "not" not_expr          -> unary_not
+         | comparison
+
+// comparison: non-associative (chained a < b < c is a parse error via the
+// flat single-optional-rhs design below).
+// `is` / `is not` test: additive "is" "not"? qualified_constructor
+// Structural comparisons: additive cmp_op additive
+// `in`: additive "in" additive
+// Note: we express non-associativity by making comparison -> additive (cmp_op additive)?
+// which admits at most ONE binary operator; a second would be unreachable and
+// Lark would reject it as an unexpected token, giving the non-associativity error.
+?comparison: additive "is" "not" TYPE_NAME         -> is_not_test_simple
+           | additive "is" "not" TYPE_NAME DOT TYPE_NAME -> is_not_test_qualified
+           | additive "is" TYPE_NAME               -> is_test_simple
+           | additive "is" TYPE_NAME DOT TYPE_NAME -> is_test_qualified
+           | additive "in" additive                -> bin_in
+           | additive EQ additive                  -> bin_eq
+           | additive NEQ additive                 -> bin_neq
+           | additive LT additive                  -> bin_lt
+           | additive LE additive                  -> bin_le
+           | additive GT additive                  -> bin_gt
+           | additive GE additive                  -> bin_ge
+           | additive
+
+?additive: additive PLUS multiplicative   -> bin_add
+         | additive MINUS multiplicative  -> bin_sub
+         | multiplicative
+
+?multiplicative: multiplicative STAR unary   -> bin_mul
+               | multiplicative SLASH unary  -> bin_div
+               | unary
+
+?unary: MINUS unary   -> unary_neg
+      | access
 
 // access: postfix field-access, namespace-qualification, and constructor-payload chains.
 // access -> atom is transparent (returns atom as-is).
-// M3's unary level slots between or_expr and access.
-//
-// Three postfix variants:
-//   access DOT VAR_NAME        — field access on records (lowercase field name)
-//   access DOT TYPE_NAME       — qualified enum-variant namespace: Status.Done
-//                                AstBuilder converts Constructor(None,"Status") DOT "Done"
-//                                into Constructor("Status","Done").
-//   access constructor_payload — apply constructor args to a bare constructor.
-//                                Handles both Type(x:1) and Type.Variant(x:1).
-//                                Only valid when the access is a Constructor.
 access: access DOT VAR_NAME          -> field_access
       | access DOT TYPE_NAME         -> type_access
       | access constructor_payload   -> ctor_applied
@@ -252,24 +384,11 @@ dict_entry: template COLON expr     -> dict_entry_str
 
 // ---------------------------------------------------------------------------
 // M2: Constructor expressions (design §10.13, §5.5)
-//
-// constructor: qualified_constructor constructor_payload?
-// qualified_constructor: TYPE_NAME | TYPE_NAME "." TYPE_NAME
-//
-// constructor_payload: "(" constructor_args? ")"
-// constructor_args: named_arg ("," named_arg)* ","?
-// named_arg: VAR_NAME ":" expr
-//
-// Note: TYPE_NAME (uppercase) is unambiguous with VAR_NAME (lowercase) and
-// with dict_entry (inside braces) and call_option (inside brackets).
-// Qualified form TYPE_NAME DOT TYPE_NAME is unambiguous with field_access
-// (VAR_NAME DOT VAR_NAME) because the qualifier is TYPE_NAME.
 // ---------------------------------------------------------------------------
 
 // Constructors start with TYPE_NAME. The bare form (no payload) is parsed here.
 // The payload is applied at the access level (ctor_applied) to handle both
 // unqualified (Type(x:1)) and qualified (Qualifier.Type(x:1)) constructors.
-// Qualified form: access DOT TYPE_NAME → type_access; then access constructor_payload → ctor_applied.
 constructor: TYPE_NAME    -> ctor_unqualified
 
 constructor_payload: LPAR constructor_args? RPAR
@@ -277,3 +396,30 @@ constructor_payload: LPAR constructor_args? RPAR
 constructor_args: named_arg (COMMA named_arg)* COMMA?
 
 named_arg: VAR_NAME COLON expr
+
+// ---------------------------------------------------------------------------
+// Patterns (design §6.1, §10.12)
+// ---------------------------------------------------------------------------
+
+// pattern: wildcard | literal | var_binder | constructor_pattern
+// Disambiguation:
+//   VAR_NAME with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
+//   TYPE_NAME (qualified or not) + optional fields → constructor pattern
+//   VAR_NAME (other) → var binder
+//   literal → literal pattern
+//
+// Note: "_" is NOT a reserved keyword — it arrives as VAR_NAME.
+// The transformer dispatches to WildcardPattern or VarPattern based on the value.
+pattern: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?  -> pat_constructor
+       | VAR_NAME                                -> pat_var_or_wild
+       | INT                                     -> pat_lit_int
+       | DECIMAL                                 -> pat_lit_decimal
+       | "true"                                  -> pat_lit_true
+       | "false"                                 -> pat_lit_false
+       | template                                -> pat_lit_str
+
+// Pattern fields: (field_shorthand | field_bind | nested_pattern)+
+pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
+
+pattern_field: VAR_NAME COLON pattern   -> pat_field_full
+             | VAR_NAME                 -> pat_field_shorthand

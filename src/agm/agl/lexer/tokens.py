@@ -163,6 +163,12 @@ SEMICOLON = "SEMICOLON"  # ;
 # Error token emitted for "==" so the parser can emit a friendly diagnostic.
 EQ_EQ = "EQ_EQ"  # ==
 
+# Synthetic token emitted by the lexer when it sees do[N].
+# The lexer merges LSQB INT RSQB → LOOP_BOUND right after DO, so the grammar
+# can use a single token instead of a three-token sequence, eliminating the
+# LALR(1) conflict with lit_list (which also matches LSQB INT RSQB).
+LOOP_BOUND = "LOOP_BOUND"  # [N] immediately after do — value is the integer string
+
 # ---------------------------------------------------------------------------
 # Grammar token-type mapping
 #

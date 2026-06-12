@@ -34,6 +34,7 @@ from lark.tree import Meta
 
 import agm.agl.syntax as syntax
 from agm.agl.parser.errors import AglSyntaxError
+from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
     BoolT,
@@ -138,7 +139,8 @@ class AstBuilder(Transformer):
                 syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
                 syntax.InputDecl, syntax.LetDecl, syntax.VarDecl,
                 syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
-                syntax.ExprStmt,
+                syntax.ExprStmt, syntax.Raise,
+                syntax.DoUntil, syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch,
             ))
         )
 
@@ -152,7 +154,23 @@ class AstBuilder(Transformer):
             syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
             syntax.InputDecl, syntax.LetDecl, syntax.VarDecl,
             syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
-            syntax.ExprStmt,
+            syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
+        ))
+        return inner
+
+    # open_stmt is transparent: if/case/try already return the right type
+    def open_stmt(self, meta: Meta, args: _Args) -> syntax.Stmt:
+        (inner,) = args
+        assert isinstance(inner, (syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch))
+        return inner
+
+    # bar_closed_stmt: transparent — delegates to the non-bar sub-rule return values
+    def bar_closed_stmt(self, meta: Meta, args: _Args) -> syntax.Stmt:
+        (inner,) = args
+        assert isinstance(inner, (
+            syntax.TypeAlias, syntax.LetDecl, syntax.VarDecl,
+            syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
+            syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
         ))
         return inner
 
@@ -216,6 +234,22 @@ class AstBuilder(Transformer):
             span=span,
             node_id=self._next_id(),
         )
+
+    # Bar-safe twins: identical to the non-bar forms because bar_expr aliases or_expr.
+    def bar_let_decl(self, meta: Meta, args: _Args) -> syntax.LetDecl:
+        return self.let_decl(meta, args)
+
+    def bar_var_decl(self, meta: Meta, args: _Args) -> syntax.VarDecl:
+        return self.var_decl(meta, args)
+
+    def bar_set_stmt(self, meta: Meta, args: _Args) -> syntax.SetStmt:
+        return self.set_stmt(meta, args)
+
+    def bar_print_stmt(self, meta: Meta, args: _Args) -> syntax.PrintStmt:
+        return self.print_stmt(meta, args)
+
+    def bar_raise_stmt(self, meta: Meta, args: _Args) -> syntax.Raise:
+        return self.raise_stmt(meta, args)
 
     # ------------------------------------------------------------------
     # M2: record_def / field_def
@@ -340,12 +374,33 @@ class AstBuilder(Transformer):
         return syntax.PrintStmt(value=value, span=span, node_id=self._next_id())
 
     # ------------------------------------------------------------------
+    # raise_stmt
+    # ------------------------------------------------------------------
+
+    def raise_stmt(self, meta: Meta, args: _Args) -> syntax.Raise:
+        exc = _find_expr(args)
+        return syntax.Raise(exc=exc, span=_span_from_meta(meta), node_id=self._next_id())
+
+    # ------------------------------------------------------------------
     # expr_stmt
     # ------------------------------------------------------------------
 
     def expr_stmt(self, meta: Meta, args: _Args) -> syntax.ExprStmt:
         expr = _find_expr(args)
         span = _span_from_meta(meta)
+        # Design constraint: bare equality expressions such as `n = 2` look like
+        # accidental assignments (use `set n = 2` to mutate a variable).  Reject
+        # them at the parse level with a helpful diagnostic.
+        if (
+            isinstance(expr, syntax.BinaryOp)
+            and expr.op == syntax.BinOp.EQ
+            and isinstance(expr.left, syntax.VarRef)
+        ):
+            raise AglSyntaxError(
+                f"Bare assignment '{expr.left.name} = …' is not valid. "
+                "Use 'set' to reassign a mutable variable.",
+                span=span,
+            )
         return syntax.ExprStmt(expr=expr, span=span, node_id=self._next_id())
 
     # ------------------------------------------------------------------
@@ -926,6 +981,492 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
+    # M3: Binary operators
+    # ------------------------------------------------------------------
+
+    def _binary(self, meta: Meta, args: _Args, op: syntax.BinOp) -> syntax.BinaryOp:
+        left = cast(syntax.Expr, args[0])
+        right = cast(syntax.Expr, args[-1])
+        return syntax.BinaryOp(
+            op=op, left=left, right=right,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def bin_or(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.OR)
+
+    def bin_and(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.AND)
+
+    def bin_eq(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.EQ)
+
+    def bin_neq(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.NEQ)
+
+    def bin_lt(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.LT)
+
+    def bin_le(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.LE)
+
+    def bin_gt(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.GT)
+
+    def bin_ge(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.GE)
+
+    def bin_in(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.IN)
+
+    def bin_add(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.ADD)
+
+    def bin_sub(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.SUB)
+
+    def bin_mul(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.MUL)
+
+    def bin_div(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
+        return self._binary(meta, args, syntax.BinOp.DIV)
+
+    # ------------------------------------------------------------------
+    # M3: Unary operators
+    # ------------------------------------------------------------------
+
+    def unary_not(self, meta: Meta, args: _Args) -> syntax.UnaryNot:
+        operand = cast(syntax.Expr, args[0])
+        return syntax.UnaryNot(
+            operand=operand, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    def unary_neg(self, meta: Meta, args: _Args) -> syntax.UnaryNeg:
+        # args: [Token(MINUS), expr]
+        operand = cast(syntax.Expr, args[-1])
+        return syntax.UnaryNeg(
+            operand=operand, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    # ------------------------------------------------------------------
+    # M3: is / is not tests
+    # ------------------------------------------------------------------
+
+    def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
+        # additive "is" TYPE_NAME
+        left = cast(syntax.Expr, args[0])
+        variant_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
+        return syntax.IsTest(
+            expr=left, qualifier=None, variant=str(variant_tok), negated=False,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def is_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
+        # additive "is" TYPE_NAME DOT TYPE_NAME
+        left = cast(syntax.Expr, args[0])
+        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
+        assert len(type_toks) == 2
+        return syntax.IsTest(
+            expr=left, qualifier=str(type_toks[0]), variant=str(type_toks[1]), negated=False,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def is_not_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
+        # additive "is" "not" TYPE_NAME
+        left = cast(syntax.Expr, args[0])
+        variant_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
+        return syntax.IsTest(
+            expr=left, qualifier=None, variant=str(variant_tok), negated=True,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def is_not_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
+        # additive "is" "not" TYPE_NAME DOT TYPE_NAME
+        left = cast(syntax.Expr, args[0])
+        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
+        assert len(type_toks) == 2
+        return syntax.IsTest(
+            expr=left, qualifier=str(type_toks[0]), variant=str(type_toks[1]), negated=True,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M3: case_expr
+    # ------------------------------------------------------------------
+
+    def case_expr(self, meta: Meta, args: _Args) -> syntax.CaseExpr:
+        # args: [expr, CaseExprBranch, CaseExprBranch, ...]
+        subject = cast(syntax.Expr, args[0])
+        branches = tuple(a for a in args[1:] if isinstance(a, syntax.CaseExprBranch))
+        return syntax.CaseExpr(
+            subject=subject, branches=branches,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def case_expr_branch(self, meta: Meta, args: _Args) -> syntax.CaseExprBranch:
+        # args: [pattern, ARROW token, body_expr] — find the pattern and body
+        pat_types = (
+            syntax.WildcardPattern, syntax.LiteralPattern,
+            syntax.VarPattern, syntax.ConstructorPattern,
+        )
+        pat = next(a for a in args if isinstance(a, pat_types))
+        body = _find_expr([a for a in args if not isinstance(a, pat_types)])
+        assert isinstance(pat, pat_types)
+        return syntax.CaseExprBranch(
+            pattern=pat, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M3: do_until
+    # ------------------------------------------------------------------
+
+    def loop_bound(self, meta: Meta, args: _Args) -> int:
+        """Extract N from a LOOP_BOUND token and validate it is positive."""
+        tok = args[0]
+        assert isinstance(tok, Token)
+        n = int(str(tok))
+        if n <= 0:
+            raise AglSyntaxError(
+                f"Loop bound must be a positive integer; got {n}.",
+                span=_span_from_meta(meta),
+            )
+        return n
+
+    def body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
+        """Body of a do_until: either a suite or inline_seq."""
+        (inner,) = args
+        assert isinstance(inner, tuple)
+        return cast(tuple[syntax.Stmt, ...], inner)
+
+    def inline_seq(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
+        """inline_seq: closed_stmt (SEMICOLON closed_stmt)* (SEMICOLON do_tail)? | do_tail"""
+        return tuple(
+            s for s in args
+            if s is not None and not isinstance(s, Token) and isinstance(s, (
+                syntax.LetDecl, syntax.VarDecl, syntax.SetStmt, syntax.PassStmt,
+                syntax.PrintStmt, syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
+                syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch,
+            ))
+        )
+
+    def do_tail(self, meta: Meta, args: _Args) -> syntax.Stmt:
+        """do_tail: if_stmt | case_stmt | try_stmt — transparent."""
+        (inner,) = args
+        assert isinstance(inner, (syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch))
+        return inner
+
+    def suite(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
+        """suite: _INDENT block_stmts _DEDENT — unwrap the block_stmts tuple."""
+        # block_stmts always returns a tuple[Stmt,...]; it's the only non-Token child.
+        stmts = next(a for a in args if isinstance(a, tuple))
+        return cast(tuple[syntax.Stmt, ...], stmts)
+
+    def do_until(self, meta: Meta, args: _Args) -> syntax.DoUntil:
+        # Grammar: "do" loop_bound? body "until" bar_expr
+        # After transformation (with maybe_placeholders=True):
+        #   bounded:   [int, tuple[Stmt,...], Expr]
+        #   unbounded: [tuple[Stmt,...], Expr]
+        # Anonymous terminals ("do", "until") are filtered by Lark.
+        # loop_bound? absent: no None placeholder — the item is simply omitted.
+        limit: int | None = None
+        body_stmts: tuple[syntax.Stmt, ...] = ()
+        cond: syntax.Expr | None = None
+        for a in args:
+            if isinstance(a, int):
+                limit = a
+            elif isinstance(a, tuple):
+                body_stmts = cast(tuple[syntax.Stmt, ...], a)
+            else:
+                cond = cast(syntax.Expr, a)
+        assert cond is not None, "do_until: no condition"
+        return syntax.DoUntil(
+            limit=limit, body=body_stmts, condition=cond,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M3: if_stmt
+    # ------------------------------------------------------------------
+
+    def if_cond_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
+        # Grammar: bar_expr ARROW branch_body
+        # After transformation: [Expr, tuple[Stmt,...]]
+        cond = cast(syntax.Expr, args[0])
+        body = _find_branch_body(args[1:])
+        return syntax.IfBranch(
+            cond=cond, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def if_else_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
+        # Grammar: "else" ARROW branch_body
+        body = _find_branch_body(args)
+        return syntax.IfBranch(
+            cond=ELSE, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def if_stmt(self, meta: Meta, args: _Args) -> syntax.IfStmt:
+        branches = tuple(a for a in args if isinstance(a, syntax.IfBranch))
+        # Validate: else must be last
+        for i, b in enumerate(branches):
+            if b.cond is ELSE and i < len(branches) - 1:
+                raise AglSyntaxError(
+                    "'else' branch must be the last branch in an if statement.",
+                    span=b.span,
+                )
+        return syntax.IfStmt(
+            branches=branches,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def branch_body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
+        """branch_body: suite | bar_closed_stmt | try_stmt
+
+        Returns a flat tuple of statements.  The grammar guarantees exactly one
+        non-None, non-Token child:
+          * suite          → already a tuple[Stmt, ...]
+          * bar_closed_stmt → a single Stmt wrapped into a 1-tuple
+          * try_stmt       → a TryCatch wrapped into a 1-tuple
+        """
+        # args always has exactly one relevant child (the grammar guarantees it).
+        child = args[0]
+        if isinstance(child, tuple):
+            return cast(tuple[syntax.Stmt, ...], child)
+        return (cast(syntax.Stmt, child),)
+
+    # ------------------------------------------------------------------
+    # M3: case_stmt
+    # ------------------------------------------------------------------
+
+    def case_stmt(self, meta: Meta, args: _Args) -> syntax.CaseStmt:
+        # Grammar: "case" expr "of" (PIPE case_stmt_branch)+
+        subject = cast(syntax.Expr, args[0])
+        branches = tuple(a for a in args[1:] if isinstance(a, syntax.CaseStmtBranch))
+        return syntax.CaseStmt(
+            subject=subject, branches=branches,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def case_stmt_branch(self, meta: Meta, args: _Args) -> syntax.CaseStmtBranch:
+        # args: [pattern, tuple[Stmt,...]]
+        pat = cast(syntax.Pattern, args[0])
+        body = _find_branch_body(args[1:])
+        return syntax.CaseStmtBranch(
+            pattern=pat, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M3: try_stmt / catch_clause
+    # ------------------------------------------------------------------
+
+    def try_body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
+        """try_body: suite | closed_stmt (SEMICOLON closed_stmt)*"""
+        for a in args:
+            if isinstance(a, tuple):
+                return cast(tuple[syntax.Stmt, ...], a)
+        # Inline form: list of closed stmts
+        return tuple(
+            cast(syntax.Stmt, a) for a in args
+            if a is not None and not isinstance(a, Token) and isinstance(a, (
+                syntax.LetDecl, syntax.VarDecl, syntax.SetStmt, syntax.PassStmt,
+                syntax.PrintStmt, syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
+            ))
+        )
+
+    def catch_type_pattern(self, meta: Meta, args: _Args) -> tuple[str | None, str | None]:
+        """catch_pattern: TYPE_NAME ("as" VAR_NAME)?"""
+        type_tok = next((a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None)
+        bind_tok = next((a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None)
+        exc_type = str(type_tok) if type_tok else None
+        binding = str(bind_tok) if bind_tok else None
+        return (exc_type, binding)
+
+    def catch_wildcard_pattern(
+        self, meta: Meta, args: _Args
+    ) -> tuple[str | None, str | None]:
+        """catch_pattern: VAR_NAME ("as" VAR_NAME)?  where first VAR_NAME is "_"."""
+        var_toks = [a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"]
+        # First token is the wildcard "_"; second (if present) is the binding name.
+        binding: str | None = str(var_toks[1]) if len(var_toks) >= 2 else None
+        return (None, binding)
+
+    def catch_body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
+        """catch_body: suite | bar_closed_stmt
+
+        Returns a flat tuple of statements.  The grammar guarantees exactly one child:
+          * suite            → already a tuple[Stmt, ...]
+          * bar_closed_stmt  → a single Stmt wrapped into a 1-tuple
+        """
+        child = args[0]
+        if isinstance(child, tuple):
+            return cast(tuple[syntax.Stmt, ...], child)
+        return (cast(syntax.Stmt, child),)
+
+    def catch_clause(self, meta: Meta, args: _Args) -> syntax.CatchClause:
+        # args: [(exc_type, binding), tuple[Stmt,...]]
+        pat_tuple = next(
+            (a for a in args if isinstance(a, tuple) and not all(
+                isinstance(x, (syntax.LetDecl, syntax.VarDecl, syntax.SetStmt,
+                                syntax.PassStmt, syntax.PrintStmt, syntax.ExprStmt,
+                                syntax.Raise, syntax.DoUntil)) for x in a
+            )),
+            None,
+        )
+        # The catch_pattern sub-rule returns (exc_type, binding) — a plain tuple.
+        # The catch_body sub-rule returns a tuple[Stmt,...].
+        # Distinguish by checking element types.
+        exc_type: str | None = None
+        binding: str | None = None
+        body: tuple[syntax.Stmt, ...] = ()
+        for a in args:
+            if isinstance(a, tuple):
+                # Is it (exc_type, binding) or (Stmt, ...)?
+                if len(a) == 2 and (a[0] is None or isinstance(a[0], str)) and (
+                    a[1] is None or isinstance(a[1], str)
+                ):
+                    exc_type, binding = cast(tuple[str | None, str | None], a)
+                else:
+                    body = cast(tuple[syntax.Stmt, ...], a)
+        del pat_tuple  # only used as a fallback heuristic; explicit logic above is complete
+        return syntax.CatchClause(
+            exc_type=exc_type, binding=binding, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def try_stmt(self, meta: Meta, args: _Args) -> syntax.TryCatch:
+        # args: [tuple[Stmt,...] (try_body), CatchClause, ...]
+        # All grammar children transform to exactly one of: tuple[Stmt,...] or CatchClause.
+        handlers = [a for a in args if isinstance(a, syntax.CatchClause)]
+        try_body = next(a for a in args if isinstance(a, tuple))
+        return syntax.TryCatch(
+            body=cast(tuple[syntax.Stmt, ...], try_body),
+            handlers=tuple(handlers),
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M3: Patterns
+    # ------------------------------------------------------------------
+
+    def pat_var_or_wild(
+        self, meta: Meta, args: _Args
+    ) -> syntax.WildcardPattern | syntax.VarPattern:
+        """VAR_NAME → WildcardPattern (when value is "_") or VarPattern."""
+        tok = args[0]
+        assert isinstance(tok, Token)
+        if str(tok) == "_":
+            return syntax.WildcardPattern(span=_span_from_meta(meta), node_id=self._next_id())
+        return syntax.VarPattern(
+            name=str(tok), span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
+        # Grammar: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?
+        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
+        qualifier: str | None = None
+        if len(type_toks) == 2:
+            qualifier = str(type_toks[0])
+            name = str(type_toks[1])
+        else:
+            name = str(type_toks[0])
+        fields: tuple[syntax.PatternField, ...] = ()
+        for a in args:
+            if isinstance(a, tuple) and all(isinstance(x, syntax.PatternField) for x in a):
+                fields = cast(tuple[syntax.PatternField, ...], a)
+        return syntax.ConstructorPattern(
+            qualifier=qualifier, name=name, fields=fields,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def pat_lit_int(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
+        tok = args[0]
+        assert isinstance(tok, Token)
+        lit = syntax.IntLit(
+            value=int(str(tok)), span=_span_from_meta(meta), node_id=self._next_id()
+        )
+        return syntax.LiteralPattern(
+            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    def pat_lit_decimal(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
+        tok = args[0]
+        assert isinstance(tok, Token)
+        import decimal as _decimal
+        lit = syntax.DecimalLit(
+            value=_decimal.Decimal(str(tok)),
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+        return syntax.LiteralPattern(
+            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    def pat_lit_true(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
+        lit = syntax.BoolLit(
+            value=True, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+        return syntax.LiteralPattern(
+            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    def pat_lit_false(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
+        lit = syntax.BoolLit(
+            value=False, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+        return syntax.LiteralPattern(
+            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    def pat_lit_str(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
+        # args: [StringLit | Template] — the template transformer normalises plain strings.
+        # A plain string (no interpolation) becomes StringLit; an interpolated string
+        # stays as Template and must be rejected as a pattern literal.
+        tmpl = args[0]
+        if isinstance(tmpl, syntax.Template):
+            raise AglSyntaxError(
+                "Pattern string literals cannot contain interpolation.",
+                span=tmpl.span,
+            )
+        assert isinstance(tmpl, syntax.StringLit), f"pat_lit_str: unexpected {type(tmpl)}"
+        return syntax.LiteralPattern(
+            literal=tmpl, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
+    def pattern_fields(self, meta: Meta, args: _Args) -> tuple[syntax.PatternField, ...]:
+        return tuple(a for a in args if isinstance(a, syntax.PatternField))
+
+    def pat_field_full(self, meta: Meta, args: _Args) -> syntax.PatternField:
+        # VAR_NAME COLON pattern
+        name_tok = next((a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None)
+        assert name_tok is not None
+        _pat_types = (
+            syntax.WildcardPattern, syntax.LiteralPattern,
+            syntax.VarPattern, syntax.ConstructorPattern,
+        )
+        pat = next((a for a in args if isinstance(a, _pat_types)), None)
+        assert pat is not None
+        assert isinstance(pat, _pat_types)
+        return syntax.PatternField(
+            name=str(name_tok), pattern=pat,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def pat_field_shorthand(self, meta: Meta, args: _Args) -> syntax.PatternField:
+        # VAR_NAME — shorthand: name: name
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        name = str(name_tok)
+        var_pat = syntax.VarPattern(
+            name=name, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+        return syntax.PatternField(
+            name=name, pattern=var_pat,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
     # template
     # ------------------------------------------------------------------
 
@@ -1080,6 +1621,18 @@ def _extract_ann_and_value(
 def syntax_error_from_meta(meta: Meta, message: str) -> AglSyntaxError:
     """Create an AglSyntaxError from a Meta object."""
     return AglSyntaxError(message, span=_span_from_meta(meta))
+
+
+def _find_branch_body(args: _Args) -> tuple[syntax.Stmt, ...]:
+    """Extract the branch_body tuple[Stmt,...] from transformer args.
+
+    ``branch_body`` always returns a ``tuple[Stmt, ...]``; this helper picks it
+    out of the args list (which may also contain an expression from the condition
+    or an ARROW token, both of which are not tuples).
+    """
+    stmts = next((a for a in args if isinstance(a, tuple)), None)
+    assert stmts is not None, "_find_branch_body: no tuple found in args"
+    return cast(tuple[syntax.Stmt, ...], stmts)
 
 
 # ---------------------------------------------------------------------------

@@ -30,36 +30,56 @@ from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.syntax import (
     AbortPolicy,
     AgentCall,
+    BinaryOp,
+    BinOp,
     BoolLit,
     CallOptions,
+    CaseExpr,
+    CaseExprBranch,
+    CaseStmt,
+    CatchClause,
     Constructor,
+    ConstructorPattern,
     DecimalLit,
     DictEntry,
     DictLit,
+    DoUntil,
     EnumDef,
     ExprStmt,
     FieldAccess,
     FieldDef,
+    IfBranch,
+    IfStmt,
     InputDecl,
     InterpSegment,
     IntLit,
+    IsTest,
     LetDecl,
     ListLit,
+    LiteralPattern,
     NamedArg,
     NullLit,
     PassStmt,
+    PatternField,
     PrintStmt,
     Program,
+    Raise,
     RecordDef,
     RetryPolicy,
     SetStmt,
     StringLit,
     Template,
     TextSegment,
+    TryCatch,
     TypeAlias,
+    UnaryNeg,
+    UnaryNot,
     VarDecl,
+    VarPattern,
     VarRef,
+    WildcardPattern,
 )
+from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.types import (
     BoolT,
     DecimalT,
@@ -1679,12 +1699,8 @@ class TestFieldAccess:
 
 
 class TestTypeProgramFiles:
-    @pytest.mark.xfail(
-        reason="records.agl uses M3 constructs (if_stmt, comparison); passes after M3.",
-        strict=False,
-    )
     def test_parse_records_agl(self) -> None:
-        """tests/agl/programs/types/records.agl must parse to a Program."""
+        """tests/agl/programs/types/records.agl must parse to a Program (M3)."""
         import pathlib
 
         src_path = pathlib.Path("tests/agl/programs/types/records.agl")
@@ -1695,12 +1711,8 @@ class TestTypeProgramFiles:
         # Must contain at least one RecordDef
         assert any(isinstance(s, RecordDef) for s in prog.body)
 
-    @pytest.mark.xfail(
-        reason="enums.agl uses M3 constructs (if_stmt, case_stmt, is/is not); passes after M3.",
-        strict=False,
-    )
     def test_parse_enums_agl(self) -> None:
-        """tests/agl/programs/types/enums.agl must parse to a Program."""
+        """tests/agl/programs/types/enums.agl must parse to a Program (M3)."""
         import pathlib
 
         src_path = pathlib.Path("tests/agl/programs/types/enums.agl")
@@ -1710,3 +1722,1127 @@ class TestTypeProgramFiles:
         assert len(prog.body) > 0
         # Must contain at least one EnumDef
         assert any(isinstance(s, EnumDef) for s in prog.body)
+
+
+# ---------------------------------------------------------------------------
+# M3: Binary operators (precedence chain)
+# ---------------------------------------------------------------------------
+
+
+class TestBinaryOperators:
+    def test_equality(self) -> None:
+        stmt = _parse_one("let x = a = b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.EQ
+
+    def test_inequality(self) -> None:
+        stmt = _parse_one("let x = a != b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.NEQ
+
+    def test_less_than(self) -> None:
+        stmt = _parse_one("let x = a < b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.LT
+
+    def test_less_equal(self) -> None:
+        stmt = _parse_one("let x = a <= b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.LE
+
+    def test_greater_than(self) -> None:
+        stmt = _parse_one("let x = a > b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.GT
+
+    def test_greater_equal(self) -> None:
+        stmt = _parse_one("let x = a >= b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.GE
+
+    def test_in_operator(self) -> None:
+        stmt = _parse_one("let x = a in b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.IN
+
+    def test_addition(self) -> None:
+        stmt = _parse_one("let x = a + b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.ADD
+
+    def test_subtraction(self) -> None:
+        stmt = _parse_one("let x = a - b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.SUB
+
+    def test_multiplication(self) -> None:
+        stmt = _parse_one("let x = a * b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.MUL
+
+    def test_division(self) -> None:
+        stmt = _parse_one("let x = a / b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.DIV
+
+    def test_or_operator(self) -> None:
+        stmt = _parse_one("let x = a or b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.OR
+
+    def test_and_operator(self) -> None:
+        stmt = _parse_one("let x = a and b")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, BinaryOp)
+        assert stmt.value.op == BinOp.AND
+
+    def test_precedence_add_mul(self) -> None:
+        """a + b * c parses as a + (b * c) — MUL binds tighter than ADD."""
+        stmt = _parse_one("let x = a + b * c")
+        assert isinstance(stmt, LetDecl)
+        top = stmt.value
+        assert isinstance(top, BinaryOp)
+        assert top.op == BinOp.ADD
+        assert isinstance(top.right, BinaryOp)
+        assert top.right.op == BinOp.MUL
+
+    def test_precedence_neg_add(self) -> None:
+        """- a + b parses as (-a) + b — unary minus binds tighter than ADD."""
+        stmt = _parse_one("let x = -a + b")
+        assert isinstance(stmt, LetDecl)
+        top = stmt.value
+        assert isinstance(top, BinaryOp)
+        assert top.op == BinOp.ADD
+        assert isinstance(top.left, UnaryNeg)
+
+    def test_precedence_not_and(self) -> None:
+        """not a and b parses as (not a) and b — NOT binds tighter than AND."""
+        stmt = _parse_one("let x = not a and b")
+        assert isinstance(stmt, LetDecl)
+        top = stmt.value
+        assert isinstance(top, BinaryOp)
+        assert top.op == BinOp.AND
+        assert isinstance(top.left, UnaryNot)
+
+    def test_precedence_and_or(self) -> None:
+        """a and b or c parses as (a and b) or c — AND binds tighter than OR."""
+        stmt = _parse_one("let x = a and b or c")
+        assert isinstance(stmt, LetDecl)
+        top = stmt.value
+        assert isinstance(top, BinaryOp)
+        assert top.op == BinOp.OR
+        assert isinstance(top.left, BinaryOp)
+        assert top.left.op == BinOp.AND
+
+    def test_associativity_add(self) -> None:
+        """a + b + c parses left-associatively as (a + b) + c."""
+        stmt = _parse_one("let x = a + b + c")
+        assert isinstance(stmt, LetDecl)
+        top = stmt.value
+        assert isinstance(top, BinaryOp)
+        assert top.op == BinOp.ADD
+        assert isinstance(top.left, BinaryOp)
+        assert top.left.op == BinOp.ADD
+
+    def test_chained_comparison_rejected(self) -> None:
+        """a = b = c is rejected (comparison is non-associative)."""
+        with pytest.raises(AglSyntaxError):
+            parse_program("let ok = (x = 1 = 2)")
+
+    def test_operands_are_correct(self) -> None:
+        """BinaryOp.left and .right are set correctly."""
+        stmt = _parse_one("let x = a + b")
+        assert isinstance(stmt, LetDecl)
+        op = stmt.value
+        assert isinstance(op, BinaryOp)
+        assert isinstance(op.left, VarRef)
+        assert op.left.name == "a"
+        assert isinstance(op.right, VarRef)
+        assert op.right.name == "b"
+
+
+# ---------------------------------------------------------------------------
+# M3: Unary operators
+# ---------------------------------------------------------------------------
+
+
+class TestUnaryOperators:
+    def test_unary_not(self) -> None:
+        stmt = _parse_one("let x = not a")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, UnaryNot)
+        assert isinstance(stmt.value.operand, VarRef)
+
+    def test_unary_neg(self) -> None:
+        stmt = _parse_one("let x = -a")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, UnaryNeg)
+        assert isinstance(stmt.value.operand, VarRef)
+
+    def test_double_not(self) -> None:
+        stmt = _parse_one("let x = not not a")
+        assert isinstance(stmt, LetDecl)
+        outer = stmt.value
+        assert isinstance(outer, UnaryNot)
+        assert isinstance(outer.operand, UnaryNot)
+
+    def test_double_neg(self) -> None:
+        stmt = _parse_one("let x = - -a")
+        assert isinstance(stmt, LetDecl)
+        outer = stmt.value
+        assert isinstance(outer, UnaryNeg)
+        assert isinstance(outer.operand, UnaryNeg)
+
+    def test_neg_literal(self) -> None:
+        stmt = _parse_one("let x = -42")
+        assert isinstance(stmt, LetDecl)
+        outer = stmt.value
+        assert isinstance(outer, UnaryNeg)
+        assert isinstance(outer.operand, IntLit)
+        assert outer.operand.value == 42
+
+
+# ---------------------------------------------------------------------------
+# M3: is / is not tests
+# ---------------------------------------------------------------------------
+
+
+class TestIsTest:
+    def test_is_simple(self) -> None:
+        stmt = _parse_one("let x = v is Pass")
+        assert isinstance(stmt, LetDecl)
+        t = stmt.value
+        assert isinstance(t, IsTest)
+        assert isinstance(t.expr, VarRef)
+        assert t.expr.name == "v"
+        assert t.qualifier is None
+        assert t.variant == "Pass"
+        assert t.negated is False
+
+    def test_is_qualified(self) -> None:
+        stmt = _parse_one("let x = v is Review.Pass")
+        assert isinstance(stmt, LetDecl)
+        t = stmt.value
+        assert isinstance(t, IsTest)
+        assert t.qualifier == "Review"
+        assert t.variant == "Pass"
+        assert t.negated is False
+
+    def test_is_not_simple(self) -> None:
+        stmt = _parse_one("let x = v is not Fail")
+        assert isinstance(stmt, LetDecl)
+        t = stmt.value
+        assert isinstance(t, IsTest)
+        assert t.variant == "Fail"
+        assert t.negated is True
+
+    def test_is_not_qualified(self) -> None:
+        stmt = _parse_one("let x = v is not Review.Fail")
+        assert isinstance(stmt, LetDecl)
+        t = stmt.value
+        assert isinstance(t, IsTest)
+        assert t.qualifier == "Review"
+        assert t.variant == "Fail"
+        assert t.negated is True
+
+    def test_is_in_condition(self) -> None:
+        src = 'do pass until status is Complete'
+        prog = parse_program(src)
+        assert len(prog.body) == 1
+        du = prog.body[0]
+        assert isinstance(du, DoUntil)
+        assert isinstance(du.condition, IsTest)
+        assert du.condition.variant == "Complete"
+
+    def test_is_not_in_condition(self) -> None:
+        src = 'do pass until review is not Pass'
+        prog = parse_program(src)
+        du = prog.body[0]
+        assert isinstance(du, DoUntil)
+        assert isinstance(du.condition, IsTest)
+        assert du.condition.negated is True
+
+
+# ---------------------------------------------------------------------------
+# M3: raise_stmt
+# ---------------------------------------------------------------------------
+
+
+class TestRaiseStmt:
+    def test_raise_var_ref(self) -> None:
+        stmt = _parse_one("raise e")
+        assert isinstance(stmt, Raise)
+        assert isinstance(stmt.exc, VarRef)
+        assert stmt.exc.name == "e"
+
+    def test_raise_constructor(self) -> None:
+        stmt = _parse_one('raise Abort(message: "oops")')
+        assert isinstance(stmt, Raise)
+        assert isinstance(stmt.exc, Constructor)
+        assert stmt.exc.name == "Abort"
+
+    def test_raise_in_if_branch(self) -> None:
+        src = 'if true => raise Abort(message: "bad")'
+        prog = parse_program(src)
+        assert len(prog.body) == 1
+        stmt = prog.body[0]
+        assert isinstance(stmt, IfStmt)
+        branch = stmt.branches[0]
+        assert len(branch.body) == 1
+        assert isinstance(branch.body[0], Raise)
+
+
+# ---------------------------------------------------------------------------
+# M3: do_until
+# ---------------------------------------------------------------------------
+
+
+class TestDoUntil:
+    def test_simple_bounded(self) -> None:
+        src = "do[5] pass until true"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert stmt.limit == 5
+        assert len(stmt.body) == 1
+        assert isinstance(stmt.body[0], PassStmt)
+        assert isinstance(stmt.condition, BoolLit)
+        assert stmt.condition.value is True
+
+    def test_unbounded(self) -> None:
+        src = "do pass until true"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert stmt.limit is None
+
+    def test_multiline(self) -> None:
+        src = "do[3]\n  pass\nuntil true"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert stmt.limit == 3
+        assert len(stmt.body) == 1
+
+    def test_multiline_multi_stmts(self) -> None:
+        src = "do[3]\n  let x = 1\n  pass\nuntil true"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert len(stmt.body) == 2
+        assert isinstance(stmt.body[0], LetDecl)
+        assert isinstance(stmt.body[1], PassStmt)
+
+    def test_inline_multi_stmts(self) -> None:
+        src = "do[2] let x = 1; pass until true"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert stmt.limit == 2
+        assert len(stmt.body) == 2
+
+    def test_until_condition_is_expr(self) -> None:
+        src = "do pass until status is Complete"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert isinstance(stmt.condition, IsTest)
+
+    def test_zero_bound_rejected(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("do[0] pass until true")
+        assert "positive" in str(exc_info.value).lower()
+
+    def test_inline_do_with_trailing_if(self) -> None:
+        """Prototype case: inline do body may end in if_stmt (sealed by until)."""
+        src = "do[5] let r = a; if r = 1 => pass | else => pass until r = 1"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert stmt.limit == 5
+        # Last stmt in body is IfStmt
+        assert isinstance(stmt.body[-1], IfStmt)
+
+    def test_bare_case_expr_after_until_rejected(self) -> None:
+        """bare case_expr after until must be rejected (bar-safe violation)."""
+        src = "do[2] pass until case s of\n  | A => true\n  | B => false"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_parenthesized_case_expr_after_until_ok(self) -> None:
+        """Parenthesized case_expr after until is accepted."""
+        src = (
+            "enum S\n  | A\n  | B\nlet s: S = A\n"
+            "do[2] pass until (case s of | A => true | B => false)"
+        )
+        prog = parse_program(src)
+        du = prog.body[-1]
+        assert isinstance(du, DoUntil)
+        assert isinstance(du.condition, CaseExpr)
+
+
+# ---------------------------------------------------------------------------
+# M3: if_stmt
+# ---------------------------------------------------------------------------
+
+
+class TestIfStmt:
+    def test_simple_if_else(self) -> None:
+        src = "if true => pass | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 2
+        b0, b1 = stmt.branches
+        assert isinstance(b0, IfBranch)
+        assert isinstance(b0.cond, BoolLit)
+        assert b0.cond.value is True
+        assert isinstance(b1, IfBranch)
+        assert b1.cond is ELSE
+
+    def test_single_condition_no_else(self) -> None:
+        src = "if x => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 1
+        assert isinstance(stmt.branches[0].cond, VarRef)
+
+    def test_multiple_conditions(self) -> None:
+        src = "if a => pass | b => pass | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 3
+        assert stmt.branches[2].cond is ELSE
+
+    def test_multiline_branches(self) -> None:
+        src = "if true =>\n  pass\n| else =>\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 2
+
+    def test_branch_body_has_stmts(self) -> None:
+        src = "if cond =>\n  let x = 1\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 1
+        assert len(stmt.branches[0].body) == 2
+
+    def test_else_not_last_rejected(self) -> None:
+        """else branch must be last — rejected with diagnostic about 'else'."""
+        src = "let k = 1\nif k = 1 => pass\n| else => pass\n| k = 2 => pass"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        assert "else" in str(exc_info.value).lower()
+
+    def test_nested_if_inline_branch_rejected(self) -> None:
+        """Nested if in inline branch body is rejected (bar-safe violation)."""
+        src = "if true => if false => pass | else => pass"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_missing_arrow_rejected(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_program("if true pass")
+
+    def test_inline_if(self) -> None:
+        """if condition => stmt | else => stmt on one line."""
+        src = "if x => pass | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+
+    def test_design_3_3_if_inline(self) -> None:
+        """Design §3.3: if code is Fail or design is Fail => ... | else => pass."""
+        src = ("if code is Fail or design is Fail => pass | else => pass")
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        cond = stmt.branches[0].cond
+        assert isinstance(cond, BinaryOp)
+        assert cond.op == BinOp.OR
+
+
+# ---------------------------------------------------------------------------
+# M3: case_stmt
+# ---------------------------------------------------------------------------
+
+
+class TestCaseStmt:
+    def test_simple_case(self) -> None:
+        src = "case result of\n  | Pass => pass\n  | Fail => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, CaseStmt)
+        assert isinstance(stmt.subject, VarRef)
+        assert stmt.subject.name == "result"
+        assert len(stmt.branches) == 2
+
+    def test_wildcard_branch(self) -> None:
+        src = "case x of\n  | _ => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, CaseStmt)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, WildcardPattern)
+
+    def test_constructor_pattern_no_fields(self) -> None:
+        src = "case result of\n  | Pass => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, ConstructorPattern)
+        assert b.pattern.name == "Pass"
+        assert b.pattern.qualifier is None
+
+    def test_constructor_pattern_with_fields(self) -> None:
+        src = "case result of\n  | Fail(issues) => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, ConstructorPattern)
+        assert b.pattern.name == "Fail"
+        assert len(b.pattern.fields) == 1
+        f = b.pattern.fields[0]
+        assert isinstance(f, PatternField)
+        assert f.name == "issues"
+        # Shorthand: Fail(issues) means issues: issues
+        assert isinstance(f.pattern, VarPattern)
+        assert f.pattern.name == "issues"
+
+    def test_constructor_pattern_field_bind(self) -> None:
+        src = "case result of\n  | Blocked(reason: why) => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, ConstructorPattern)
+        f = b.pattern.fields[0]
+        assert f.name == "reason"
+        assert isinstance(f.pattern, VarPattern)
+        assert f.pattern.name == "why"
+
+    def test_qualified_constructor_pattern(self) -> None:
+        src = "case result of\n  | Review.Pass => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, ConstructorPattern)
+        assert b.pattern.qualifier == "Review"
+        assert b.pattern.name == "Pass"
+
+    def test_var_pattern(self) -> None:
+        src = "case code of\n  | other => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, VarPattern)
+        assert b.pattern.name == "other"
+
+    def test_literal_pattern_int(self) -> None:
+        src = "case code of\n  | 0 => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, LiteralPattern)
+        assert isinstance(b.pattern.literal, IntLit)
+        assert b.pattern.literal.value == 0
+
+    def test_literal_pattern_bool(self) -> None:
+        src = "case flag of\n  | true => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, LiteralPattern)
+        assert isinstance(b.pattern.literal, BoolLit)
+        assert b.pattern.literal.value is True
+
+    def test_literal_pattern_str(self) -> None:
+        src = 'case who of\n  | "alice" => pass'
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, LiteralPattern)
+        assert isinstance(b.pattern.literal, StringLit)
+        assert b.pattern.literal.value == "alice"
+
+    def test_case_stmt_inline(self) -> None:
+        src = "case result of | Pass => pass | Fail => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, CaseStmt)
+        assert len(stmt.branches) == 2
+
+    def test_stmt_in_case_expr_branch_rejected(self) -> None:
+        """case expression branch must be an expression, not a statement."""
+        src = (
+            "enum S\n  | A\n  | B\nlet s: S = A\n"
+            "let x = case s of\n  | A => let y = 1\n  | B => 2"
+        )
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+
+# ---------------------------------------------------------------------------
+# M3: case_expr
+# ---------------------------------------------------------------------------
+
+
+class TestCaseExpr:
+    def test_simple_case_expr(self) -> None:
+        src = "let x = case v of\n  | Pass => 1\n  | Fail => 0"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        ce = stmt.value
+        assert isinstance(ce, CaseExpr)
+        assert isinstance(ce.subject, VarRef)
+        assert len(ce.branches) == 2
+
+    def test_case_expr_branch_body_is_expr(self) -> None:
+        src = 'let x = case v of\n  | Pass => "ok"\n  | Fail => "no"'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        ce = stmt.value
+        assert isinstance(ce, CaseExpr)
+        b0 = ce.branches[0]
+        assert isinstance(b0, CaseExprBranch)
+        assert isinstance(b0.body, StringLit)
+
+    def test_case_expr_inline(self) -> None:
+        src = "let x = case v of | Pass => 1 | Fail => 0"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, CaseExpr)
+
+    def test_bare_case_expr_at_block_level(self) -> None:
+        """A bare case_expr at block level is valid (binding RHS is not bar-safe)."""
+        src = "let x = case s of\n  | A => true\n  | B => false"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, CaseExpr)
+
+    def test_bare_case_expr_in_bar_position_rejected(self) -> None:
+        """Bare case_expr in an if-branch body is rejected (bar-safe)."""
+        src = "if ok => let x = case v of | a => 1 | b => 2"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_parenthesized_case_expr_in_bar_position_ok(self) -> None:
+        """Parenthesized case_expr in an if-branch body is accepted."""
+        src = "if ok => let x = (case v of | a => 1 | b => 2) | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        b0 = stmt.branches[0]
+        assert len(b0.body) == 1
+        inner = b0.body[0]
+        assert isinstance(inner, LetDecl)
+        assert isinstance(inner.value, CaseExpr)
+
+
+# ---------------------------------------------------------------------------
+# M3: try_stmt / catch / raise
+# ---------------------------------------------------------------------------
+
+
+class TestTryCatch:
+    def test_simple_try_catch(self) -> None:
+        src = "try\n  pass\ncatch _ =>\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        assert len(stmt.body) == 1
+        assert isinstance(stmt.body[0], PassStmt)
+        assert len(stmt.handlers) == 1
+        h = stmt.handlers[0]
+        assert isinstance(h, CatchClause)
+        assert h.exc_type is None  # wildcard
+        assert h.binding is None
+
+    def test_catch_with_binding(self) -> None:
+        src = "try\n  pass\ncatch _ as e =>\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        h = stmt.handlers[0]
+        assert h.exc_type is None
+        assert h.binding == "e"
+
+    def test_catch_type(self) -> None:
+        src = "try\n  pass\ncatch AgentParseError =>\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        h = stmt.handlers[0]
+        assert h.exc_type == "AgentParseError"
+        assert h.binding is None
+
+    def test_catch_type_with_binding(self) -> None:
+        src = "try\n  pass\ncatch AgentParseError as e =>\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        h = stmt.handlers[0]
+        assert h.exc_type == "AgentParseError"
+        assert h.binding == "e"
+
+    def test_multiple_catch_clauses(self) -> None:
+        src = "try\n  pass\ncatch AgentParseError as e =>\n  pass\ncatch _ as e =>\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        assert len(stmt.handlers) == 2
+
+    def test_inline_try(self) -> None:
+        """Inline try body is closed statements only."""
+        src = "try pass catch _ => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+
+    def test_inline_try_multi_closed(self) -> None:
+        src = "try let x = 1; pass catch _ => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        assert len(stmt.body) == 2
+
+    def test_if_in_inline_catch_rejected(self) -> None:
+        """An if_stmt in an inline catch body is rejected."""
+        src = "try pass catch _ => if true => pass | else => pass"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_open_stmt_in_inline_try_rejected(self) -> None:
+        """An open stmt (if) in inline try body is rejected."""
+        src = "try let x = 1; if true => pass | else => pass catch _ => pass"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_try_body_multi_stmts(self) -> None:
+        src = "try\n  let x = 1\n  let y = 2\n  pass\ncatch _ =>\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        assert len(stmt.body) == 3
+
+    def test_try_with_bar_safe_catch_body(self) -> None:
+        """Try-in-branch + bar-safe catch: prototype case §4.1."""
+        src = "if ok => try pass catch _ => pass | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        b0 = stmt.branches[0]
+        assert len(b0.body) == 1
+        assert isinstance(b0.body[0], TryCatch)
+
+
+# ---------------------------------------------------------------------------
+# M3: Rejection fixtures (acceptance suite integration)
+# ---------------------------------------------------------------------------
+
+
+class TestRejectionFixtures:
+    """Verify that the acceptance rejection fixtures fail as expected.
+
+    Each fixture has a .agl file and a .expect.json describing the expected
+    diagnostic (line number and/or message_contains).
+    """
+
+    def _parse_and_check(
+        self,
+        src: str,
+        expected_line: int | None,
+        message_contains: list[str] | None,
+    ) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        err = exc_info.value
+        if expected_line is not None:
+            assert err.source_span.start_line == expected_line, (
+                f"Expected line {expected_line}, got {err.source_span.start_line}; "
+                f"message: {err}"
+            )
+        if message_contains:
+            msg = str(err).lower()
+            for fragment in message_contains:
+                assert fragment.lower() in msg, (
+                    f"Expected {fragment!r} in error message: {err}"
+                )
+
+    def test_bare_case_after_until(self) -> None:
+        src = (
+            "enum S\n  | A\n  | B\n"
+            "let s: S = A\n"
+            "var n: int = 0\n"
+            "do[2] set n = n + 1 until case s of | A => true | B => false"
+        )
+        self._parse_and_check(src, expected_line=6, message_contains=None)
+
+    def test_chained_comparison(self) -> None:
+        src = "let x = 1\nlet ok = (x = 1 = 2)"
+        self._parse_and_check(src, expected_line=2, message_contains=None)
+
+    def test_else_not_last(self) -> None:
+        src = "let k = 1\nif k = 1 => pass\n| else => pass\n| k = 2 => pass"
+        self._parse_and_check(src, expected_line=None, message_contains=["else"])
+
+    def test_if_in_inline_catch(self) -> None:
+        src = "try pass catch _ => if true => pass | else => pass"
+        self._parse_and_check(src, expected_line=1, message_contains=None)
+
+    def test_missing_arrow(self) -> None:
+        src = "if true pass"
+        self._parse_and_check(src, expected_line=1, message_contains=None)
+
+    def test_nested_if_inline_branch(self) -> None:
+        src = "if true => if false => pass | else => pass"
+        self._parse_and_check(src, expected_line=1, message_contains=None)
+
+    def test_open_stmt_in_inline_try(self) -> None:
+        src = "try let x = 1; if true => pass | else => pass catch _ => pass"
+        self._parse_and_check(src, expected_line=1, message_contains=None)
+
+    def test_stmt_in_case_expr_branch(self) -> None:
+        src = (
+            "enum S\n  | A\n  | B\n"
+            "let s: S = A\n"
+            "let x = case s of\n  | A => let y = 1\n  | B => 2"
+        )
+        self._parse_and_check(src, expected_line=6, message_contains=None)
+
+    def test_zero_loop_bound(self) -> None:
+        src = "do[0] pass until true"
+        self._parse_and_check(src, expected_line=1, message_contains=["positive"])
+
+    def test_bare_assignment_rejected(self) -> None:
+        """bare `n = 2` is rejected at parse time as a bare assignment attempt."""
+        src = "var n: int = 1\nn = 2"
+        self._parse_and_check(src, expected_line=2, message_contains=None)
+
+    def test_annotated_assignment_rejected(self) -> None:
+        """annotated assignment `count: int = 5` is rejected at parse time."""
+        src = "count: int = 5"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+
+# ---------------------------------------------------------------------------
+# M3: Design §3 canonical examples (parse-level check)
+# ---------------------------------------------------------------------------
+
+
+class TestDesignExamples:
+    def test_design_3_1_one_liner(self) -> None:
+        """Design §3.1 inline form."""
+        src = (
+            'do[5] let status: Status = prompt[on_parse_error: retry[2]] "Do X."'
+            " until status is Complete"
+        )
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert stmt.limit == 5
+        assert isinstance(stmt.condition, IsTest)
+        assert stmt.condition.variant == "Complete"
+
+    def test_design_3_2_do_loop_case(self) -> None:
+        """Design §3.2 one-liner prototype case (prototype test_conflicts.py §14)."""
+        src = (
+            "var artifact: text = impl \"Implement ${spec}\"; "
+            "do[5] let review: Review = reviewer[on_parse_error: retry[2]] \"Review ${artifact}\"; "
+            "case review of "
+            "| Fail(issues) => set artifact = impl \"Fix ${issues} in ${artifact}\" "
+            "| Pass => pass "
+            "until review is Pass"
+        )
+        prog = parse_program(src)
+        assert len(prog.body) == 2
+        du = prog.body[1]
+        assert isinstance(du, DoUntil)
+        # body has: let review + case review
+        assert len(du.body) == 2
+        assert isinstance(du.body[0], LetDecl)
+        assert isinstance(du.body[1], CaseStmt)
+
+    def test_design_3_4_case_with_fields(self) -> None:
+        src = (
+            "case review of\n"
+            "  | Pass => pass\n"
+            "  | Fail(issues) => set artifact = impl \"Fix:\\n${issues}\""
+        )
+        stmt = _parse_one(src)
+        assert isinstance(stmt, CaseStmt)
+        assert len(stmt.branches) == 2
+        b1 = stmt.branches[1]
+        assert isinstance(b1.pattern, ConstructorPattern)
+        assert b1.pattern.name == "Fail"
+        assert len(b1.pattern.fields) == 1
+
+    def test_design_3_5_case_expr(self) -> None:
+        src = (
+            "let next_prompt: text = case action of\n"
+            "  | Stop => \"Stop.\"\n"
+            "  | Continue(prompt) => prompt\n"
+            '  | Escalate(reason) => "Investigate blocker:\\n${reason}"'
+        )
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, CaseExpr)
+        assert len(stmt.value.branches) == 3
+
+    def test_design_3_7_equality(self) -> None:
+        src = (
+            "let expected_count = 3\n"
+            "let actual_count: int = 5\n"
+            "if actual_count = expected_count => pass\n"
+            "| else =>\n"
+            '  raise Abort(message: "unexpected count")'
+        )
+        prog = parse_program(src)
+        assert len(prog.body) == 3
+        if_stmt = prog.body[2]
+        assert isinstance(if_stmt, IfStmt)
+        cond = if_stmt.branches[0].cond
+        assert isinstance(cond, BinaryOp)
+        assert cond.op == BinOp.EQ
+
+    def test_design_3_8_try_catch(self) -> None:
+        src = (
+            "try\n"
+            "  let review: text = reviewer \"Review ${artifact}\"\n"
+            "catch AgentParseError as e =>\n"
+            "  raise e"
+        )
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        assert len(stmt.handlers) == 1
+        h = stmt.handlers[0]
+        assert h.exc_type == "AgentParseError"
+        assert h.binding == "e"
+
+    def test_design_section_14_canonical(self) -> None:
+        """Parse the design §14 canonical review_fix.agl program."""
+        import pathlib
+
+        src_path = pathlib.Path("tests/agl/programs/canonical/review_fix.agl")
+        src = src_path.read_text(encoding="utf-8")
+        prog = parse_program(src)
+        assert isinstance(prog, Program)
+        assert len(prog.body) > 0
+
+    def test_inline_multiline_equivalence(self) -> None:
+        """Inline semicolons produce the same AST as newlines for do/if."""
+        inline = "if a => pass | b => pass"
+        multiline = "if a => pass\n| b => pass"
+        p1 = parse_program(inline)
+        p2 = parse_program(multiline)
+        assert p1.body[0] == p2.body[0]
+
+
+# ---------------------------------------------------------------------------
+# M3: Pattern matching edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestPatterns:
+    def test_nested_constructor_pattern(self) -> None:
+        """Nested constructor pattern: Inner(shape: Line(len: n))."""
+        src = "case wrapped of\n  | Inner(shape: Line(len: n)) => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, CaseStmt)
+        b = stmt.branches[0]
+        outer = b.pattern
+        assert isinstance(outer, ConstructorPattern)
+        assert outer.name == "Inner"
+        assert len(outer.fields) == 1
+        inner_field = outer.fields[0]
+        assert inner_field.name == "shape"
+        inner_pat = inner_field.pattern
+        assert isinstance(inner_pat, ConstructorPattern)
+        assert inner_pat.name == "Line"
+        assert inner_pat.fields[0].name == "len"
+        bound_var = inner_pat.fields[0].pattern
+        assert isinstance(bound_var, VarPattern)
+        assert bound_var.name == "n"
+
+    def test_multiple_field_pattern(self) -> None:
+        src = "case result of\n  | Box(w, h, label) => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, ConstructorPattern)
+        assert len(b.pattern.fields) == 3
+
+    def test_pattern_field_rename(self) -> None:
+        src = "case result of\n  | Box(label: tag) => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        f = b.pattern.fields[0]
+        assert f.name == "label"
+        assert isinstance(f.pattern, VarPattern)
+        assert f.pattern.name == "tag"
+
+    def test_wildcard_in_case_stmt(self) -> None:
+        src = "case x of\n  | _ => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, WildcardPattern)
+
+    def test_var_pattern_in_case(self) -> None:
+        src = "case code of\n  | 0 => pass\n  | other => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[1]
+        assert isinstance(b.pattern, VarPattern)
+        assert b.pattern.name == "other"
+
+
+# ---------------------------------------------------------------------------
+# M3: Program files (control and canonical)
+# ---------------------------------------------------------------------------
+
+
+class TestM3ProgramFiles:
+    @staticmethod
+    def _read(rel: str) -> str:
+        import pathlib
+        return pathlib.Path(rel).read_text(encoding="utf-8")
+
+    def test_parse_do_until_agl(self) -> None:
+        prog = parse_program(self._read("tests/agl/programs/control/do_until.agl"))
+        assert isinstance(prog, Program)
+        assert any(isinstance(s, DoUntil) for s in prog.body)
+
+    def test_parse_case_patterns_agl(self) -> None:
+        prog = parse_program(self._read("tests/agl/programs/control/case_patterns.agl"))
+        assert isinstance(prog, Program)
+        assert any(isinstance(s, CaseStmt) for s in prog.body)
+
+    def test_parse_case_expr_agl(self) -> None:
+        prog = parse_program(self._read("tests/agl/programs/control/case_expr.agl"))
+        assert isinstance(prog, Program)
+        assert any(
+            isinstance(s, LetDecl) and isinstance(s.value, CaseExpr) for s in prog.body
+        )
+
+    def test_parse_nested_control_agl(self) -> None:
+        prog = parse_program(self._read("tests/agl/programs/control/nested_control.agl"))
+        assert isinstance(prog, Program)
+
+    def test_parse_review_fix_agl(self) -> None:
+        prog = parse_program(self._read("tests/agl/programs/canonical/review_fix.agl"))
+        assert isinstance(prog, Program)
+
+    def test_parse_one_liner_agl(self) -> None:
+        prog = parse_program(self._read("tests/agl/programs/canonical/one_liner.agl"))
+        assert isinstance(prog, Program)
+
+    def test_parse_multi_agent_agl(self) -> None:
+        prog = parse_program(self._read("tests/agl/programs/canonical/multi_agent.agl"))
+        assert isinstance(prog, Program)
+
+    def test_parse_dialogue_agl(self) -> None:
+        src = self._read("tests/agl/programs/canonical/dialogue.agl")
+        prog = parse_program(src)
+        assert isinstance(prog, Program)
+
+
+# ---------------------------------------------------------------------------
+# M3: Coverage completion — edge cases for full 100% branch coverage
+# ---------------------------------------------------------------------------
+
+
+class TestM3CoverageEdgeCases:
+    """Tests that exercise specific uncovered branches in transform.py."""
+
+    def test_bar_var_decl_in_if_branch(self) -> None:
+        """bar_var_decl: var declaration in a bar-safe inline branch body."""
+        src = "if cond => var x: int = 1 | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        b0 = stmt.branches[0]
+        assert len(b0.body) == 1
+        assert isinstance(b0.body[0], VarDecl)
+
+    def test_bar_set_stmt_in_if_branch(self) -> None:
+        """bar_set_stmt: set in a bar-safe inline branch body."""
+        src = "var x: int = 0\nif cond => set x = 1 | else => pass"
+        prog = parse_program(src)
+        if_stmt = prog.body[1]
+        assert isinstance(if_stmt, IfStmt)
+        b0 = if_stmt.branches[0]
+        assert isinstance(b0.body[0], SetStmt)
+
+    def test_bar_print_stmt_in_if_branch(self) -> None:
+        """bar_print_stmt: print in a bar-safe inline branch body."""
+        src = 'if cond => print "hello" | else => pass'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert isinstance(stmt.branches[0].body[0], PrintStmt)
+
+    def test_bar_raise_stmt_in_if_branch(self) -> None:
+        """bar_raise_stmt: raise in a bar-safe inline branch body."""
+        src = "if cond => raise e | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert isinstance(stmt.branches[0].body[0], Raise)
+
+    def test_pat_lit_decimal(self) -> None:
+        """LiteralPattern with a decimal literal."""
+        src = "case x of\n  | 3.14 => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, CaseStmt)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, LiteralPattern)
+        assert isinstance(b.pattern.literal, DecimalLit)
+
+    def test_pat_lit_false(self) -> None:
+        """LiteralPattern with false literal."""
+        src = "case x of\n  | false => pass"
+        stmt = _parse_one(src)
+        b = stmt.branches[0]
+        assert isinstance(b.pattern, LiteralPattern)
+        assert isinstance(b.pattern.literal, BoolLit)
+        assert b.pattern.literal.value is False
+
+    def test_pat_lit_str_with_interp_rejected(self) -> None:
+        """Pattern string literal with interpolation is rejected."""
+        src = 'case x of\n  | "${y}" => pass'
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_branch_body_returns_try_stmt(self) -> None:
+        """branch_body containing a try_stmt is accepted."""
+        src = "if ok => try pass catch _ => pass | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        b0 = stmt.branches[0]
+        assert len(b0.body) == 1
+        assert isinstance(b0.body[0], TryCatch)
+
+    def test_catch_body_with_suite(self) -> None:
+        """catch_body with a suite (indented block) is handled."""
+        src = "try\n  pass\ncatch _ =>\n  let x = 1\n  pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        h = stmt.handlers[0]
+        assert len(h.body) == 2
+
+    def test_catch_body_inline_bar_closed(self) -> None:
+        """catch_body with inline bar_closed_stmt sets body correctly."""
+        src = "try pass catch _ => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        assert len(stmt.handlers[0].body) == 1
+        assert isinstance(stmt.handlers[0].body[0], PassStmt)
+
+    def test_try_stmt_with_two_handlers(self) -> None:
+        """try_stmt with two catch_clauses covers the CatchClause append path."""
+        src = (
+            "try\n  pass\n"
+            "catch AgentParseError as e =>\n  pass\n"
+            "catch _ =>\n  pass"
+        )
+        stmt = _parse_one(src)
+        assert isinstance(stmt, TryCatch)
+        assert len(stmt.handlers) == 2
+
+    def test_do_until_multiline_suite(self) -> None:
+        """do_until with suite body: covers the suite non-None path."""
+        src = "do[2]\n  let x = 1\n  pass\nuntil true"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert len(stmt.body) == 2
+
+    def test_if_branch_with_suite(self) -> None:
+        """branch_body receiving a suite returns tuple from it."""
+        src = "if cond =>\n  let x = 1\n  pass\n| else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        b0 = stmt.branches[0]
+        assert len(b0.body) == 2
+
+    def test_case_stmt_branch_with_suite(self) -> None:
+        """case_stmt_branch with suite body."""
+        src = "case result of\n  | Pass =>\n    let x = 1\n    pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, CaseStmt)
+        b = stmt.branches[0]
+        assert len(b.body) == 2

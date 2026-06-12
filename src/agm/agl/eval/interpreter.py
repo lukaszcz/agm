@@ -9,7 +9,7 @@ Control flow for AgL exceptions uses Python exceptions (``AglRaise``).
 from __future__ import annotations
 
 import decimal
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, TypeVar, assert_never
 
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.scope import Scope
@@ -85,6 +85,9 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
+
+
+_Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
 
 
 def _make_exc_value(type_name: str, message: str, **extra: Value) -> ExceptionValue:
@@ -408,16 +411,14 @@ class Interpreter:
 
         call_kind = self._checked.resolved.call_kinds.get(expr.node_id)
         if call_kind == CallKind.shell_exec:
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    "exec is not supported until M4",
-                    command=TextValue(""),
-                    exit_code=IntValue(0),
-                    stdout=TextValue(""),
-                    stderr=TextValue("exec not implemented in M1"),
-                    timed_out=BoolValue(False),
-                )
+            # Unreachable through the public ``run`` pipeline: the checker rejects
+            # ``exec`` calls statically until M4 (``supports_shell_exec``).  Reaching
+            # here means the interpreter was driven with a hand-built
+            # CheckedProgram that bypassed that gate — an internal invariant
+            # violation, NOT a user-facing AgL exception.  Fail loudly.
+            raise AssertionError(
+                "shell_exec call reached the interpreter; the checker must reject "
+                "'exec' until M4 (supports_shell_exec). Real exec support lands in M4."
             )
 
         # Determine the agent name for dispatch.
@@ -580,21 +581,11 @@ class Interpreter:
         op = expr.op
         left = self._eval_expr(expr.left, scope)
 
-        # Short-circuit for and/or (right operand evaluated lazily).
-        if op is BinOp.AND:
-            if isinstance(left, BoolValue) and not left.value:
-                return BoolValue(False)
-            right = self._eval_expr(expr.right, scope)
-            if isinstance(right, BoolValue):
-                return BoolValue(right.value)
-            return right
-        if op is BinOp.OR:
-            if isinstance(left, BoolValue) and left.value:
-                return BoolValue(True)
-            right = self._eval_expr(expr.right, scope)
-            if isinstance(right, BoolValue):
-                return BoolValue(right.value)
-            return right
+        # Short-circuit for and/or (right operand evaluated lazily). The checker
+        # guarantees both operands are bool, so the result is always a BoolValue
+        # (design §4.3).
+        if op is BinOp.AND or op is BinOp.OR:
+            return self._eval_bool_binop(op, left, expr.right, scope)
 
         right = self._eval_expr(expr.right, scope)
 
@@ -622,6 +613,34 @@ class Interpreter:
             return _in_op(left, right)
 
         assert_never(op)  # pragma: no cover
+
+    def _eval_bool_binop(
+        self, op: BinOp, left: Value, right_expr: Expr, scope: Scope
+    ) -> BoolValue:
+        """Short-circuit evaluation of ``and``/``or`` returning a BoolValue.
+
+        The checker guarantees both operands are bool. ``and`` short-circuits
+        when the left operand is ``False``; ``or`` short-circuits when it is
+        ``True`` — in those cases the right operand is NOT evaluated.
+        """
+        left_bool = self._require_bool(left)
+        if op is BinOp.AND:
+            if not left_bool:
+                return BoolValue(False)
+        else:  # BinOp.OR
+            if left_bool:
+                return BoolValue(True)
+        right = self._eval_expr(right_expr, scope)
+        return BoolValue(self._require_bool(right))
+
+    @staticmethod
+    def _require_bool(value: Value) -> bool:
+        if isinstance(value, BoolValue):
+            return value.value
+        # Unreachable: the checker requires bool operands for 'and'/'or'.
+        raise AssertionError(  # pragma: no cover
+            f"and/or operand is not a bool: {type(value).__name__}"
+        )
 
     def _eval_is_test(self, expr: IsTest, scope: Scope) -> BoolValue:
         value = self._eval_expr(expr.expr, scope)
@@ -734,61 +753,70 @@ def _to_decimal(value: Value) -> decimal.Decimal:
     raise RuntimeError(f"Not a numeric value: {type(value).__name__}")
 
 
+def _value_eq(left: Value, right: Value) -> bool:
+    """Value equality with int→decimal widening (design §4.3).
+
+    The single source of truth for ``=`` comparison and ``in`` membership, so
+    ``IntValue(1)`` equals ``DecimalValue(1)`` consistently across both passes.
+    """
+    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
+        return decimal.Decimal(left.value) == right.value
+    if isinstance(left, DecimalValue) and isinstance(right, IntValue):
+        return left.value == decimal.Decimal(right.value)
+    return left == right
+
+
 def _compare(left: Value, right: Value, op: BinOp) -> BoolValue:
     """Equality and ordering comparison."""
-    # Widen for comparison.
+    if op == BinOp.EQ:
+        return BoolValue(_value_eq(left, right))
+    if op == BinOp.NEQ:
+        return BoolValue(not _value_eq(left, right))
+
+    # Widen for ordering comparison.
     if isinstance(left, IntValue) and isinstance(right, DecimalValue):
         left = DecimalValue(decimal.Decimal(left.value))
     elif isinstance(left, DecimalValue) and isinstance(right, IntValue):
         right = DecimalValue(decimal.Decimal(right.value))
 
-    if op == BinOp.EQ:
-        return BoolValue(left == right)
-    if op == BinOp.NEQ:
-        return BoolValue(left != right)
-
-    # Ordering: numeric types only.
+    # Ordering: numeric or text operands of the same kind.  ``_compare`` only
+    # reaches here with ``op`` in {LT, LE, GT, GE}; EQ/NEQ are handled earlier
+    # and no other op flows into ``_compare``.
     if isinstance(left, IntValue) and isinstance(right, IntValue):
-        li, ri = left.value, right.value
-        if op == BinOp.LT:
-            return BoolValue(li < ri)
-        if op == BinOp.LE:
-            return BoolValue(li <= ri)
-        if op == BinOp.GT:
-            return BoolValue(li > ri)
-        if op == BinOp.GE:
-            return BoolValue(li >= ri)
-    elif isinstance(left, DecimalValue) and isinstance(right, DecimalValue):
-        ld, rd = left.value, right.value
-        if op == BinOp.LT:
-            return BoolValue(ld < rd)
-        if op == BinOp.LE:
-            return BoolValue(ld <= rd)
-        if op == BinOp.GT:
-            return BoolValue(ld > rd)
-        if op == BinOp.GE:
-            return BoolValue(ld >= rd)
-    elif isinstance(left, TextValue) and isinstance(right, TextValue):
-        ls, rs = left.value, right.value
-        if op == BinOp.LT:
-            return BoolValue(ls < rs)
-        if op == BinOp.LE:
-            return BoolValue(ls <= rs)
-        if op == BinOp.GT:
-            return BoolValue(ls > rs)
-        if op == BinOp.GE:
-            return BoolValue(ls >= rs)
-    else:
-        raise RuntimeError(
-            f"Cannot compare {type(left).__name__} and {type(right).__name__}"
-        )
-    return BoolValue(False)
+        return _order_result(left.value, right.value, op)
+    if isinstance(left, DecimalValue) and isinstance(right, DecimalValue):
+        return _order_result(left.value, right.value, op)
+    if isinstance(left, TextValue) and isinstance(right, TextValue):
+        return _order_result(left.value, right.value, op)
+    raise RuntimeError(
+        f"Cannot compare {type(left).__name__} and {type(right).__name__}"
+    )
+
+
+def _order_result(left: _Ordered, right: _Ordered, op: BinOp) -> BoolValue:
+    """Apply an ordering operator to two same-kind comparable keys.
+
+    Reached only with ``op`` in {LT, LE, GT, GE}; the four ordering ops are
+    exhaustive, so the final branch is ``GE`` (no unreachable fallback).
+    """
+    if op == BinOp.LT:
+        return BoolValue(left < right)
+    if op == BinOp.LE:
+        return BoolValue(left <= right)
+    if op == BinOp.GT:
+        return BoolValue(left > right)
+    # Only GE remains.
+    return BoolValue(left >= right)
 
 
 def _in_op(left: Value, right: Value) -> BoolValue:
-    """``x in container`` operator."""
+    """``x in container`` operator.
+
+    List membership uses the same value-equality semantics as ``=`` (incl.
+    int→decimal widening), so ``1 in [1.0]`` is true (design §4.3).
+    """
     if isinstance(right, ListValue):
-        return BoolValue(left in right.elements)
+        return BoolValue(any(_value_eq(left, elem) for elem in right.elements))
     if isinstance(right, DictValue):
         if isinstance(left, TextValue):
             return BoolValue(left.value in right.entries)

@@ -20,6 +20,7 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.exec as exec_command
+from agm.commands.args import ExecArgs
 
 
 class RecordedArgs(Protocol):
@@ -275,163 +276,124 @@ class TestExecCommandBehavior:
         assert captured.err
 
 
+def _exec_args(agl_file: Path, *, inputs: list[str] | None = None) -> ExecArgs:
+    """Build ExecArgs for *agl_file* with all optional flags defaulted."""
+    return ExecArgs(
+        file=str(agl_file),
+        inputs=inputs or [],
+        strict_json=None,
+        max_iters=None,
+        runner=None,
+        no_log=False,
+        log_file=None,
+    )
+
+
 class TestExecCommandEdgePaths:
-    """Cover the ok=True and error!=None branches via monkeypatching."""
+    """Real-program coverage of the ok=True and pre-execution-error branches.
+
+    The exit-2 (uncaught-AgL-exception) seam is exercised separately in
+    ``TestExecExitCodeMapping`` because no real M1 source reaches it after F6.
+    """
 
     def test_ok_result_returns_normally(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A successful run returns normally (exit 0) instead of raising SystemExit."""
-        from agm.agl.runtime.runtime import RunResult, WorkflowRuntime
-        from agm.commands.args import ExecArgs
-
+        """A successful real program prints its output and returns (exit 0)."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text('print "ok"\n')
 
-        def fake_run(
-            self: WorkflowRuntime,
-            source: str,
-            *,
-            inputs: object = None,
-            check_only: bool = False,
-        ) -> RunResult:
-            return RunResult(ok=True, diagnostics=[], error=None)
-
-        import agm.agl.runtime.runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
-
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
-        # Falls through and returns None (no SystemExit on the success path).
-        assert exec_command.run(args) is None
-
-    def test_error_result_exits_2(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.agl.runtime.runtime import RunError, RunResult, WorkflowRuntime
-        from agm.commands.args import ExecArgs
-
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-
-        def fake_run(
-            self: WorkflowRuntime,
-            source: str,
-            *,
-            inputs: object = None,
-            check_only: bool = False,
-        ) -> RunResult:
-            return RunResult(
-                ok=False,
-                diagnostics=[],
-                error=RunError(type_name="AgentParseError", fields={}),
-            )
-
-        import agm.agl.runtime.runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
-
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 2
+        # Real pipeline: no SystemExit on the success path.
+        assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
-        assert "AgentParseError" in captured.err
-
-    def test_error_result_includes_message_field(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """The exit-2 path prints the exception's ``fields['message']`` when present."""
-        from agm.agl.runtime.runtime import RunError, RunResult, WorkflowRuntime
-        from agm.commands.args import ExecArgs
-
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-
-        def fake_run(
-            self: WorkflowRuntime,
-            source: str,
-            *,
-            inputs: object = None,
-            check_only: bool = False,
-        ) -> RunResult:
-            return RunResult(
-                ok=False,
-                diagnostics=[],
-                error=RunError(
-                    type_name="AgentParseError",
-                    fields={"message": "could not parse agent output"},
-                ),
-            )
-
-        import agm.agl.runtime.runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
-
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 2
-        captured = capsys.readouterr()
-        assert "AgentParseError" in captured.err
-        assert "could not parse agent output" in captured.err
+        assert captured.out == "ok\n"
 
     def test_bad_input_format_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from agm.commands.args import ExecArgs
-
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=["noequals"],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
+            exec_command.run(_exec_args(agl_file, inputs=["noequals"]))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error" in captured.err
 
 
+class TestExecExitCodeMapping:
+    """F13a: the exit-2 (uncaught AgL exception) seam.
+
+    Exit 2 is unreachable through real source in M1 — F6 removed the only path
+    that produced an uncaught AgL exception from a statically-valid program (the
+    fabricated exec ExecError). These mocked tests pin the CLI's RunResult→exit
+    mapping until a real M2+ program can drive it.
+    """
+
+    @pytest.mark.parametrize(
+        ("fields", "expected_fragments"),
+        [
+            ({}, ["AgentParseError"]),
+            (
+                {"message": "could not parse agent output"},
+                ["AgentParseError", "could not parse agent output"],
+            ),
+        ],
+    )
+    def test_uncaught_exception_maps_to_exit_2(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        fields: dict[str, object],
+        expected_fragments: list[str],
+    ) -> None:
+        from agm.agl.runtime.runtime import RunError, RunResult, WorkflowRuntime
+
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+
+        def fake_run(
+            self: WorkflowRuntime,
+            source: str,
+            *,
+            inputs: object = None,
+            check_only: bool = False,
+        ) -> RunResult:
+            return RunResult(
+                ok=False,
+                diagnostics=[],
+                error=RunError(type_name="AgentParseError", fields=fields),
+            )
+
+        import agm.agl.runtime.runtime as rt_mod
+
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file))
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        for fragment in expected_fragments:
+            assert fragment in captured.err
+
+
 class TestExecCommandWarnings:
-    """Warning-severity diagnostics are reported but never affect the exit code."""
+    """Warning-severity diagnostics are reported but never affect the exit code.
+
+    No AgL checker warning is organically producible in M1 (warnings such as
+    non-exhaustive ``case`` land with M2/M3 analysis), so the warning paths are
+    driven through a single mocked ``run`` that injects a warning diagnostic.
+    The error→exit-1 path IS reachable through real source and is covered by
+    ``test_error_diagnostic_still_exits_1`` below.
+    """
 
     def test_warning_with_ok_returns_normally_and_prints_to_stderr(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        # Mocked: no organic M1 warning exists (lands in M2/M3). This pins that a
+        # warning prints to stderr and never raises SystemExit (exit 0).
         from agm.agl.runtime.runtime import Diagnostic, RunResult, WorkflowRuntime
-        from agm.commands.args import ExecArgs
 
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
@@ -451,65 +413,31 @@ class TestExecCommandWarnings:
 
         monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
 
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
         # ok=True even with a warning: returns normally (exit 0).
-        assert exec_command.run(args) is None
+        assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
         assert "case is non-exhaustive" in captured.err
         assert "line 7" in captured.err
 
     def test_error_diagnostic_still_exits_1(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from agm.agl.runtime.runtime import Diagnostic, RunResult, WorkflowRuntime
-        from agm.commands.args import ExecArgs
-
+        # Real source: an undefined name is a static (error-severity) diagnostic.
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = undefined_name\n")
 
-        error = Diagnostic(message="type mismatch", line=3)
-
-        def fake_run(
-            self: WorkflowRuntime,
-            source: str,
-            *,
-            inputs: object = None,
-            check_only: bool = False,
-        ) -> RunResult:
-            return RunResult(ok=False, diagnostics=[error], error=None)
-
-        import agm.agl.runtime.runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
-
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
+            exec_command.run(_exec_args(agl_file))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "type mismatch" in captured.err
+        assert "undefined_name" in captured.err
 
     def test_warning_and_error_together_exits_1_and_prints_both(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        # Mocked: combining a warning with an error requires an organic warning,
+        # which does not exist until M2/M3 — pins that both print and exit is 1.
         from agm.agl.runtime.runtime import Diagnostic, RunResult, WorkflowRuntime
-        from agm.commands.args import ExecArgs
 
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
@@ -530,17 +458,8 @@ class TestExecCommandWarnings:
 
         monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
 
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
+            exec_command.run(_exec_args(agl_file))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "unused binding" in captured.err
@@ -621,46 +540,6 @@ class TestExecCommandM1:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 1
-
-    def test_uncaught_agl_exception_exits_2(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An uncaught AgL exception during execution → exit code 2."""
-        from agm.agl.runtime.runtime import RunError, RunResult, WorkflowRuntime
-        from agm.commands.args import ExecArgs
-
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-
-        def fake_run(
-            self: WorkflowRuntime,
-            source: str,
-            *,
-            inputs: object = None,
-            check_only: bool = False,
-        ) -> RunResult:
-            return RunResult(
-                ok=False,
-                diagnostics=[],
-                error=RunError(type_name="Abort", fields={"message": "fatal"}),
-            )
-
-        import agm.agl.runtime.runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
-
-        args = ExecArgs(
-            file=str(agl_file),
-            inputs=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=False,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(args)
-        assert exc_info.value.code == 2
 
     def test_prompt_program_exits_1_with_no_default_agent(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

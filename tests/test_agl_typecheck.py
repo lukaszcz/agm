@@ -163,6 +163,18 @@ def caps_no_fallback(*agent_names: str) -> HostCapabilities:
     )
 
 
+def caps_with_shell_exec() -> HostCapabilities:
+    """Capabilities that support shell ``exec`` (simulates M4)."""
+    return HostCapabilities(
+        agent_names=frozenset(),
+        has_fallback_agent=True,
+        has_default_agent=True,
+        supports_shell_exec=True,
+        codec_kinds={"text": frozenset({"text"})},
+        renderer_names=frozenset({"default", "raw", "json", "bullets"}),
+    )
+
+
 def caps_with_json_codec() -> HostCapabilities:
     """Capabilities that include the JSON codec (simulates M2+)."""
     return HostCapabilities(
@@ -263,7 +275,9 @@ class TestAcceptance:
         assert r.resolved.program is not None
 
     def test_exec_call_text_default(self) -> None:
-        r = parse_resolve_check('let x = exec "ls"')
+        # F6: exec is accepted only when the host supports shell exec (M4); the
+        # default M1 capabilities reject it (covered in TestExecRejection).
+        r = parse_resolve_check('let x = exec "ls"', capabilities=caps_with_shell_exec())
         from agm.agl.syntax.nodes import LetDecl
 
         stmt = r.resolved.program.body[0]
@@ -302,7 +316,8 @@ class TestContractSpecs:
         )
 
     def test_exec_call_text_codec(self) -> None:
-        r = parse_resolve_check('let x = exec "ls"')
+        # F6: requires a host that supports shell exec (M4).
+        r = parse_resolve_check('let x = exec "ls"', capabilities=caps_with_shell_exec())
         from agm.agl.syntax.nodes import LetDecl
 
         stmt = r.resolved.program.body[0]
@@ -432,9 +447,18 @@ class TestAgentCapabilities:
         r = parse_resolve_check('let x = prompt "Q"', capabilities=caps)
         assert r.resolved.program is not None
 
-    def test_exec_always_ok_no_fallback(self) -> None:
+    def test_exec_rejected_without_shell_exec_support(self) -> None:
+        # F6: with the default M1 capabilities (supports_shell_exec=False), an
+        # exec call is a static error regardless of agent fallback.
         caps = caps_no_fallback()
-        r = parse_resolve_check('let x = exec "ls"', capabilities=caps)
+        err = reject_type('let x = exec "ls"', capabilities=caps)
+        line, msg = diag(err)
+        assert line == 1
+        assert "exec" in msg
+
+    def test_exec_supported_ok(self) -> None:
+        # F6: a host that supports shell exec (M4) accepts exec calls.
+        r = parse_resolve_check('let x = exec "ls"', capabilities=caps_with_shell_exec())
         assert r.resolved.program is not None
 
 
@@ -1652,6 +1676,36 @@ class TestCheckerExprsViaAst:
         )
         r = resolve_and_check(let_a, let_b, _tc_let("r", binop))
         assert r.node_types[binop.node_id] == BoolType()
+
+    def test_binary_and_non_bool_left_error(self) -> None:
+        # F7: 'and'/'or' require bool operands; a non-bool left operand is a
+        # static error with the span on the offending (left) operand.
+        let_a = _tc_let("a", _tc_intlit(1))
+        let_b = _tc_let("b", _tc_boollit(True))
+        left_ref = _tc_varref("a")
+        binop = BinaryOp(
+            op=BinOp.AND, left=left_ref, right=_tc_varref("b"),
+            span=_tc_sp(line=9), node_id=_tc_nid(),
+        )
+        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        d = err.to_diagnostic()
+        assert "and" in d.message and "bool" in d.message
+        # Span points at the left operand, not the whole BinaryOp.
+        assert d.line == left_ref.span.start_line
+
+    def test_binary_or_non_bool_right_error(self) -> None:
+        # F7: a non-bool right operand is reported at the right operand's span.
+        let_a = _tc_let("a", _tc_boollit(True))
+        let_b = _tc_let("b", _tc_intlit(2))
+        right_ref = _tc_varref("b")
+        binop = BinaryOp(
+            op=BinOp.OR, left=_tc_varref("a"), right=right_ref,
+            span=_tc_sp(line=9), node_id=_tc_nid(),
+        )
+        err = reject_ast(let_a, let_b, _tc_let("r", binop))
+        d = err.to_diagnostic()
+        assert "or" in d.message and "bool" in d.message
+        assert d.line == right_ref.span.start_line
 
     def test_binary_eq(self) -> None:
         let_a = _tc_let("a", _tc_intlit(1))

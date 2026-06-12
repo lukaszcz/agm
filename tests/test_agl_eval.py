@@ -2076,6 +2076,19 @@ class TestInterpreterUnit:
         result = _compare(DecimalValue(decimal.Decimal("2.0")), IntValue(2), BinOp.EQ)
         assert result == BoolValue(True)
 
+    def test_compare_ordering_int_decimal_widen(self) -> None:
+        """Ordering widens int→decimal: ``1 < 1.5`` and ``2.0 > 1``."""
+        from agm.agl.eval.interpreter import _compare
+        from agm.agl.eval.values import BoolValue, DecimalValue, IntValue
+        from agm.agl.syntax.nodes import BinOp
+
+        assert _compare(
+            IntValue(1), DecimalValue(decimal.Decimal("1.5")), BinOp.LT
+        ) == BoolValue(True)
+        assert _compare(
+            DecimalValue(decimal.Decimal("2.0")), IntValue(1), BinOp.GT
+        ) == BoolValue(True)
+
     def test_compare_ordering_decimal_lt(self) -> None:
         from agm.agl.eval.interpreter import _compare
         from agm.agl.eval.values import BoolValue, DecimalValue
@@ -2159,6 +2172,23 @@ class TestInterpreterUnit:
         v = ListValue(elements=(IntValue(1), IntValue(2)))
         assert _in_op(IntValue(1), v) == BoolValue(True)
         assert _in_op(IntValue(3), v) == BoolValue(False)
+
+    def test_in_op_list_int_decimal_widening(self) -> None:
+        """F8: ``IntValue(1) in [DecimalValue(1.0)]`` is true (``=`` semantics)."""
+        from agm.agl.eval.interpreter import _in_op
+        from agm.agl.eval.values import BoolValue, DecimalValue, IntValue, ListValue
+
+        v = ListValue(elements=(DecimalValue(decimal.Decimal("1.0")),))
+        assert _in_op(IntValue(1), v) == BoolValue(True)
+
+    def test_value_eq_int_decimal_widening(self) -> None:
+        """F8: the shared ``_value_eq`` widens int↔decimal for equality."""
+        from agm.agl.eval.interpreter import _value_eq
+        from agm.agl.eval.values import DecimalValue, IntValue
+
+        assert _value_eq(IntValue(1), DecimalValue(decimal.Decimal("1.0"))) is True
+        assert _value_eq(DecimalValue(decimal.Decimal("2.0")), IntValue(2)) is True
+        assert _value_eq(IntValue(1), DecimalValue(decimal.Decimal("2.0"))) is False
 
     def test_in_op_dict_key(self) -> None:
         from agm.agl.eval.interpreter import _in_op
@@ -2675,6 +2705,26 @@ class TestEvalExprCompound:
 
         prelude = (_let("lst", _list(_int(1), _int(2))),)
         result = _eval_value(_binop(BinOp.IN, _int(1), _ref("lst")), prelude=prelude)
+        assert result == BoolValue(True)
+
+    def test_binary_op_in_list_int_decimal_widening(self) -> None:
+        """F8: ``1 in [1.0]`` is true — membership uses ``=`` value-equality.
+
+        The static pass already accepts ``int in list[decimal]`` (int→decimal),
+        so the runtime must agree instead of using raw dataclass equality.
+        """
+        from agm.agl.eval.values import BoolValue
+
+        prelude = (_let("lst", _list(_dec("1.0"), _dec("2.0"))),)
+        result = _eval_value(_binop(BinOp.IN, _int(1), _ref("lst")), prelude=prelude)
+        assert result == BoolValue(True)
+
+    def test_binary_op_in_dict_key_unaffected(self) -> None:
+        """F8: dict-key membership (``"a" in {"a": 1}``) is unaffected."""
+        from agm.agl.eval.values import BoolValue
+
+        prelude = (_let("d", _dict(a=_int(1))),)
+        result = _eval_value(_binop(BinOp.IN, _str("a"), _ref("d")), prelude=prelude)
         assert result == BoolValue(True)
 
     def test_binary_op_and_short_circuit_false(self) -> None:
@@ -3301,22 +3351,68 @@ class TestTemplateInterpSegment:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: agent call shell_exec path (line 421)
+# F6: exec calls are rejected statically (shell exec lands in M4)
 # ---------------------------------------------------------------------------
 
 
 class TestAgentCallShellExec:
-    def test_exec_call_raises_exec_error(self) -> None:
-        """An ``exec`` call surfaces ExecError (shell exec is unsupported in M1).
+    def test_exec_call_rejected_statically(self) -> None:
+        """An ``exec`` call is a static error in M1 (no ``supports_shell_exec``).
 
-        ``exec "cmd"`` is M1-parseable, so this exercises the shell_exec call
-        path through the public ``run`` surface: the uncaught AgL exception
-        becomes ``RunResult.error``.
+        ``exec "cmd"`` is M1-parseable, but the checker rejects it before any
+        statement runs: the result is a pre-execution failure (``error is None``)
+        with a diagnostic mentioning exec — NOT a fabricated runtime ExecError.
         """
         result = run('exec "cmd"')
         assert result.ok is False
-        assert result.error is not None
-        assert result.error.type_name == "ExecError"
+        assert result.error is None
+        assert any("exec" in d.message for d in result.diagnostics)
+
+    def test_exec_reaching_interpreter_is_internal_error(self) -> None:
+        """If a shell_exec call slips past the checker (hand-built program), the
+        interpreter raises a loud internal AssertionError — NOT a catchable AgL
+        exception. Drives the Interpreter directly with caps that (unlike M1)
+        admit exec, to reach the unreachable-in-M1 guard.
+        """
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.runtime.agents import AgentRegistry
+        from agm.agl.scope import resolve
+        from agm.agl.syntax.nodes import CallOptions, Program
+        from agm.agl.typecheck import check
+
+        exec_call = ast.AgentCall(
+            agent="exec",
+            options=CallOptions(
+                format=None, strict_json=None, parse_policy=None,
+                span=_sp(), node_id=_nid(),
+            ),
+            template=_template(_text_seg("cmd")),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        program = Program(body=(_let("x", exec_call),), span=_sp(), node_id=_nid())
+        resolved = resolve(program)
+        # Caps that admit exec (simulates M4) so the checker does NOT reject it.
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_fallback_agent=True,
+            has_default_agent=True,
+            supports_shell_exec=True,
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default", "raw"}),
+        )
+        checked = check(resolved, caps)
+        interp = Interpreter(
+            checked=checked,
+            registry=AgentRegistry(named={}, default_agent=None),
+            contracts={},
+            type_env=checked.type_env,
+            loop_limit=3,
+            strict_json=False,
+        )
+        with pytest.raises(AssertionError, match="shell_exec"):
+            interp.execute(Scope(parent=None))
 
 
 # ---------------------------------------------------------------------------
@@ -3351,22 +3447,58 @@ class TestConstructorCoercion:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: binary op and/or with non-BoolValue right (lines 609, 616)
+# F7: and/or short-circuit and always return BoolValue (design §4.3)
 # ---------------------------------------------------------------------------
 
 
-class TestBinaryOpNonBoolRight:
-    def test_and_true_left_returns_non_bool_right(self) -> None:
-        """``true and <int>`` returns the right operand value verbatim."""
-        from agm.agl.eval.values import IntValue
+def _div_by_zero_eq() -> Expr:
+    """A bool-typed expression that RAISES ArithmeticError when evaluated.
 
-        assert _eval_value(_binop(BinOp.AND, _bool(True), _int(42))) == IntValue(42)
+    ``(1 / 0) = 0`` type-checks as bool (division yields decimal; decimal = int
+    is allowed), but evaluating it divides by zero and raises ``AglRaise``.  Used
+    to observe whether the right operand of and/or is evaluated.
+    """
+    return _binop(BinOp.EQ, _binop(BinOp.DIV, _int(1), _int(0)), _int(0))
 
-    def test_or_false_left_returns_non_bool_right(self) -> None:
-        """``false or <int>`` returns the right operand value verbatim."""
-        from agm.agl.eval.values import IntValue
 
-        assert _eval_value(_binop(BinOp.OR, _bool(False), _int(7))) == IntValue(7)
+class TestBoolShortCircuit:
+    def test_and_false_left_does_not_evaluate_right(self) -> None:
+        """``false and (1/0 = 0)`` short-circuits: the right operand never runs."""
+        from agm.agl.eval.values import BoolValue
+
+        assert _eval_value(_binop(BinOp.AND, _bool(False), _div_by_zero_eq())) == BoolValue(
+            False
+        )
+
+    def test_or_true_left_does_not_evaluate_right(self) -> None:
+        """``true or (1/0 = 0)`` short-circuits: the right operand never runs."""
+        from agm.agl.eval.values import BoolValue
+
+        assert _eval_value(_binop(BinOp.OR, _bool(True), _div_by_zero_eq())) == BoolValue(
+            True
+        )
+
+    def test_and_true_left_does_evaluate_right(self) -> None:
+        """``true and (1/0 = 0)`` evaluates the right operand → ArithmeticError."""
+        from agm.agl.eval.exceptions import AglRaise
+
+        with pytest.raises(AglRaise) as exc_info:
+            _eval_value(_binop(BinOp.AND, _bool(True), _div_by_zero_eq()))
+        assert exc_info.value.exc.type_name == "ArithmeticError"
+
+    def test_or_false_left_does_evaluate_right(self) -> None:
+        """``false or (1/0 = 0)`` evaluates the right operand → ArithmeticError."""
+        from agm.agl.eval.exceptions import AglRaise
+
+        with pytest.raises(AglRaise) as exc_info:
+            _eval_value(_binop(BinOp.OR, _bool(False), _div_by_zero_eq()))
+        assert exc_info.value.exc.type_name == "ArithmeticError"
+
+    def test_and_both_bool_returns_bool(self) -> None:
+        """``true and true`` returns a BoolValue (not the right operand verbatim)."""
+        from agm.agl.eval.values import BoolValue
+
+        assert _eval_value(_binop(BinOp.AND, _bool(True), _bool(True))) == BoolValue(True)
 
 
 # ---------------------------------------------------------------------------
@@ -3381,30 +3513,6 @@ class TestToDecimalInvalidType:
 
         with pytest.raises(RuntimeError, match="Not a numeric value"):
             _to_decimal(TextValue("hello"))
-
-
-# ---------------------------------------------------------------------------
-# Coverage: _compare fallback return BoolValue(False) (line 802)
-# ---------------------------------------------------------------------------
-
-
-class TestCompareFallback:
-    def test_compare_non_ordering_op_on_int_returns_false(self) -> None:
-        """Passing a non-ordering, non-EQ/NEQ op to _compare with int/int
-        falls through all if-branches and returns BoolValue(False) at line 802.
-
-        Path: op=ADD, left=IntValue, right=IntValue
-        → EQ check: False
-        → NEQ check: False
-        → int/int block entered, LT/LE/GT/GE all False
-        → falls to return BoolValue(False)
-        """
-        from agm.agl.eval.interpreter import _compare
-        from agm.agl.eval.values import BoolValue, IntValue
-        from agm.agl.syntax.nodes import BinOp
-
-        result = _compare(IntValue(1), IntValue(2), BinOp.ADD)
-        assert result == BoolValue(False)
 
 
 # ---------------------------------------------------------------------------
@@ -3532,25 +3640,4 @@ class TestRemainingCoverage:
         assert isinstance(result, DecimalValue)
         assert result == DecimalValue(decimal.Decimal("1.5"))
 
-    def test_compare_non_ordering_op_on_decimal_returns_false(self) -> None:
-        """Passing a non-ordering op to _compare with decimal/decimal falls to line 802."""
-        from agm.agl.eval.interpreter import _compare
-        from agm.agl.eval.values import BoolValue, DecimalValue
-        from agm.agl.syntax.nodes import BinOp
-
-        result = _compare(
-            DecimalValue(decimal.Decimal("1.0")),
-            DecimalValue(decimal.Decimal("2.0")),
-            BinOp.ADD,
-        )
-        assert result == BoolValue(False)
-
-    def test_compare_non_ordering_op_on_text_returns_false(self) -> None:
-        """Passing a non-ordering op to _compare with text/text falls to line 802."""
-        from agm.agl.eval.interpreter import _compare
-        from agm.agl.eval.values import BoolValue, TextValue
-        from agm.agl.syntax.nodes import BinOp
-
-        result = _compare(TextValue("a"), TextValue("b"), BinOp.ADD)
-        assert result == BoolValue(False)
 

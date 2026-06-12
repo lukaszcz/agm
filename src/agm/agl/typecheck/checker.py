@@ -511,6 +511,16 @@ class _Checker:
     def _check_agent_call(self, node: AgentCall, *, expected: Type | None) -> Type:
         kind = self._resolved.call_kinds.get(node.node_id, CallKind.agent)
 
+        # ``exec`` (shell) calls are rejected statically unless the host supports
+        # them.  In M1 ``supports_shell_exec`` is always False (M4 flips it), so
+        # any ``exec`` call is a static error at the call's span.
+        if kind == CallKind.shell_exec and not self._caps.supports_shell_exec:
+            raise AglTypeError(
+                "The host does not support 'exec' calls (shell execution lands "
+                "in M4).",
+                span=node.span,
+            )
+
         # Determine target type from context, defaulting to text (design §2.4).
         if expected is not None:
             target_type: Type = expected
@@ -591,6 +601,21 @@ class _Checker:
         op = node.op
 
         if op in (BinOp.AND, BinOp.OR):
+            # 'and'/'or' require bool operands (design §4.3). Report the span of
+            # the first offending operand.
+            op_name = "and" if op is BinOp.AND else "or"
+            if not isinstance(left_type, BoolType):
+                raise AglTypeError(
+                    f"'{op_name}' requires bool operands; left operand has type "
+                    f"'{left_type!r}'.",
+                    span=node.left.span,
+                )
+            if not isinstance(right_type, BoolType):
+                raise AglTypeError(
+                    f"'{op_name}' requires bool operands; right operand has type "
+                    f"'{right_type!r}'.",
+                    span=node.right.span,
+                )
             return BoolType()
 
         if op in (BinOp.EQ, BinOp.NEQ):

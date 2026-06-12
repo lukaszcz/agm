@@ -49,6 +49,10 @@ class HostCapabilities:
         When ``True``, a default agent backs the built-in ``prompt`` keyword.
         When ``False`` (and ``has_fallback_agent`` is also ``False``), a
         ``prompt`` call is a static error.
+    supports_shell_exec:
+        When ``True``, the host can execute ``exec`` (shell) calls.  In M1 this
+        is always ``False`` and any ``exec`` call is a static error; M4 flips it
+        to ``True`` once the shell-exec backend lands.
     codec_kinds:
         Mapping from codec name to the frozenset of semantic type-kind strings
         the codec can handle.  Type-kind strings are the lower-cased class name
@@ -62,5 +66,6 @@ class HostCapabilities:
     agent_names: frozenset[str] = field(default_factory=frozenset)
     has_fallback_agent: bool = False
     has_default_agent: bool = False
+    supports_shell_exec: bool = False
     codec_kinds: dict[str, frozenset[str]] = field(default_factory=dict)
     renderer_names: frozenset[str] = field(default_factory=frozenset)

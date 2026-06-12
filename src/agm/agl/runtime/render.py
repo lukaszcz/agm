@@ -123,7 +123,7 @@ def _type_kind_str(value: Value) -> str:
     """Return the AgL type-kind label for a value (used in boundary tags).
 
     The ``type=`` attribute in structured-value boundary tags follows the §2.12
-    convention (finalized in M5):
+    convention:
 
     - Scalar values: ``"text"``, ``"int"``, ``"decimal"``, ``"bool"``, ``"json"``
     - Homogeneous collections: ``"list"``, ``"dict"``

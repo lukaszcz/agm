@@ -12,8 +12,7 @@ setup:
 # Run the test suite
 check_coverage := "100"
 test:
-    # AgL v1 acceptance suite is red by design until M5 (notes/PLAN_DSL.md §15); M5 removes this ignore.
-    uv run python -m pytest tests/ --ignore=tests/test_agl_e2e.py -q -n auto --cov=agm --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
+    uv run python -m pytest tests/ -q -n auto --cov=agm --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 
 # Lint with ruff
 lint:

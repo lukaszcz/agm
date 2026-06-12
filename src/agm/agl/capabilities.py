@@ -16,11 +16,13 @@ Design
   the built-in ``prompt`` keyword.  When ``False`` (and no fallback agent), a
   ``prompt`` call is a static error.
 - ``codec_kinds``: mapping from codec name → frozenset of semantic type-kind
-  strings the codec supports.  In v1 the only registered codec is ``"text"``
-  supporting ``{"text"}``; the ``"json"`` codec (M2) adds
-  ``{"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}``.
-- ``renderer_names``: frozenset of known renderer names (``"default"``,
-  ``"raw"`` in v1; extended in M5).
+  strings the codec supports.  Built-in codecs: ``"text"`` (supports
+  ``{"text"}``); ``"json"`` (supports
+  ``{"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}``).
+  Hosts may register additional codecs via ``WorkflowRuntime``.
+- ``renderer_names``: frozenset of known renderer names.  The built-in set is
+  ``{"default", "raw", "json", "bullets"}``; hosts may register additional
+  renderers via :meth:`WorkflowRuntime.register_renderer`.
 
 The string type-kind identifiers used in ``codec_kinds`` match the names of
 the semantic ``Type`` subclasses in ``agm.agl.typecheck.types`` (lower-cased,
@@ -50,9 +52,10 @@ class HostCapabilities:
         When ``False`` (and ``has_fallback_agent`` is also ``False``), a
         ``prompt`` call is a static error.
     supports_shell_exec:
-        When ``True``, the host can execute ``exec`` (shell) calls.  In M1 this
-        is always ``False`` and any ``exec`` call is a static error; M4 flips it
-        to ``True`` once the shell-exec backend lands.
+        When ``True``, the host can execute ``exec`` (shell) calls.  When
+        ``False``, any ``exec`` call site is a static error.  ``WorkflowRuntime``
+        sets this to ``True``; test harnesses that do not want shell execution
+        may set it to ``False``.
     codec_kinds:
         Mapping from codec name to the frozenset of semantic type-kind strings
         the codec can handle.  Type-kind strings are the lower-cased class name

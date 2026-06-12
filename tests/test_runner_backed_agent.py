@@ -858,7 +858,10 @@ class TestRunnerMessageComposition:
     def _call_factory(
         self,
         *,
-        request_kwargs: dict[str, object],
+        prompt: str = "Hello world",
+        attempt: int = 0,
+        previous_invalid_output: str | None = None,
+        validation_errors: list[object] | None = None,
         format_instructions: str = "",
     ) -> str:
         """Call runner_backed_agent_factory and return the rendered prompt written to temp file."""
@@ -866,7 +869,14 @@ class TestRunnerMessageComposition:
         from agm.agl.runtime.agents import runner_backed_agent_factory
         from agm.agl.runtime.codec import TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.runtime.request import ValidationError
         from agm.agl.typecheck.types import TextType
+
+        ve: list[ValidationError] = (
+            [v for v in validation_errors if isinstance(v, ValidationError)]
+            if validation_errors is not None
+            else []
+        )
 
         written_prompts: list[str] = []
 
@@ -895,16 +905,14 @@ class TestRunnerMessageComposition:
             json_schema=None,
         )
 
-        req_fields: dict[str, object] = {
-            "agent": "prompt",
-            "prompt": "Hello world",
-            "attempt": 0,
-            "previous_invalid_output": None,
-            "validation_errors": [],
-            "output_contract": contract,
-        }
-        req_fields.update(request_kwargs)
-        req = AgentRequest(**req_fields)  # type: ignore[arg-type]
+        req = AgentRequest(
+            agent="prompt",
+            prompt=prompt,
+            attempt=attempt,
+            previous_invalid_output=previous_invalid_output,
+            validation_errors=ve,
+            output_contract=contract,
+        )
 
         factory_fn = runner_backed_agent_factory(
             default_runner_cmd="echo",
@@ -927,12 +935,13 @@ class TestRunnerMessageComposition:
         return written_prompts[0]
 
     def test_prompt_only_on_first_attempt(self) -> None:
-        text = self._call_factory(request_kwargs={"prompt": "Do X.", "attempt": 0})
+        text = self._call_factory(prompt="Do X.", attempt=0)
         assert text.startswith("Do X.")
 
     def test_format_instructions_appended_when_present(self) -> None:
         text = self._call_factory(
-            request_kwargs={"prompt": "Do X.", "attempt": 0},
+            prompt="Do X.",
+            attempt=0,
             format_instructions="Return plain text.",
         )
         assert "Do X." in text
@@ -940,7 +949,8 @@ class TestRunnerMessageComposition:
 
     def test_no_format_instructions_when_empty(self) -> None:
         text = self._call_factory(
-            request_kwargs={"prompt": "Do X.", "attempt": 0},
+            prompt="Do X.",
+            attempt=0,
             format_instructions="",
         )
         # Should just be the prompt (and no injected blank lines from format_instructions)
@@ -950,12 +960,10 @@ class TestRunnerMessageComposition:
     def test_retry_feedback_on_attempt_1(self) -> None:
         """§7.8 corrective message included on attempt≥1."""
         text = self._call_factory(
-            request_kwargs={
-                "prompt": "Do X.",
-                "attempt": 1,
-                "previous_invalid_output": "bad output",
-                "validation_errors": [],
-            },
+            prompt="Do X.",
+            attempt=1,
+            previous_invalid_output="bad output",
+            validation_errors=[],
         )
         # Must include corrective feedback text per §7.8
         assert "Your previous response did not match the required output format" in text
@@ -963,26 +971,23 @@ class TestRunnerMessageComposition:
     def test_retry_previous_output_included(self) -> None:
         """Previous response is quoted in retry feedback (§7.8)."""
         text = self._call_factory(
-            request_kwargs={
-                "prompt": "Do X.",
-                "attempt": 1,
-                "previous_invalid_output": "the-bad-output-xyz",
-                "validation_errors": [],
-            },
+            prompt="Do X.",
+            attempt=1,
+            previous_invalid_output="the-bad-output-xyz",
+            validation_errors=[],
         )
         assert "the-bad-output-xyz" in text
 
     def test_no_retry_feedback_on_attempt_0(self) -> None:
         """No corrective feedback on first attempt."""
-        text = self._call_factory(
-            request_kwargs={"prompt": "Do X.", "attempt": 0},
-        )
+        text = self._call_factory(prompt="Do X.", attempt=0)
         assert "Your previous response did not match" not in text
 
     def test_verbatim_dollar_name_not_expanded(self) -> None:
         """$NAME and ${NAME} in the rendered prompt are NOT expanded (§9.5)."""
         text = self._call_factory(
-            request_kwargs={"prompt": "Value is $NAME and ${OTHER}", "attempt": 0},
+            prompt="Value is $NAME and ${OTHER}",
+            attempt=0,
         )
         assert "$NAME" in text
         assert "${OTHER}" in text
@@ -990,12 +995,10 @@ class TestRunnerMessageComposition:
     def test_format_instructions_precede_retry_feedback(self) -> None:
         """Order: prompt → format_instructions → retry feedback."""
         text = self._call_factory(
-            request_kwargs={
-                "prompt": "Do X.",
-                "attempt": 1,
-                "previous_invalid_output": "bad",
-                "validation_errors": [],
-            },
+            prompt="Do X.",
+            attempt=1,
+            previous_invalid_output="bad",
+            validation_errors=[],
             format_instructions="Return JSON.",
         )
         fmt_pos = text.find("Return JSON.")

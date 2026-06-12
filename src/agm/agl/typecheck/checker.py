@@ -672,13 +672,12 @@ class _Checker:
     def _check_agent_call(self, node: AgentCall, *, expected: Type | None) -> Type:
         kind = self._resolved.call_kinds.get(node.node_id, CallKind.agent)
 
-        # ``exec`` (shell) calls are rejected statically unless the host supports
-        # them.  In M1 ``supports_shell_exec`` is always False (M4 flips it), so
-        # any ``exec`` call is a static error at the call's span.
+        # ``exec`` (shell) calls are rejected statically unless the host declares
+        # support.  ``WorkflowRuntime`` sets ``supports_shell_exec=True``; test
+        # harnesses that want to forbid shell execution may set it to ``False``.
         if kind == CallKind.shell_exec and not self._caps.supports_shell_exec:
             raise AglTypeError(
-                "The host does not support 'exec' calls (shell execution lands "
-                "in M4).",
+                "The host does not support 'exec' (shell) calls.",
                 span=node.span,
             )
 
@@ -723,8 +722,8 @@ class _Checker:
             if not self._caps.has_default_agent and not self._caps.has_fallback_agent:
                 raise AglTypeError(
                     "No default agent is configured; the built-in 'prompt' call "
-                    "cannot run. Configure a default agent (the CLI wires the "
-                    "runner-backed default agent in M5).",
+                    "cannot run. Register a default agent, or run via `agm exec`, "
+                    "which provides one.",
                     span=node.span,
                 )
 

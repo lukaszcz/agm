@@ -305,7 +305,19 @@ agm tmux layout 4 --window @1
 
 ### `agm exec`
 
-Execute an AgL (Agent Language) workflow program; see `agm help exec` for options and exit codes.
+Execute an AgL (Agent Language) workflow program. AgL is a statically-typed DSL for composable
+agent workflows: it supports typed inputs/outputs, structured JSON targets, do-loops with
+retry/abort policies, control flow (if/case/try), and named agents. The runner command is
+resolved from `[exec.agents]` (per-agent), `--runner`, `[exec] runner`, `[loop] runner`, or
+`claude -p` (built-in default).
+
+```bash
+agm exec workflow.agl
+agm exec --input name=Alice --max-iters 10 workflow.agl
+agm exec --dry-run workflow.agl   # static check only — no agent calls
+```
+
+See `agm help exec` for options, exit codes, and config.
 
 ## Aliases
 

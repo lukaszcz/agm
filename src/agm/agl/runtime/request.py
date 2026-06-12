@@ -4,9 +4,9 @@ These are the objects passed to host-registered agent callables.
 ``AgentRequest.prompt`` is the already-rendered prompt template (the rendered
 text that the agent should receive as its user message).
 
-Design §7.5 shape — M1 minimal fields; M2 adds ``output_contract`` so agents
-can inspect format instructions and the JSON schema for native structured
-output (design §7.6).
+Design §7.5 / §7.6 shape: ``AgentRequest`` carries the rendered prompt,
+attempt counter, retry context, and an ``OutputContract`` so agents can
+inspect format instructions and the JSON schema for native structured output.
 """
 
 from __future__ import annotations

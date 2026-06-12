@@ -52,6 +52,6 @@ via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
 | `agm.commands.exec` | CLI command | `tests/test_exec_command.py` |
 
 The end-to-end acceptance suite lives in `tests/test_agl_e2e.py` and
-`tests/agl/`. It is **red until M5** and is excluded from the `just test` /
-`just check` gate via `--ignore=tests/test_agl_e2e.py` (see the `test` recipe in
-the `justfile`). M5 removes that ignore once the suite goes green.
+`tests/agl/`. It is **green and part of the standing gate** — `just test` /
+`just check` include it with no `--ignore` flag.  All new AgL work must keep
+this suite green.

@@ -9,3 +9,15 @@ runner = "claude -p '@%{PROMPT_FILE}'"
 
 [loop.pi]
 runner = "agm run pi -p '@%{PROMPT_FILE}'"
+
+# [exec] — AgL workflow runner settings (agm exec).
+# Uncomment and adjust as needed; all fields are optional.
+#
+# [exec]
+# runner = "claude -p"          # default agent runner (falls back to [loop] runner)
+# strict_json = false           # require bare JSON from agents (default: lenient recovery)
+# default_loop_limit = 5        # do[] iteration bound when not specified inline
+# timeout = "30m"               # idle timeout for agent and exec() calls
+#
+# [exec.agents]                 # per-agent runner commands (highest precedence)
+# reviewer = "claude -p"

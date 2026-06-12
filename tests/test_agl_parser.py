@@ -2861,14 +2861,13 @@ class TestTargetedDiagnostics:
     "Unexpected token" message.
     """
 
-    def test_chained_comparison_targeted_message(self) -> None:
-        """Chained comparison rejects with a targeted non-associative message."""
+    def _assert_chained_comparison_message(self, source: str) -> None:
+        """Parse *source*, assert it raises AglSyntaxError with a targeted message."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("let x = 1\nlet ok = (x = 1 = 2)")
+            parse_program(source)
         err = exc_info.value
         msg = str(err).lower()
-        # The message must reference associativity, parenthesization, or
-        # comparison non-associativity — not just "unexpected token".
+        # The message must reference associativity, parenthesization, or comparison.
         assert (
             "non-associative" in msg
             or "associative" in msg
@@ -2876,7 +2875,20 @@ class TestTargetedDiagnostics:
             or "comparison" in msg
             or "chain" in msg
         ), f"Expected targeted chained-comparison message, got: {err}"
-        # Must not be a generic "unexpected token" message.
+        # Must not be a plain "unexpected token" message.
         assert "unexpected token" not in msg or any(
             kw in msg for kw in ("non-associative", "parenthes", "comparison", "chain")
         ), f"Message is too generic: {err}"
+
+    def test_chained_comparison_targeted_message(self) -> None:
+        """Chained EQ rejects with a targeted non-associative message (x = y = z)."""
+        self._assert_chained_comparison_message("let x = 1\nlet ok = (x = 1 = 2)")
+
+    def test_chained_lt_targeted_message(self) -> None:
+        """Chained LT rejects with a targeted non-associative message (1 < 2 < 3)."""
+        self._assert_chained_comparison_message("let ok = (1 < 2 < 3)")
+
+    def test_chained_le_neq_targeted_message(self) -> None:
+        """Mixed chained comparison rejects with a targeted message (a <= b != c)."""
+        source = "let a = 1\nlet b = 2\nlet c = 3\nlet ok = (a <= b != c)"
+        self._assert_chained_comparison_message(source)

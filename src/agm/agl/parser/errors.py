@@ -3,8 +3,15 @@
 This module maps Lark ``UnexpectedInput`` family and lexer ``LexError`` to
 ``AglSyntaxError`` carrying a ``SourceSpan`` and a user-facing message.
 
-Special case: if the unexpected token is ``EQ_EQ`` (``==``), the message is
-``'Use `=` for equality.'`` per design §2.3.
+Special cases:
+- If the unexpected token is ``EQ_EQ`` (``==``), the message is
+  ``'Use `=` for equality.'`` per design §2.3.
+- If the unexpected token is any comparison operator (``=``, ``!=``, ``<``,
+  ``<=``, ``>``, ``>=``) and that operator is NOT in the expected set, the
+  parser has already consumed one complete comparison expression and a second
+  one was chained, which is non-associative in AgL (design §4.3).  A targeted
+  "comparisons are non-associative; parenthesize" message is emitted instead of
+  the generic "Unexpected token" fallback.
 """
 
 from __future__ import annotations
@@ -14,8 +21,8 @@ from agm.agl.syntax.spans import SourceSpan
 
 # Token type for the "==" error token (mirrors tokens.EQ_EQ).
 _EQ_EQ = "EQ_EQ"
-# Token type for the "=" comparison operator (mirrors tokens.EQ).
-_EQ = "EQ"
+# All comparison operator token types (mirrors tokens.py).
+_CMP_OPS: frozenset[str] = frozenset({"EQ", "NEQ", "LT", "LE", "GT", "GE"})
 
 
 class AglSyntaxError(AglError):
@@ -67,17 +74,18 @@ def _make_eq_eq_error(span: SourceSpan) -> AglSyntaxError:
 
 
 def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
-    """Targeted diagnostic for chained comparison (design §4.3).
+    """Targeted diagnostic for chained comparisons (design §4.3).
 
-    Comparison is non-associative in AgL: ``x = y = z`` is not valid.
-    When the parser sees a second ``=`` after a complete comparison expression,
-    the expected-token set will not include ``EQ`` (a fresh comparison has
-    already been consumed).  This helper produces a friendly message instead of
-    the generic "Unexpected token" fallback.
+    All comparison operators (``=``, ``!=``, ``<``, ``<=``, ``>``, ``>=``) are
+    non-associative in AgL: ``x = y = z``, ``1 < 2 < 3``, ``a <= b != c`` are
+    all parse errors.  When the parser sees a comparison operator as the
+    *unexpected* token AND that operator is absent from the *expected* set, a
+    full comparison expression was already consumed and a second was chained —
+    the friendly message below is emitted instead of the generic fallback.
     """
     return AglSyntaxError(
-        "Comparison is non-associative: `x = y = z` is not valid. "
-        "Parenthesize comparisons explicitly, e.g. `(x = y) = z`.",
+        "Comparisons are non-associative; parenthesize explicitly, "
+        "e.g. `(x = y) = z`.",
         span=span,
     )
 
@@ -113,12 +121,14 @@ def syntax_error_from_lark(
         span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
         if tok.type == _EQ_EQ:
             return _make_eq_eq_error(span)
-        # Chained comparison detection (design §4.3): ``=`` is the unexpected
-        # token AND ``EQ`` is NOT in the expected set.  When ``EQ`` IS expected,
-        # we are before the first comparison operator (valid start of ``x = y``);
-        # when it is absent, a comparison expression was already consumed and the
-        # parser cannot continue — i.e. the user wrote ``x = y = z``.
-        if tok.type == _EQ and _EQ not in exc.expected:
+        # Chained comparison detection (design §4.3): the unexpected token is
+        # a comparison operator AND that operator is NOT in the expected set.
+        # When the operator IS expected, we are still before the first comparison
+        # (valid start of, e.g., ``x = y``); when it is absent, a full comparison
+        # expression was already consumed and the parser cannot continue — the
+        # user chained comparisons such as ``x = y = z``, ``1 < 2 < 3``, or
+        # ``a <= b != c``.
+        if tok.type in _CMP_OPS and tok.type not in exc.expected:
             return _make_chained_comparison_error(span)
         return AglSyntaxError(
             f"Unexpected token {tok!r}.",

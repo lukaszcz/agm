@@ -1910,14 +1910,15 @@ class TestRuntimeExceptionHandlers:
         result = _convert_input("meta", [1, 2, 3], JsonType())
         assert result == JsonValue([1, 2, 3])
 
-    def test_convert_input_nonscalar_type_rejected(self) -> None:
-        # F4: a non-scalar declared type (list/dict/record/enum) is rejected
-        # with a clear pre-execution diagnostic; the json codec lands in M2.
+    def test_convert_input_list_type_parsed_via_json_codec(self) -> None:
+        # M2: list/dict/record/enum inputs are now accepted via the JsonCodec.
+        from agm.agl.eval.values import ListValue, TextValue
         from agm.agl.runtime.runtime import _convert_input
         from agm.agl.typecheck.types import ListType, TextType
 
-        with pytest.raises(ValueError, match="json codec"):
-            _convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
+        result = _convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
+        assert isinstance(result, ListValue)
+        assert result.elements == (TextValue("a"), TextValue("b"))
 
     def test_convert_input_text_non_str_raises(self) -> None:
         from agm.agl.runtime.runtime import _convert_input

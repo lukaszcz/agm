@@ -9,6 +9,8 @@ description = "Unified CLI for managing worktrees, project dependencies, configu
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.0",
+    "json-repair>=0.30",
+    "jsonschema>=4.0",
     "lark>=1.2",
     "plumbum>=1.9.0",
     "python-dotenv>=1.2.2",
@@ -54,4 +56,5 @@ dev = [
     "pytest-xdist>=3.0",
     "mypy>=1.10",
     "ruff>=0.11",
+    "types-jsonschema>=4.0",
 ]

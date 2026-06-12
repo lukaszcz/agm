@@ -139,9 +139,10 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         from agm.agl.capabilities import HostCapabilities
         from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.runtime.codec import TextCodec
+        from agm.agl.runtime.codec import JsonCodec, TextCodec
 
         text_codec = TextCodec()
+        json_codec = JsonCodec()
         registry = AgentRegistry(
             named={name: fn for name, fn in self._agents.items()},
             default_agent=self._default_agent,
@@ -150,10 +151,12 @@ class WorkflowRuntime:
             agent_names=registry.agent_names,
             has_fallback_agent=registry.has_fallback,
             has_default_agent=registry.has_default_agent,
-            codec_kinds={text_codec.name: frozenset({"text"})},
-            # The renderers/codecs below are exactly those implemented in M1
-            # (see ``render.py`` ``_RENDERERS`` and ``codec.py``).  This catalog
-            # is the single source of truth for host capabilities.
+            codec_kinds={
+                text_codec.name: frozenset({"text"}),
+                json_codec.name: frozenset(
+                    {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+                ),
+            },
             renderer_names=frozenset({"default", "raw", "json", "bullets"}),
         )
 
@@ -268,9 +271,13 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         # [5] Materialize output contracts (text codec only in M1)
         # ----------------------------------------------------------------
+        from agm.agl.runtime.codec import OutputCodec
         from agm.agl.runtime.contract import materialize_contract
 
-        codecs = {text_codec.name: text_codec}
+        codecs: dict[str, OutputCodec] = {
+            text_codec.name: text_codec,
+            json_codec.name: json_codec,
+        }
         contracts: dict[int, object] = {}
         contract_errors: list[Diagnostic] = []
 
@@ -394,14 +401,12 @@ class WorkflowRuntime:
 def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
     """Convert a raw host input value to the declared AgL type.
 
-    Scalars are supported in M1:
+    Supported types:
     - ``text``: verbatim (the value must already be a ``str``).
     - ``int``/``decimal``/``bool``/``json``: parsed via stdlib ``json`` with
       ``parse_float=Decimal`` (design §5.1: no binary floats) and validated.
-
-    Non-scalar declared types (``list``/``dict``/``record``/``enum`` — anything
-    the M1 host cannot parse from JSON into a typed ``Value``) are rejected with
-    a clear pre-execution diagnostic; the JSON codec lands in M2.
+    - ``list``/``dict``/``record``/``enum``: parsed from a JSON string via the
+      ``JsonCodec`` (M2+).
     """
     import decimal as _decimal
 
@@ -415,8 +420,12 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
     from agm.agl.typecheck.types import (
         BoolType,
         DecimalType,
+        DictType,
+        EnumType,
         IntType,
         JsonType,
+        ListType,
+        RecordType,
         TextType,
     )
 
@@ -428,16 +437,29 @@ def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
             )
         return TextValue(raw)
 
-    # Reject non-scalar declared types: the M1 host has no codec to build a
-    # typed Value from JSON for these.
+    # Structured types (list/dict/record/enum): delegate to JsonCodec.
+    if isinstance(type_obj, (ListType, DictType, RecordType, EnumType)):
+        from agm.agl.runtime.codec import JsonCodec
+
+        if not isinstance(raw, str):
+            raise ValueError(
+                f"Input {name!r} has type {type_obj!r}; structured inputs must be "
+                "provided as a JSON string."
+            )
+        codec = JsonCodec()
+        result = codec.parse(raw, type_obj, strict_json=False)
+        if not result.ok or result.value is None:
+            raise ValueError(
+                f"Input {name!r}: could not parse as {type_obj!r}: {result.error_msg}"
+            )
+        return result.value
+
+    # Scalar non-text (int/decimal/bool/json): parse from JSON if given as string.
     if not isinstance(type_obj, (IntType, DecimalType, BoolType, JsonType)):
         raise ValueError(
-            f"Input {name!r} has type {type_obj!r}; non-scalar JSON-typed inputs "
-            "land with the json codec (M2). M1 supports only text, int, decimal, "
-            "bool, and json inputs."
+            f"Input {name!r} has unsupported type {type_obj!r}."
         )
 
-    # Scalar non-text: parse from JSON if given as a string.
     value = raw
     if isinstance(value, str):
         try:

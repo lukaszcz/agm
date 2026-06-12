@@ -490,6 +490,7 @@ class Interpreter:
                 prompt=prompt_text,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
+                output_contract=contract,
             )
             response = self._registry.dispatch(agent_name, request)
             raw = response.content

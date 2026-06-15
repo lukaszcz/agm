@@ -77,29 +77,15 @@ def render_entry_result(
 
 
 def _render_failure(result: "EntryResult") -> list[str]:
-    """Render a failed entry: a runtime raise, else pre-execution diagnostics."""
-    if result.error is not None:
-        return [_render_runtime_error(result)]
-    return [f"line {diag.line}: {diag.message}" for diag in result.diagnostics]
+    """Render a failed entry: a runtime raise, else pre-execution diagnostics.
 
-
-def _render_runtime_error(result: "EntryResult") -> str:
-    """Render an uncaught AgL exception line (mirrors ``agm exec``).
-
-    Format: ``AgL exception: <Type>[: <message>][ at line L[, col C]]``.
+    A runtime raise uses ``RunError.to_message`` — the same formatter ``agm
+    exec`` prints (the REPL omits the trace id, which exec includes for
+    correlation) — so the two never diverge.
     """
-    error = result.error
-    assert error is not None  # guarded by the caller
-    parts: list[str] = [f"AgL exception: {error.type_name}"]
-    message = error.fields.get("message")
-    if isinstance(message, str) and message:
-        parts.append(message)
-    if error.line is not None:
-        if error.col is not None:
-            parts.append(f"at line {error.line}, col {error.col}")
-        else:
-            parts.append(f"at line {error.line}")
-    return ": ".join(parts)
+    if result.error is not None:
+        return [result.error.to_message()]
+    return [f"line {diag.line}: {diag.message}" for diag in result.diagnostics]
 
 
 def _render_check_only(result: "EntryResult") -> str | None:

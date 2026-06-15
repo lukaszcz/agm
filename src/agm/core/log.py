@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,36 @@ def resolve_log_file(
         pid = os.getpid()
         return default_agent_files_dir() / f"{command_name}-{timestamp}-{pid}.log"
     return default_agent_files_dir() / f"{command_name}-{timestamp}.log"
+
+
+def prepare_trace_log(
+    *,
+    command_name: str,
+    no_log: bool,
+    log_file: str | None,
+) -> Path | None:
+    """Resolve and validate the JSONL trace path up front, or return ``None``.
+
+    Resolves via :func:`resolve_log_file` (``unique=True`` to avoid collisions
+    on the second-granularity stamp), then creates the parent directory and
+    touch-appends an empty string to confirm writability without writing a
+    record (so the first traced entry starts from a clean file).  An unwritable
+    path exits 1 with a clean ``Error: ...`` BEFORE any program runs instead of
+    crashing mid-run.  Returns ``None`` when *no_log* is set; callers that
+    suppress tracing for other reasons (e.g. ``--dry-run``) short-circuit before
+    calling.  Shared by ``agm exec`` and ``agm repl``.
+    """
+    log_path = resolve_log_file(
+        command_name=command_name, no_log=no_log, log_file=log_file, unique=True
+    )
+    if log_path is not None:
+        try:
+            mkdir(log_path.parent, parents=True, exist_ok=True)
+            append_text(log_path, "", encoding="utf-8")
+        except OSError as exc:
+            print(f"Error: cannot write trace log to {log_path}: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+    return log_path
 
 
 def append_log(log_file: Path | None, content: str) -> None:

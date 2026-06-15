@@ -118,6 +118,29 @@ class RunError:
     line: int | None = None
     col: int | None = None
 
+    def to_message(self, *, include_trace_id: bool = False) -> str:
+        """Render the single-line ``AgL exception: ...`` report for this error.
+
+        Format: ``AgL exception: <Type>[: <message>][: at line L[, col C]]``,
+        with a trailing ``: trace_id=<id>`` when *include_trace_id* is set and a
+        trace id is present.  Shared by ``agm exec`` (with the trace id, design
+        §12.6) and the REPL failure echo so the two never diverge.
+        """
+        parts: list[str] = [f"AgL exception: {self.type_name}"]
+        message = self.fields.get("message")
+        if isinstance(message, str) and message:
+            parts.append(message)
+        if self.line is not None:
+            if self.col is not None:
+                parts.append(f"at line {self.line}, col {self.col}")
+            else:
+                parts.append(f"at line {self.line}")
+        if include_trace_id:
+            trace_id = self.fields.get("trace_id")
+            if isinstance(trace_id, str) and trace_id:
+                parts.append(f"trace_id={trace_id}")
+        return ": ".join(parts)
+
 
 @dataclass(slots=True)
 class RunResult:
@@ -205,6 +228,10 @@ class WorkflowRuntime:
         self._extra_renderers: dict[str, "RendererFn"] = {}
         # Per-renderer supported type kinds (``None`` → type-agnostic / all kinds).
         self._extra_renderer_kinds: dict[str, frozenset[str] | None] = {}
+        # Cached assembled environment: invariant between registrations, so the
+        # REPL's per-entry ``host_environment()`` calls reuse one bundle.  Any
+        # ``register_*`` invalidates it.
+        self._host_env_cache: HostEnvironment | None = None
 
     def register_agent(self, name: str, fn: AgentFn) -> None:
         """Register a named agent callable.
@@ -223,6 +250,7 @@ class WorkflowRuntime:
                 "Duplicate registrations are not allowed."
             )
         self._agents[name] = fn
+        self._host_env_cache = None
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec.
@@ -252,6 +280,7 @@ class WorkflowRuntime:
                 "Duplicate codec registrations are not allowed."
             )
         self._extra_codecs[name] = codec
+        self._host_env_cache = None
 
     def register_renderer(
         self,
@@ -302,6 +331,7 @@ class WorkflowRuntime:
                 )
         self._extra_renderers[name] = fn
         self._extra_renderer_kinds[name] = supported_types
+        self._host_env_cache = None
 
     def host_environment(self) -> HostEnvironment:
         """Assemble the shared host environment from this runtime's registrations.
@@ -310,14 +340,21 @@ class WorkflowRuntime:
         codec/renderer tables — the same bundle ``run`` builds internally.  An
         embedding host (e.g. ``ReplSession``) calls this to wire identical
         agent/codec/renderer backing without re-running the assembly itself.
+
+        The bundle is invariant between registrations, so it is assembled once
+        and cached; a ``register_*`` call invalidates the cache.  This spares the
+        REPL re-assembling the whole environment on every entry / introspection.
         """
-        return assemble_host_environment(
+        if self._host_env_cache is not None:
+            return self._host_env_cache
+        self._host_env_cache = assemble_host_environment(
             agents=self._agents,
             default_agent=self._default_agent,
             extra_codecs=self._extra_codecs,
             extra_renderers=self._extra_renderers,
             extra_renderer_kinds=self._extra_renderer_kinds,
         )
+        return self._host_env_cache
 
     def run(
         self,

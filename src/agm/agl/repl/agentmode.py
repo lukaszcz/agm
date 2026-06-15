@@ -8,16 +8,14 @@ The REPL can dispatch live agent (and ``exec`` shell) calls in one of two modes:
 
 This tiny module exists on its own so BOTH the meta-command layer
 (:mod:`agm.agl.repl.meta`, which mutates the mode via ``:agent confirm|auto``)
-and M4's confirming agent wrapper (which will *read* the mode before each call)
-can import it without a cyclic dependency.
+and the confirming agent wrapper (:class:`agm.agl.repl.agents.ConfirmingAgent`,
+which *reads* the mode before each live call) can import it without a cyclic
+dependency.
 
-**M4 wiring seam.** ``AgentMode`` is a mutable holder, not a value: the meta
-layer mutates ``mode`` in place. M4 must construct ONE :class:`AgentMode` and
-pass the SAME instance to both :func:`agm.agl.repl.console.run_console` (so
-``:agent`` mutates it) and to the confirming wrapper (so the wrapper sees the
-mutation). Until M4 wires that wrapper, ``:agent`` changes this holder but has
-**no observable effect** on evaluation — the mode is recorded and reported, and
-nothing reads it yet.
+``AgentMode`` is a mutable holder, not a value: the meta layer mutates ``mode``
+in place. The REPL constructs ONE :class:`AgentMode` and passes the SAME
+instance to both the console (so ``:agent`` mutates it) and the confirming
+wrapper (so the wrapper sees the mutation on the next call).
 """
 
 from __future__ import annotations
@@ -33,7 +31,7 @@ class AgentMode:
     """Mutable holder for the current agent-call confirmation mode.
 
     ``mode`` defaults to ``"confirm"`` per plan decision 2. The meta layer
-    mutates this field; M4's confirming wrapper will read it.
+    mutates this field; the confirming wrapper reads it before each call.
     """
 
     mode: AgentModeName = "confirm"

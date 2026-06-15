@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.render import RendererFn
     from agm.agl.runtime.runtime import HostEnvironment, RunError
+    from agm.agl.runtime.trace import TraceStore
     from agm.agl.scope.symbols import ResolvedProgram, ScopeNode
     from agm.agl.syntax.nodes import Program
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
@@ -350,22 +351,12 @@ class ReplSession:
         expression entry is the checked node type of the expression; for a binding
         it is the declared binding type.
         """
-        from agm.agl.syntax.nodes import ExprStmt, LetDecl, VarDecl
-
         kind, name = self._classify(program)
-        value_type: Type | None = None
-        # A parsed program always has at least one statement (the parser rejects
-        # empty/comment-only input as a syntax error before reaching here).
-        last = program.body[-1]
-        if isinstance(last, ExprStmt):
-            value_type = checked.node_types.get(last.expr.node_id)
-        elif isinstance(last, (LetDecl, VarDecl)):
-            value_type = checked.type_env.get_binding_type(last.node_id)
         return EntryResult(
             kind=kind,
             name=name,
             value=None,
-            value_type=value_type,
+            value_type=self._value_type_of_last(program, checked),
             diagnostics=[],
             warnings=warnings,
             error=None,
@@ -439,47 +430,26 @@ class ReplSession:
             interp.execute(child_scope)
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
-            trace_id = str(error.fields.get("trace_id", ""))
             trace.exception(
                 type_name=error.type_name,
                 message=str(error.fields.get("message", "")),
-                trace_id=trace_id,
+                trace_id=str(error.fields.get("trace_id", "")),
                 span=exc.span,
             )
-            trace.run_end(ok=False)
-            self._rollback(value_snapshot)
-            kind, name = self._classify(program)
-            return EntryResult(
-                kind=kind,
-                name=name,
-                value=None,
-                value_type=None,
-                diagnostics=[],
-                warnings=warnings,
-                error=error,
-                ok=False,
-                trace_path=self._trace_path,
-            )
+            return self._abort(program, warnings, trace, value_snapshot, error=error)
         except (AgentCancelled, KeyboardInterrupt):
             # A declined confirmation or a Ctrl-C during a live agent call aborts
-            # the entry atomically — identical rollback to the AglRaise path, but
-            # there is no AgL exception to map (the cancellation is a host signal,
-            # not an in-language raise), so it surfaces as a diagnostic.
-            trace.run_end(ok=False)
-            self._rollback(value_snapshot)
-            kind, name = self._classify(program)
-            return EntryResult(
-                kind=kind,
-                name=name,
-                value=None,
-                value_type=None,
+            # the entry atomically.  The cancellation is a host signal, not an
+            # in-language raise, so it surfaces as a diagnostic rather than a
+            # mapped AgL exception.
+            return self._abort(
+                program,
+                warnings,
+                trace,
+                value_snapshot,
                 diagnostics=[
                     Diagnostic(message="Agent call cancelled — entry aborted.", line=1)
                 ],
-                warnings=warnings,
-                error=None,
-                ok=False,
-                trace_path=self._trace_path,
             )
 
         trace.run_end(ok=True)
@@ -504,6 +474,39 @@ class ReplSession:
             warnings=warnings,
             error=None,
             ok=True,
+            trace_path=self._trace_path,
+        )
+
+    def _abort(
+        self,
+        program: "Program",
+        warnings: list[Diagnostic],
+        trace: "TraceStore",
+        value_snapshot: dict[str, "Value"],
+        *,
+        error: "RunError | None" = None,
+        diagnostics: list[Diagnostic] | None = None,
+    ) -> EntryResult:
+        """End the trace, roll back, and build the failed result for an abort.
+
+        Shared by the ``AglRaise`` and cancellation arms of
+        ``_evaluate_and_promote``: both end the trace run, restore the value
+        scope, and return a failed result differing only in whether the failure
+        carries an ``error`` (a mapped AgL raise) or ``diagnostics`` (a
+        host-signalled cancellation).
+        """
+        trace.run_end(ok=False)
+        self._rollback(value_snapshot)
+        kind, name = self._classify(program)
+        return EntryResult(
+            kind=kind,
+            name=name,
+            value=None,
+            value_type=None,
+            diagnostics=diagnostics if diagnostics is not None else [],
+            warnings=warnings,
+            error=error,
+            ok=False,
             trace_path=self._trace_path,
         )
 
@@ -595,14 +598,35 @@ class ReplSession:
 
         # A parsed program always has at least one statement.
         last = program.body[-1]
+        value_type = self._value_type_of_last(program, checked)
         if isinstance(last, ExprStmt):
-            return captured, checked.node_types.get(last.expr.node_id)
+            return captured, value_type
         if isinstance(last, (LetDecl, VarDecl)):
             binding = self._value_scope.lookup(last.name)
             value = binding.value if binding is not None else None
-            value_type = checked.type_env.get_binding_type(last.node_id)
             return value, value_type
         return None, None
+
+    def _value_type_of_last(
+        self, program: "Program", checked: "CheckedProgram"
+    ) -> "Type | None":
+        """Static type carried by the entry's last statement, or ``None``.
+
+        The checked type of the expression for a bare-expression entry, the
+        declared binding type for a ``let``/``var``, ``None`` otherwise.  Shared
+        by the check-only result builder and the success echo so the two agree
+        on how an entry's type is derived.
+        """
+        from agm.agl.syntax.nodes import ExprStmt, LetDecl, VarDecl
+
+        # A parsed program always has at least one statement (empty/comment-only
+        # input fails parsing earlier).
+        last = program.body[-1]
+        if isinstance(last, ExprStmt):
+            return checked.node_types.get(last.expr.node_id)
+        if isinstance(last, (LetDecl, VarDecl)):
+            return checked.type_env.get_binding_type(last.node_id)
+        return None
 
     # ------------------------------------------------------------------
     # type_of — type without evaluation

@@ -44,8 +44,8 @@ from agm.config.context import current_config_context
 from agm.config.general import load_exec_config
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
-from agm.core.fs import append_text, mkdir, read_text_arg
-from agm.core.log import resolve_log_file
+from agm.core.fs import read_text_arg
+from agm.core.log import prepare_trace_log
 
 
 def run(args: ExecArgs) -> None:
@@ -79,31 +79,14 @@ def run(args: ExecArgs) -> None:
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
     loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
 
-    # Resolve the trace log file.  --dry-run is side-effect-free: no trace
-    # is written regardless of --log-file (plan §10.1).
+    # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
+    # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
     if dry_run.enabled():
         log_file = None
     else:
-        log_file = resolve_log_file(
-            command_name="exec",
-            no_log=args.no_log,
-            log_file=args.log_file,
-            unique=True,  # F6: add pid to avoid collisions on second-granularity stamp
+        log_file = prepare_trace_log(
+            command_name="exec", no_log=args.no_log, log_file=args.log_file
         )
-
-    # Validate/create the trace path up front so a non-writable --log-file
-    # surfaces as a clean ``Error: ...`` + exit 1 BEFORE any program statement
-    # runs, instead of a raw PermissionError traceback mid-run (F2a).
-    if log_file is not None:
-        try:
-            mkdir(log_file.parent, parents=True, exist_ok=True)
-            # Touch-append to confirm the path is actually writable.  An empty
-            # append creates the file without writing a record, so a later
-            # successful run starts from a clean (empty) trace.
-            append_text(log_file, "", encoding="utf-8")
-        except OSError as exc:
-            print(f"Error: cannot write trace log to {log_file}: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
 
     # ----------------------------------------------------------------
     # Resolve the runner command: CLI flag > [exec] config > shared loop
@@ -177,17 +160,5 @@ def run(args: ExecArgs) -> None:
     # Uncaught AgL exception: print and exit 2 (design §12.6: include source
     # location and trace_id in the error line so the caller can correlate the
     # error with the trace file and the source program).
-    message = result.error.fields.get("message")
-    trace_id = result.error.fields.get("trace_id")
-    parts: list[str] = [f"AgL exception: {result.error.type_name}"]
-    if isinstance(message, str) and message:
-        parts.append(message)
-    if result.error.line is not None:
-        if result.error.col is not None:
-            parts.append(f"at line {result.error.line}, col {result.error.col}")
-        else:
-            parts.append(f"at line {result.error.line}")
-    if isinstance(trace_id, str) and trace_id:
-        parts.append(f"trace_id={trace_id}")
-    print(": ".join(parts), file=sys.stderr)
+    print(result.error.to_message(include_trace_id=True), file=sys.stderr)
     raise SystemExit(2)

@@ -35,8 +35,7 @@ from agm.config.context import current_config_context
 from agm.config.general import load_exec_config
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
-from agm.core.fs import append_text, mkdir
-from agm.core.log import resolve_log_file
+from agm.core.log import prepare_trace_log
 
 
 def run(args: ReplArgs) -> None:
@@ -117,26 +116,13 @@ def run(args: ReplArgs) -> None:
 def _resolve_trace_path(args: ReplArgs) -> Path | None:
     """Resolve + validate the JSONL trace path, or ``None`` (dry-run / --no-log).
 
-    Mirrors ``agm exec``: ``--dry-run`` writes no trace; otherwise the path is
-    resolved via :func:`resolve_log_file` and validated up front (mkdir +
-    touch-append) so an unwritable ``--log-file`` exits 1 BEFORE the loop starts
-    rather than crashing mid-session.
+    Mirrors ``agm exec`` via the shared :func:`prepare_trace_log`: ``--dry-run``
+    writes no trace; otherwise the path is resolved and validated up front so an
+    unwritable ``--log-file`` exits 1 BEFORE the loop starts rather than crashing
+    mid-session.
     """
     if dry_run.enabled():
         return None
-    log_file: Path | None = resolve_log_file(
-        command_name="repl",
-        no_log=args.no_log,
-        log_file=args.log_file,
-        unique=True,
+    return prepare_trace_log(
+        command_name="repl", no_log=args.no_log, log_file=args.log_file
     )
-    if log_file is not None:
-        try:
-            mkdir(log_file.parent, parents=True, exist_ok=True)
-            # Touch-append confirms writability without writing a record, so the
-            # first traced entry starts from a clean file.
-            append_text(log_file, "", encoding="utf-8")
-        except OSError as exc:
-            print(f"Error: cannot write trace log to {log_file}: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-    return log_file

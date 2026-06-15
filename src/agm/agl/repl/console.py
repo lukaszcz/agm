@@ -60,7 +60,28 @@ if TYPE_CHECKING:
 
 PROMPT = "agl> "
 CONTINUATION = "...> "
-BANNER = "AgL REPL — type :help for commands, :quit or Ctrl-D to exit."
+
+
+def format_banner(agent_mode: "AgentMode | None" = None) -> str:
+    """Return the startup banner, noting the active agent-call mode.
+
+    The first line is always ``AgL REPL …`` (a stable prefix other tooling and
+    tests key on).  Subsequent lines state the prompt, how to get help, how to
+    quit, and — when an :class:`AgentMode` is supplied — the current agent-call
+    mode so the user knows up front whether live calls will prompt for
+    confirmation.
+    """
+    lines = [
+        "AgL REPL — an interactive read-eval-print loop for AgL.",
+        f"  Enter AgL at the {PROMPT!r} prompt; a block continues on {CONTINUATION!r}.",
+        "  Type :help for the meta-command list; :quit or Ctrl-D to exit.",
+    ]
+    if agent_mode is not None:
+        if agent_mode.mode == "auto":
+            lines.append("  Agent-call mode: auto (live calls fire without confirmation).")
+        else:
+            lines.append("  Agent-call mode: confirm (you approve each live agent call).")
+    return "\n".join(lines)
 
 # AgL keywords offered by the completer (the reserved-word set, sorted for a
 # stable suggestion order).
@@ -461,7 +482,7 @@ def run_console(
         agent_mode=agent_mode if agent_mode is not None else AgentMode(),
     )
 
-    print(BANNER)
+    print(format_banner(ctx.agent_mode))
     while True:
         try:
             entry = prompt_session.prompt()

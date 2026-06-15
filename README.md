@@ -1,8 +1,9 @@
 # AGM
 
 Agent Management Framework is a CLI for setting up agent-oriented project workspaces, managing
-repo and dependency worktrees, opening tmux sessions, running setup scripts, and executing
-commands with sandbox settings.
+repo and dependency worktrees, opening tmux sessions, running setup scripts, executing
+commands with sandbox settings, and running AgL agent workflows — as whole programs (`agm exec`)
+or in an interactive REPL (`agm repl`).
 
 ## Requirements
 
@@ -320,6 +321,24 @@ agm exec --dry-run workflow.agl   # static check only — no agent calls
 
 See `agm help exec` for options, exit codes, and config. The AgL language itself is
 documented in the [AgL language reference](docs/agl/reference/index.md).
+
+### `agm repl`
+
+Start an interactive read-eval-print loop for AgL. The REPL keeps a persistent session:
+each entry is parsed, type-checked, and evaluated once against an environment that
+accumulates bindings, types, and declarations, so earlier results stay available and agent
+calls fire exactly once. By default it confirms each live agent call; `--auto-agents` fires
+them immediately. Multiline editing, syntax highlighting, tab-completion, and history are
+built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
+
+```bash
+agm repl                                    # launch; type :help for commands, :quit to exit
+agm repl --auto-agents --input topic=haskell  # no per-call confirmation, pre-seed an input
+agl> let n = 21 * 2                          # bindings persist across entries → "n : int = 42"
+```
+
+See `agm help repl` and [docs/commands.md](docs/commands.md) for the full reference, and the
+[AgL language reference](docs/agl/reference/index.md) for the language.
 
 ## Aliases
 

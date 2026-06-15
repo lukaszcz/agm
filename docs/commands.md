@@ -567,6 +567,39 @@ Blank lines and comment-only entries (everything after a `#` is a comment) are a
 no-op: pressing Enter on them simply returns a fresh prompt, with no evaluation
 and no error.
 
+Exit codes (the REPL itself only fails before the loop starts; per-entry errors
+are reported inline and never exit the process):
+
+| Code | Meaning |
+|------|---------|
+| `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
+| `1` | Pre-loop setup failure: a malformed `--input KEY=VALUE`, an invalid `[exec]` configuration or `--runner` command, or an unwritable `--log-file` — reported before the prompt appears |
+
+Once the loop is running, a static or runtime error in an entry is printed and
+the prompt returns; it never changes the exit code.
+
+Examples:
+
+```bash
+# Launch a session; build up state line by line.
+agm repl
+agl> let greeting = "hello"
+greeting : text = hello
+agl> :type greeting
+text
+agl> :bindings
+greeting : text = hello
+agl> :quit
+
+# Fire agent calls without confirming each one, pre-seeding an input.
+agm repl --auto-agents --input topic=haskell
+
+# Explore types only — no agent or exec calls fire, nothing is persisted.
+agm repl --dry-run
+agl> 1 + 2
+: int
+```
+
 ## Help and aliases
 
 | Alias | Canonical form |

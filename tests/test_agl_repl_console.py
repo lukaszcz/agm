@@ -26,12 +26,14 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from agm.agl.repl import ReplSession
+from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmDecision
 from agm.agl.repl.console import (
     AglCompleter,
     AglPromptLexer,
     _make_history,
     build_prompt_session,
+    format_banner,
     has_runnable_statements,
     is_incomplete,
     run_console,
@@ -83,6 +85,7 @@ def drive(
     session: ReplSession | None = None,
     echo: bool = True,
     check_only: bool = False,
+    agent_mode: AgentMode | None = None,
 ) -> str:
     """Feed *keystrokes* to a headless REPL and return everything it printed."""
     repl_session = session if session is not None else ReplSession()
@@ -94,6 +97,7 @@ def drive(
                 repl_session,
                 echo=echo,
                 check_only=check_only,
+                agent_mode=agent_mode,
                 history_path=None,  # InMemoryHistory — never touch real $HOME
                 input=pipe,
                 output=DummyOutput(),
@@ -110,6 +114,23 @@ class TestLoop:
     def test_banner_is_printed(self) -> None:
         output = drive("\x04")
         assert "AgL REPL" in output
+        # The banner points the user at :help and how to quit.
+        assert ":help" in output
+        assert ":quit" in output
+
+    def test_banner_reports_confirm_mode(self) -> None:
+        output = drive("\x04", agent_mode=AgentMode(mode="confirm"))
+        assert "confirm" in output.lower()
+
+    def test_banner_reports_auto_mode(self) -> None:
+        output = drive("\x04", agent_mode=AgentMode(mode="auto"))
+        assert "auto" in output.lower()
+
+    def test_format_banner_starts_with_stable_prefix(self) -> None:
+        # The first banner line is a stable prefix regardless of mode.
+        assert format_banner().startswith("AgL REPL")
+        assert format_banner(AgentMode(mode="auto")).startswith("AgL REPL")
+        assert format_banner(AgentMode(mode="confirm")).startswith("AgL REPL")
 
     def test_single_expression_submits_and_echoes(self) -> None:
         output = drive("1 + 2\r\x04")

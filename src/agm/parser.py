@@ -503,8 +503,11 @@ _HELP_TEXTS: dict[str, str] = {
                  [--quiet] [--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
-        parsed, type-checked, and evaluated against a persistent session that
-        accumulates bindings, types, and declarations across entries.
+        parsed, type-checked, and evaluated once against a persistent session
+        that accumulates bindings, types, and declarations across entries, so
+        earlier results stay available and agent calls fire exactly once.  The
+        session reuses the [exec] configuration (runner, per-agent commands,
+        loop limit, JSON strictness, timeout).
 
         Options:
           --input KEY=VALUE     Pre-seed a host input value (repeatable).
@@ -512,13 +515,23 @@ _HELP_TEXTS: dict[str, str] = {
           --no-strict-json      Use lenient JSON recovery (default).
           --max-iters N         Override the default do-loop iteration limit.
           --runner COMMAND      Override the default agent runner command.
-          --auto-agents         Fire agent calls without confirming each one.
+          --auto-agents         Fire agent calls without confirming each one
+                                (default: confirm each live agent call).
           --quiet               Suppress automatic echoing of entry results.
-          --log-file PATH       Write trace log to PATH.
+          --log-file PATH       Write a JSONL trace log to PATH.
           --no-log              Disable trace logging.
+          --dry-run             Type-check only: run the static pipeline for each
+                                entry but never evaluate it (no agent/exec calls,
+                                no persisted bindings); echo the inferred type.
 
         Type :help inside the REPL for the meta-command list; :quit or Ctrl-D
-        exits.
+        exits.  Ctrl-C cancels the current entry without exiting.  --no-log and
+        --log-file are mutually exclusive.
+
+        Exit codes:
+          0  The session ended normally (:quit / :exit / Ctrl-D).
+          1  Pre-loop setup failure: malformed --input, invalid [exec] config or
+             --runner, or an unwritable --log-file (reported before the prompt).
     """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]

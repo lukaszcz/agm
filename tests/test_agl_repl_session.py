@@ -381,8 +381,9 @@ class TestLoadFile:
         f = tmp_path / "prog.agl"
         f.write_text("let a = 1\nlet b = a + 2\n")
         s = ReplSession()
-        r = s.load_file(f)
-        assert r.ok
+        results = s.load_file(f)
+        assert all(r.ok for r in results)
+        assert len(results) == 2
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals == {"a": 1, "b": 3}
 
@@ -397,13 +398,108 @@ class TestLoadFile:
         s.eval_entry("g")
         assert agent.calls == 1
 
-    def test_load_file_atomic_on_error(self, tmp_path: Path) -> None:
-        f = tmp_path / "bad.agl"
-        f.write_text("let a = 1\nlet z: decimal = 1 / 0\n")
+    def test_load_file_incremental_redefinition_round_trips(self, tmp_path: Path) -> None:
+        # Redefinition across entries is supported; a saved transcript containing
+        # a redefinition must reload because :load runs one statement per entry.
+        a = ReplSession()
+        a.eval_entry("let x = 1")
+        a.eval_entry("let x = 2")
+        f = tmp_path / "redef.agl"
+        f.write_text(a.dump_source())
+
+        b = ReplSession()
+        results = b.load_file(f)
+        assert all(r.ok for r in results)
+        vals = {n: _int(v) for n, _t, v in b.bindings()}
+        assert vals == {"x": 2}
+
+    def test_load_file_multi_binding_round_trips(self, tmp_path: Path) -> None:
+        a = ReplSession()
+        a.eval_entry("let a = 1")
+        a.eval_entry("let b = a + 1")
+        f = tmp_path / "multi.agl"
+        f.write_text(a.dump_source())
+
+        b = ReplSession()
+        results = b.load_file(f)
+        assert all(r.ok for r in results)
+        vals = {n: _int(v) for n, _t, v in b.bindings()}
+        assert vals == {"a": 1, "b": 2}
+
+    def test_load_file_block_statement_slices_correctly(self, tmp_path: Path) -> None:
+        # A multi-line block statement must be sliced with its nested indentation
+        # preserved so each top-level slice is independently parseable.
+        f = tmp_path / "block.agl"
+        f.write_text(
+            "let n = 1\n"
+            "var label: text = \"\"\n"
+            "if n = 1 =>\n"
+            "    set label = \"one\"\n"
+            "| else =>\n"
+            "    set label = \"many\"\n"
+            "label\n"
+        )
         s = ReplSession()
-        r = s.load_file(f)
-        assert not r.ok
-        # Whole entry is atomic: 'a' (declared before the raise) is NOT promoted.
+        results = s.load_file(f)
+        assert all(r.ok for r in results), [r.diagnostics for r in results if not r.ok]
+        vals = {n: v for n, _t, v in s.bindings()}
+        assert _text(vals["label"]) == "one"
+
+    def test_load_file_record_block_slices_correctly(self, tmp_path: Path) -> None:
+        f = tmp_path / "rec.agl"
+        f.write_text(
+            "record Point\n"
+            "    x: int\n"
+            "    y: int\n"
+            "let p = Point(x: 1, y: 2)\n"
+            "p.x\n"
+        )
+        s = ReplSession()
+        results = s.load_file(f)
+        assert all(r.ok for r in results), [r.diagnostics for r in results if not r.ok]
+        assert results[-1].value is not None
+        assert _int(results[-1].value) == 1
+
+    def test_load_file_halts_at_first_error_keeps_prior(self, tmp_path: Path) -> None:
+        f = tmp_path / "halt.agl"
+        f.write_text(
+            "let a = 1\n"
+            "let z: decimal = 1 / 0\n"  # runtime raise — halts the load here
+            "let b = 99\n"  # never reached
+        )
+        s = ReplSession()
+        results = s.load_file(f)
+        # The load halted at the failing statement; nothing after it ran.
+        assert len(results) == 2
+        assert results[0].ok
+        assert not results[1].ok
+        # The statement before the failure persisted; 'b' never ran.
+        vals = {n: _int(v) for n, _t, v in s.bindings()}
+        assert vals == {"a": 1}
+
+    def test_load_file_syntax_error_single_failed_result(self, tmp_path: Path) -> None:
+        f = tmp_path / "syntax.agl"
+        f.write_text("let = oops\n")
+        s = ReplSession()
+        results = s.load_file(f)
+        assert len(results) == 1
+        assert not results[0].ok
+        assert results[0].diagnostics
+
+    def test_load_file_empty_file_no_results(self, tmp_path: Path) -> None:
+        f = tmp_path / "empty.agl"
+        f.write_text("")
+        s = ReplSession()
+        results = s.load_file(f)
+        assert results == []
+        assert s.bindings() == []
+
+    def test_load_file_comment_only_no_results(self, tmp_path: Path) -> None:
+        f = tmp_path / "comments.agl"
+        f.write_text("# just a comment\n# and another\n")
+        s = ReplSession()
+        results = s.load_file(f)
+        assert results == []
         assert s.bindings() == []
 
 

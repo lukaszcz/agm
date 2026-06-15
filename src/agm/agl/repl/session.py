@@ -44,6 +44,34 @@ if TYPE_CHECKING:
 
 EntryKind = Literal["expression", "binding", "declaration", "statement"]
 
+# Layout-only token types that carry no statement to evaluate.
+_TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+
+
+def has_runnable_statements(text: str) -> bool:
+    """Return ``True`` when *text* contains at least one statement to evaluate.
+
+    Blank, whitespace-only, and comment-only entries (AgL comments run from a
+    ``#`` to end of line) have nothing to run.  The check tokenizes *text* with
+    the real AgL lexer and looks for any non-trivial token — the lexer skips
+    whitespace and comments entirely and emits no tokens for blank/comment-only
+    input, while synthetic layout tokens (``_NEWLINE`` / ``_INDENT`` /
+    ``_DEDENT``) carry no statement, so they are ignored.  Any lexer error (a
+    half-typed entry never reaches here, but be defensive) is treated as
+    *runnable* so the entry flows on to ``eval_entry`` and surfaces a real
+    diagnostic rather than being silently dropped.
+
+    Shared by the interactive console (blank-line handling) and ``load_file``
+    (an empty / comment-only file loads as a benign no-op rather than a parse
+    error).
+    """
+    from agm.agl.lexer import tokenize
+
+    try:
+        return any(token.type not in _TRIVIAL_TOKENS for token in tokenize(text))
+    except Exception:
+        return True
+
 
 # ---------------------------------------------------------------------------
 # EntryResult — pure data describing the outcome of one entry
@@ -633,12 +661,51 @@ class ReplSession:
         self._declared_inputs = {}
         self._source_log = []
 
-    def load_file(self, path: "Path") -> EntryResult:
-        """Evaluate the entire contents of *path* as ONE entry (execute-into-session)."""
+    def load_file(self, path: "Path") -> list[EntryResult]:
+        """Evaluate the contents of *path* INCREMENTALLY, one statement per entry.
+
+        Each top-level statement is fed to :meth:`eval_entry` in order, exactly as
+        if the user had typed it at the prompt.  This makes redefinition/shadowing
+        work on load (within a single entry it would be a duplicate-declaration
+        error) so a ``:save`` transcript reliably round-trips through ``:load``.
+
+        The load halts at the FIRST non-``ok`` result (like running a script);
+        the returned list holds the results collected so far, including the
+        failing one.  Statements that already succeeded remain promoted.
+
+        A syntax error in the file yields a single failed ``EntryResult`` carrying
+        the parse diagnostic.  An empty or comment-only file has no statements to
+        run and yields an empty list (a benign no-op).
+        """
+        from agm.agl._text import normalize_newlines
+        from agm.agl.parser import AglSyntaxError, parse_program
         from agm.core.fs import read_text
 
-        text = read_text(path)
-        return self.eval_entry(text)
+        # Normalize newlines with the SAME helper the lexer/interpreter use so the
+        # statement-span char offsets align with the text we slice below.
+        normalized = normalize_newlines(read_text(path))
+
+        # A blank / comment-only file has nothing to run — load it as a no-op
+        # rather than surfacing the parser's "Unexpected end of input" error.
+        if not has_runnable_statements(normalized):
+            return []
+
+        # Parse the whole file ONCE only to find top-level statement boundaries;
+        # this parse is never promoted (each slice is re-parsed by eval_entry with
+        # the session's continuing node-id counter).  start_id=0 is fine here.
+        try:
+            program = parse_program(normalized)
+        except AglSyntaxError as exc:
+            return [self._fail([exc.to_diagnostic()], [])]
+
+        results: list[EntryResult] = []
+        for stmt in program.body:
+            slice_text = normalized[stmt.span.start_offset : stmt.span.end_offset]
+            result = self.eval_entry(slice_text)
+            results.append(result)
+            if not result.ok:
+                break  # halt on the first failing statement, like a script
+        return results
 
     def dump_source(self) -> str:
         """Return the accumulated successfully-promoted entry sources (newline-joined)."""

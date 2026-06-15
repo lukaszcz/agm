@@ -11,14 +11,33 @@ These are pure-data modules (no terminal), so they are tested directly:
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.eval.values import IntValue, TextValue, Value
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
+from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.session import EntryKind, EntryResult, ReplSession
+from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.runtime import RunError
 from agm.agl.typecheck.types import IntType, TextType, Type
+
+
+class _CountingAgent:
+    """Fake ``AgentFn`` returning scripted replies and counting invocations."""
+
+    def __init__(self, *replies: str) -> None:
+        self._replies = list(replies) or ["ok"]
+        self._next = 0
+        self.calls = 0
+
+    def __call__(self, request: AgentRequest) -> AgentResponse:
+        del request
+        self.calls += 1
+        reply = self._replies[min(self._next, len(self._replies) - 1)]
+        self._next += 1
+        return AgentResponse(content=reply)
 
 
 def _result(
@@ -230,3 +249,320 @@ class TestDispatchMeta:
             assert ":xtest" in meta_mod.meta_command_names()
         finally:
             meta_mod._COMMANDS.remove(command)
+
+# ---------------------------------------------------------------------------
+# render helpers (single-sourced binding/value formatting)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderHelpers:
+    def test_format_typed_value(self) -> None:
+        line = render_mod.format_typed_value("x", IntType(), IntValue(Decimal(5)))
+        assert line == "x : int = 5"
+
+    def test_format_unset_input(self) -> None:
+        assert render_mod.format_unset_input("n", TextType()) == "n : text = <unset>"
+
+    def test_binding_echo_matches_format_helper(self) -> None:
+        # The entry-echo path and the shared helper must produce the same line.
+        value = TextValue("hi")
+        result = _result(kind="binding", name="g", value=value, value_type=TextType())
+        echoed = render_mod.render_entry_result(result, echo=True)
+        assert echoed == render_mod.format_typed_value("g", TextType(), value)
+
+
+# ---------------------------------------------------------------------------
+# Full meta-command set
+# ---------------------------------------------------------------------------
+
+
+def _session_ctx(
+    session: ReplSession | None = None,
+    *,
+    agent_mode: AgentMode | None = None,
+) -> meta_mod.MetaContext:
+    return meta_mod.MetaContext(
+        session=session if session is not None else ReplSession(),
+        agent_mode=agent_mode if agent_mode is not None else AgentMode(),
+    )
+
+
+class TestHelpFullSet:
+    def test_help_lists_full_command_set(self) -> None:
+        out = meta_mod.dispatch_meta(":help", _session_ctx()).text
+        assert out is not None
+        for cmd in (":reset", ":type", ":bindings", ":env", ":agents", ":inputs",
+                    ":set", ":agent", ":load", ":save"):
+            assert cmd in out
+
+
+class TestReset:
+    def test_reset_clears_bindings(self) -> None:
+        s = ReplSession()
+        s.eval_entry("let x = 1")
+        assert s.bindings()
+        outcome = meta_mod.dispatch_meta(":reset", _session_ctx(s))
+        assert "reset" in (outcome.text or "").lower()
+        assert s.bindings() == []
+
+
+class TestType:
+    def test_type_of_valid_expr(self) -> None:
+        s = ReplSession()
+        s.eval_entry("let x = 5")
+        outcome = meta_mod.dispatch_meta(":type x + 1", _session_ctx(s))
+        assert outcome.text == "int"
+
+    def test_type_empty_arg_gives_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":type", _session_ctx())
+        assert "usage" in (outcome.text or "").lower()
+
+    def test_type_unknown_name_clean_error(self) -> None:
+        outcome = meta_mod.dispatch_meta(":type nope", _session_ctx())
+        assert outcome.text is not None
+        assert outcome.quit is False  # never crashed the loop
+
+    def test_type_bad_syntax_clean_error(self) -> None:
+        outcome = meta_mod.dispatch_meta(":type 1 +", _session_ctx())
+        assert outcome.text is not None
+
+    def test_type_non_expression_clean_error(self) -> None:
+        # A binding is not a single expression — type_of raises AglError, caught.
+        outcome = meta_mod.dispatch_meta(":type let y = 1", _session_ctx())
+        assert outcome.text is not None
+        assert "expression" in outcome.text.lower()
+
+
+class TestBindings:
+    def test_bindings_empty(self) -> None:
+        for name in (":bindings", ":env"):
+            outcome = meta_mod.dispatch_meta(name, _session_ctx())
+            assert outcome.text == "No bindings."
+
+    def test_bindings_lists_with_types_and_values(self) -> None:
+        s = ReplSession()
+        s.eval_entry("let x = 5")
+        s.eval_entry('let g = "hi"')
+        outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
+        assert outcome.text is not None
+        assert "x : int = 5" in outcome.text
+        assert 'g : text = hi' in outcome.text
+
+    def test_env_alias_same_as_bindings(self) -> None:
+        s = ReplSession()
+        s.eval_entry("let x = 5")
+        out_b = meta_mod.dispatch_meta(":bindings", _session_ctx(s)).text
+        out_e = meta_mod.dispatch_meta(":env", _session_ctx(s)).text
+        assert out_b == out_e
+
+
+class TestAgents:
+    def test_agents_empty_notes_default(self) -> None:
+        outcome = meta_mod.dispatch_meta(":agents", _session_ctx())
+        assert outcome.text is not None
+        assert "mode: confirm" in outcome.text
+
+    def test_agents_lists_registered_and_default_prompt(self) -> None:
+        s = ReplSession(default_agent=_CountingAgent("x"))
+        s.register_agent("reviewer", _CountingAgent("r"))
+        outcome = meta_mod.dispatch_meta(":agents", _session_ctx(s))
+        assert outcome.text is not None
+        assert "reviewer" in outcome.text
+        assert "prompt" in outcome.text
+
+    def test_agents_reports_current_mode(self) -> None:
+        mode = AgentMode(mode="auto")
+        outcome = meta_mod.dispatch_meta(":agents", _session_ctx(agent_mode=mode))
+        assert outcome.text is not None
+        assert "mode: auto" in outcome.text
+
+
+class TestInputs:
+    def test_inputs_empty(self) -> None:
+        outcome = meta_mod.dispatch_meta(":inputs", _session_ctx())
+        assert outcome.text == "No inputs declared."
+
+    def test_inputs_shows_unset_then_set(self) -> None:
+        s = ReplSession()
+        s.eval_entry("input name: text")
+        out_unset = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
+        assert out_unset is not None
+        assert "name : text = <unset>" in out_unset
+        s.set_input("name", "World")
+        out_set = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
+        assert out_set is not None
+        assert "name : text = World" in out_set
+
+
+class TestSet:
+    def test_set_declared_input(self) -> None:
+        s = ReplSession()
+        s.eval_entry("input count: int")
+        outcome = meta_mod.dispatch_meta(":set count=42", _session_ctx(s))
+        assert "42" in (outcome.text or "")
+        r = s.eval_entry("count + 1")
+        assert r.ok
+        assert isinstance(r.value, IntValue)
+        assert r.value.value == 43
+
+    def test_set_undeclared_input_clean_error(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set nope=1", _session_ctx())
+        assert outcome.text is not None
+        assert "nope" in outcome.text
+
+    def test_set_bad_value_clean_error(self) -> None:
+        s = ReplSession()
+        s.eval_entry("input count: int")
+        outcome = meta_mod.dispatch_meta(":set count=oops", _session_ctx(s))
+        assert outcome.text is not None
+
+    def test_set_missing_equals_gives_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
+        assert "usage" in (outcome.text or "").lower()
+
+    def test_set_empty_name_gives_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set =5", _session_ctx())
+        assert "usage" in (outcome.text or "").lower()
+
+    def test_set_echo_off_then_on_toggles_ctx(self) -> None:
+        ctx = _session_ctx()
+        assert ctx.echo is True
+        off = meta_mod.dispatch_meta(":set echo off", ctx)
+        assert ctx.echo is False
+        assert "off" in (off.text or "").lower()
+        on = meta_mod.dispatch_meta(":set echo on", ctx)
+        assert ctx.echo is True
+        assert "on" in (on.text or "").lower()
+
+    def test_set_echo_bad_state_gives_usage(self) -> None:
+        ctx = _session_ctx()
+        outcome = meta_mod.dispatch_meta(":set echo maybe", ctx)
+        assert "usage" in (outcome.text or "").lower()
+        assert ctx.echo is True  # unchanged
+
+
+class TestAgent:
+    def test_agent_auto_then_confirm_mutates_shared_mode(self) -> None:
+        mode = AgentMode()
+        ctx = _session_ctx(agent_mode=mode)
+        out_auto = meta_mod.dispatch_meta(":agent auto", ctx)
+        assert mode.mode == "auto"
+        assert "auto" in (out_auto.text or "")
+        out_conf = meta_mod.dispatch_meta(":agent confirm", ctx)
+        assert mode.mode == "confirm"
+        assert "confirm" in (out_conf.text or "")
+
+    def test_agent_no_arg_reports_mode(self) -> None:
+        mode = AgentMode(mode="auto")
+        outcome = meta_mod.dispatch_meta(":agent", _session_ctx(agent_mode=mode))
+        assert "auto" in (outcome.text or "")
+
+    def test_agent_bad_arg_usage_error_no_mutation(self) -> None:
+        mode = AgentMode()
+        outcome = meta_mod.dispatch_meta(":agent bogus", _session_ctx(agent_mode=mode))
+        assert "usage" in (outcome.text or "").lower()
+        assert mode.mode == "confirm"
+
+
+class TestLoad:
+    def test_load_runs_file_into_session(self, tmp_path: Path) -> None:
+        src = tmp_path / "prog.agl"
+        src.write_text("let x = 7\n")
+        s = ReplSession()
+        outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
+        assert outcome.text is not None
+        assert "x : int = 7" in outcome.text
+        # The binding persisted into the session.
+        assert any(n == "x" for n, _t, _v in s.bindings())
+
+    def test_load_agent_call_fires_exactly_once(self, tmp_path: Path) -> None:
+        src = tmp_path / "agent.agl"
+        src.write_text('let r = prompt """do it"""\n')
+        agent = _CountingAgent("done")
+        s = ReplSession(default_agent=agent)
+        meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
+        assert agent.calls == 1
+
+    def test_load_missing_file_clean_error(self, tmp_path: Path) -> None:
+        missing = tmp_path / "nope.agl"
+        outcome = meta_mod.dispatch_meta(f":load {missing}", _session_ctx())
+        assert outcome.text is not None
+        assert "cannot read" in outcome.text.lower()
+
+    def test_load_empty_arg_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":load", _session_ctx())
+        assert "usage" in (outcome.text or "").lower()
+
+    def test_load_renders_each_statement(self, tmp_path: Path) -> None:
+        # Multiple statements load incrementally; each statement's echo surfaces.
+        src = tmp_path / "multi.agl"
+        src.write_text("let a = 1\nlet b = 2\n")
+        s = ReplSession()
+        outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
+        assert outcome.text is not None
+        assert "a : int = 1" in outcome.text
+        assert "b : int = 2" in outcome.text
+
+    def test_load_halts_at_first_error(self, tmp_path: Path) -> None:
+        src = tmp_path / "halt.agl"
+        src.write_text("let a = 1\nlet z: decimal = 1 / 0\nlet b = 99\n")
+        s = ReplSession()
+        outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
+        assert outcome.text is not None
+        # The failing statement's error surfaced; the unreached one did not run.
+        assert "exception" in outcome.text.lower()
+        names = {n for n, _t, _v in s.bindings()}
+        assert names == {"a"}
+
+    def test_load_empty_file_benign_note(self, tmp_path: Path) -> None:
+        src = tmp_path / "empty.agl"
+        src.write_text("# only a comment\n")
+        s = ReplSession()
+        outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
+        assert outcome.text is not None
+        assert "no statements" in outcome.text.lower()
+        assert s.bindings() == []
+
+
+class TestSave:
+    def test_save_round_trips_source(self, tmp_path: Path) -> None:
+        s = ReplSession()
+        s.eval_entry("let x = 1")
+        s.eval_entry("let y = 2")
+        out = tmp_path / "out.agl"
+        outcome = meta_mod.dispatch_meta(f":save {out}", _session_ctx(s))
+        assert str(out) in (outcome.text or "")
+        assert out.read_text() == s.dump_source()
+        # The saved source replays into a fresh session.
+        s2 = ReplSession()
+        assert all(r.ok for r in s2.load_file(out))
+
+    def test_save_load_round_trips_redefinition(self, tmp_path: Path) -> None:
+        # A transcript containing a redefinition must round-trip through
+        # :save -> :load (each statement loads as its own entry, so the second
+        # `let x` shadows rather than being a duplicate-declaration error).
+        s = ReplSession()
+        s.eval_entry("let x = 1")
+        s.eval_entry("let x = 2")
+        out = tmp_path / "redef.agl"
+        meta_mod.dispatch_meta(f":save {out}", _session_ctx(s))
+
+        s2 = ReplSession()
+        outcome = meta_mod.dispatch_meta(f":load {out}", _session_ctx(s2))
+        # No error surfaced and x reloaded as the shadowed value 2.
+        assert "line" not in (outcome.text or "")
+        assert "x : int = 2" in (outcome.text or "")
+        vals = {n: v for n, _t, v in s2.bindings()}
+        assert isinstance(vals["x"], IntValue)
+        assert vals["x"].value == 2
+
+    def test_save_empty_arg_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":save", _session_ctx())
+        assert "usage" in (outcome.text or "").lower()
+
+    def test_save_unwritable_path_clean_error(self, tmp_path: Path) -> None:
+        # A path whose parent directory does not exist cannot be written.
+        bad = tmp_path / "missing_dir" / "out.agl"
+        outcome = meta_mod.dispatch_meta(f":save {bad}", _session_ctx())
+        assert outcome.text is not None
+        assert "cannot write" in outcome.text.lower()

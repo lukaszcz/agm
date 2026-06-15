@@ -44,6 +44,8 @@ from agm.agl.lexer.tokens import KEYWORDS
 from agm.agl.parser import is_incomplete_source
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
+from agm.agl.repl import session as session_mod
+from agm.agl.repl.agentmode import AgentMode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -280,27 +282,10 @@ def is_incomplete(text: str) -> bool:
     return is_incomplete_source(text)
 
 
-def has_runnable_statements(text: str) -> bool:
-    """Return ``True`` when *text* contains at least one statement to evaluate.
-
-    Blank, whitespace-only, and comment-only entries (AgL comments run from a
-    ``#`` to end of line) have nothing to run.  The check tokenizes *text* with
-    the real AgL lexer and looks for any non-trivial token — the lexer skips
-    whitespace and comments entirely and emits no tokens for blank/comment-only
-    input, while synthetic layout tokens (``_NEWLINE`` / ``_INDENT`` /
-    ``_DEDENT``) carry no statement, so they are ignored.  Any lexer error (a
-    half-typed entry never reaches here, but be defensive) is treated as
-    *runnable* so the entry flows on to ``eval_entry`` and surfaces a real
-    diagnostic rather than being silently dropped.
-    """
-    try:
-        return any(token.type not in _TRIVIAL_TOKENS for token in tokenize(text))
-    except Exception:
-        return True
-
-
-# Layout-only token types that carry no statement to evaluate.
-_TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+# ``has_runnable_statements`` (the blank/comment-only-entry predicate) lives in
+# the UI-free ``session`` module so ``load_file`` can share it; re-exported here
+# under its original name for the console loop and its tests.
+has_runnable_statements = session_mod.has_runnable_statements
 
 
 def _make_key_bindings() -> KeyBindings:
@@ -383,6 +368,7 @@ def run_console(
     *,
     echo: bool = True,
     check_only: bool = False,
+    agent_mode: "AgentMode | None" = None,
     history_path: "Path | None" = None,
     input: Input | None = None,
     output: Output | None = None,
@@ -407,7 +393,14 @@ def run_console(
     prompt_session = build_prompt_session(
         session, history_path=history_path, input=input, output=output
     )
-    ctx = meta_mod.MetaContext(session=session, echo=echo)
+    # A shared, mutable agent-mode holder: ``:agent`` mutates it here, and M4
+    # will pass this SAME instance to the confirming agent wrapper so the wrapper
+    # observes the mutation.  Defaults to confirm-each-call per plan decision 2.
+    ctx = meta_mod.MetaContext(
+        session=session,
+        echo=echo,
+        agent_mode=agent_mode if agent_mode is not None else AgentMode(),
+    )
 
     print(BANNER)
     while True:

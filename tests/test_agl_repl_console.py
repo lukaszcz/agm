@@ -425,3 +425,63 @@ class TestDryRun:
         output = drive(":bogus\r\x04")
         assert "Unknown command" in output
         assert ":bogus" in output
+
+
+# ---------------------------------------------------------------------------
+# Meta-commands through the loop (M3)
+# ---------------------------------------------------------------------------
+
+
+class TestMetaThroughLoop:
+    def test_set_echo_off_suppresses_then_on_restores(self) -> None:
+        # echo off → the binding is not echoed; echo on → the next binding is.
+        output = drive(
+            ":set echo off\rlet a = 1\r:set echo on\rlet b = 2\r\x04"
+        )
+        assert "a : int = 1" not in output  # suppressed while echo off
+        assert "b : int = 2" in output  # restored after echo on
+
+    def test_bindings_meta_lists_live_bindings(self) -> None:
+        output = drive("let x = 5\r:bindings\r\x04")
+        assert "x : int = 5" in output
+
+    def test_reset_meta_clears_session(self) -> None:
+        session = ReplSession()
+        output = drive("let x = 5\r:reset\r:bindings\r\x04", session=session)
+        assert "Session reset." in output
+        assert "No bindings." in output
+        assert session.bindings() == []
+
+    def test_type_meta_reports_type(self) -> None:
+        output = drive("1 + 2\r:type 1 + 2\r\x04")
+        assert "int" in output
+
+    def test_agent_meta_mutates_shared_mode(self) -> None:
+        # The shared AgentMode passed to run_console reflects :agent mutations,
+        # which is exactly the instance M4 will also hand to its wrapper.
+        from agm.agl.repl.agentmode import AgentMode
+
+        mode = AgentMode()
+        with create_pipe_input() as pipe, _fail_on_hang():
+            pipe.send_text(":agent auto\r\x04")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                run_console(
+                    ReplSession(),
+                    agent_mode=mode,
+                    history_path=None,
+                    input=pipe,
+                    output=DummyOutput(),
+                )
+        assert mode.mode == "auto"
+
+    def test_load_meta_runs_file_into_session(self, tmp_path: object) -> None:
+        from pathlib import Path
+
+        assert isinstance(tmp_path, Path)
+        src = tmp_path / "prog.agl"
+        src.write_text("let loaded = 9\n")
+        session = ReplSession()
+        output = drive(f":load {src}\r\x04", session=session)
+        assert "loaded : int = 9" in output
+        assert any(n == "loaded" for n, _t, _v in session.bindings())

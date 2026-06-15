@@ -47,8 +47,9 @@ class TestWorkflowRuntimeConstructor:
 
         rt = WorkflowRuntime(default_agent=my_agent)
         rt.register_agent("reviewer", my_agent)  # should not raise
-        result = rt.run("let x = 1")
-        # M1: a valid program with no agent calls returns ok=True
+        # The source declares the registered agent so the source↔host contract
+        # holds (M4); a valid program then returns ok=True.
+        result = rt.run("agent reviewer\nlet x = 1")
         assert result.ok is True
         assert result.error is None
 
@@ -186,9 +187,11 @@ class TestFallbackAgent:
         assert result.ok is True
 
     def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
-        rt = WorkflowRuntime()
-        # A declared-but-never-called agent is a non-fatal scope warning,
-        # surfaced on result.warnings without affecting result.ok.
+        # A default agent backs the declared (but uncalled) agent so the
+        # source↔host contract holds (decision 11): a declared+backed agent
+        # that is never called is a non-fatal scope WARNING, surfaced on
+        # result.warnings without affecting result.ok.
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
         result = rt.run('agent unused_helper\nprint "hi"')
         assert result.ok is True
         joined = " ".join(d.message for d in result.warnings)
@@ -2077,3 +2080,140 @@ class TestTabWarningsInRunResult:
         result = rt.run(source)
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert len(tab_warns) == 2
+
+
+# ---------------------------------------------------------------------------
+# declared_agents() API (M4)
+# ---------------------------------------------------------------------------
+
+
+class TestDeclaredAgentsApi:
+    """WorkflowRuntime.declared_agents(): parse + scope only, non-raising."""
+
+    def test_returns_agent_decl_info_with_names_runners_and_positions(self) -> None:
+        from agm.agl import AgentDeclInfo
+
+        rt = WorkflowRuntime()
+        source = 'agent impl = "claude -p %{PROMPT_FILE}"\nagent reviewer'
+        decls = rt.declared_agents(source)
+        assert all(isinstance(d, AgentDeclInfo) for d in decls)
+        # Sorted deterministically by source line/col.
+        assert [d.name for d in decls] == ["impl", "reviewer"]
+        impl, reviewer = decls
+        assert impl.runner == "claude -p %{PROMPT_FILE}"
+        assert reviewer.runner is None
+        # Positions come from the declaration span (1-based).
+        assert impl.line == 1
+        assert impl.col == 1
+        assert reviewer.line == 2
+
+    def test_no_declarations_returns_empty(self) -> None:
+        rt = WorkflowRuntime()
+        assert rt.declared_agents("let x = 1") == ()
+
+    def test_parse_error_returns_empty_tuple(self) -> None:
+        rt = WorkflowRuntime()
+        # Syntax garbage: declared_agents stays non-raising and returns ().
+        assert rt.declared_agents("@@@@@") == ()
+
+    def test_scope_error_returns_empty_tuple(self) -> None:
+        rt = WorkflowRuntime()
+        # Duplicate agent declaration is a scope error → ().
+        assert rt.declared_agents("agent dup\nagent dup") == ()
+
+    def test_undeclared_call_scope_error_returns_empty_tuple(self) -> None:
+        rt = WorkflowRuntime()
+        # Calling an undeclared agent is a scope error → ().
+        assert rt.declared_agents('let x = ghost "hi"') == ()
+
+
+# ---------------------------------------------------------------------------
+# Source↔host reconciliation in run() (M4, plan §8, decisions 1 & 11)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentReconciliation:
+    """run() enforces the source↔host agent contract before execution."""
+
+    def test_registered_but_undeclared_is_host_error(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
+            return "ok"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("ghost", agent)
+        # 'ghost' is registered but the source never declares it.
+        result = rt.run("let x = 1")
+        assert result.ok is False
+        assert result.error is None
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "ghost" in msgs
+        assert "registered" in msgs.lower()
+        # Nothing executed.
+        assert calls == []
+
+    def test_registered_but_undeclared_diagnostic_line_is_one(self) -> None:
+        rt = WorkflowRuntime()
+        rt.register_agent("ghost", lambda req: "ok")
+        result = rt.run("let x = 1")
+        assert result.diagnostics[0].line == 1
+
+    def test_declared_but_unbacked_is_host_error(self) -> None:
+        rt = WorkflowRuntime()  # no registration, no default agent
+        result = rt.run('agent orphan\nlet x = orphan "hi"')
+        assert result.ok is False
+        assert result.error is None
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "orphan" in msgs
+        assert "backing" in msgs.lower()
+
+    def test_declared_but_unbacked_diagnostic_reports_declaration_line(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('let y = 1\nagent orphan\nlet x = orphan "hi"')
+        assert result.ok is False
+        # The declaration is on line 2.
+        assert result.diagnostics[0].line == 2
+
+    def test_declared_and_registered_runs(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
+            return "output"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("impl", agent)
+        result = rt.run('agent impl\nlet x = impl "do it"')
+        assert result.ok is True
+        assert calls == ["do it"]
+
+    def test_declared_with_default_agent_runs(self) -> None:
+        # No dedicated registration, but a default agent backs the declared name.
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        result = rt.run('agent any_name\nlet x = any_name "hi"')
+        assert result.ok is True
+
+    def test_both_error_categories_reported_together(self) -> None:
+        rt = WorkflowRuntime()  # no default agent
+        rt.register_agent("ghost", lambda req: "ok")
+        # 'orphan' is declared but unbacked; 'ghost' is registered but undeclared.
+        result = rt.run('agent orphan\nlet x = orphan "hi"')
+        assert result.ok is False
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "ghost" in msgs
+        assert "orphan" in msgs
+        assert len(result.diagnostics) == 2
+
+    def test_reconciliation_failure_skips_execution(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
+            return "ok"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("ghost", agent)
+        rt.run('print "side effect?"')
+        assert calls == []

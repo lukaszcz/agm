@@ -23,9 +23,16 @@ from __future__ import annotations
 
 from agm.agl.diagnostics import AglError, Diagnostic, SourceSpan
 from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.runtime import CallSiteInfo, RunError, RunResult, WorkflowRuntime
+from agm.agl.runtime.runtime import (
+    AgentDeclInfo,
+    CallSiteInfo,
+    RunError,
+    RunResult,
+    WorkflowRuntime,
+)
 
 __all__ = [
+    "AgentDeclInfo",
     "AgentFn",
     "AglError",
     "CallSiteInfo",

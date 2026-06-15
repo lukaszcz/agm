@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.render import RendererFn
+    from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.types import Type as AglType
 
@@ -97,6 +98,27 @@ class CallSiteInfo:
     codec_name: str
     has_schema: bool
     parse_policy: str
+    line: int
+    col: int
+
+
+@dataclass(frozen=True, slots=True)
+class AgentDeclInfo:
+    """Static summary of one ``agent`` declaration in a program.
+
+    ``name``
+        The declared agent name.
+    ``runner``
+        The optional static runner-command hint (a literal string with NO
+        interpolation), or ``None`` for a bare ``agent NAME`` declaration.
+    ``line``
+        1-based source line of the declaration (``span.start_line``).
+    ``col``
+        1-based source column of the declaration (``span.start_col``).
+    """
+
+    name: str
+    runner: str | None
     line: int
     col: int
 
@@ -356,6 +378,41 @@ class WorkflowRuntime:
         )
         return self._host_env_cache
 
+    def declared_agents(self, source: str) -> tuple[AgentDeclInfo, ...]:
+        """Return the agents declared in *source* (parse + scope only).
+
+        Runs ONLY the parse and scope passes (with an empty ambient set —
+        ``resolve(program)``) and returns one :class:`AgentDeclInfo` per
+        ``agent`` declaration in source, sorted by source line/col for
+        determinism.
+
+        This API is side-effect-free and NON-raising: on ANY parse error
+        (``AglSyntaxError``) or scope error (``AglScopeError``) it returns an
+        empty tuple ``()`` rather than raising.  The subsequent ``run(source)``
+        call resurfaces the diagnostic properly, so a host can call this to
+        learn the declared inventory without having to handle errors here.
+        """
+        from agm.agl.parser import AglSyntaxError, parse_program
+        from agm.agl.scope import AglScopeError, resolve
+
+        try:
+            program = parse_program(source)
+            resolved = resolve(program)
+        except (AglSyntaxError, AglScopeError):
+            return ()
+
+        infos = [
+            AgentDeclInfo(
+                name=decl.name,
+                runner=decl.runner,
+                line=decl.span.start_line,
+                col=decl.span.start_col,
+            )
+            for decl in resolved.declared_agents.values()
+        ]
+        infos.sort(key=lambda info: (info.line, info.col))
+        return tuple(infos)
+
     def run(
         self,
         source: str,
@@ -453,6 +510,23 @@ class WorkflowRuntime:
         # Collect scope-pass warnings (e.g. a declared-but-uncalled agent).
         # Surfaced on every subsequent return path, like typecheck warnings.
         warnings.extend(resolved.warnings)
+
+        # ----------------------------------------------------------------
+        # [2b] Source↔host agent reconciliation (plan §8, decisions 1 & 11)
+        #
+        # Enforce the source/host contract BEFORE execution (preferred over
+        # waiting for typecheck — a broken contract should preempt execution).
+        # Reported on the same channel as input-validation / host-config
+        # errors: a non-empty diagnostics list ⇒ ok=False, nothing executes.
+        # ----------------------------------------------------------------
+        reconciliation_errors = _reconcile_agents(registry, resolved.declared_agents)
+        if reconciliation_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=reconciliation_errors,
+                error=None,
+                warnings=list(warnings),
+            )
 
         # ----------------------------------------------------------------
         # [3] Type checking
@@ -702,6 +776,58 @@ class WorkflowRuntime:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _reconcile_agents(
+    registry: "AgentRegistry",
+    declared_agents: "Mapping[str, AgentDeclNode]",
+) -> list[Diagnostic]:
+    """Enforce the source↔host agent contract (plan §8, decisions 1 & 11).
+
+    Returns error :class:`Diagnostic`s for BOTH contract violations (never
+    stopping at the first) so the user sees every mismatch at once:
+
+    - **Registered-but-undeclared** (decision 1): a name in
+      ``registry.agent_names`` that the source never declares.  Reported at
+      ``line=1`` (a registration has no source span).
+    - **Declared-but-unbacked** (decision 11): a declared agent with no
+      dedicated registration AND no default agent.  Reported at the
+      declaration's ``span.start_line``.  When a default agent IS present every
+      declared name is backed by it, so this never fires.
+
+    Order is deterministic: registered-but-undeclared first (sorted by name),
+    then declared-but-unbacked (sorted by name).  ``declared_agents`` maps a
+    declared name to its ``AgentDecl`` (only ``.span.start_line`` is read).
+    """
+    errors: list[Diagnostic] = []
+
+    declared_names = set(declared_agents)
+    for name in sorted(registry.agent_names - declared_names):
+        errors.append(
+            Diagnostic(
+                message=(
+                    f"Agent {name!r} is registered but never declared in the "
+                    f"program. Declare it with `agent {name}` or remove the "
+                    "registration."
+                ),
+                line=1,
+            )
+        )
+
+    if not registry.has_default_agent:
+        for name in sorted(declared_names - registry.agent_names):
+            errors.append(
+                Diagnostic(
+                    message=(
+                        f"Agent {name!r} is declared but has no backing: "
+                        "register it with register_agent or configure a "
+                        "default agent."
+                    ),
+                    line=declared_agents[name].span.start_line,
+                )
+            )
+
+    return errors
 
 
 def assemble_host_environment(

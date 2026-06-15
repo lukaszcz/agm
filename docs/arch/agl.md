@@ -85,6 +85,23 @@ to the one file, bracketed by `run_start`/`run_end`; `check_only` writes no trac
 interpreter, not the agent registry). The `agm repl` command builds ONE
 `AgentMode` and passes that same instance to both the wrapper and the console.
 
+## Agent declarations and source↔host reconciliation
+
+Named agents must be **declared in source** (`agent NAME [= "runner"]`). The
+scope pass owns binding: it collects declarations into
+`ResolvedProgram.declared_agents` (name → `AgentDecl`) and rejects any call to
+an undeclared name. The **host only backs declared names** — it never owns the
+name set. `WorkflowRuntime.declared_agents(source)` exposes the declared
+inventory (as `AgentDeclInfo` tuples) by running parse + scope only; it is
+non-raising (returns `()` on any parse/scope error, which `run` resurfaces).
+
+`WorkflowRuntime.run` enforces the contract before execution (helper
+`_reconcile_agents`), reporting all violations as error diagnostics
+(`ok=False`, nothing executes): a registered name the source never declares,
+and a declared name with neither a dedicated registration nor a default agent.
+A declared agent backed only by the default agent is fine; a declared-but-
+uncalled agent is a non-fatal scope warning.
+
 ## Package layout and test locations
 
 | Package | Component | Tests |

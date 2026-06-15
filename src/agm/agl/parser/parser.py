@@ -84,6 +84,53 @@ def _parse_to_program(
     return result, builder.next_node_id
 
 
+def is_incomplete_source(text: str) -> bool:
+    """Return ``True`` when *text* parses as a *prefix* of a valid program.
+
+    This is the structured signal a REPL needs to decide whether pressing Enter
+    should submit the entry or insert a continuation newline.  It distinguishes
+    "the user has not finished typing" from "the user made a real mistake".
+
+    The classification reads the raw Lark failure rather than the lossy
+    ``AglSyntaxError`` message, so it tracks the grammar exactly (this is the one
+    place — alongside the rest of the parser package — permitted to import Lark):
+
+    - A clean parse → complete (not incomplete).
+    - ``UnexpectedToken`` at the **end of input** (token type ``$END``) → the
+      parser ran out of tokens while still expecting more.  This covers every
+      unterminated block header (``record R``, ``enum E``, ``case x of``,
+      ``try``, ``do agent``, ``if c =>``), a dangling binary operator
+      (``1 +``), and an open ``let x =``.  All are treated as "needs more
+      input".
+    - ``UnexpectedToken`` on a real token where an ``_INDENT`` was expected (the
+      user hit Enter right after a block-opening ``=>``/header but has not yet
+      indented the suite body) → incomplete.
+    - Any other failure (``UnexpectedCharacters``, ``LexError``, a wrong token
+      mid-line such as ``let = 5`` or ``x == y``) → complete, so the REPL submits
+      and the user sees the genuine error instead of being trapped in a
+      continuation prompt.
+    """
+    from lark.lexer import Token
+
+    try:
+        _PARSER.parse(text)
+    except UnexpectedToken as exc:
+        # The LALR parser reports a premature end of input as an unexpected
+        # ``$END`` token (it never raises ``UnexpectedEOF``), so this single
+        # branch classifies every unterminated block / dangling operator.
+        token: Token = exc.token
+        if token.type == "$END":
+            return True
+        return "_INDENT" in exc.expected
+    except (LarkError, LexError):
+        # Any other parse/lex failure (``UnexpectedCharacters`` and the residual
+        # ``LarkError`` family, plus the custom ``LexError`` — which is NOT a
+        # ``LarkError`` subclass) is a real error the user should see
+        # immediately, not a continuation.
+        return False
+    return False
+
+
 def parse_program(
     text: str, *, filename: str = "<agl>", start_id: int = 0
 ) -> syntax.Program:

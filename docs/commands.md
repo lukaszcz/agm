@@ -382,6 +382,7 @@ Sandbox settings resolution:
 | Command | Description |
 |---------|-------------|
 | `agm exec [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] (FILE \| -c COMMAND)` | Execute an AgL workflow program |
+| `agm repl [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 ### `agm exec (FILE | -c COMMAND)`
 
@@ -475,6 +476,71 @@ reviewer = "claude -p"      # per-agent runner commands
 `[exec.<command>]` sub-tables provide per-command overrides of the base `[exec]`
 settings. The name `agents` is reserved for the structural `[exec.agents]` map
 and is never treated as a per-command override.
+
+### `agm repl`
+
+Start an interactive read-eval-print loop (REPL) for AgL. Unlike `agm exec`,
+which runs a whole program from a fresh environment, the REPL keeps a
+**persistent session**: each entry is parsed, type-checked, and evaluated once
+against an environment that accumulates bindings, types, and declarations across
+entries, so earlier results stay available and agent calls fire exactly once.
+
+```text
+agm repl [--input KEY=VALUE]... [--strict-json|--no-strict-json]
+         [--max-iters N] [--runner COMMAND] [--auto-agents]
+         [--quiet] [--log-file PATH|--no-log]
+```
+
+The REPL reuses the `[exec]` configuration (runner, per-agent commands, default
+loop limit, JSON strictness, timeout), so an interactive session evaluates
+entries with the same agent backing a batch `agm exec` run would use.
+
+Entry editing:
+
+- Multiline editing is **AgL-aware**: pressing Enter on an unterminated block
+  (`record`, `enum`, `if`, `case`, `try`, `do`, …) opens a continuation line
+  (`...>`); a complete entry submits. Pressing Enter on a blank continuation line
+  force-submits even an unfinished buffer so you can always escape.
+- Syntax highlighting and tab-completion are driven from the live session:
+  completion offers AgL keywords, current binding names, available agent names,
+  and meta-command names.
+- Command history persists under `~/.agm/repl_history`.
+
+Meta-commands begin with a leading `:` (which never collides with AgL syntax):
+
+| Command | Action |
+|---------|--------|
+| `:help` | List the available meta-commands |
+| `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
+
+Press Ctrl-C to cancel the current entry without exiting.
+
+Options:
+
+- `--input KEY=VALUE`: Provide a host input value (repeatable).
+- `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent
+  output (lenient recovery is the default), as for `agm exec`.
+- `--max-iters N`: Override the default `do`-loop iteration limit.
+- `--runner COMMAND`: Override the default agent runner command.
+- `--auto-agents`: Fire agent calls without confirming each one.
+- `--quiet`: Suppress the automatic echoing of entry results.
+- `--log-file PATH` / `--no-log`: Control trace logging. `--no-log` and
+  `--log-file` are mutually exclusive.
+- `--dry-run`: Type-check only. Each entry runs the full static pipeline
+  (parse / resolve / typecheck) but is **never evaluated**, so no agent or
+  `exec` calls fire and no bindings are persisted. The inferred type is echoed
+  instead of a value (`name : Type` for a binding, `: Type` for a bare
+  expression), making it a quick way to explore types interactively.
+
+Blank lines and comment-only entries (everything after a `#` is a comment) are a
+no-op: pressing Enter on them simply returns a fresh prompt, with no evaluation
+and no error.
+
+> Note: agent-call confirmation (`--auto-agents` and the `confirm`/`auto`
+> modes), `--input` pre-seeding of declared inputs, and REPL trace logging are
+> accepted today but not yet active; they are wired up in a subsequent
+> milestone. The remaining flags (`--strict-json`/`--no-strict-json`,
+> `--max-iters`, `--runner`, `--quiet`, `--dry-run`) take effect immediately.
 
 ## Help and aliases
 

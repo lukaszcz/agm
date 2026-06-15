@@ -217,3 +217,15 @@ class ExecArgs:
     no_log: bool
     log_file: str | None
     command: str | None = None
+
+
+@dataclass(slots=True)
+class ReplArgs:
+    inputs: list[str]
+    strict_json: bool | None
+    max_iters: int | None
+    runner: str | None
+    auto_agents: bool
+    quiet: bool
+    no_log: bool
+    log_file: str | None

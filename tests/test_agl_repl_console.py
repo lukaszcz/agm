@@ -1,0 +1,427 @@
+"""Headless tests for the prompt_toolkit console (``agm.agl.repl.console``).
+
+Drives :func:`run_console` through prompt_toolkit's ``create_pipe_input`` +
+``DummyOutput`` so no real terminal is required, and exercises the highlighting
+lexer, the completer, and the multiline incompleteness predicate directly.
+
+Scripted keystrokes use ``\\r`` for the Enter key (so the custom multiline Enter
+binding fires), ``\\x04`` for Ctrl-D (EOF → exit), and ``\\x03`` for Ctrl-C
+(cancel the current entry without exiting).  Assertions check user-visible
+console output, never internals.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+import signal
+from collections.abc import Iterator
+from types import FrameType
+
+import pytest
+from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.document import Document
+from prompt_toolkit.history import FileHistory, InMemoryHistory
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
+
+from agm.agl.repl import ReplSession
+from agm.agl.repl.console import (
+    AglCompleter,
+    AglPromptLexer,
+    _make_history,
+    build_prompt_session,
+    has_runnable_statements,
+    is_incomplete,
+    run_console,
+)
+from agm.agl.runtime.request import AgentRequest, AgentResponse
+
+
+class _CountingAgent:
+    """A fake ``AgentFn`` that counts invocations and returns a scripted reply."""
+
+    def __init__(self, reply: str = "ok") -> None:
+        self._reply = reply
+        self.calls = 0
+
+    def __call__(self, request: AgentRequest) -> AgentResponse:
+        del request
+        self.calls += 1
+        return AgentResponse(content=self._reply)
+
+# ---------------------------------------------------------------------------
+# Driver helper
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _fail_on_hang(seconds: int = 10) -> Iterator[None]:
+    """Convert a stuck REPL (e.g. Ctrl-D on a non-empty buffer) into a failure.
+
+    Scripted keystrokes should always terminate the loop; if they leave the
+    prompt blocked on an exhausted pipe, this guard raises instead of hanging
+    the whole test session.
+    """
+
+    def _raise(signum: int, frame: FrameType | None) -> None:
+        raise AssertionError("REPL did not terminate — scripted keystrokes hung")
+
+    previous = signal.signal(signal.SIGALRM, _raise)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def drive(
+    keystrokes: str,
+    *,
+    session: ReplSession | None = None,
+    echo: bool = True,
+    check_only: bool = False,
+) -> str:
+    """Feed *keystrokes* to a headless REPL and return everything it printed."""
+    repl_session = session if session is not None else ReplSession()
+    with create_pipe_input() as pipe, _fail_on_hang():
+        pipe.send_text(keystrokes)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            run_console(
+                repl_session,
+                echo=echo,
+                check_only=check_only,
+                history_path=None,  # InMemoryHistory — never touch real $HOME
+                input=pipe,
+                output=DummyOutput(),
+            )
+    return out.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Loop: submit / exit / cancel
+# ---------------------------------------------------------------------------
+
+
+class TestLoop:
+    def test_banner_is_printed(self) -> None:
+        output = drive("\x04")
+        assert "AgL REPL" in output
+
+    def test_single_expression_submits_and_echoes(self) -> None:
+        output = drive("1 + 2\r\x04")
+        assert "3" in output
+
+    def test_ctrl_d_exits(self) -> None:
+        # Ctrl-D with no entry exits cleanly (only the banner is printed).
+        output = drive("\x04")
+        assert output.strip().startswith("AgL REPL")
+
+    def test_quit_meta_exits(self) -> None:
+        output = drive(":quit\r")
+        # Nothing evaluated after :quit.
+        assert "AgL REPL" in output
+
+    def test_exit_meta_exits(self) -> None:
+        output = drive(":exit\r")
+        assert "AgL REPL" in output
+
+    def test_ctrl_c_cancels_entry_without_exiting(self) -> None:
+        # Ctrl-C abandons the in-progress "1 + 1", then "2 + 2" still evaluates
+        # and the REPL exits only on the trailing :quit — proving it kept going.
+        # Each echoed expression result is printed on its own line; the cancelled
+        # "1 + 1" must leave no echo line, while "2 + 2" echoes "4".
+        output = drive("1 + 1\x03 2 + 2\r:quit\r")
+        echoed = [line.strip() for line in output.splitlines() if line.strip()]
+        assert "4" in echoed  # the surviving "2 + 2" evaluated
+        assert "2" not in echoed  # the cancelled "1 + 1" produced no result line
+
+    def test_whitespace_only_entry_is_ignored(self) -> None:
+        # A whitespace-only buffer force-submitted on a blank line strips to ""
+        # and is skipped; the following real entry still evaluates.
+        output = drive("   \r\r1 + 1\r\x04")
+        assert "2" in output
+
+    def test_empty_enter_gives_fresh_prompt_no_error(self) -> None:
+        # Pressing Enter on a wholly empty prompt is a no-op: nothing evaluates,
+        # no parse error is printed, and a following real entry still evaluates.
+        session = ReplSession()
+        output = drive("\r1 + 1\r\x04", session=session)
+        assert "2" in output
+        assert "line" not in output.lower()  # no diagnostic
+        assert session.bindings() == []  # no state change from the empty entry
+
+    def test_comment_only_entry_is_noop_no_error(self) -> None:
+        # A comment-only entry (everything after ``#`` is a comment) has nothing
+        # to run: fresh prompt, no error, no state change. The next real entry
+        # still evaluates.
+        session = ReplSession()
+        output = drive("# just a comment\r1 + 1\r\x04", session=session)
+        assert "2" in output
+        assert "Unexpected" not in output
+        assert "line" not in output.lower()
+        assert session.bindings() == []
+
+
+# ---------------------------------------------------------------------------
+# Multiline continuation
+# ---------------------------------------------------------------------------
+
+
+class TestMultiline:
+    @pytest.mark.parametrize(
+        ("header", "body", "echoed"),
+        [
+            ("record R", "  x: int", "R declared"),
+            ("enum E", "| A", "E declared"),
+            ("if 1 = 1 =>", '  print "hi"', "hi"),
+            ("do", "  pass\nuntil 1 = 1", None),
+            ("try", "  pass\ncatch _ =>\n  pass", None),
+            ("case 1 of", "| _ => 7", None),
+        ],
+    )
+    def test_block_continues_then_completes(
+        self, header: str, body: str, echoed: str | None
+    ) -> None:
+        # The header alone is incomplete (Enter inserts a newline), and the full
+        # block submits.  ``\r`` for each Enter so the multiline binding fires.
+        keystrokes = header + "\r" + body.replace("\n", "\r") + "\r\x04"
+        output = drive(keystrokes)
+        if echoed is not None:
+            assert echoed in output
+
+    def test_incomplete_header_keeps_prompting(self) -> None:
+        # ``record R`` alone is incomplete, so the first Enter opens a
+        # continuation rather than submitting.  A blank line then force-submits
+        # the still-incomplete buffer, which surfaces a parse error (no
+        # declaration is promoted).
+        output = drive("record R\r\r\x04")
+        assert "declared" not in output
+        assert "line" in output.lower()
+
+    def test_blank_line_force_submits_incomplete(self) -> None:
+        # A buffer still ending in an unfinished header is incomplete, but once
+        # the user presses Enter on a blank continuation line (buffer ends with
+        # a newline) ``is_incomplete`` force-submits.
+        assert is_incomplete("record R") is True
+        assert is_incomplete("record R\n") is False
+
+
+class TestIsIncomplete:
+    @pytest.mark.parametrize(
+        "source",
+        ["record R", "enum E", "case x of", "try", "do agent", "if x = 1 =>", "1 +"],
+    )
+    def test_incomplete_sources(self, source: str) -> None:
+        assert is_incomplete(source) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        ["1 + 2", "let x = 1", "let = 5", "x == y", "record R\n  x: int"],
+    )
+    def test_complete_sources(self, source: str) -> None:
+        assert is_incomplete(source) is False
+
+    @pytest.mark.parametrize("source", ["", "   ", "\t", "  \n  "])
+    def test_blank_input_force_submits(self, source: str) -> None:
+        # Blank / whitespace-only input force-submits so Enter on an empty prompt
+        # gives a fresh prompt instead of inserting a newline.
+        assert is_incomplete(source) is False
+
+
+class TestHasRunnableStatements:
+    @pytest.mark.parametrize(
+        "source",
+        ["", "   ", "\t", "# a comment", "  # indented comment", "# one\n# two"],
+    )
+    def test_blank_or_comment_only_has_nothing_to_run(self, source: str) -> None:
+        assert has_runnable_statements(source) is False
+
+    @pytest.mark.parametrize(
+        "source",
+        ["1 + 1", "let x = 1", "# lead\nlet y = 2", "record R\n  x: int"],
+    )
+    def test_real_entry_has_statements(self, source: str) -> None:
+        assert has_runnable_statements(source) is True
+
+    def test_lexer_error_is_treated_as_runnable(self) -> None:
+        # An odd/unlexable entry is conservatively runnable so it reaches the
+        # evaluator and surfaces a real diagnostic rather than being dropped.
+        assert has_runnable_statements("@") is True
+
+
+# ---------------------------------------------------------------------------
+# Lexer
+# ---------------------------------------------------------------------------
+
+
+class TestLexer:
+    def test_styles_a_sample_line(self) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document('let x = 1 + foo'))(0)
+        styles = {style for style, _text in fragments}
+        assert "class:agl.keyword" in styles  # let
+        assert "class:agl.operator" in styles  # = / +
+        assert "class:agl.number" in styles  # 1
+        # The full line text is preserved across the fragments.
+        assert "".join(text for _style, text in fragments) == "let x = 1 + foo"
+
+    def test_half_typed_line_does_not_raise(self) -> None:
+        lexer = AglPromptLexer()
+        # An invalid character mid-line must fall back to plain text, not raise.
+        fragments = lexer.lex_document(Document("let x = @bad"))(0)
+        assert "".join(text for _style, text in fragments) == "let x = @bad"
+
+    def test_string_literal_is_styled(self) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document('print "hello"'))(0)
+        styles = {style for style, _text in fragments}
+        assert "class:agl.string" in styles
+
+    def test_out_of_range_line_does_not_crash(self) -> None:
+        lexer = AglPromptLexer()
+        getter = lexer.lex_document(Document("let x = 1"))
+        # Asking for a line beyond the document yields an empty line, not a crash.
+        assert getter(0)  # in range
+        assert getter(5) == []
+
+    def test_multiline_document_styles_each_line(self) -> None:
+        lexer = AglPromptLexer()
+        getter = lexer.lex_document(Document("record R\n  x: int"))
+        first = getter(0)
+        second = getter(1)
+        assert any(style == "class:agl.keyword" for style, _ in first)
+        assert "".join(t for _, t in second) == "  x: int"
+
+    def test_trailing_unstyled_text_is_preserved(self) -> None:
+        # A line ending in unstyled text (trailing whitespace after a token)
+        # keeps that text as a plain fragment.
+        fragments = AglPromptLexer().lex_document(Document("1   "))(0)
+        assert ("", "   ") in fragments
+        assert "".join(text for _style, text in fragments) == "1   "
+
+
+class TestHistory:
+    def test_none_path_uses_in_memory_history(self) -> None:
+        assert isinstance(_make_history(None), InMemoryHistory)
+
+    def test_path_uses_file_history(self, tmp_path: object) -> None:
+        from pathlib import Path
+
+        assert isinstance(tmp_path, Path)
+        history = _make_history(tmp_path / "hist")
+        assert isinstance(history, FileHistory)
+
+    def test_build_session_with_file_history(self, tmp_path: object) -> None:
+        from pathlib import Path
+
+        assert isinstance(tmp_path, Path)
+        # Smoke-test the factory with a real history path (the FileHistory
+        # branch of build_prompt_session).
+        session = build_prompt_session(ReplSession(), history_path=tmp_path / "h")
+        assert session is not None
+
+
+# ---------------------------------------------------------------------------
+# Completer
+# ---------------------------------------------------------------------------
+
+
+def _completions(completer: AglCompleter, text: str) -> list[str]:
+    document = Document(text, len(text))
+    return [c.text for c in completer.get_completions(document, CompleteEvent())]
+
+
+class TestCompleter:
+    def test_completes_keyword(self) -> None:
+        completer = AglCompleter(ReplSession())
+        assert "let" in _completions(completer, "le")
+
+    def test_completes_live_binding(self) -> None:
+        session = ReplSession()
+        session.eval_entry("let myvar = 10")
+        completer = AglCompleter(session)
+        assert "myvar" in _completions(completer, "myv")
+
+    def test_completes_meta_commands(self) -> None:
+        completer = AglCompleter(ReplSession())
+        suggestions = _completions(completer, ":")
+        assert ":help" in suggestions
+        assert ":quit" in suggestions
+
+    def test_meta_prefix_filters(self) -> None:
+        completer = AglCompleter(ReplSession())
+        suggestions = _completions(completer, ":q")
+        assert ":quit" in suggestions
+        assert ":help" not in suggestions
+
+    def test_no_completion_for_unknown_word(self) -> None:
+        completer = AglCompleter(ReplSession())
+        assert _completions(completer, "zzzzz") == []
+
+
+# ---------------------------------------------------------------------------
+# Evaluated output via the loop
+# ---------------------------------------------------------------------------
+
+
+class TestEvalOutput:
+    def test_binding_echo_shows_name_type_value(self) -> None:
+        output = drive("let x = 5\r\x04")
+        assert "x : int = 5" in output
+
+    def test_expression_echo_shows_value(self) -> None:
+        output = drive('"hi"\r\x04')
+        assert "hi" in output
+
+    def test_quiet_suppresses_echo(self) -> None:
+        output = drive("let x = 5\r\x04", echo=False)
+        assert "x : int = 5" not in output
+
+    def test_error_entry_prints_diagnostic(self) -> None:
+        output = drive("let = 5\r\x04")
+        assert "line" in output.lower()
+
+
+class TestDryRun:
+    def test_check_only_binding_shows_type_no_value(self) -> None:
+        session = ReplSession()
+        output = drive("let x = 5\r\x04", session=session, check_only=True)
+        assert "x : int" in output
+        assert "= 5" not in output  # no value in dry-run
+        assert session.bindings() == []  # nothing persisted
+
+    def test_check_only_expression_shows_type(self) -> None:
+        output = drive("1 + 2\r\x04", check_only=True)
+        assert ": int" in output
+        assert "3" not in output  # the value is never computed
+
+    def test_check_only_agent_call_typechecks_without_firing(self) -> None:
+        # An entry with an agent call type-checks and echoes its type, but the
+        # fake agent is never invoked and no binding is persisted.
+        agent = _CountingAgent("should-not-be-used")
+        session = ReplSession(default_agent=agent)
+        output = drive(
+            'let g: text = prompt """say something"""\r\x04',
+            session=session,
+            check_only=True,
+        )
+        assert "g : text" in output
+        assert agent.calls == 0  # no agent fired in dry-run
+        assert session.bindings() == []  # no binding persisted
+
+    def test_check_only_error_still_reports_diagnostic(self) -> None:
+        output = drive("let = 5\r\x04", check_only=True)
+        assert "line" in output.lower()
+
+    def test_help_meta_prints_commands(self) -> None:
+        output = drive(":help\r\x04")
+        assert ":help" in output
+        assert ":quit" in output
+
+    def test_unknown_meta_prints_error(self) -> None:
+        output = drive(":bogus\r\x04")
+        assert "Unknown command" in output
+        assert ":bogus" in output

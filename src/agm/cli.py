@@ -27,6 +27,7 @@ import agm.commands.loop.step as loop_step_command
 import agm.commands.open as open_command
 import agm.commands.pull as pull_command
 import agm.commands.refine as refine_command
+import agm.commands.repl as repl_command
 import agm.commands.review as review_command
 import agm.commands.revise as revise_command
 import agm.commands.run as run_command
@@ -52,6 +53,7 @@ from agm.commands.args import (
     LoopSelectArgs,
     OpenArgs,
     RefineArgs,
+    ReplArgs,
     ReviewArgs,
     ReviseArgs,
     RunArgs,
@@ -875,6 +877,72 @@ def exec_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             runner=runner,
+            no_log=no_log,
+            log_file=log_file,
+        )
+    )
+
+
+@app.command(name="repl")
+def repl_cmd(
+    inputs: list[str] | None = typer.Option(
+        None,
+        "--input",
+        help="Host input value in KEY=VALUE form (repeatable).",
+    ),
+    strict_json: bool | None = typer.Option(
+        None,
+        "--strict-json/--no-strict-json",
+        help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
+    ),
+    max_iters: int | None = typer.Option(
+        None,
+        "--max-iters",
+        help="Override the default do-loop iteration limit.",
+    ),
+    runner: str | None = typer.Option(
+        None,
+        "--runner",
+        help="Override the default agent runner command.",
+    ),
+    auto_agents: bool = typer.Option(
+        False,
+        "--auto-agents",
+        help="Fire agent calls without confirming each one.",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        help="Suppress automatic echoing of entry results.",
+    ),
+    log_file: str | None = typer.Option(
+        None,
+        "--log-file",
+        help="Write a structured JSONL trace log to PATH.",
+        autocompletion=completion.complete_path_argument,
+    ),
+    no_log: bool = typer.Option(
+        False,
+        "--no-log",
+        help="Disable trace logging.",
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    if no_log and log_file is not None:
+        exit_with_usage_error(
+            ["repl"], "error: --no-log and --log-file are mutually exclusive"
+        )
+    repl_command.run(
+        ReplArgs(
+            inputs=list(inputs) if inputs is not None else [],
+            strict_json=strict_json,
+            max_iters=max_iters,
+            runner=runner,
+            auto_agents=auto_agents,
+            quiet=quiet,
             no_log=no_log,
             log_file=log_file,
         )

@@ -26,7 +26,12 @@ import logging.handlers
 import pytest
 
 from agm.agl.lexer.lexer import AglLexer
-from agm.agl.parser import AglSyntaxError, parse_program, parse_program_seeded
+from agm.agl.parser import (
+    AglSyntaxError,
+    is_incomplete_source,
+    parse_program,
+    parse_program_seeded,
+)
 from agm.agl.syntax import (
     AbortPolicy,
     AgentCall,
@@ -3151,3 +3156,38 @@ class TestParseProgramSeeded:
         assert min(all_node_ids(prog)) >= 10
         prog2, _ = parse_program_seeded("let y = 2", start_id=next_id)
         assert all_node_ids(prog).isdisjoint(all_node_ids(prog2))
+
+
+class TestIsIncompleteSource:
+    """The structured incompleteness signal used by the REPL multiline predicate."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "record R",  # unterminated block header ($END)
+            "enum E",
+            "case x of",
+            "try",
+            "do agent",
+            "if x = 1 =>",  # block-opening arrow, no body yet
+            "if x = 1 =>\n",  # newline after =>, awaiting an INDENT
+            "1 +",  # dangling binary operator
+            "let x =",  # open initializer
+        ],
+    )
+    def test_incomplete_sources(self, source: str) -> None:
+        assert is_incomplete_source(source) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "1 + 2",  # a clean parse
+            "let x = 1",
+            "record R\n  x: int",  # a full block
+            "let = 5",  # a real error mid-line (not $END / INDENT)
+            "x == y",  # the == friendly-error case
+            '"unterminated',  # a lexical error → submit so the user sees it
+        ],
+    )
+    def test_complete_or_erroring_sources(self, source: str) -> None:
+        assert is_incomplete_source(source) is False

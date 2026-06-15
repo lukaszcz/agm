@@ -497,6 +497,29 @@ _HELP_TEXTS: dict[str, str] = {
              diagnostics, host configuration error, or input validation failure.
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
+    "repl": textwrap.dedent("""\
+        agm repl [--input KEY=VALUE]... [--strict-json|--no-strict-json]
+                 [--max-iters N] [--runner COMMAND] [--auto-agents]
+                 [--quiet] [--log-file PATH|--no-log]
+
+        Start an interactive read-eval-print loop for AgL.  Each entry is
+        parsed, type-checked, and evaluated against a persistent session that
+        accumulates bindings, types, and declarations across entries.
+
+        Options:
+          --input KEY=VALUE     Pre-seed a host input value (repeatable).
+          --strict-json         Require bare JSON output from agents (no recovery).
+          --no-strict-json      Use lenient JSON recovery (default).
+          --max-iters N         Override the default do-loop iteration limit.
+          --runner COMMAND      Override the default agent runner command.
+          --auto-agents         Fire agent calls without confirming each one.
+          --quiet               Suppress automatic echoing of entry results.
+          --log-file PATH       Write trace log to PATH.
+          --no-log              Disable trace logging.
+
+        Type :help inside the REPL for the meta-command list; :quit or Ctrl-D
+        exits.
+    """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]
 
@@ -530,6 +553,7 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("revise", "Run the revision prompt"),
     ("refine", "Run review/revise refinement"),
     ("exec", "Execute an AgL workflow program"),
+    ("repl", "Start an interactive AgL REPL"),
     ("run", "Run a command in a sandbox"),
     ("config", "Manage project configuration files"),
     ("list", "List all open worktrees"),

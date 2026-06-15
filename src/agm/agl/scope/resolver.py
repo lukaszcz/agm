@@ -44,6 +44,9 @@ already in place.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
@@ -152,6 +155,24 @@ class _Resolver:
     def _current_scope(self) -> ScopeNode:
         assert self._scope is not None, "resolver used outside of run()"
         return self._scope
+
+    @contextmanager
+    def _child_scope(self, node_id: int) -> Iterator[ScopeNode]:
+        """Open a fresh child scope (not the root) and yield it.
+
+        Pushes a new ``ScopeNode`` parented to the current scope, clears the
+        root flag for its lifetime (only the program root is ``_at_root``), and
+        restores/pops on exit.
+        """
+        child = ScopeNode(node_id=node_id, parent=self._current_scope())
+        self._push_scope(child)
+        was_root = self._at_root
+        self._at_root = False
+        try:
+            yield child
+        finally:
+            self._at_root = was_root
+            self._pop_scope()
 
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration."""
@@ -285,16 +306,11 @@ class _Resolver:
 
     def _resolve_do_until(self, stmt: DoUntil) -> None:
         # Open a fresh iteration scope for the body + condition.
-        child = ScopeNode(node_id=stmt.node_id, parent=self._current_scope())
-        self._push_scope(child)
-        was_root = self._at_root
-        self._at_root = False
-        for s in stmt.body:
-            self._resolve_stmt(s)
-        # until condition is evaluated in the same iteration scope.
-        self._resolve_expr(stmt.condition)
-        self._at_root = was_root
-        self._pop_scope()
+        with self._child_scope(stmt.node_id):
+            for s in stmt.body:
+                self._resolve_stmt(s)
+            # until condition is evaluated in the same iteration scope.
+            self._resolve_expr(stmt.condition)
 
     def _resolve_if(self, stmt: IfStmt) -> None:
         for branch in stmt.branches:
@@ -305,14 +321,9 @@ class _Resolver:
 
         if not isinstance(branch.cond, ElseSentinel):
             self._resolve_expr(branch.cond)
-        child = ScopeNode(node_id=branch.node_id, parent=self._current_scope())
-        self._push_scope(child)
-        was_root = self._at_root
-        self._at_root = False
-        for s in branch.body:
-            self._resolve_stmt(s)
-        self._at_root = was_root
-        self._pop_scope()
+        with self._child_scope(branch.node_id):
+            for s in branch.body:
+                self._resolve_stmt(s)
 
     def _resolve_case_stmt(self, stmt: CaseStmt) -> None:
         self._resolve_expr(stmt.subject)
@@ -320,51 +331,36 @@ class _Resolver:
             self._resolve_case_stmt_branch(branch)
 
     def _resolve_case_stmt_branch(self, branch: CaseStmtBranch) -> None:
-        child = ScopeNode(node_id=branch.node_id, parent=self._current_scope())
-        self._push_scope(child)
-        was_root = self._at_root
-        self._at_root = False
-        # Bind pattern variables into the branch scope before the body.
-        self._bind_pattern_vars(branch.pattern, child)
-        for s in branch.body:
-            self._resolve_stmt(s)
-        self._at_root = was_root
-        self._pop_scope()
+        with self._child_scope(branch.node_id) as child:
+            # Bind pattern variables into the branch scope before the body.
+            self._bind_pattern_vars(branch.pattern, child)
+            for s in branch.body:
+                self._resolve_stmt(s)
 
     def _resolve_try_catch(self, stmt: TryCatch) -> None:
         # Try body — its own scope.
-        try_scope = ScopeNode(node_id=stmt.node_id, parent=self._current_scope())
-        self._push_scope(try_scope)
-        was_root = self._at_root
-        self._at_root = False
-        for s in stmt.body:
-            self._resolve_stmt(s)
-        self._at_root = was_root
-        self._pop_scope()
+        with self._child_scope(stmt.node_id):
+            for s in stmt.body:
+                self._resolve_stmt(s)
         # Each catch clause gets its own scope.
         for clause in stmt.handlers:
             self._resolve_catch_clause(clause)
 
     def _resolve_catch_clause(self, clause: CatchClause) -> None:
-        catch_scope = ScopeNode(node_id=clause.node_id, parent=self._current_scope())
-        self._push_scope(catch_scope)
-        was_root = self._at_root
-        self._at_root = False
-        # Bind the catch binder (immutable) if present.
-        if clause.binding is not None:
-            self._check_not_reserved(clause.binding, clause.span)
-            ref = BindingRef(
-                name=clause.binding,
-                mutable=False,
-                decl_span=clause.span,
-                decl_node_id=clause.node_id,
-                kind=BinderKind.catch_binder,
-            )
-            catch_scope.define(clause.binding, ref)
-        for s in clause.body:
-            self._resolve_stmt(s)
-        self._at_root = was_root
-        self._pop_scope()
+        with self._child_scope(clause.node_id) as catch_scope:
+            # Bind the catch binder (immutable) if present.
+            if clause.binding is not None:
+                self._check_not_reserved(clause.binding, clause.span)
+                ref = BindingRef(
+                    name=clause.binding,
+                    mutable=False,
+                    decl_span=clause.span,
+                    decl_node_id=clause.node_id,
+                    kind=BinderKind.catch_binder,
+                )
+                catch_scope.define(clause.binding, ref)
+            for s in clause.body:
+                self._resolve_stmt(s)
 
     # ------------------------------------------------------------------
     # Pattern variable binding
@@ -487,14 +483,9 @@ class _Resolver:
                 self._resolve_expr(seg.expr)
 
     def _resolve_case_expr_branch(self, branch: CaseExprBranch) -> None:
-        child = ScopeNode(node_id=branch.node_id, parent=self._current_scope())
-        self._push_scope(child)
-        was_root = self._at_root
-        self._at_root = False
-        self._bind_pattern_vars(branch.pattern, child)
-        self._resolve_expr(branch.body)
-        self._at_root = was_root
-        self._pop_scope()
+        with self._child_scope(branch.node_id) as child:
+            self._bind_pattern_vars(branch.pattern, child)
+            self._resolve_expr(branch.body)
 
 
 # ---------------------------------------------------------------------------

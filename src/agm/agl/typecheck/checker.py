@@ -391,10 +391,8 @@ class _Checker:
             self._check_stmt(stmt)
 
     def _check_stmt(self, stmt: Stmt) -> None:
-        if isinstance(stmt, LetDecl):
-            self._check_let(stmt)
-        elif isinstance(stmt, VarDecl):
-            self._check_var(stmt)
+        if isinstance(stmt, (LetDecl, VarDecl)):
+            self._check_binding(stmt)
         elif isinstance(stmt, SetStmt):
             self._check_set(stmt)
         elif isinstance(stmt, InputDecl):
@@ -419,17 +417,7 @@ class _Checker:
         else:
             pass  # PassStmt — no-op
 
-    def _check_let(self, stmt: LetDecl) -> None:
-        ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
-        val_type = self._check_expr(stmt.value, expected=ann_type)
-        if ann_type is not None:
-            self._assert_assignable(val_type, ann_type, stmt.span)
-            declared_type = ann_type
-        else:
-            declared_type = val_type
-        self._env.set_binding_type(stmt.node_id, declared_type)
-
-    def _check_var(self, stmt: VarDecl) -> None:
+    def _check_binding(self, stmt: LetDecl | VarDecl) -> None:
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         val_type = self._check_expr(stmt.value, expected=ann_type)
         if ann_type is not None:
@@ -550,20 +538,6 @@ class _Checker:
 
     def _infer_expr(self, expr: Expr, *, expected: Type | None) -> Type:
         """Bottom-up inference with optional top-down ``expected`` context."""
-        from agm.agl.syntax.nodes import (
-            AgentCall,
-            BinaryOp,
-            CaseExpr,
-            Constructor,
-            DictLit,
-            FieldAccess,
-            IsTest,
-            ListLit,
-            Template,
-            UnaryNeg,
-            VarRef,
-        )
-
         if isinstance(expr, IntLit):
             return IntType()
         if isinstance(expr, DecimalLit):
@@ -1197,7 +1171,7 @@ class _Checker:
             return self._check_constructor_call(node, named_type)
         if isinstance(named_type, ExceptionType):
             # The abstract "Exception" base is not constructible.
-            if named_type.name == "Exception":
+            if named_type.abstract:
                 raise AglTypeError(
                     "The abstract 'Exception' base type is not constructible. "
                     "Use a concrete exception type (e.g. 'Abort').",

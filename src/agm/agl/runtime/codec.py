@@ -152,6 +152,15 @@ class OutputCodec(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Built-in codec names
+# ---------------------------------------------------------------------------
+
+# The names of the built-in codecs (``TextCodec.name`` / ``JsonCodec.name``).
+# These are reserved: host-registered codecs cannot shadow them.
+BUILTIN_CODEC_NAMES: frozenset[str] = frozenset({"text", "json"})
+
+
+# ---------------------------------------------------------------------------
 # TextCodec — passthrough codec for the text type
 # ---------------------------------------------------------------------------
 

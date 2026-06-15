@@ -390,15 +390,13 @@ class Interpreter:
 
     def _exec_if(self, stmt: IfStmt, scope: Scope) -> None:
         for branch in stmt.branches:
-            if isinstance(branch.cond, ElseSentinel):
-                branch_scope = Scope(parent=scope)
-                for s in branch.body:
-                    self._exec_stmt(s, branch_scope)
-                return
-            cond = self._eval_expr(branch.cond, scope)
             # The checker requires every if-condition to be bool (design §4.3),
-            # so this is always a BoolValue.
-            if self._require_bool(cond):
+            # so ``_eval_expr`` always yields a BoolValue here.  An else branch
+            # has no condition and is always taken (short-circuits the eval).
+            take = isinstance(branch.cond, ElseSentinel) or self._require_bool(
+                self._eval_expr(branch.cond, scope)
+            )
+            if take:
                 branch_scope = Scope(parent=scope)
                 for s in branch.body:
                     self._exec_stmt(s, branch_scope)

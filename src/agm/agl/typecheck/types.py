@@ -182,11 +182,14 @@ class ExceptionType:
 
     ``fields`` maps field name → field type.
     The abstract ``Exception`` base is represented as an ``ExceptionType``
-    with name ``"Exception"`` and only ``message``/``trace_id`` fields.
+    with name ``"Exception"``, only ``message``/``trace_id`` fields, and
+    ``abstract=True`` (it is catchable as the hierarchy root but not
+    constructible).
     """
 
     name: str
     fields: Mapping[str, Type] = field(default_factory=dict)
+    abstract: bool = False
 
     @property
     def kind(self) -> str:
@@ -286,6 +289,7 @@ EXCEPTION_BASE = ExceptionType(
         "message": TextType(),
         "trace_id": TextType(),
     },
+    abstract=True,
 )
 
 # Concrete built-in exceptions — exact §8.1 table.

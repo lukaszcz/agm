@@ -208,16 +208,13 @@ class WorkflowRuntime:
 
         Raises ``ValueError`` for reserved or duplicate names.
         """
-        from agm.agl.runtime.codec import JsonCodec, TextCodec
+        from agm.agl.runtime.codec import BUILTIN_CODEC_NAMES
 
-        _reserved_codec_names: frozenset[str] = frozenset({
-            TextCodec().name, JsonCodec().name
-        })
         name = codec.name
-        if name in _reserved_codec_names:
+        if name in BUILTIN_CODEC_NAMES:
             raise ValueError(
                 f"Cannot register codec with reserved name {name!r}. "
-                f"Reserved codec names: {sorted(_reserved_codec_names)}"
+                f"Reserved codec names: {sorted(BUILTIN_CODEC_NAMES)}"
             )
         if name in self._extra_codecs:
             raise ValueError(

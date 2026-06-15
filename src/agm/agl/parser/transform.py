@@ -1315,14 +1315,6 @@ class AstBuilder(Transformer):
 
     def catch_clause(self, meta: Meta, args: _Args) -> syntax.CatchClause:
         # args: [(exc_type, binding), tuple[Stmt,...]]
-        pat_tuple = next(
-            (a for a in args if isinstance(a, tuple) and not all(
-                isinstance(x, (syntax.LetDecl, syntax.VarDecl, syntax.SetStmt,
-                                syntax.PassStmt, syntax.PrintStmt, syntax.ExprStmt,
-                                syntax.Raise, syntax.DoUntil)) for x in a
-            )),
-            None,
-        )
         # The catch_pattern sub-rule returns (exc_type, binding) — a plain tuple.
         # The catch_body sub-rule returns a tuple[Stmt,...].
         # Distinguish by checking element types.
@@ -1338,7 +1330,6 @@ class AstBuilder(Transformer):
                     exc_type, binding = cast(tuple[str | None, str | None], a)
                 else:
                     body = cast(tuple[syntax.Stmt, ...], a)
-        del pat_tuple  # only used as a fallback heuristic; explicit logic above is complete
         return syntax.CatchClause(
             exc_type=exc_type, binding=binding, body=body,
             span=_span_from_meta(meta), node_id=self._next_id(),
@@ -1389,15 +1380,23 @@ class AstBuilder(Transformer):
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
 
+    def _literal_pattern(
+        self,
+        literal: syntax.IntLit | syntax.DecimalLit | syntax.BoolLit | syntax.StringLit
+        | syntax.NullLit,
+        meta: Meta,
+    ) -> syntax.LiteralPattern:
+        return syntax.LiteralPattern(
+            literal=literal, span=_span_from_meta(meta), node_id=self._next_id()
+        )
+
     def pat_lit_int(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         tok = args[0]
         assert isinstance(tok, Token)
         lit = syntax.IntLit(
             value=int(str(tok)), span=_span_from_meta(meta), node_id=self._next_id()
         )
-        return syntax.LiteralPattern(
-            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
-        )
+        return self._literal_pattern(lit, meta)
 
     def pat_lit_decimal(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         tok = args[0]
@@ -1407,31 +1406,23 @@ class AstBuilder(Transformer):
             value=_decimal.Decimal(str(tok)),
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
-        return syntax.LiteralPattern(
-            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
-        )
+        return self._literal_pattern(lit, meta)
 
     def pat_lit_true(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         lit = syntax.BoolLit(
             value=True, span=_span_from_meta(meta), node_id=self._next_id()
         )
-        return syntax.LiteralPattern(
-            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
-        )
+        return self._literal_pattern(lit, meta)
 
     def pat_lit_false(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         lit = syntax.BoolLit(
             value=False, span=_span_from_meta(meta), node_id=self._next_id()
         )
-        return syntax.LiteralPattern(
-            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
-        )
+        return self._literal_pattern(lit, meta)
 
     def pat_lit_null(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         lit = syntax.NullLit(span=_span_from_meta(meta), node_id=self._next_id())
-        return syntax.LiteralPattern(
-            literal=lit, span=_span_from_meta(meta), node_id=self._next_id()
-        )
+        return self._literal_pattern(lit, meta)
 
     def pat_lit_str(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         # args: [StringLit | Template] — the template transformer normalises plain strings.
@@ -1444,9 +1435,7 @@ class AstBuilder(Transformer):
                 span=tmpl.span,
             )
         assert isinstance(tmpl, syntax.StringLit), f"pat_lit_str: unexpected {type(tmpl)}"
-        return syntax.LiteralPattern(
-            literal=tmpl, span=_span_from_meta(meta), node_id=self._next_id()
-        )
+        return self._literal_pattern(tmpl, meta)
 
     def pattern_fields(self, meta: Meta, args: _Args) -> tuple[syntax.PatternField, ...]:
         return tuple(a for a in args if isinstance(a, syntax.PatternField))

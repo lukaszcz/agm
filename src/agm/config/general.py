@@ -381,12 +381,7 @@ def load_loop_config(
         if isinstance(extra_selector_prompt_file, str) and extra_selector_prompt_file.strip()
         else None
     )
-    timeout_raw = selected_loop_table.get("timeout")
-    resolved_timeout: float | None = None
-    if isinstance(timeout_raw, (int, float)) and timeout_raw > 0:
-        resolved_timeout = float(timeout_raw)
-    elif isinstance(timeout_raw, str) and timeout_raw.strip():
-        resolved_timeout = parse_timeout(timeout_raw)
+    resolved_timeout = _optional_timeout(selected_loop_table, "timeout")
     return LoopConfig(
         runner=resolved_runner,
         selector=resolved_selector,
@@ -428,6 +423,15 @@ def _optional_positive_int(table: TomlDict, key: str, *, default: int) -> int:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return default
+
+
+def _optional_timeout(table: TomlDict, key: str) -> float | None:
+    value = table.get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        return parse_timeout(value)
+    return None
 
 
 def _select_command_table(
@@ -544,16 +548,7 @@ def load_exec_config(
     resolved_strict_json = _optional_bool(exec_table, "strict_json")
     resolved_loop_limit = _optional_positive_int(exec_table, "default_loop_limit", default=5)
 
-    timeout_raw = exec_table.get("timeout")
-    resolved_timeout: float | None = None
-    if (
-        isinstance(timeout_raw, (int, float))
-        and not isinstance(timeout_raw, bool)
-        and timeout_raw > 0
-    ):
-        resolved_timeout = float(timeout_raw)
-    elif isinstance(timeout_raw, str) and timeout_raw.strip():
-        resolved_timeout = parse_timeout(timeout_raw)
+    resolved_timeout = _optional_timeout(exec_table, "timeout")
 
     agents_raw = exec_table.get("agents")
     resolved_agents: dict[str, str] = {}

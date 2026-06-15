@@ -50,6 +50,7 @@ from agm.agl.repl.agentmode import AgentMode
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agl.repl.agents import ConfirmDecision
     from agm.agl.repl.session import ReplSession
 
 
@@ -356,6 +357,64 @@ def _prompt_continuation(
     """Render the ``...> `` continuation prompt for multiline entries."""
     del width, line_number, wrap_count
     return [("class:agl.prompt", CONTINUATION)]
+
+
+# ---------------------------------------------------------------------------
+# Agent-call confirmation prompt
+# ---------------------------------------------------------------------------
+
+# How much of a rendered prompt to show inline before truncating; longer prompts
+# offer a ``[v]iew`` option to print the full text.
+_PROMPT_PREVIEW_CHARS = 200
+
+# The reader the confirm prompt uses to read a line.  Injected so headless tests
+# can script answers without a terminal; defaults to stdlib ``input``.
+PromptReader = Callable[[str], str]
+
+
+def make_console_confirm(
+    *,
+    reader: "PromptReader | None" = None,
+    printer: Callable[[str], None] | None = None,
+) -> "Callable[[str, str], ConfirmDecision]":
+    """Return a confirm callback for :class:`~agm.agl.repl.agents.ConfirmingAgent`.
+
+    The callback shows the *callee* and the rendered prompt (truncated, with a
+    ``[v]iew`` option to print the full text), then reads ``[Y]es / [n]o /
+    [a]lways`` and maps the answer to ``"yes"`` / ``"no"`` / ``"always"``.  An
+    empty answer defaults to ``"yes"`` (the capitalised default).  Anything
+    unrecognised re-asks.
+
+    *reader* / *printer* are injected so headless tests drive it without a
+    terminal; they default to stdlib ``input`` / ``print``.
+    """
+    read: PromptReader = reader if reader is not None else input
+    write: Callable[[str], None] = printer if printer is not None else print
+
+    def confirm(callee: str, prompt: str) -> "ConfirmDecision":
+        write(f"Agent call to {callee!r}:")
+        write(_preview_prompt(prompt))
+        while True:
+            answer = read("Run this agent call? [Y]es / [n]o / [a]lways: ").strip().lower()
+            if answer in ("", "y", "yes"):
+                return "yes"
+            if answer in ("n", "no"):
+                return "no"
+            if answer in ("a", "always"):
+                return "always"
+            if answer in ("v", "view"):
+                write(prompt)
+                continue
+            write("Please answer y(es), n(o), a(lways), or v(iew).")
+
+    return confirm
+
+
+def _preview_prompt(prompt: str) -> str:
+    """Return the inline prompt preview, truncated with a ``[v]iew`` hint."""
+    if len(prompt) <= _PROMPT_PREVIEW_CHARS:
+        return prompt
+    return f"{prompt[:_PROMPT_PREVIEW_CHARS]}… (truncated; type 'v' to view full)"
 
 
 # ---------------------------------------------------------------------------

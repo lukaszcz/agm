@@ -512,20 +512,51 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 |---------|--------|
 | `:help` | List the available meta-commands |
 | `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
+| `:reset` | Clear the whole session (bindings, types, declarations, inputs) |
+| `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
+| `:bindings` / `:env` | List current bindings as `name : Type = value` |
+| `:agents` | List available agents and report the current agent-call mode |
+| `:inputs` | List declared inputs and their current values |
+| `:set name=value` | Supply a host input value; `:set echo on\|off` toggles echoing |
+| `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
+| `:load FILE` | Run an `.agl` file's statements into the session, one per entry |
+| `:save FILE` | Write the accumulated session source to a file |
 
-Press Ctrl-C to cancel the current entry without exiting.
+Press Ctrl-C to cancel the current entry without exiting. During a live agent
+call, Ctrl-C interrupts the call and aborts the current entry (the entry's
+bindings roll back atomically) but keeps the REPL running.
+
+Agent-call confirmation:
+
+- By default the REPL is in **confirm** mode: before every live agent call it
+  shows the callee and the rendered prompt (truncated, with a `[v]iew` option to
+  print the full text) and asks `[Y]es / [n]o / [a]lways`. `yes` runs the call,
+  `no` aborts the entry (rolling its bindings back), and `always` switches the
+  session to auto mode for the rest of the session.
+- `--auto-agents` (or `:agent auto`) starts/switches to **auto** mode, firing
+  agent calls immediately without prompting, matching `agm exec`.
+- `agm exec`-style `exec` shell calls are **not** gated in this version; only
+  agent calls are confirmed.
 
 Options:
 
-- `--input KEY=VALUE`: Provide a host input value (repeatable).
+- `--input KEY=VALUE`: Pre-seed a host input value (repeatable). The value is
+  applied when the matching `input name: T` is declared in the session (or
+  immediately if it is already declared); a value that fails conversion leaves
+  the input unset rather than erroring. Inputs can also be set interactively with
+  `:set name=value`.
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent
   output (lenient recovery is the default), as for `agm exec`.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
 - `--runner COMMAND`: Override the default agent runner command.
-- `--auto-agents`: Fire agent calls without confirming each one.
+- `--auto-agents`: Start in auto mode, firing agent calls without confirming
+  each one (the default is confirm-each-call; see *Agent-call confirmation*).
 - `--quiet`: Suppress the automatic echoing of entry results.
-- `--log-file PATH` / `--no-log`: Control trace logging. `--no-log` and
-  `--log-file` are mutually exclusive.
+- `--log-file PATH` / `--no-log`: Control trace logging. With `--log-file` each
+  evaluated entry appends its JSONL trace records (one trace *run* per entry) to
+  PATH; without it a timestamped file is written under `.agent-files/`. `--no-log`
+  disables tracing. `--no-log` and `--log-file` are mutually exclusive, and
+  `--dry-run` writes no trace.
 - `--dry-run`: Type-check only. Each entry runs the full static pipeline
   (parse / resolve / typecheck) but is **never evaluated**, so no agent or
   `exec` calls fire and no bindings are persisted. The inferred type is echoed
@@ -535,12 +566,6 @@ Options:
 Blank lines and comment-only entries (everything after a `#` is a comment) are a
 no-op: pressing Enter on them simply returns a fresh prompt, with no evaluation
 and no error.
-
-> Note: agent-call confirmation (`--auto-agents` and the `confirm`/`auto`
-> modes), `--input` pre-seeding of declared inputs, and REPL trace logging are
-> accepted today but not yet active; they are wired up in a subsequent
-> milestone. The remaining flags (`--strict-json`/`--no-strict-json`,
-> `--max-iters`, `--runner`, `--quiet`, `--dry-run`) take effect immediately.
 
 ## Help and aliases
 

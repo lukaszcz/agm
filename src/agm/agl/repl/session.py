@@ -106,8 +106,9 @@ class EntryResult:
     ``ok``
         ``True`` iff there are no error diagnostics AND no runtime error.
     ``trace_path``
-        Path of the JSONL trace written for this entry (always ``None`` in M1b —
-        tracing arrives in a later milestone).
+        Path of the JSONL trace file the entry's records were appended to, or
+        ``None`` when tracing is disabled (no ``--log-file``) or for a
+        ``check_only`` (dry-run) entry, which writes no trace.
     """
 
     kind: EntryKind
@@ -149,6 +150,7 @@ class ReplSession:
         default_strict_json: bool = False,
         default_agent: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
+        trace_path: "Path | None" = None,
     ) -> None:
         from agm.agl.eval.scope import Scope
         from agm.agl.runtime.runtime import WorkflowRuntime
@@ -158,6 +160,12 @@ class ReplSession:
         self._default_loop_limit = default_loop_limit
         self._default_strict_json = default_strict_json
         self._shell_exec_timeout = shell_exec_timeout
+        # Trace destination: when set, each evaluated entry opens a fresh
+        # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
+        # file.  ``check_only`` entries write nothing (mirroring ``agm exec``).
+        # The COMMAND validates/creates the path up front; the session assumes it
+        # is writable but the no-op store tolerates failure (it disables itself).
+        self._trace_path = trace_path
 
         # Internal runtime owns the registrations + host-environment assembly.
         self._runtime = WorkflowRuntime(
@@ -175,6 +183,10 @@ class ReplSession:
         self._next_node_id: int = 0
         # Declared inputs: name → (declared type, current value or None if unset).
         self._declared_inputs: dict[str, tuple[Type, Value | None]] = {}
+        # Pending pre-seeded input values (``--input``/``preset_input``) that
+        # name an input not yet declared: applied on the input's later
+        # declaration (in ``_promote``).  Cleared by ``reset``.
+        self._pending_inputs: dict[str, str] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
 
@@ -374,9 +386,11 @@ class ReplSession:
         """Execute the entry in a child scope; promote on success, discard on error."""
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.scope import Scope
+        from agm.agl.repl.agents import AgentCancelled
         from agm.agl.repl.echo_interpreter import EchoInterpreter
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.runtime.runtime import exception_value_to_run_error
+        from agm.agl.runtime.trace import TraceStore
         from agm.agl.syntax.nodes import ExprStmt
 
         typed_contracts: dict[int, OutputContract] = {
@@ -399,6 +413,12 @@ class ReplSession:
             name: binding.value for name, binding in self._value_scope.bindings.items()
         }
 
+        # One trace run per entry: a fresh ``TraceStore`` (own ``run_id``)
+        # appends to the shared file, bracketed by ``run_start``/``run_end``.
+        # ``path=None`` (no ``--log-file``) makes every write a silent no-op.
+        trace = TraceStore(path=self._trace_path)
+        trace.run_start()
+
         interp = EchoInterpreter(
             checked=checked,
             registry=host_env.registry,
@@ -409,7 +429,7 @@ class ReplSession:
             strict_json=self._default_strict_json,
             source=text,
             shell_exec_timeout=self._shell_exec_timeout,
-            trace=None,  # M1b: tracing is a no-op.
+            trace=trace,
         )
         # Echo the value of a trailing bare expression (captured during exec).
         if program.body and isinstance(program.body[-1], ExprStmt):
@@ -419,12 +439,15 @@ class ReplSession:
             interp.execute(child_scope)
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
-            # Atomic-on-error: discard the child scope (new bindings) AND roll back
-            # any in-place ``set`` mutations to prior session bindings.  The key
-            # set cannot change during eval, so restoring values is sufficient.
-            assert self._value_scope.bindings.keys() == value_snapshot.keys()
-            for bname, binding in self._value_scope.bindings.items():
-                binding.value = value_snapshot[bname]
+            trace_id = str(error.fields.get("trace_id", ""))
+            trace.exception(
+                type_name=error.type_name,
+                message=str(error.fields.get("message", "")),
+                trace_id=trace_id,
+                span=exc.span,
+            )
+            trace.run_end(ok=False)
+            self._rollback(value_snapshot)
             kind, name = self._classify(program)
             return EntryResult(
                 kind=kind,
@@ -435,8 +458,31 @@ class ReplSession:
                 warnings=warnings,
                 error=error,
                 ok=False,
+                trace_path=self._trace_path,
+            )
+        except (AgentCancelled, KeyboardInterrupt):
+            # A declined confirmation or a Ctrl-C during a live agent call aborts
+            # the entry atomically — identical rollback to the AglRaise path, but
+            # there is no AgL exception to map (the cancellation is a host signal,
+            # not an in-language raise), so it surfaces as a diagnostic.
+            trace.run_end(ok=False)
+            self._rollback(value_snapshot)
+            kind, name = self._classify(program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
+                diagnostics=[
+                    Diagnostic(message="Agent call cancelled — entry aborted.", line=1)
+                ],
+                warnings=warnings,
+                error=None,
+                ok=False,
+                trace_path=self._trace_path,
             )
 
+        trace.run_end(ok=True)
         captured: Value | None = interp.captured
 
         # Success — promote atomically, then compute the echo data.
@@ -458,7 +504,21 @@ class ReplSession:
             warnings=warnings,
             error=None,
             ok=True,
+            trace_path=self._trace_path,
         )
+
+    def _rollback(self, value_snapshot: dict[str, "Value"]) -> None:
+        """Roll the persistent value scope back to *value_snapshot* (atomic abort).
+
+        Shared by the ``AglRaise`` and cancellation paths.  Discarding the entry's
+        child scope drops new ``let``/``var`` bindings; restoring each session
+        binding's ``.value`` undoes any in-place ``set`` mutation of a prior
+        binding.  The session frame's key set cannot change during eval (``set``
+        only updates existing bindings), so restoring values is a complete rollback.
+        """
+        assert self._value_scope.bindings.keys() == value_snapshot.keys()
+        for bname, binding in self._value_scope.bindings.items():
+            binding.value = value_snapshot[bname]
 
     def _promote(
         self,
@@ -491,6 +551,11 @@ class ReplSession:
                 assert input_type is not None
                 # A re-declared input keeps no stale value (shadows fresh).
                 self._declared_inputs[stmt.name] = (input_type, None)
+                # Apply a pending pre-seeded value (``--input``/``preset_input``)
+                # now that the input is declared.  A conversion failure leaves the
+                # input unset (the unset-input guard surfaces a clean error if it
+                # is later referenced) — pre-seeding must never crash promotion.
+                self._apply_pending_input(stmt.name)
 
         self._source_log.append(text)
         self._next_node_id = next_start_id
@@ -626,8 +691,6 @@ class ReplSession:
         value into both the value scope and the declared-inputs table.  Raises
         ``AglError`` on conversion failure.
         """
-        from agm.agl.runtime.runtime import convert_input
-
         entry = self._declared_inputs.get(name)
         if entry is None:
             raise AglError(
@@ -636,17 +699,66 @@ class ReplSession:
             )
         declared_type, _ = entry
         try:
-            value = convert_input(name, raw, declared_type)
+            self._bind_input(name, raw, declared_type)
         except ValueError as exc:
             raise AglError(str(exc)) from exc
+
+    def _bind_input(self, name: str, raw: str, declared_type: "Type") -> None:
+        """Convert *raw* to *declared_type* and bind it as the input's value.
+
+        Shared by ``set_input`` (the ``:set`` flow) and ``_apply_pending_input``
+        (the pre-seed flow).  Raises ``ValueError`` on conversion failure; the
+        binding tables are left untouched in that case so callers decide how to
+        surface or swallow the error.
+        """
+        from agm.agl.runtime.runtime import convert_input
+
+        value = convert_input(name, raw, declared_type)
 
         ref = self._session_scope.bindings.get(name)
         assert ref is not None  # a declared input is always a promoted binding
         self._value_scope.bindings.pop(name, None)
-        self._value_scope.define(
-            name, value, mutable=False, decl_span=ref.decl_span
-        )
+        self._value_scope.define(name, value, mutable=False, decl_span=ref.decl_span)
         self._declared_inputs[name] = (declared_type, value)
+
+    def preset_input(self, name: str, raw: str) -> None:
+        """Pre-seed a host input value (the ``--input KEY=VALUE`` launch flow).
+
+        If *name* is ALREADY declared, the value is converted and bound
+        immediately (reusing the ``:set`` binding path); a bad value leaves the
+        input unset.  Otherwise the raw value is stored pending and applied on the
+        input's later declaration (in ``_promote``).  Unlike :meth:`set_input`,
+        a conversion failure here is swallowed rather than raised — pre-seeding
+        is a best-effort launch convenience, and an unset input surfaces a clean
+        error only if it is actually referenced.
+        """
+        if name in self._declared_inputs:
+            declared_type, _ = self._declared_inputs[name]
+            try:
+                self._bind_input(name, raw, declared_type)
+            except ValueError:
+                # Bad pre-seed value: leave the input unset.
+                pass
+            return
+        self._pending_inputs[name] = raw
+
+    def _apply_pending_input(self, name: str) -> None:
+        """Apply (and consume) a pending pre-seeded value for a just-declared input.
+
+        Called from ``_promote`` when an ``input`` declaration is registered.  A
+        conversion failure leaves the input unset (the value is consumed either
+        way so it is not retried on re-declaration).
+        """
+        raw = self._pending_inputs.pop(name, None)
+        if raw is None:
+            return
+        declared_type, _ = self._declared_inputs[name]
+        try:
+            self._bind_input(name, raw, declared_type)
+        except ValueError:
+            # Bad pre-seed value: leave the input unset (guard surfaces the error
+            # only if the input is later referenced).
+            pass
 
     def reset(self) -> None:
         """Clear ALL session state (symbols, types, values, inputs, source, ids)."""
@@ -659,6 +771,7 @@ class ReplSession:
         self._value_scope = Scope(parent=None)
         self._next_node_id = 0
         self._declared_inputs = {}
+        self._pending_inputs = {}
         self._source_log = []
 
     def load_file(self, path: "Path") -> list[EntryResult]:

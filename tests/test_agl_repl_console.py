@@ -15,7 +15,7 @@ from __future__ import annotations
 import contextlib
 import io
 import signal
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from types import FrameType
 
 import pytest
@@ -26,6 +26,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from agm.agl.repl import ReplSession
+from agm.agl.repl.agents import ConfirmDecision
 from agm.agl.repl.console import (
     AglCompleter,
     AglPromptLexer,
@@ -485,3 +486,90 @@ class TestMetaThroughLoop:
         output = drive(f":load {src}\r\x04", session=session)
         assert "loaded : int = 9" in output
         assert any(n == "loaded" for n, _t, _v in session.bindings())
+
+
+# ---------------------------------------------------------------------------
+# Agent-call confirmation callback + confirm flow through run_console
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmCallback:
+    def _confirm_factory(
+        self, *answers: str
+    ) -> tuple[Callable[[str, str], ConfirmDecision], list[str]]:
+        """Build a confirm callback whose reader replays scripted answers."""
+        from agm.agl.repl.console import make_console_confirm
+
+        replies = iter(answers)
+        printed: list[str] = []
+        confirm = make_console_confirm(
+            reader=lambda _prompt: next(replies),
+            printer=printed.append,
+        )
+        return confirm, printed
+
+    def test_yes_no_always(self) -> None:
+        confirm, _printed = self._confirm_factory("y", "n", "a")
+        assert confirm("writer", "do it") == "yes"
+        assert confirm("writer", "do it") == "no"
+        assert confirm("writer", "do it") == "always"
+
+    def test_empty_answer_defaults_to_yes(self) -> None:
+        confirm, _printed = self._confirm_factory("")
+        assert confirm("writer", "do it") == "yes"
+
+    def test_unrecognised_reasks_then_accepts(self) -> None:
+        confirm, printed = self._confirm_factory("huh?", "yes")
+        assert confirm("writer", "do it") == "yes"
+        assert any("y(es)" in line for line in printed)
+
+    def test_view_prints_full_prompt_then_accepts(self) -> None:
+        long_prompt = "X" * 500
+        confirm, printed = self._confirm_factory("v", "y")
+        assert confirm("writer", long_prompt) == "yes"
+        # The truncated preview AND the full text both appear.
+        assert any("truncated" in line for line in printed)
+        assert any(long_prompt in line for line in printed)
+
+
+def _confirming_session(
+    *answers: str, reply: str = "agent-reply"
+) -> tuple[ReplSession, "object"]:
+    """A session whose default agent is a ConfirmingAgent with a scripted confirm."""
+    from agm.agl.repl.agentmode import AgentMode
+    from agm.agl.repl.agents import ConfirmingAgent
+    from agm.agl.repl.console import make_console_confirm
+
+    replies = iter(answers)
+    confirm = make_console_confirm(
+        reader=lambda _prompt: next(replies), printer=lambda _s: None
+    )
+    mode = AgentMode(mode="confirm")
+    underlying = _CountingAgent(reply)
+    wrapper = ConfirmingAgent(underlying, mode, confirm=confirm)
+    session = ReplSession(default_agent=wrapper)
+    return session, underlying
+
+
+class TestConfirmFlowThroughLoop:
+    def test_confirmed_call_dispatches_and_echoes(self) -> None:
+        session, underlying = _confirming_session("y", reply="hello-world")
+        assert isinstance(underlying, _CountingAgent)
+        output = drive('let g = prompt """ask"""\r\x04', session=session)
+        assert underlying.calls == 1
+        assert "hello-world" in output
+        assert any(n == "g" for n, _t, _v in session.bindings())
+
+    def test_declined_call_aborts_entry_repl_continues(self) -> None:
+        session, underlying = _confirming_session("n")
+        assert isinstance(underlying, _CountingAgent)
+        # Decline the agent call, then run a plain entry to prove the REPL keeps
+        # looping after the abort.
+        output = drive(
+            'let g = prompt """ask"""\rlet ok = 1\r\x04', session=session
+        )
+        assert underlying.calls == 0
+        assert "cancelled" in output.lower()
+        # The aborted entry promoted nothing; the later entry succeeded.
+        assert all(n != "g" for n, _t, _v in session.bindings())
+        assert any(n == "ok" for n, _t, _v in session.bindings())

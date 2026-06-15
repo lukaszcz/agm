@@ -43,19 +43,25 @@ via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
 `agm.agl.repl.session.ReplSession` is a UI-free incremental driver that runs the
 same `parse → resolve → check → host-prep → eval` pipeline **one entry at a
 time** against a *persistent* environment (session scope, type env, value scope,
-declared inputs, source log). It reuses the firewalled passes' seam parameters:
+declared inputs, pending pre-seeded inputs, source log). It reuses the firewalled
+passes' seam parameters:
 `parse_program_seeded` (globally-unique node ids across entries),
 `resolve(..., parent_scope=...)` (refs fall through to session bindings; new
 decls shadow), and `check(..., seed_env=...)` (seed with prior decls/binding
 types). Each entry executes **only its own statements** in a child value scope,
 so agent calls fire exactly once and a later entry reads stored `Value`s rather
 than re-invoking. Promotion into the session is **atomic** — a runtime raise
-discards ALL of the entry's in-session effects: new `let`/`var` bindings (held in
-the child scope) AND any `set` mutation of a prior session binding (rolled back
-from a value snapshot taken before eval, since `set` only updates an existing
-binding's value and never changes the value scope's key set). Only genuinely
-external effects already issued during evaluation (agent calls, `exec` shell
-commands) are irreversible.
+(`AglRaise`) OR an agent-call cancellation (`AgentCancelled` / `KeyboardInterrupt`
+from the confirming wrapper) discards ALL of the entry's in-session effects via a
+shared `_rollback` helper: new `let`/`var` bindings (held in the child scope) AND
+any `set` mutation of a prior session binding (rolled back from a value snapshot
+taken before eval, since `set` only updates an existing binding's value and never
+changes the value scope's key set). Only genuinely external effects already issued
+during evaluation (agent calls, `exec` shell commands) are irreversible.
+
+Pre-seeded inputs (`--input KEY=VALUE` / `preset_input`) are applied when the
+matching `input` declaration is promoted (or immediately if already declared); a
+conversion failure leaves the input unset rather than erroring.
 
 The session shares the host-environment assembly, input conversion, and
 exception→`RunError` mapping with `WorkflowRuntime` via public helpers in
@@ -63,8 +69,21 @@ exception→`RunError` mapping with `WorkflowRuntime` via public helpers in
 `convert_input`, `exception_value_to_run_error`); registration is delegated to an
 internal `WorkflowRuntime` so reserved-name/duplicate validation is not
 duplicated. `EchoInterpreter` (a thin `Interpreter` subclass) captures a trailing
-bare-expression's value for echoing without re-evaluating it. Tracing and the
-prompt_toolkit console are later milestones (trace is a no-op here).
+bare-expression's value for echoing without re-evaluating it.
+
+Agent calls are gated by `agm.agl.repl.agents.ConfirmingAgent`, a wrapper
+`AgentFn` holding a shared mutable `AgentMode` (`confirm`/`auto`, also mutated by
+the `:agent` meta-command) and an injected confirmation callback. In confirm mode
+it asks before each live call; `no` raises `AgentCancelled`, `always` flips the
+mode to auto. A `KeyboardInterrupt` during a live call (the runner subprocess runs
+in its own process group, so on Ctrl-C the parent group-kills it in
+`core/process.py` and re-raises) is converted to `AgentCancelled`. The wrapper is UI-free; the console supplies the real `[Y/n/a]`
+prompt via `make_console_confirm`. Per-entry tracing: when a `trace_path` is set,
+each evaluated entry opens its own `TraceStore` (a fresh `run_id`) appending JSONL
+to the one file, bracketed by `run_start`/`run_end`; `check_only` writes no trace.
+`exec` shell-call confirmation is out of scope (the shell path lives inside the
+interpreter, not the agent registry). The `agm repl` command builds ONE
+`AgentMode` and passes that same instance to both the wrapper and the console.
 
 ## Package layout and test locations
 

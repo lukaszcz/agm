@@ -9,6 +9,7 @@ exactly-once agent dispatch, the ``:set`` input flow, ``reset``, ``load_file``,
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -692,9 +693,191 @@ class TestEntryResultShape:
         s = ReplSession()
         r = s.eval_entry("let x = 1")
         assert isinstance(r, EntryResult)
-        assert r.trace_path is None  # M1b: tracing is a no-op
-        with pytest.raises(Exception):
-            r.ok = False  # type: ignore[misc]
+        assert r.trace_path is None  # no --log-file → no trace path
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            r.ok = False
+
+
+# ---------------------------------------------------------------------------
+# Agent-call cancellation (declined / interrupted) — atomic entry abort
+# ---------------------------------------------------------------------------
+
+
+class _CancellingAgent:
+    """A fake ``AgentFn`` that raises ``AgentCancelled`` on dispatch."""
+
+    def __init__(self, callee: str = "prompt", reason: str = "declined") -> None:
+        self._callee = callee
+        self._reason = reason
+        self.calls = 0
+
+    def __call__(self, request: AgentRequest) -> AgentResponse:
+        from agm.agl.repl.agents import AgentCancelled
+
+        self.calls += 1
+        raise AgentCancelled(self._callee, self._reason)
+
+
+class _InterruptAgent:
+    """A fake ``AgentFn`` that raises a bare ``KeyboardInterrupt`` (Ctrl-C)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, request: AgentRequest) -> AgentResponse:
+        self.calls += 1
+        raise KeyboardInterrupt
+
+
+class TestAgentCancellation:
+    def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
+        s = ReplSession(default_agent=_CancellingAgent())
+        r = s.eval_entry('let g = prompt """do it"""')
+        assert not r.ok
+        assert r.error is None
+        assert r.diagnostics
+        assert "cancelled" in r.diagnostics[0].message.lower()
+
+    def test_declined_agent_leaves_bindings_unchanged(self) -> None:
+        s = ReplSession(default_agent=_CancellingAgent())
+        s.eval_entry("let keep = 7")
+        before = _snapshot(s)
+        r = s.eval_entry('let g = prompt """do it"""')
+        assert not r.ok
+        # Atomic: the failed entry promoted nothing.
+        assert _snapshot(s) == before
+        assert all(n != "g" for n, _t, _v in s.bindings())
+
+    def test_keyboard_interrupt_aborts_entry(self) -> None:
+        s = ReplSession(default_agent=_InterruptAgent())
+        s.eval_entry("let x = 1")
+        before = _snapshot(s)
+        r = s.eval_entry('let g = prompt """slow"""')
+        assert not r.ok
+        assert r.error is None
+        assert _snapshot(s) == before
+
+    def test_cancellation_rolls_back_prior_set_mutation(self) -> None:
+        # A ``set`` to a prior binding before a cancelled agent call must roll
+        # back — the entry is atomic.
+        s = ReplSession(default_agent=_CancellingAgent())
+        s.eval_entry("var v = 1")
+        r = s.eval_entry('do\n  set v = 2\n  let g = prompt """x"""')
+        assert not r.ok
+        vals = {n: _int(v) for n, _t, v in s.bindings()}
+        assert vals["v"] == 1  # the set was rolled back
+
+
+# ---------------------------------------------------------------------------
+# Trace logging
+# ---------------------------------------------------------------------------
+
+
+class TestTraceLogging:
+    def test_no_trace_path_writes_nothing(self, tmp_path: Path) -> None:
+        s = ReplSession(default_agent=CountingAgent("ok"))
+        r = s.eval_entry('let g = prompt """hi"""')
+        assert r.ok
+        assert r.trace_path is None
+
+    def test_trace_file_records_run_and_agent_call(self, tmp_path: Path) -> None:
+        import json
+
+        trace = tmp_path / "repl.log"
+        s = ReplSession(default_agent=CountingAgent("reply"), trace_path=trace)
+        r = s.eval_entry('let g = prompt """ask"""')
+        assert r.ok
+        assert r.trace_path == trace
+        assert trace.exists()
+        records = [json.loads(line) for line in trace.read_text().splitlines() if line]
+        kinds = [rec["kind"] for rec in records]
+        assert "run_start" in kinds
+        assert "run_end" in kinds
+        assert "agent_call_attempt" in kinds
+
+    def test_each_entry_is_its_own_run(self, tmp_path: Path) -> None:
+        import json
+
+        trace = tmp_path / "repl.log"
+        s = ReplSession(default_agent=CountingAgent("a", "b"), trace_path=trace)
+        s.eval_entry('let x = prompt """one"""')
+        s.eval_entry('let y = prompt """two"""')
+        records = [json.loads(line) for line in trace.read_text().splitlines() if line]
+        run_ids = {rec["run_id"] for rec in records}
+        # Per-entry TraceStore → a fresh run_id per entry, all in one file.
+        assert len(run_ids) == 2
+
+    def test_check_only_writes_no_trace(self, tmp_path: Path) -> None:
+        trace = tmp_path / "repl.log"
+        s = ReplSession(default_agent=CountingAgent("ok"), trace_path=trace)
+        r = s.eval_entry('let g = prompt """hi"""', check_only=True)
+        assert r.ok
+        assert r.trace_path is None
+        assert not trace.exists()
+
+    def test_cancelled_entry_records_run_end(self, tmp_path: Path) -> None:
+        import json
+
+        trace = tmp_path / "repl.log"
+        s = ReplSession(default_agent=_CancellingAgent(), trace_path=trace)
+        r = s.eval_entry('let g = prompt """x"""')
+        assert not r.ok
+        records = [json.loads(line) for line in trace.read_text().splitlines() if line]
+        run_end = [rec for rec in records if rec["kind"] == "run_end"]
+        assert run_end and run_end[-1]["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# preset_input — the --input pre-seed flow
+# ---------------------------------------------------------------------------
+
+
+class TestPresetInput:
+    def test_preset_applied_on_later_declaration(self) -> None:
+        s = ReplSession()
+        s.preset_input("count", "42")
+        # Not declared yet → pending; not yet in inputs().
+        assert s.inputs() == []
+        s.eval_entry("input count: int")
+        # Declaring the input applies the pending value.
+        r = s.eval_entry("count + 1")
+        assert r.ok
+        assert _int(r.value) == 43
+
+    def test_preset_for_already_declared_input_applies_immediately(self) -> None:
+        s = ReplSession()
+        s.eval_entry("input name: text")
+        s.preset_input("name", "World")
+        r = s.eval_entry("name")
+        assert r.ok
+        assert _text(r.value) == "World"
+
+    def test_preset_bad_value_leaves_input_unset(self) -> None:
+        s = ReplSession()
+        s.preset_input("count", "not-an-int")
+        s.eval_entry("input count: int")
+        # Conversion failed → input stays unset; referencing it is a clean error.
+        _name, _typ, val = s.inputs()[0]
+        assert val is None
+        r = s.eval_entry("count")
+        assert not r.ok
+        assert ":set" in r.diagnostics[0].message
+
+    def test_preset_bad_value_for_declared_input_leaves_unset(self) -> None:
+        s = ReplSession()
+        s.eval_entry("input count: int")
+        s.preset_input("count", "nope")  # swallowed, not raised
+        _name, _typ, val = s.inputs()[0]
+        assert val is None
+
+    def test_reset_clears_pending_presets(self) -> None:
+        s = ReplSession()
+        s.preset_input("count", "42")
+        s.reset()
+        # After reset the pending value is gone: declaring leaves it unset.
+        s.eval_entry("input count: int")
+        _name, _typ, val = s.inputs()[0]
+        assert val is None
 
 
 # ---------------------------------------------------------------------------

@@ -156,6 +156,7 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         *,
         echo: bool = True,
         check_only: bool = False,
+        agent_mode: object = None,
         history_path: Path | None = None,
         input: object = None,
         output: object = None,
@@ -165,6 +166,7 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
                 "session": session,
                 "echo": echo,
                 "check_only": check_only,
+                "agent_mode": agent_mode,
                 "history_path": history_path,
             }
         )
@@ -181,6 +183,30 @@ def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("AGM_PROJECT_DIR", raising=False)
     return tmp_path
+
+
+def _args(
+    *,
+    inputs: list[str] | None = None,
+    strict_json: bool | None = None,
+    max_iters: int | None = None,
+    runner: str | None = "echo agent",
+    auto_agents: bool = False,
+    quiet: bool = False,
+    no_log: bool = False,
+    log_file: str | None = None,
+) -> ReplArgs:
+    """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
+    return ReplArgs(
+        inputs=inputs if inputs is not None else [],
+        strict_json=strict_json,
+        max_iters=max_iters,
+        runner=runner,
+        auto_agents=auto_agents,
+        quiet=quiet,
+        no_log=no_log,
+        log_file=log_file,
+    )
 
 
 class TestReplRun:
@@ -301,5 +327,131 @@ class TestReplRun:
         )
         with pytest.raises(SystemExit) as excinfo:
             repl_command.run(args)
+        assert excinfo.value.code == 1
+        assert fake_console == []
+
+
+# ---------------------------------------------------------------------------
+# M4 wiring: agent mode, --input pre-seed, trace path resolution
+# ---------------------------------------------------------------------------
+
+
+class TestReplAgentMode:
+    def test_default_mode_is_confirm(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+        mode = fake_console[0]["agent_mode"]
+        from agm.agl.repl.agentmode import AgentMode
+
+        assert isinstance(mode, AgentMode)
+        assert mode.mode == "confirm"
+
+    def test_auto_agents_starts_in_auto(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(auto_agents=True))
+        mode = fake_console[0]["agent_mode"]
+        from agm.agl.repl.agentmode import AgentMode
+
+        assert isinstance(mode, AgentMode)
+        assert mode.mode == "auto"
+
+
+class TestReplInputPreseed:
+    def test_input_preseeds_declared_value(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(inputs=["count=41"]))
+        session = fake_console[0]["session"]
+        assert isinstance(session, ReplSession)
+        # The pending value is applied when the input is later declared.
+        session.eval_entry("input count: int")
+        r = session.eval_entry("count + 1")
+        assert r.ok
+        from agm.agl.eval.values import IntValue
+
+        assert isinstance(r.value, IntValue)
+        assert r.value.value == 42
+
+    def test_malformed_input_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        with pytest.raises(SystemExit) as excinfo:
+            repl_command.run(_args(inputs=["no-equals-sign"]))
+        assert excinfo.value.code == 1
+        assert fake_console == []
+
+
+class TestReplTrace:
+    def test_log_file_threaded_into_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        log_file = tmp_path / "trace.log"
+        repl_command.run(_args(log_file=str(log_file)))
+        # The validate-up-front touch creates the (empty) file.
+        assert log_file.exists()
+        session = fake_console[0]["session"]
+        assert isinstance(session, ReplSession)
+
+    def test_no_log_writes_no_trace(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(no_log=True))
+        # Nothing under .agent-files was created for a --no-log session.
+        assert not (tmp_path / ".agent-files").exists()
+
+    def test_dry_run_writes_no_trace(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from agm.core import dry_run
+
+        _isolated_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(dry_run, "enabled", lambda: True)
+        log_file = tmp_path / "trace.log"
+        repl_command.run(_args(log_file=str(log_file)))
+        # Dry-run is side-effect-free: the trace path is never touched.
+        assert not log_file.exists()
+
+    def test_unwritable_log_file_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        # A path whose parent is a regular file cannot be created (mkdir fails).
+        not_a_dir = tmp_path / "afile"
+        not_a_dir.write_text("x")
+        log_file = not_a_dir / "trace.log"
+        with pytest.raises(SystemExit) as excinfo:
+            repl_command.run(_args(log_file=str(log_file)))
         assert excinfo.value.code == 1
         assert fake_console == []

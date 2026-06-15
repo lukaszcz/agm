@@ -116,21 +116,26 @@ the unary minus operator: `-3` is `-` applied to the literal `3`.
 ## Strings and templates
 
 All string literals are **templates**: they may contain `${expr}`
-interpolation. There are two forms:
+interpolation. Both `"` and `'` are valid delimiter characters, giving four
+forms:
 
-- `"…"` — single-line; an unescaped newline inside it is a lexical error.
-- `"""…"""` — triple-quoted, multi-line, subject to the dedent rule.
+- `"…"` / `'…'` — single-line; an unescaped newline inside is a lexical error.
+- `"""…"""` / `'''…'''` — triple-quoted, multi-line, subject to the dedent rule.
 
-The escape sequences are the JSON set plus `\$`:
+The two delimiter styles are interchangeable: `"it's done"` and `'"quoted"'`
+are both legal. The closing delimiter must match the opening one.
+
+The escape sequences are the JSON set plus `\'`, `\"`, and `\$`:
 
 ```text
-\"  \\  \/  \b  \f  \n  \r  \t  \uXXXX  \$
+\"  \'  \\  \/  \b  \f  \n  \r  \t  \uXXXX  \$
 ```
 
-`\$` produces a literal dollar sign (suppressing interpolation). A `$` not
-followed by `{` is literal without any escaping. **Any other backslash
-sequence is a lexical error**, as is an incomplete or malformed `\uXXXX`
-escape.
+`\'` and `\"` each produce the respective quote character; both work in either
+quote style. `\$` produces a literal dollar sign (suppressing interpolation).
+A `$` not followed by `{` is literal without any escaping. **Any other
+backslash sequence is a lexical error**, as is an incomplete or malformed
+`\uXXXX` escape.
 
 Interpolation has the form `${expr}` or `${expr as renderer}`, where
 `renderer` is a lowercase identifier. Newlines are not permitted inside an
@@ -139,7 +144,7 @@ interpolation is balanced correctly and does not close it.
 
 ### Triple-quoted dedent
 
-The content of a `"""…"""` template is normalized in three steps:
+The content of a `"""…"""` or `'''…'''` template is normalized in three steps:
 
 1. Remove one leading newline, if present.
 2. Strip the *minimum common indentation* of all non-blank lines. A line

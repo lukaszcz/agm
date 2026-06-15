@@ -438,6 +438,83 @@ class TestTripleQuotedStrings:
 
 
 # ---------------------------------------------------------------------------
+# Single-quoted strings
+# ---------------------------------------------------------------------------
+
+
+class TestSingleQuotedStrings:
+    def test_empty_single_quoted_string(self) -> None:
+        result = tok("''")
+        assert result == [
+            ("TEMPLATE_START", "'"),
+            ("STRING_FRAGMENT", ""),
+            ("TEMPLATE_END", "'"),
+        ]
+
+    def test_simple_single_quoted_string(self) -> None:
+        result = tok("'hello'")
+        assert result == [
+            ("TEMPLATE_START", "'"),
+            ("STRING_FRAGMENT", "hello"),
+            ("TEMPLATE_END", "'"),
+        ]
+
+    def test_double_quote_inside_single_quoted_string(self) -> None:
+        result = tok('\'"\'')
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags == ['"']
+
+    def test_escaped_single_quote_in_single_quoted_string(self) -> None:
+        result = tok(r"'\''")
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags == ["'"]
+
+    def test_single_quoted_with_interpolation(self) -> None:
+        result = tok("'hello ${name}'")
+        assert result == [
+            ("TEMPLATE_START", "'"),
+            ("STRING_FRAGMENT", "hello "),
+            ("INTERP_START", "${"),
+            ("VAR_NAME", "name"),
+            ("INTERP_END", "}"),
+            ("STRING_FRAGMENT", ""),
+            ("TEMPLATE_END", "'"),
+        ]
+
+    def test_triple_single_quoted_string(self) -> None:
+        source = "'''hello'''"
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert "".join(frags) == "hello"
+
+    def test_triple_single_quoted_with_dedent(self) -> None:
+        source = "'''\n    hello\n    '''"
+        result = tok(source)
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert "".join(frags) == "hello"
+
+    def test_escaped_double_quote_in_single_quoted_string(self) -> None:
+        result = tok(r'"\""')
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags == ['"']
+
+    def test_unterminated_single_quoted_string(self) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok("'hello")
+        assert exc_info.value.span is not None
+
+    def test_newline_inside_single_quoted_string(self) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok("'hello\nworld'")
+        assert exc_info.value.span is not None
+
+    def test_unterminated_triple_single_quoted_string(self) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok("'''hello")
+        assert exc_info.value.span is not None
+
+
+# ---------------------------------------------------------------------------
 # Comments
 # ---------------------------------------------------------------------------
 

@@ -103,6 +103,7 @@ _SINGLE_OPS: dict[str, str] = {
 # JSON escape decoding table (excluding \uXXXX and \$, handled separately)
 _JSON_ESCAPES: dict[str, str] = {
     '"': '"',
+    "'": "'",
     "\\": "\\",
     "/": "/",
     "b": "\b",
@@ -320,27 +321,30 @@ class _Scanner:
     # ------------------------------------------------------------------
 
     def _scan_template(
-        self, start_pos: int, start_line: int, start_col: int
+        self, start_pos: int, start_line: int, start_col: int, quote: str = '"'
     ) -> Iterator[Token]:
-        """Scan a template (single- or triple-quoted) starting just after ``"``.
+        """Scan a template (single- or triple-quoted) starting just after the opening quote.
+
+        *quote* is either ``'"'`` or ``"'"``; it is the delimiter character already
+        consumed by the caller.
 
         Yields:
             ``TEMPLATE_START``, zero or more (``STRING_FRAGMENT`` |
             ``INTERP_START`` … ``INTERP_END``), ``TEMPLATE_END``.
         """
-        triple = self._peek() == '"' and self._peek(1) == '"'
+        triple = self._peek() == quote and self._peek(1) == quote
         if triple:
             self._advance()
             self._advance()
-        yield self._make_token(TEMPLATE_START, '"', start_pos, start_line, start_col)
+        yield self._make_token(TEMPLATE_START, quote, start_pos, start_line, start_col)
 
         if triple:
-            yield from self._scan_triple_template()
+            yield from self._scan_triple_template(quote)
         else:
-            yield from self._scan_single_template()
+            yield from self._scan_single_template(quote)
 
-    def _scan_single_template(self) -> Iterator[Token]:
-        """Scan the body of a single-quoted template, yielding tokens."""
+    def _scan_single_template(self, quote: str = '"') -> Iterator[Token]:
+        """Scan the body of a single-line template delimited by *quote*, yielding tokens."""
         frag_start_pos = self._pos
         frag_start_line = self._line
         frag_start_col = self._col
@@ -351,7 +355,7 @@ class _Scanner:
                 span = self._span_here()
                 raise LexError("Unterminated string literal", span=span)
             ch = self._peek()
-            if ch == '"':
+            if ch == quote:
                 # End of template
                 self._advance()
                 yield self._make_token(
@@ -362,7 +366,7 @@ class _Scanner:
                     frag_start_col,
                 )
                 yield self._make_token(
-                    TEMPLATE_END, '"', self._pos - 1, self._line, self._col - 1
+                    TEMPLATE_END, quote, self._pos - 1, self._line, self._col - 1
                 )
                 return
             if ch == "\n":
@@ -452,7 +456,7 @@ class _Scanner:
             # Scan a code token
             yield from self._scan_one_code_token()
 
-    def _scan_triple_template(self) -> Iterator[Token]:
+    def _scan_triple_template(self, quote: str = '"') -> Iterator[Token]:
         """Scan the body of a triple-quoted template, yielding tokens.
 
         Triple-quoted dedent rule (§10.1):
@@ -485,7 +489,7 @@ class _Scanner:
                 span = self._span_here()
                 raise LexError("Unterminated triple-quoted string literal", span=span)
             ch = self._peek()
-            if ch == '"' and self._peek(1) == '"' and self._peek(2) == '"':
+            if ch == quote and self._peek(1) == quote and self._peek(2) == quote:
                 # End of triple-quoted string; record the closing-quote position.
                 close_pos = self._pos
                 close_line = self._line
@@ -599,7 +603,7 @@ class _Scanner:
 
         yield Token(
             TEMPLATE_END,
-            '"',
+            quote,
             start_pos=close_pos,
             line=close_line,
             column=close_col,
@@ -654,7 +658,10 @@ class _Scanner:
 
         # Strings/templates
         if ch == '"':
-            yield from self._scan_template(start_pos, start_line, start_col)
+            yield from self._scan_template(start_pos, start_line, start_col, quote='"')
+            return
+        if ch == "'":
+            yield from self._scan_template(start_pos, start_line, start_col, quote="'")
             return
 
         # Multi-char operators (maximal munch)

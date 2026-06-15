@@ -101,23 +101,49 @@ def run(args: ExecArgs) -> None:
     # (plan §10.1) and deduplicates the logic already in split_command.
     split_command(runner_cmd, kind="runner")
 
-    # Build a runner-backed agent as both the ``prompt`` default and the
-    # fallback for arbitrary named agents (plan §9.5).  This means any
-    # agent name appearing in the AgL source resolves at runtime even if
-    # not explicitly registered; names listed in ``[exec.agents]`` get their
-    # own dedicated runner command.
-    runner_agent = runner_backed_agent_factory(
+    # ----------------------------------------------------------------
+    # Resolve declared agents and wire each one explicitly (plan §9).
+    #
+    # The source program OWNS the agent name set: every named agent must be
+    # declared.  We register each DECLARED agent against a single runner-backed
+    # factory whose per-agent command map merges, in precedence order
+    # (high → low; decision §4):
+    #
+    #     [exec.agents.<name>]   (config, per-agent)
+    #     source `agent` runner hint
+    #     resolved default runner (runner_cmd, the floor)
+    #
+    # ``declared_agents`` parses + scopes only (independent of registrations);
+    # on a source with parse/scope errors it returns ``()`` and the later
+    # ``runtime.run`` resurfaces the diagnostic (exit 1).
+    decls = WorkflowRuntime().declared_agents(source)
+    source_hints = {d.name: d.runner for d in decls if d.runner is not None}
+    # Config wins over source hints (dict merge: later keys override earlier).
+    per_agent_cmds = {**source_hints, **config.agents}
+
+    # One factory backs ``prompt`` (the default) and every declared name; it
+    # dispatches by ``request.agent`` against ``per_agent_cmds``, falling back
+    # to the default runner (the floor).  ``command_with_prompt_target``
+    # substitutes ``%%`` / ``%{PROMPT_FILE}`` for source hints and config
+    # commands alike.
+    factory = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
-        per_agent_cmds=config.agents,
+        per_agent_cmds=per_agent_cmds,
         idle_timeout=config.timeout,
     )
 
     runtime = WorkflowRuntime(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
-        default_agent=runner_agent,
+        default_agent=factory,
         shell_exec_timeout=config.timeout,
     )
+
+    # Register every declared agent so the registered set equals the declared
+    # set: M4 reconciliation always passes; config-only agents the source never
+    # declares stay inert (NOT registered), per plan §9.
+    for d in decls:
+        runtime.register_agent(d.name, factory)
 
     # ``parse_inputs`` returns ``dict[str, str]``; ``run`` accepts a
     # ``Mapping[str, object]``, so no widening copy is needed.

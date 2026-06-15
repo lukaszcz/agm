@@ -1,4 +1,4 @@
-# print console rendering (design §4.11): text verbatim, scalars as scalar text,
+# print console rendering: text verbatim, scalars as scalar text,
 # structured values as pretty JSON, no boundary markers.
 record Pair
   name: text

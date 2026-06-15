@@ -1,5 +1,5 @@
 # exec: shell commands as call-shaped expressions; trailing-newline stripping;
-# typed targets parsed like agent output (design §4.12, §11.13).
+# typed targets parsed like agent output.
 input name
 
 let greeting = exec "printf 'hi %s' ${name}"

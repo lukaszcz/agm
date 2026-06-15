@@ -1,5 +1,5 @@
 # ExecError: nonzero exit raises a catchable exception carrying command,
-# exit_code, stdout, stderr, timed_out (design §4.12, §8.1).
+# exit_code, stdout, stderr, timed_out.
 input mode
 
 try

@@ -1,5 +1,4 @@
-# Lexical scoping: branch shadowing, set across scopes, do-loop iteration scope
-# (design §2.14, §9.1-9.3).
+# Lexical scoping: branch shadowing, set across scopes, do-loop iteration scope.
 input mode
 
 let x = 1

@@ -1,6 +1,5 @@
 # Pattern matching: qualified, field shorthand, renamed bindings, nested
-# constructor patterns, literal patterns, variable patterns, wildcard
-# (design §6.1, §10.12).
+# constructor patterns, literal patterns, variable patterns, wildcard.
 enum Shape
   | Dot
   | Line(len: int)

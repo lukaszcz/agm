@@ -1,6 +1,5 @@
 # do[N]...until: post-test, loop-carried state through outer vars, iteration
-# bindings visible to the condition, MaxIterationsExceeded on exhaustion
-# (design §2.11, §9.3, §11.5).
+# bindings visible to the condition, MaxIterationsExceeded on exhaustion.
 input target: int
 
 var hits: int = 0

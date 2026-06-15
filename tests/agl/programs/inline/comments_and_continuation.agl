@@ -1,5 +1,5 @@
 # Leading full-line comment; comments must not disturb layout, and newlines are
-# suppressed inside brackets (design §10.1, plan §3.3-3.4).
+# suppressed inside brackets.
 input n: int   # trailing comment on a statement
 
 # comment between statements

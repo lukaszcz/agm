@@ -1,4 +1,4 @@
-# The multi-agent refinement loop from design §3.3, finished with exec and print.
+# The multi-agent refinement loop, finished with exec and print.
 enum Review
   | Pass
   | Fail(issues: list[text])

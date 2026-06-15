@@ -1,5 +1,4 @@
-# String escapes: the JSON set plus \$; bare $ without { is literal
-# (design §10.1).
+# String escapes: the JSON set plus \$; bare $ without { is literal.
 input n: int
 
 let s1 = "quote=\" backslash=\\ slash=\/ tab=\tend"

@@ -1,5 +1,5 @@
 # Shell-safe interpolation quotes each value; `as raw` deliberately bypasses
-# quoting (design §4.12).
+# quoting.
 input arg
 input k: int
 

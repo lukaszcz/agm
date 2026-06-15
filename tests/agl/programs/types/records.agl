@@ -1,5 +1,5 @@
 # Records: nested types, multi-line constructors with trailing comma, field access
-# chains, record agent targets (design §5.2, §7.3).
+# chains, record agent targets.
 record Author
   name: text
   active: bool

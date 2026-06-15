@@ -1,4 +1,4 @@
-# The canonical example from design §14, verbatim.
+# The canonical example, verbatim.
 input spec: text
 
 record Issue

@@ -1,6 +1,5 @@
 # Equality and ordering: single = is full-value equality, int widens to decimal,
-# text compares lexicographically, structured values compare by value
-# (design §2.3, §4.3, §5.8).
+# text compares lexicographically, structured values compare by value.
 record P
   n: int
 

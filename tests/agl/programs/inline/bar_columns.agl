@@ -1,5 +1,5 @@
 # Branch-marker layout: same-column and indented `|` branches; an outer `|` at a
-# shallower column closes the nested construct first (design §4.6, plan §3.4).
+# shallower column closes the nested construct first.
 input k: int
 
 if k = 1 =>

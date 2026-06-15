@@ -1,5 +1,5 @@
 # Arithmetic: + - * /, unary minus, int/decimal mixing, exact decimals,
-# arbitrary precision, text concatenation (design §4.3, §5.1, §5.8).
+# arbitrary precision, text concatenation.
 input a: int
 input b: int
 input scale: decimal

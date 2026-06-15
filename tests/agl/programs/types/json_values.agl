@@ -1,5 +1,5 @@
 # json values, null, literal shorthand vs quoted keys, empty literals with
-# annotations, typed agent targets for every built-in (design §5.6-5.8, §2.8).
+# annotations, typed agent targets for every built-in.
 input payload: json
 
 let empty_list: list[text] = []

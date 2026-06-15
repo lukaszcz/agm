@@ -1,5 +1,5 @@
 # Parse policies: portable default abort, retry[N] corrective retries, explicit
-# abort, format option, trailing comma in call options (design §2.9, §7.8-7.9).
+# abort, format option, trailing comma in call options.
 enum Review
   | Pass
   | Fail(issues: list[text])

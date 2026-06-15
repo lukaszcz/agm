@@ -1,5 +1,5 @@
 # AgentParseError carries the documented diagnostic fields, usable in follow-up
-# prompts (design §7.9, §8.1, §3.8).
+# prompts.
 record Spec
   name: text
   level: int

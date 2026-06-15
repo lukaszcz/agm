@@ -1,5 +1,5 @@
 # Inline forms: `;` sequencing, inline do bodies with trailing open statements
-# sealed by until, inline if/case/try/catch (design §2.13, §10.3).
+# sealed by until, inline if/case/try/catch.
 enum Status
   | Done
   | More

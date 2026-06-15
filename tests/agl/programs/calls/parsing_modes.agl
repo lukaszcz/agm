@@ -1,6 +1,6 @@
 # Lenient JSON recovery (extract from fences/prose, repair trivially malformed
 # JSON, then validate strictly) is the portable default; `strict_json: true` is
-# a per-call opt-in to strict parsing (design §2.8, §4.4).
+# a per-call opt-in to strict parsing.
 let n: int = counter "Count the items."
 print n
 let exact: int = counter[strict_json: true] "Count again."

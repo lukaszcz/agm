@@ -1,5 +1,5 @@
 # try/catch ordering: first matching clause wins; the wildcard binds the abstract
-# Exception base (message/trace_id only) (design §8.1-8.2).
+# Exception base (message/trace_id only).
 enum Review
   | Pass
   | Fail(issues: list[text])

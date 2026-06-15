@@ -1,4 +1,4 @@
-# The dialogue loop from design §3.6: typed mutable state driven by two agents.
+# The dialogue loop: typed mutable state driven by two agents.
 enum Turn
   | Continue(message: text)
   | Done(answer: text)

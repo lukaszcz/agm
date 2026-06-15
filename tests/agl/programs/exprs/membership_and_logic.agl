@@ -1,5 +1,5 @@
 # `in` membership (list element / dict key / substring) and boolean composition
-# with precedence (design §4.3).
+# with precedence.
 input needle
 input numbers: list[int]
 input k: int

@@ -1,6 +1,5 @@
 # Triple-quoted templates: dedent rule (drop one leading/trailing newline, strip
-# minimum common indentation), interpolation holes are never dedented
-# (design §10.1).
+# minimum common indentation), interpolation holes are never dedented.
 input body
 
 if true =>

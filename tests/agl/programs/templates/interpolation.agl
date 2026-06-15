@@ -1,5 +1,5 @@
 # Interpolation: expressions inside ${...}, adjacency, nested braces, structured
-# value rendering inside prompts (design §2.12, §10.15).
+# value rendering inside prompts.
 record Item
   name: text
   qty: int

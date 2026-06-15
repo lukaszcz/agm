@@ -1,4 +1,4 @@
-# The compact one-line variant from design §14, with the declarations it assumes.
+# The compact one-line variant, with the declarations it assumes.
 input spec
 enum Review
   | Pass

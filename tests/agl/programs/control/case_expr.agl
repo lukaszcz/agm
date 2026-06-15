@@ -1,6 +1,5 @@
 # Case expressions: single-expression branches, common result type with
-# int -> decimal widening, parenthesized form in bar-safe positions
-# (design §4.8, §5.8, §10.3, §11.8).
+# int -> decimal widening, parenthesized form in bar-safe positions.
 enum Grade
   | Top
   | Mid(score: int)

@@ -1,6 +1,5 @@
 # Built-in runtime exceptions caught in-language: ArithmeticError, MatchError,
-# MaxIterationsExceeded; `catch Exception as e` and binderless wildcard
-# (design §8.1, §11.10).
+# MaxIterationsExceeded; `catch Exception as e` and binderless wildcard.
 enum Coin
   | Heads
   | Tails

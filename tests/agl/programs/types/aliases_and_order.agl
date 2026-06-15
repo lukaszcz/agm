@@ -1,5 +1,5 @@
-# Type aliases are transparent (design §5.4); type declarations are collected
-# program-wide, so they may appear after their first use (plan §0).
+# Type aliases are transparent; type declarations are collected
+# program-wide, so they may appear after their first use.
 input verdict: Status
 
 let initial: Status = verdict

@@ -1,5 +1,5 @@
 # Renderer selection: boundary-marked default for text, raw / json / bullets
-# overrides (design §2.12; boundary format pinned by plan §9.4).
+# overrides.
 enum Review
   | Fail(issues: list[text])
   | Pass

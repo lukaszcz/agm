@@ -1,5 +1,5 @@
 # Deeply nested control flow: loop > case > case > if, dedent-routed branch
-# markers, state threading through outer vars (design §2.13, §10.3).
+# markers, state threading through outer vars.
 enum Review
   | Pass
   | Fail(issues: list[text])

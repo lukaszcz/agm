@@ -1547,7 +1547,6 @@ class TestParentScopeSeam:
 
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),

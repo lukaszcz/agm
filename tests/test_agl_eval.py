@@ -348,7 +348,9 @@ def _list_ty(elem: tast.TypeExpr) -> tast.ListT:
 # --- the public-contract execution driver ----------------------------------
 
 
-def _check_program(body: tuple[Stmt, ...], *, has_fallback: bool = False) -> CheckedProgram:
+def _check_program(
+    body: tuple[Stmt, ...], *, has_default_agent: bool = False
+) -> CheckedProgram:
     """Run *body* statements through the real resolve + check passes."""
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.scope import resolve
@@ -359,7 +361,7 @@ def _check_program(body: tuple[Stmt, ...], *, has_fallback: bool = False) -> Che
     resolved = resolve(program)
     caps = HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=has_fallback,
+        has_default_agent=has_default_agent,
         codec_kinds={"text": frozenset({"text"})},
         renderer_names=frozenset({"default", "raw"}),
     )
@@ -371,7 +373,7 @@ def _execute(
     *,
     default_agent: AgentFn | None = None,
     named: dict[str, AgentFn] | None = None,
-    has_fallback: bool = False,
+    has_default_agent: bool = False,
 ) -> Scope:
     """Build + resolve + check + execute *body*, returning the root ``Scope``.
 
@@ -383,7 +385,9 @@ def _execute(
     from agm.agl.eval.interpreter import Interpreter
     from agm.agl.runtime.agents import AgentRegistry
 
-    checked = _check_program(body, has_fallback=has_fallback or default_agent is not None)
+    checked = _check_program(
+        body, has_default_agent=has_default_agent or default_agent is not None
+    )
     registry = AgentRegistry(named=named or {}, default_agent=default_agent)
     interp = Interpreter(
         checked=checked,
@@ -2612,7 +2616,6 @@ class TestCheckedProgramTypeEnv:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=False,
             codec_kinds={},
             renderer_names=frozenset(),
         )
@@ -3287,7 +3290,7 @@ class TestAgentCallEdgeCases:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
+            has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),
         )
@@ -3332,7 +3335,7 @@ class TestAgentCallEdgeCases:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
+            has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),
         )
@@ -3410,7 +3413,7 @@ class TestAgentCallEdgeCases:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
+            has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),
         )
@@ -3486,7 +3489,7 @@ class TestAgentCallEdgeCases:
             resolve(parse_program(source)),
             HostCapabilities(
                 agent_names=frozenset(),
-                has_fallback_agent=True,
+                has_default_agent=True,
                 codec_kinds={"text": frozenset({"text"})},
                 renderer_names=frozenset({"default"}),
             ),
@@ -3748,7 +3751,6 @@ class TestCheckedProgramTypeEnvConstructors:
         resolved: ResolvedProgram = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=False,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),
         )
@@ -3911,7 +3913,6 @@ class TestAgentCallShellExec:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
             has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={"text": frozenset({"text"})},
@@ -4176,7 +4177,7 @@ class TestRetryFeedbackComposition:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
+            has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),
         )
@@ -4520,7 +4521,6 @@ class TestShellExecInterpreter:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
             has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={"text": frozenset({"text"})},
@@ -4596,7 +4596,6 @@ class TestShellExecInterpreter:
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
             has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={"text": frozenset({"text"})},

@@ -152,7 +152,7 @@ class TestRunBehavior:
 
 
 class TestFallbackAgent:
-    """has_fallback_agent behavior for capability checking."""
+    """Default-agent backing behavior for capability checking."""
 
     def test_no_default_agent_prompt_call_static_error(self) -> None:
         rt = WorkflowRuntime()  # no default_agent
@@ -179,9 +179,9 @@ class TestFallbackAgent:
         assert result.ok is False
         assert result.error is None
 
-    def test_has_fallback_when_default_agent_is_set(self) -> None:
+    def test_default_agent_backs_declared_name(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        # A runtime with a default_agent provides fallback for any name
+        # A default_agent backs any declared name without a dedicated registration.
         result = rt.run('agent any_agent_name\nlet x = any_agent_name "hi"')
         assert result.ok is True
 

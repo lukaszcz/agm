@@ -143,7 +143,7 @@ def _check_program_with_json(body: tuple[Stmt, ...]) -> CheckedProgram:
     resolved = resolve(program, ambient_agents=ambient_agents_for(program))
     caps = HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=True,
+        has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
             "json": frozenset(

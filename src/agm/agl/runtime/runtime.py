@@ -756,7 +756,6 @@ def assemble_host_environment(
     )
     capabilities = HostCapabilities(
         agent_names=registry.agent_names,
-        has_fallback_agent=registry.has_fallback,
         has_default_agent=registry.has_default_agent,
         supports_shell_exec=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},

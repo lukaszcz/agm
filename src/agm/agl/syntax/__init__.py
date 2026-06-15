@@ -15,6 +15,7 @@ from agm.agl.syntax.nodes import (
     ELSE,
     AbortPolicy,
     AgentCall,
+    AgentDecl,
     BinaryOp,
     BinOp,
     BoolLit,
@@ -106,6 +107,7 @@ __all__ = [
     "EnumDef",
     "TypeAlias",
     "InputDecl",
+    "AgentDecl",
     "FieldDef",
     "VariantDef",
     # statements

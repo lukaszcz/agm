@@ -65,6 +65,7 @@ KW_RECORD = "record"
 KW_ENUM = "enum"
 KW_TYPE = "type"
 KW_INPUT = "input"
+KW_AGENT = "agent"
 KW_LET = "let"
 KW_VAR = "var"
 KW_SET = "set"
@@ -96,6 +97,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_ENUM,
         KW_TYPE,
         KW_INPUT,
+        KW_AGENT,
         KW_LET,
         KW_VAR,
         KW_SET,

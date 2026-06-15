@@ -57,13 +57,20 @@ A semicolon `;` also separates statements on one line; see
 
 ## Keywords
 
-The following 27 words are **reserved** and can never be used as variable,
-field, or agent names:
+The following 28 words are **reserved** and can never be used as variable or
+agent names:
 
 ```text
-record enum type input let var set do until if else case of
+record enum type input agent let var set do until if else case of
 try catch raise as pass print and or not is in true false null
 ```
+
+Reserved words are also rejected as field names, with one exception: `agent`
+remains legal as a **field name** (record/enum field definitions, named
+constructor arguments, dict shorthand keys, and field access) so that the
+built-in exception fields `AgentCallError.agent` and `AgentParseError.agent`
+stay usable. It still cannot be used as a variable, input, pattern/`catch`
+binder, or agent name.
 
 Two further names are **contextual keywords**, not reserved:
 

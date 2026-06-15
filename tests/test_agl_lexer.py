@@ -47,6 +47,21 @@ class TestKeywordsAndIdentifiers:
         assert "pass" in types
         assert "print" in types
 
+    def test_agent_is_reserved_keyword(self) -> None:
+        # `agent` is a reserved keyword — its token type is the literal string.
+        result = tok("agent")
+        assert result == [("agent", "agent")]
+
+    def test_agent_not_var_name(self) -> None:
+        # `agent` cannot be used as an identifier/variable name.
+        types = [t for t, _ in tok("agent")]
+        assert "VAR_NAME" not in types
+
+    def test_agent_prefix_identifier(self) -> None:
+        # "agentic" starts with "agent" but is a plain identifier.
+        result = tok("agentic")
+        assert result == [("VAR_NAME", "agentic")]
+
     def test_bool_and_null_keywords(self) -> None:
         result = tok("true false null")
         types = [t for t, _ in result]

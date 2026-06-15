@@ -32,6 +32,7 @@ from agm.agl.syntax import (
     ELSE,
     AbortPolicy,
     AgentCall,
+    AgentDecl,
     BinaryOp,
     BinOp,
     BoolLit,
@@ -641,6 +642,26 @@ class TestDeclarations:
         assert node.name == "spec"
         assert node.annotation is None
 
+    def test_agent_decl_bare(self) -> None:
+        node = AgentDecl(name="reviewer", runner=None, span=self._s(), node_id=1)
+        assert node.name == "reviewer"
+        assert node.runner is None
+
+    def test_agent_decl_with_runner(self) -> None:
+        node = AgentDecl(name="impl", runner="claude -p", span=self._s(), node_id=1)
+        assert node.name == "impl"
+        assert node.runner == "claude -p"
+
+    def test_agent_decl_equality_ignores_span_and_node_id(self) -> None:
+        a = AgentDecl(name="impl", runner="claude -p", span=span(), node_id=1)
+        b = AgentDecl(name="impl", runner="claude -p", span=span(), node_id=99)
+        assert a == b
+
+    def test_agent_decl_inequality_on_runner(self) -> None:
+        a = AgentDecl(name="impl", runner=None, span=span(), node_id=1)
+        b = AgentDecl(name="impl", runner="claude -p", span=span(), node_id=1)
+        assert a != b
+
 
 # ---------------------------------------------------------------------------
 # Pattern nodes
@@ -947,6 +968,15 @@ class TestVisitorWalk:
         decl_kinds = {RecordDef, EnumDef, TypeAlias, InputDecl, FieldDef, VariantDef}
         for kind in decl_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
+
+    def test_walk_agent_decl(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        node = AgentDecl(name="reviewer", runner=None, span=span(), node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        # AgentDecl is a leaf — only itself is visited.
+        assert visited == [node]
 
     def test_walk_input_decl_without_annotation(self) -> None:
         from agm.agl.syntax.visitor import walk

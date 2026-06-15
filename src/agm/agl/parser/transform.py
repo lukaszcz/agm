@@ -156,7 +156,7 @@ class AstBuilder(Transformer):
             if s is not None and not isinstance(s, Token)
             if isinstance(s, (
                 syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
-                syntax.InputDecl, syntax.LetDecl, syntax.VarDecl,
+                syntax.InputDecl, syntax.AgentDecl, syntax.LetDecl, syntax.VarDecl,
                 syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
                 syntax.ExprStmt, syntax.Raise,
                 syntax.DoUntil, syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch,
@@ -171,7 +171,7 @@ class AstBuilder(Transformer):
         (inner,) = args
         assert isinstance(inner, (
             syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
-            syntax.InputDecl, syntax.LetDecl, syntax.VarDecl,
+            syntax.InputDecl, syntax.AgentDecl, syntax.LetDecl, syntax.VarDecl,
             syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
             syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
         ))
@@ -206,6 +206,37 @@ class AstBuilder(Transformer):
         return syntax.InputDecl(
             name=str(name_tok),
             annotation=ann,
+            span=span,
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # agent_decl
+    # ------------------------------------------------------------------
+
+    def agent_decl(self, meta: Meta, args: _Args) -> syntax.AgentDecl:
+        # Grammar: AGENT VAR_NAME (EQ template)?
+        # The leading AGENT keyword token is kept in the tree (it is a declared
+        # terminal, so Lark does not filter it); the agent name is the VAR_NAME.
+        # The template transformer normalises a plain (non-interpolated) string
+        # to a StringLit and keeps an interpolated one as a Template.
+        name_tok = next(
+            a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"
+        )
+        runner: str | None = None
+        for a in args:
+            if isinstance(a, syntax.StringLit):
+                runner = a.value
+            elif isinstance(a, syntax.Template):
+                raise AglSyntaxError(
+                    "agent runner string must be a literal string with no "
+                    "interpolation.",
+                    span=a.span,
+                )
+        span = _span_from_meta(meta)
+        return syntax.AgentDecl(
+            name=str(name_tok),
+            runner=runner,
             span=span,
             node_id=self._next_id(),
         )
@@ -287,8 +318,25 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    # ------------------------------------------------------------------
+    # field_name — reserved-word-tolerant field/key name
+    # ------------------------------------------------------------------
+
+    def field_name(self, meta: Meta, args: _Args) -> Token:
+        """field_name: VAR_NAME | "agent" — return the underlying name Token.
+
+        Field/key positions accept the reserved word ``agent`` (the name of the
+        built-in ``AgentCallError.agent`` / ``AgentParseError.agent`` fields) in
+        addition to ordinary lower-case identifiers.  The token is returned
+        unchanged so callers keep using ``str(tok)`` / span helpers; it carries
+        type ``VAR_NAME`` or ``AGENT`` depending on which alternative matched.
+        """
+        tok = args[0]
+        assert isinstance(tok, Token)
+        return tok
+
     def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
-        # Grammar: VAR_NAME COLON type_expr
+        # Grammar: field_name COLON type_expr
         name_tok = args[0]
         assert isinstance(name_tok, Token)
         type_expr = _find_type_expr(args[1:])
@@ -569,12 +617,15 @@ class AstBuilder(Transformer):
         return cast(syntax.Expr, expr)
 
     def field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
-        """access DOT VAR_NAME — record field access (lowercase field name)."""
+        """access DOT field_name — record field access.
+
+        ``field_name`` yields the field-name Token (type ``VAR_NAME`` or, for the
+        reserved word ``agent``, ``AGENT``).  ``agent`` is reserved (it leads an
+        agent declaration) but stays valid as a field name so built-in exception
+        fields like ``AgentCallError.agent`` keep working.
+        """
         obj_expr = cast(syntax.Expr, args[0])
-        field_tok = next(
-            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
-        )
-        assert field_tok is not None, "field_access: no VAR_NAME token"
+        field_tok = _find_name_token(args)
         return syntax.FieldAccess(
             obj=obj_expr,
             field=str(field_tok),
@@ -753,12 +804,11 @@ class AstBuilder(Transformer):
         """dict_entry: VAR_NAME COLON expr — identifier shorthand key.
 
         The identifier is converted to ``StringLit`` so the AST key is always
-        ``StringLit``, matching ``DictEntry.key``.
+        ``StringLit``, matching ``DictEntry.key``.  ``field_name`` admits the
+        reserved word ``agent`` as a shorthand key in addition to ordinary
+        identifiers.
         """
-        name_tok = next(
-            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
-        )
-        assert name_tok is not None, "dict_entry_name: no VAR_NAME token"
+        name_tok = _find_name_token(args)
         val_expr = _find_expr(args[1:])
         key_lit = syntax.StringLit(
             value=str(name_tok),
@@ -820,11 +870,13 @@ class AstBuilder(Transformer):
         return result
 
     def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg:
-        """named_arg: VAR_NAME COLON expr"""
-        name_tok = next(
-            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
-        )
-        assert name_tok is not None, "named_arg: no VAR_NAME token"
+        """named_arg: field_name COLON expr
+
+        ``field_name`` admits the reserved word ``agent`` as an argument name so
+        built-in exception constructors (e.g. ``AgentCallError(agent: …)``) can
+        be written.
+        """
+        name_tok = _find_name_token(args)
         val_expr = _find_expr(args[1:])
         return syntax.NamedArg(
             name=str(name_tok),
@@ -1605,6 +1657,19 @@ def _find_type_expr(args: _Args) -> TypeExpr:
         if isinstance(a, (TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT)):
             return a
     raise AssertionError(f"_find_type_expr: no TypeExpr found in {args!r}")
+
+
+def _find_name_token(args: _Args) -> Token:
+    """Return the field/key name Token from a ``field_name``-bearing rule.
+
+    ``field_name`` matches either a ``VAR_NAME`` identifier or the reserved word
+    ``agent`` (token type ``AGENT``); both arrive here as plain name Tokens.
+    The first such Token is the field/key name.
+    """
+    for a in args:
+        if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT"):
+            return a
+    raise AssertionError(f"_find_name_token: no name token found in {args!r}")
 
 
 def _is_expr_obj(a: object) -> bool:

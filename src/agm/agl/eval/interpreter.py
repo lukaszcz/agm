@@ -30,6 +30,7 @@ from agm.agl.eval.values import (
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.syntax.nodes import (
     AgentCall,
+    AgentDecl,
     BinaryOp,
     BinOp,
     BoolLit,
@@ -245,8 +246,8 @@ class Interpreter:
             self._exec_try_catch(stmt, scope)
         elif isinstance(stmt, Raise):
             self._exec_raise(stmt, scope)
-        elif isinstance(stmt, InputDecl):
-            pass  # already pre-bound; nothing to do at execution time
+        elif isinstance(stmt, (InputDecl, AgentDecl)):
+            pass  # static declarations: resolved before execution, no runtime action
         elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
             pass  # type declarations: no runtime action
         else:

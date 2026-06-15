@@ -35,6 +35,7 @@ from agm.agl.parser import (
 from agm.agl.syntax import (
     AbortPolicy,
     AgentCall,
+    AgentDecl,
     BinaryOp,
     BinOp,
     BoolLit,
@@ -335,6 +336,125 @@ class TestInputDecl:
         assert isinstance(stmt, InputDecl)
         assert isinstance(stmt.annotation, ListT)
         assert isinstance(stmt.annotation.elem, TextT)
+
+
+# ---------------------------------------------------------------------------
+# AgentDecl
+# ---------------------------------------------------------------------------
+
+
+class TestAgentDecl:
+    def test_bare_declaration(self) -> None:
+        stmt = _parse_one("agent reviewer")
+        assert isinstance(stmt, AgentDecl)
+        assert stmt.name == "reviewer"
+        assert stmt.runner is None
+
+    def test_declaration_with_runner(self) -> None:
+        stmt = _parse_one('agent impl = "claude -p %{PROMPT_FILE}"')
+        assert isinstance(stmt, AgentDecl)
+        assert stmt.name == "impl"
+        assert stmt.runner == "claude -p %{PROMPT_FILE}"
+
+    def test_declaration_with_empty_runner(self) -> None:
+        stmt = _parse_one('agent impl = ""')
+        assert isinstance(stmt, AgentDecl)
+        assert stmt.name == "impl"
+        assert stmt.runner == ""
+
+    def test_runner_with_interpolation_rejected(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_program('agent impl = "run ${x}"')
+
+    def test_agent_usable_as_field_name(self) -> None:
+        # `agent` is reserved, but stays valid as a record-field name so that
+        # built-in exception fields like `AgentCallError.agent` keep working.
+        stmt = _parse_one("print e.agent")
+        assert isinstance(stmt, PrintStmt)
+        assert isinstance(stmt.value, FieldAccess)
+        assert stmt.value.field == "agent"
+
+
+# ---------------------------------------------------------------------------
+# `agent` reserved word used as a plain field/key name (field_name nonterminal)
+#
+# `agent` is reserved (it leads `agent_decl`), but it is also the field name on
+# built-in exception records (AgentCallError.agent / AgentParseError.agent).
+# It must therefore remain usable wherever a record/struct field or named key
+# is referenced — field definitions, named constructor args, dict shorthand
+# keys, and postfix field access.  It must NOT become bindable as a variable
+# name (let/var/set/input/...).
+# ---------------------------------------------------------------------------
+
+
+class TestAgentAsFieldName:
+    def test_record_field_named_agent(self) -> None:
+        stmt = _parse_one("record R\n  agent: text")
+        assert isinstance(stmt, RecordDef)
+        assert stmt.name == "R"
+        assert len(stmt.fields) == 1
+        assert isinstance(stmt.fields[0], FieldDef)
+        assert stmt.fields[0].name == "agent"
+        assert isinstance(stmt.fields[0].type_expr, TextT)
+
+    def test_record_field_named_agent_among_others(self) -> None:
+        stmt = _parse_one("record R\n  message: text\n  agent: text\n  attempt: int")
+        assert isinstance(stmt, RecordDef)
+        assert [f.name for f in stmt.fields] == ["message", "agent", "attempt"]
+
+    def test_enum_variant_field_named_agent(self) -> None:
+        stmt = _parse_one("enum E\n  | Failure(agent: text)")
+        assert isinstance(stmt, EnumDef)
+        variant = stmt.variants[0]
+        assert variant.name == "Failure"
+        assert variant.fields[0].name == "agent"
+
+    def test_dict_shorthand_key_agent(self) -> None:
+        stmt = _parse_one("{agent: 1}")
+        assert isinstance(stmt, ExprStmt)
+        assert isinstance(stmt.expr, DictLit)
+        entry = stmt.expr.entries[0]
+        assert isinstance(entry, DictEntry)
+        assert isinstance(entry.key, StringLit)
+        assert entry.key.value == "agent"
+
+    def test_named_constructor_arg_agent(self) -> None:
+        stmt = _parse_one('Foo(agent: "n")')
+        assert isinstance(stmt, ExprStmt)
+        ctor = stmt.expr
+        assert isinstance(ctor, Constructor)
+        assert ctor.name == "Foo"
+        assert ctor.args[0].name == "agent"
+
+    def test_raise_builtin_exception_with_agent_field(self) -> None:
+        src = (
+            'raise AgentCallError(agent: "x", message: "m", '
+            'trace_id: "t", cause: "c", metadata: null)'
+        )
+        stmt = _parse_one(src)
+        assert isinstance(stmt, Raise)
+        ctor = stmt.exc
+        assert isinstance(ctor, Constructor)
+        assert ctor.name == "AgentCallError"
+        assert [a.name for a in ctor.args] == [
+            "agent",
+            "message",
+            "trace_id",
+            "cause",
+            "metadata",
+        ]
+
+    def test_field_access_agent_still_parses(self) -> None:
+        stmt = _parse_one("print e.agent")
+        assert isinstance(stmt, PrintStmt)
+        assert isinstance(stmt.value, FieldAccess)
+        assert stmt.value.field == "agent"
+
+    def test_agent_not_bindable_as_variable(self) -> None:
+        # `agent` must stay reserved as a binder: `let agent = …` is the start
+        # of neither a valid let nor an agent decl (no name after the keyword).
+        with pytest.raises(AglSyntaxError):
+            parse_program("let agent = 1")
 
 
 # ---------------------------------------------------------------------------
@@ -970,6 +1090,13 @@ class TestInternalHelpers:
 
         with pytest.raises(AssertionError, match="_find_expr"):
             _find_expr([])
+
+    def test_find_name_token_raises_on_empty(self) -> None:
+        """_find_name_token raises AssertionError if no name token is found."""
+        from agm.agl.parser.transform import _find_name_token
+
+        with pytest.raises(AssertionError, match="_find_name_token"):
+            _find_name_token([])
 
     def test_syntax_error_from_meta_creates_agl_syntax_error(self) -> None:
         """syntax_error_from_meta builds an AglSyntaxError from a Meta object."""

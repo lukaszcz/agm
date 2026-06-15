@@ -31,6 +31,7 @@ from typing import cast
 from agm.agl.syntax.nodes import (
     AbortPolicy,
     AgentCall,
+    AgentDecl,
     BinaryOp,
     BoolLit,
     CallOptions,
@@ -145,6 +146,7 @@ class Visitor:
     def visit_EnumDef(self, node: EnumDef) -> None: ...
     def visit_TypeAlias(self, node: TypeAlias) -> None: ...
     def visit_InputDecl(self, node: InputDecl) -> None: ...
+    def visit_AgentDecl(self, node: AgentDecl) -> None: ...
     def visit_IntLit(self, node: IntLit) -> None: ...
     def visit_DecimalLit(self, node: DecimalLit) -> None: ...
     def visit_BoolLit(self, node: BoolLit) -> None: ...
@@ -216,6 +218,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         EnumDef,
         TypeAlias,
         InputDecl,
+        AgentDecl,
         IntLit,
         DecimalLit,
         BoolLit,
@@ -323,6 +326,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, InputDecl):
         if node.annotation is not None:
             walk(node.annotation, callback)
+
+    elif isinstance(node, AgentDecl):
+        pass  # leaf — name and runner are plain strings
 
     # --- Literals ---
     elif isinstance(node, (IntLit, DecimalLit, BoolLit, NullLit, StringLit)):

@@ -53,6 +53,11 @@
 // ---------------------------------------------------------------------------
 
 %declare VAR_NAME TYPE_NAME
+// AGENT: the reserved word `agent`.  Declared (rather than written as the
+// string literal "agent") so it can be referenced by name in `field_name`,
+// where `agent` is admitted as a field/key name.  The custom lexer emits this
+// token type for the `agent` keyword.
+%declare AGENT
 %declare INT DECIMAL
 %declare EQ EQ_EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
@@ -77,6 +82,7 @@ closed_stmt: record_def
            | enum_def
            | type_alias
            | input_decl
+           | agent_decl
            | let_decl
            | var_decl
            | set_stmt
@@ -110,7 +116,16 @@ bar_closed_stmt: type_alias
 // record_def: indented block of field definitions (design §10.4).
 record_def: "record" TYPE_NAME _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
 
-field_def: VAR_NAME COLON type_expr
+field_def: field_name COLON type_expr
+
+// field_name: a record/struct field or named-key reference.  The reserved word
+// `agent` (which leads an agent_decl) is also a legitimate field name on the
+// built-in exception records (AgentCallError.agent / AgentParseError.agent), so
+// it is admitted here alongside ordinary lower-case identifiers.  This is used
+// only in *field-name* positions (field defs, named args, dict shorthand keys,
+// postfix field access) — never where a NEW variable is bound (let/var/set/
+// input/catch/loop/pattern var-binders), so `agent` cannot become a variable.
+field_name: VAR_NAME | AGENT
 
 // enum_def: flat variant list (design §10.4).
 //   The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
@@ -124,12 +139,17 @@ variant_payload: LPAR field_list? RPAR
 
 field_list: field_inline (COMMA field_inline)* COMMA?
 
-field_inline: VAR_NAME COLON type_expr
+field_inline: field_name COLON type_expr
 
 // type_alias: "type" TYPE_NAME EQ type_expr (design §10.4)
 type_alias: "type" TYPE_NAME EQ type_expr
 
 input_decl: "input" VAR_NAME type_ann?
+
+// agent_decl: "agent" VAR_NAME (= "runner string")?
+// The optional runner string is a template; the transformer rejects any
+// template carrying interpolation (it must be a static string literal).
+agent_decl: AGENT VAR_NAME (EQ template)?
 
 let_decl:   "let"  VAR_NAME type_ann? EQ expr
 var_decl:   "var"  VAR_NAME type_ann? EQ expr
@@ -303,7 +323,7 @@ case_expr_branch: pattern ARROW bar_expr
 
 // access: postfix field-access, namespace-qualification, and constructor-payload chains.
 // access -> atom is transparent (returns atom as-is).
-access: access DOT VAR_NAME          -> field_access
+access: access DOT field_name        -> field_access
       | access DOT TYPE_NAME         -> type_access
       | access constructor_payload   -> ctor_applied
       | atom
@@ -380,7 +400,7 @@ lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB
 lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE
 
 dict_entry: template COLON expr     -> dict_entry_str
-          | VAR_NAME COLON expr     -> dict_entry_name
+          | field_name COLON expr   -> dict_entry_name
 
 // ---------------------------------------------------------------------------
 // M2: Constructor expressions (design §10.13, §5.5)
@@ -395,7 +415,7 @@ constructor_payload: LPAR constructor_args? RPAR
 
 constructor_args: named_arg (COMMA named_arg)* COMMA?
 
-named_arg: VAR_NAME COLON expr
+named_arg: field_name COLON expr
 
 // ---------------------------------------------------------------------------
 // Patterns (design §6.1, §10.12)

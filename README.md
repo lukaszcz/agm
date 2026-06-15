@@ -314,6 +314,7 @@ resolved from `[exec.agents]` (per-agent), `--runner`, `[exec] runner`, `[loop] 
 ```bash
 agm exec workflow.agl
 agm exec --input name=Alice --max-iters 10 workflow.agl
+agm exec -c 'print "hello"'       # run inline program text instead of a file
 agm exec --dry-run workflow.agl   # static check only — no agent calls
 ```
 

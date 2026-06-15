@@ -168,6 +168,104 @@ class TestExecArgsParsing:
         assert getattr(args, "no_log") is True
 
 
+class TestExecCommandArgParsing:
+    """Parser-contract tests for the -c/--command option."""
+
+    def test_exec_command_flag_maps_to_command(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec", "-c", 'print "hi"'])
+        assert result.exit_code == 0
+
+        args = recorded_runs[0]
+        assert getattr(args, "command") == 'print "hi"'
+        assert getattr(args, "file") is None
+
+    def test_exec_command_long_flag_maps_to_command(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec", "--command", "let x = 1"])
+        assert result.exit_code == 0
+
+        args = recorded_runs[0]
+        assert getattr(args, "command") == "let x = 1"
+
+    def test_exec_file_and_command_are_mutually_exclusive(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+        result = invoke(runner, ["exec", "-c", "let x = 1", str(agl_file)])
+        assert result.exit_code != 0
+        # run() must not be reached when the CLI rejects the combination.
+        assert recorded_runs == []
+
+    def test_exec_neither_file_nor_command_exits_nonzero(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec"])
+        assert result.exit_code != 0
+        assert recorded_runs == []
+
+
+class TestExecCommandInline:
+    """Behavior tests for executing an inline -c/--command program."""
+
+    def _command_args(
+        self, command: str, *, inputs: list[str] | None = None
+    ) -> ExecArgs:
+        return ExecArgs(
+            file=None,
+            command=command,
+            inputs=inputs or [],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+
+    def test_inline_command_runs_and_prints(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert exec_command.run(self._command_args('print "hello"')) is None
+        assert capsys.readouterr().out == "hello\n"
+
+    def test_inline_command_with_inputs(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        args = self._command_args("input msg\nprint msg", inputs=["msg=hi"])
+        assert exec_command.run(args) is None
+        assert capsys.readouterr().out == "hi\n"
+
+    def test_inline_command_static_error_exits_1(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(self._command_args("let x = undefined_name"))
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
+
+    def test_neither_file_nor_command_exits_1(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Calling run() with neither source set fails cleanly (defensive guard)."""
+        args = ExecArgs(
+            file=None,
+            command=None,
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+        assert "Error" in capsys.readouterr().err
+
+
 class TestExecCommandBehavior:
     """Behavior tests for the exec command run() function."""
 

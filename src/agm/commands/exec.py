@@ -1,6 +1,7 @@
 """Implementation of the ``agm exec FILE`` command.
 
-Behaviour: read the ``.agl`` source file (exit 1 if unreadable), load the
+Behaviour: read the ``.agl`` source — either from the inline ``-c/--command``
+argument or from the source file (exit 1 if unreadable), load the
 ``[exec]`` configuration, construct a ``WorkflowRuntime`` with the resolved
 settings, call ``runtime.run`` (or a static-only dry run under ``--dry-run``),
 print diagnostics to stderr, and exit per the exit-code contract.
@@ -49,7 +50,16 @@ from agm.core.log import resolve_log_file
 
 def run(args: ExecArgs) -> None:
     """Run the ``agm exec`` command."""
-    source = read_text_arg(Path(args.file))
+    # The program source comes either from an inline ``-c/--command`` argument
+    # or from a file.  The CLI layer guarantees exactly one is provided; the
+    # defensive ``else`` keeps ``run`` safe when called directly.
+    if args.command is not None:
+        source = args.command
+    elif args.file is not None:
+        source = read_text_arg(Path(args.file))
+    else:
+        print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
+        raise SystemExit(1)
 
     # Parse --input k=v pairs (validation: malformed pairs exit 1).
     try:

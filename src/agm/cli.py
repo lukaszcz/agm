@@ -813,6 +813,12 @@ def exec_cmd(
         metavar="FILE",
         autocompletion=completion.complete_agl_file,
     ),
+    command: str | None = typer.Option(
+        None,
+        "-c",
+        "--command",
+        help="Execute the AgL program given as COMMAND instead of reading from FILE.",
+    ),
     inputs: list[str] | None = typer.Option(
         None,
         "--input",
@@ -849,8 +855,14 @@ def exec_cmd(
 ) -> None:
     del _help
     del _dry_run
-    if file is None:
-        exit_with_usage_error(["exec"], "error: the following arguments are required: FILE")
+    if command is not None and file is not None:
+        exit_with_usage_error(
+            ["exec"], "error: argument FILE not allowed with -c/--command"
+        )
+    if command is None and file is None:
+        exit_with_usage_error(
+            ["exec"], "error: one of the arguments FILE -c/--command is required"
+        )
     if no_log and log_file is not None:
         exit_with_usage_error(
             ["exec"], "error: --no-log and --log-file are mutually exclusive"
@@ -858,6 +870,7 @@ def exec_cmd(
     exec_command.run(
         ExecArgs(
             file=file,
+            command=command,
             inputs=list(inputs) if inputs is not None else [],
             strict_json=strict_json,
             max_iters=max_iters,

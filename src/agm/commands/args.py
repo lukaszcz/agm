@@ -209,10 +209,11 @@ class TmuxLayoutArgs:
 
 @dataclass(slots=True)
 class ExecArgs:
-    file: str
+    file: str | None
     inputs: list[str]
     strict_json: bool | None
     max_iters: int | None
     runner: str | None
     no_log: bool
     log_file: str | None
+    command: str | None = None

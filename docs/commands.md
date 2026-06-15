@@ -381,22 +381,27 @@ Sandbox settings resolution:
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] FILE` | Execute an AgL workflow program |
+| `agm exec [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] (FILE \| -c COMMAND)` | Execute an AgL workflow program |
 
-### `agm exec FILE`
+### `agm exec (FILE | -c COMMAND)`
 
-Execute an AgL (Agent Language) workflow program. The AgL language is documented in the
+Execute an AgL (Agent Language) workflow program, either from a source `FILE` or from inline
+program text given with `-c`/`--command`. The AgL language is documented in the
 [AgL language reference](agl/reference/index.md).
 
 ```text
 agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
          [--max-iters N] [--runner COMMAND]
          [--log-file PATH|--no-log]
-         FILE
+         (FILE | -c COMMAND)
 ```
+
+`FILE` and `-c`/`--command` are mutually exclusive, and exactly one of them is required.
 
 Options:
 
+- `-c COMMAND`, `--command COMMAND`: Execute the AgL program given as `COMMAND` directly,
+  instead of reading the program from `FILE`.
 - `--input KEY=VALUE`: Provide a host input value (repeatable). Values for `text`-declared
   inputs are taken verbatim; for every other declared type (`int`/`decimal`/`bool`/`json`
   and the structured `list`/`dict`/`record`/`enum` types) the value must be **exactly one

@@ -474,11 +474,13 @@ _HELP_TEXTS: dict[str, str] = {
         agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
                  [--max-iters N] [--runner COMMAND]
                  [--log-file PATH|--no-log]
-                 FILE
+                 (FILE | -c COMMAND)
 
-        Execute an AgL (Agent Language) workflow program from FILE.
+        Execute an AgL (Agent Language) workflow program from FILE, or from
+        the inline program text given with -c/--command.
 
         Options:
+          -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
           --input KEY=VALUE     Provide a host input value (repeatable).
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
@@ -486,6 +488,8 @@ _HELP_TEXTS: dict[str, str] = {
           --runner COMMAND      Override the default agent runner command.
           --log-file PATH       Write trace log to PATH.
           --no-log              Disable trace logging.
+
+        FILE and -c/--command are mutually exclusive; exactly one is required.
 
         Exit codes:
           0  The workflow completed successfully.

@@ -3778,7 +3778,7 @@ class TestCheckedProgramTypeEnvConstructors:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: runtime.py _convert_input int-from-Decimal (line 401)
+# Coverage: runtime.py convert_input int-from-Decimal (line 401)
 # ---------------------------------------------------------------------------
 
 
@@ -3786,19 +3786,19 @@ class TestConvertInputDecimalToInt:
     def test_convert_input_int_from_decimal_string_parsed(self) -> None:
         """'1.0' parses as Decimal('1.0') == int(1) → IntValue(1)."""
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import IntType
 
-        result = _convert_input("n", "1.0", IntType())
+        result = convert_input("n", "1.0", IntType())
         assert result == IntValue(1)
 
     def test_convert_input_int_from_decimal_non_integer_raises(self) -> None:
         """'1.5' parses as Decimal('1.5') ≠ int(1) → ValueError."""
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import IntType
 
         with pytest.raises(ValueError, match="integer"):
-            _convert_input("n", "1.5", IntType())
+            convert_input("n", "1.5", IntType())
 
 
 # ---------------------------------------------------------------------------
@@ -4996,3 +4996,32 @@ class TestNullLiteralPatternSource:
         assert result.ok is True, result.error
         assert result.bindings.get("r") == IntValue(1)
 
+
+
+# ---------------------------------------------------------------------------
+# Scope redefinition (the incremental-session promote/shadow primitive)
+# ---------------------------------------------------------------------------
+
+
+class TestScopeRedefinition:
+    """``Scope.define`` of an existing name in the same frame replaces it.
+
+    The incremental REPL session relies on this: promoting a redefinition into
+    the persistent root scope must overwrite the prior value AND its mutability,
+    not merely add a duplicate.  ``define`` already overwrites
+    ``self.bindings[name]``, so no extra API is needed.
+    """
+
+    def test_redefine_replaces_value_and_mutability(self) -> None:
+        from agm.agl.eval.values import IntValue, TextValue
+
+        scope = Scope(parent=None)
+        scope.define("x", IntValue(1), mutable=True, decl_span=_sp())
+        # Redefine with a new value and different mutability.
+        scope.define("x", TextValue("two"), mutable=False, decl_span=_sp())
+        b = scope.lookup("x")
+        assert b is not None
+        assert b.value == TextValue("two")
+        assert b.mutable is False
+        # No duplicate binding lingers — exactly one entry for the name.
+        assert list(scope.bindings) == ["x"]

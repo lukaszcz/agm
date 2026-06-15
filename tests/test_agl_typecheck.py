@@ -68,6 +68,7 @@ from agm.agl.typecheck.types import (
     ListType,
     RecordType,
 )
+from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1621,6 +1622,27 @@ class TestTypeEnvironment:
         alias_target = _tc_text_t()
         env.register_alias("MyText", alias_target)
         assert env.get_alias_target_expr("MyText") is alias_target
+
+    def test_unregister_name_removes_from_both_tables(self) -> None:
+        from agm.agl.typecheck.env import TypeEnvironment
+        env = TypeEnvironment()
+        env.register_type("R", RecordType(name="R", fields={}))
+        env.register_alias("R", _tc_text_t())
+        env.unregister_name("R")
+        assert env.get_type("R") is None
+        assert env.get_alias_target_expr("R") is None
+
+    def test_unregister_name_missing_is_noop(self) -> None:
+        from agm.agl.typecheck.env import TypeEnvironment
+        env = TypeEnvironment()
+        env.unregister_name("NeverDeclared")  # must not raise
+        assert env.get_type("NeverDeclared") is None
+
+    def test_unregister_name_never_removes_builtin(self) -> None:
+        from agm.agl.typecheck.env import TypeEnvironment
+        env = TypeEnvironment()
+        env.unregister_name("Abort")
+        assert env.has_type("Abort")
 
     def test_get_alias_target_missing_returns_none(self) -> None:
         from agm.agl.typecheck.env import TypeEnvironment
@@ -3257,3 +3279,207 @@ class TestExceptionConstructorDuplicateArg:
         with pytest.raises(AglTypeError) as exc_info:
             resolve_and_check(raise_stmt)
         assert "message" in exc_info.value.to_diagnostic().message
+
+
+# ---------------------------------------------------------------------------
+# seed_env seam (incremental REPL sessions)
+# ---------------------------------------------------------------------------
+
+
+def _check_entry(
+    source: str,
+    *,
+    start_id: int,
+    parent_scope: object | None = None,
+    seed_env: object | None = None,
+    capabilities: HostCapabilities | None = None,
+) -> CheckedProgram:
+    """Run parse(seeded) + resolve(parent) + check(seed) for one session entry."""
+    from agm.agl.parser import parse_program_seeded
+    from agm.agl.scope.symbols import ScopeNode
+    from agm.agl.typecheck.env import TypeEnvironment
+
+    if capabilities is None:
+        capabilities = default_capabilities()
+    program, _next = parse_program_seeded(source, start_id=start_id)
+    ps = parent_scope if isinstance(parent_scope, ScopeNode) else None
+    resolved = resolve(program, parent_scope=ps)
+    se = seed_env if isinstance(seed_env, TypeEnvironment) else None
+    return check(resolved, capabilities, seed_env=se)
+
+
+class TestSeedEnvSeam:
+    """``check(resolved, caps, seed_env=...)`` carries session type state."""
+
+    def test_default_none_unchanged(self) -> None:
+        """``seed_env=None`` leaves a standalone check unchanged."""
+        r = parse_resolve_check("let n: int = 1")
+        assert r.type_env.get_binding_type(r.resolved.program.body[0].node_id) == IntType()
+
+    def test_reference_seeded_binding_type(self) -> None:
+        """A new entry can reference a seeded binding and reuse its type."""
+        first = _check_entry("let n: int = 1", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        second = _check_entry(
+            "let m = n + 1",
+            start_id=next_id,
+            parent_scope=first.resolved.root_scope,
+            seed_env=first.type_env,
+        )
+        let_m = second.resolved.program.body[0]
+        assert isinstance(let_m, LetDecl)
+        assert second.type_env.get_binding_type(let_m.node_id) == IntType()
+
+    def test_reference_seeded_record_type(self) -> None:
+        """A new entry can reference a record declared in the seed."""
+        first = _check_entry("record Point\n  x: int\n  y: int", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        second = _check_entry(
+            "let p = Point(x: 1, y: 2)",
+            start_id=next_id,
+            parent_scope=first.resolved.root_scope,
+            seed_env=first.type_env,
+        )
+        let_p = second.resolved.program.body[0]
+        assert isinstance(let_p, LetDecl)
+        bt = second.type_env.get_binding_type(let_p.node_id)
+        assert isinstance(bt, RecordType) and bt.name == "Point"
+
+    def test_redefine_binding_with_new_type_allowed(self) -> None:
+        """Shadowing a seeded binding with a different type is allowed."""
+        first = _check_entry("let n: int = 1", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        second = _check_entry(
+            'let n: text = "hi"',
+            start_id=next_id,
+            parent_scope=first.resolved.root_scope,
+            seed_env=first.type_env,
+        )
+        let_n = second.resolved.program.body[0]
+        assert isinstance(let_n, LetDecl)
+        assert second.type_env.get_binding_type(let_n.node_id) == TextType()
+
+    def test_redefine_record_shadows_no_duplicate_error(self) -> None:
+        """Re-declaring a seeded record overrides it (no duplicate-name error)."""
+        first = _check_entry("record Box\n  v: int", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        # Must not raise: this replaces the seeded Box.
+        second = _check_entry(
+            "record Box\n  v: text",
+            start_id=next_id,
+            seed_env=first.type_env,
+        )
+        box = second.type_env.get_type("Box")
+        assert isinstance(box, RecordType)
+        assert box.fields["v"] == TextType()
+
+    def test_duplicate_type_within_entry_still_errors(self) -> None:
+        """A genuine duplicate type declared twice in ONE entry still errors."""
+        first = _check_entry("record A\n  v: int", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        with pytest.raises(AglTypeError) as exc_info:
+            _check_entry(
+                "record B\n  v: int\nrecord B\n  v: text",
+                start_id=next_id,
+                seed_env=first.type_env,
+            )
+        assert "already declared" in str(exc_info.value)
+
+    def test_builtin_shadowing_still_errors_when_seeded(self) -> None:
+        """Shadowing a built-in type name is still rejected with a seed present."""
+        first = _check_entry("record A\n  v: int", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        with pytest.raises(AglTypeError) as exc_info:
+            _check_entry(
+                "record Abort\n  v: int",
+                start_id=next_id,
+                seed_env=first.type_env,
+            )
+        assert "built-in" in str(exc_info.value)
+
+    def test_type_env_is_union_of_seed_and_entry(self) -> None:
+        """The result ``type_env`` carries both seeded and new declarations."""
+        first = _check_entry("record A\n  v: int", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        second = _check_entry(
+            "record C\n  v: text",
+            start_id=next_id,
+            seed_env=first.type_env,
+        )
+        assert isinstance(second.type_env.get_type("A"), RecordType)
+        assert isinstance(second.type_env.get_type("C"), RecordType)
+
+    def test_cross_kind_redefine_record_as_alias(self) -> None:
+        """Seeded ``record R`` redefined as ``type R = int`` fully replaces it.
+
+        The stale record must not linger in ``_types``: ``get_type('R')`` must
+        return ``None`` (R is now an alias), and an annotation ``R`` must resolve
+        to ``int`` — the two namespaces must agree.
+        """
+        first = _check_entry("record R\n  v: int", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        second = _check_entry(
+            "type R = int\nlet x: R = 1",
+            start_id=next_id,
+            seed_env=first.type_env,
+        )
+        env = second.type_env
+        # No stale record remains in the type table.
+        assert env.get_type("R") is None
+        # The annotation R resolves to int (alias), agreeing with the binding.
+        let_x = second.resolved.program.body[1]
+        assert isinstance(let_x, LetDecl)
+        assert env.get_binding_type(let_x.node_id) == IntType()
+
+    def test_cross_kind_redefine_alias_as_record(self) -> None:
+        """Seeded ``type A = int`` redefined as ``record A`` fully replaces it.
+
+        A later entry using ``let z: A = A(v: 1)`` must type-check: the stale
+        alias must not survive in ``_alias_targets`` to make the annotation
+        resolve to ``int`` while the constructor resolves to the record.
+        """
+        first = _check_entry("type A = int", start_id=0)
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        second = _check_entry(
+            "record A\n  v: int",
+            start_id=next_id,
+            seed_env=first.type_env,
+        )
+        # get_type now returns the record; the alias is gone.
+        a_type = second.type_env.get_type("A")
+        assert isinstance(a_type, RecordType) and a_type.name == "A"
+        assert second.type_env.get_alias_target_expr("A") is None
+        # A later entry mixes the annotation and the constructor: both must
+        # resolve to the SAME record, so no spurious mismatch is raised.
+        next_id2 = max(all_node_ids(second.resolved.program)) + 1
+        third = _check_entry(
+            "let z: A = A(v: 1)",
+            start_id=next_id2,
+            seed_env=second.type_env,
+        )
+        let_z = third.resolved.program.body[0]
+        assert isinstance(let_z, LetDecl)
+        bt = third.type_env.get_binding_type(let_z.node_id)
+        assert isinstance(bt, RecordType) and bt.name == "A"
+
+    def test_multi_hop_alias_seeded_chain(self) -> None:
+        """A seeded multi-hop alias chain resolves in a later entry.
+
+        Seed declares ``record R``, ``type A = R``, ``type B = A``; a later entry
+        referencing ``B`` type-checks through the full seeded alias chain.
+        """
+        first = _check_entry(
+            "record R\n  v: int\ntype A = R\ntype B = A", start_id=0
+        )
+        next_id = max(all_node_ids(first.resolved.program)) + 1
+        second = _check_entry(
+            "let x: B = R(v: 1)",
+            start_id=next_id,
+            seed_env=first.type_env,
+        )
+        let_x = second.resolved.program.body[0]
+        assert isinstance(let_x, LetDecl)
+        bt = second.type_env.get_binding_type(let_x.node_id)
+        assert isinstance(bt, RecordType) and bt.name == "R"
+
+

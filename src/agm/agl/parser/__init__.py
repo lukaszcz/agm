@@ -14,6 +14,6 @@ Lark.  (See ``src/agm/agl/CLAUDE.md`` for the firewall rule.)
 from __future__ import annotations
 
 from agm.agl.parser.errors import AglSyntaxError
-from agm.agl.parser.parser import parse_program
+from agm.agl.parser.parser import parse_program, parse_program_seeded
 
-__all__ = ["AglSyntaxError", "parse_program"]
+__all__ = ["AglSyntaxError", "parse_program", "parse_program_seeded"]

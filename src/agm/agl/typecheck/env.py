@@ -177,6 +177,27 @@ class TypeEnvironment:
     def register_type(self, name: str, typ: Type) -> None:
         self._types[name] = typ
 
+    def unregister_name(self, name: str) -> None:
+        """Remove a user *name* from BOTH the type and alias namespace tables.
+
+        Used by the type-builder when an incremental-session entry redeclares a
+        *seeded* name with a different kind (e.g. a seeded ``record R`` redefined
+        as ``type R = int``).  ``_types`` (records/enums/exceptions) and
+        ``_alias_targets`` (aliases) are separate tables, so a cross-kind
+        redefinition would otherwise leave a stale entry in the other table and
+        make ``get_type`` disagree with annotation/constructor resolution.
+        Dropping the name from both tables before the new kind is registered
+        keeps the two namespaces mutually exclusive for user names.
+
+        Built-in exception names are never removed: they are non-shadowable
+        (rejected earlier by ``_BUILTIN_TYPE_NAMES``), so the builder never calls
+        this for them, but the guard makes the helper safe to call defensively.
+        """
+        if name in BUILTIN_EXCEPTIONS:
+            return
+        self._types.pop(name, None)
+        self._alias_targets.pop(name, None)
+
     def register_alias(self, name: str, target_expr: object) -> None:
         """Store the raw TypeExpr for *name*; resolved lazily by resolve_type_expr."""
         self._alias_targets[name] = target_expr
@@ -310,3 +331,20 @@ class TypeEnvironment:
     def all_declared_type_names(self) -> frozenset[str]:
         """Return the set of all registered type names (including built-ins)."""
         return frozenset(self._types) | frozenset(self._alias_targets)
+
+    # --- Seeding support (incremental REPL sessions) ---
+
+    def seed_from(self, other: TypeEnvironment) -> None:
+        """Copy *other*'s user-declared types, aliases, and binding types in.
+
+        Used to pre-populate a fresh environment with a session's accumulated
+        state before checking a new entry.  Built-in exception types are already
+        present and are not copied.  Binding types are keyed by globally-unique
+        ``decl_node_id`` so they never collide across entries.
+        """
+        builtin = frozenset(BUILTIN_EXCEPTIONS)
+        for name, typ in other._types.items():
+            if name not in builtin:
+                self._types[name] = typ
+        self._alias_targets.update(other._alias_targets)
+        self._binding_types.update(other._binding_types)

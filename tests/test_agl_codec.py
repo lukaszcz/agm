@@ -1493,7 +1493,7 @@ class TestNormalizedRaw:
 
 
 class TestRecordEnumInputs:
-    """Runtime._convert_input now accepts record/enum types via JsonCodec."""
+    """Runtime.convert_input now accepts record/enum types via JsonCodec."""
 
     def test_record_input_parsed_from_json_string(self) -> None:
         # record Issue; title: text; severity: int; input issue: Issue; print issue.title
@@ -1593,25 +1593,25 @@ class TestRecordEnumInputs:
     def test_structured_input_accepts_python_list(self) -> None:
         """Structured inputs may be provided as a Python list (JSON-compatible)."""
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
 
-        result = _convert_input("xs", [1, 2, 3], ListType(elem=IntType()))
+        result = convert_input("xs", [1, 2, 3], ListType(elem=IntType()))
         assert isinstance(result, ListValue)
         assert result.elements == (IntValue(1), IntValue(2), IntValue(3))
 
     def test_structured_input_must_be_string_or_compatible(self) -> None:
         """Structured inputs that are not a string or JSON-compatible Python value raise."""
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
 
         with pytest.raises(ValueError, match="JSON"):
-            _convert_input("xs", object(), ListType(elem=IntType()))
+            convert_input("xs", object(), ListType(elem=IntType()))
 
     def test_invalid_structured_input_raises(self) -> None:
         """A JSON string that fails schema validation for the declared type raises."""
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
 
         with pytest.raises(ValueError, match="could not parse"):
-            _convert_input(
+            convert_input(
                 "issue",
                 '{"title": "Bug"}',  # missing severity
                 RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()}),
@@ -1619,11 +1619,11 @@ class TestRecordEnumInputs:
 
     def test_unsupported_type_in_convert_input_raises(self) -> None:
         """ExceptionType is not a supported input type."""
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import ExceptionType
 
         with pytest.raises(ValueError, match="unsupported type"):
-            _convert_input("e", "val", ExceptionType(name="Boom"))
+            convert_input("e", "val", ExceptionType(name="Boom"))
 
     def test_structured_input_is_strict_no_repair(self) -> None:
         """F7: host --input values are parsed strictly; typos are NOT repaired.
@@ -1632,10 +1632,10 @@ class TestRecordEnumInputs:
         output) must be rejected for a user-supplied structured input, with an
         error that makes the JSON requirement clear.
         """
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
 
         with pytest.raises(ValueError, match="valid JSON value"):
-            _convert_input(
+            convert_input(
                 "issue",
                 '{"title": "Bug", "severity": 5,}',  # trailing comma typo
                 RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()}),
@@ -1643,10 +1643,10 @@ class TestRecordEnumInputs:
 
     def test_structured_input_rejects_fenced_json(self) -> None:
         """F7: a Markdown-fenced --input value is not stripped (strict parsing)."""
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
 
         with pytest.raises(ValueError, match="valid JSON value"):
-            _convert_input(
+            convert_input(
                 "tags",
                 "```json\n[1, 2]\n```",
                 ListType(elem=IntType()),

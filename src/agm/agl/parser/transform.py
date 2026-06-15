@@ -97,15 +97,22 @@ def _span_from_token(tok: Token) -> SourceSpan:
 class AstBuilder(Transformer):
     """Transforms a Lark parse tree into ``agm.agl.syntax`` dataclasses.
 
-    The ``node_id`` counter is monotonically increasing and resets per
-    ``AstBuilder`` instance.  Each ``parse_program`` call creates a fresh
+    The ``node_id`` counter is monotonically increasing and starts at
+    ``start_id`` (default ``0``).  Each ``parse_program`` call creates a fresh
     builder, so node IDs within a single program are deterministic (assigned
-    in tree-walk order — root first, depth-first left-to-right).
+    in tree-walk order — root first, depth-first left-to-right).  Incremental
+    sessions seed ``start_id`` from a prior parse's ``next_node_id`` so ids
+    stay globally unique across entries.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, start_id: int = 0) -> None:
         super().__init__()
-        self._counter = count(0)
+        self._counter = count(start_id)
+        # The next id the counter will hand out.  Tracked explicitly so callers
+        # can read the first id NOT consumed after a transform (the seed for a
+        # subsequent incremental parse) without having to assume the root node
+        # holds the maximum id.  Seeded to ``start_id`` before any node is built.
+        self._next_unused: int = start_id
         # node_ids of Constructor nodes that already had a constructor_payload
         # applied via ctor_applied.  Used to reject a second payload
         # (``Issue(a: 1)(b: 2)``) regardless of whether the first payload was
@@ -114,7 +121,19 @@ class AstBuilder(Transformer):
         self._payload_applied: set[int] = set()
 
     def _next_id(self) -> int:
-        return next(self._counter)
+        nid = next(self._counter)
+        self._next_unused = nid + 1
+        return nid
+
+    @property
+    def next_node_id(self) -> int:
+        """The first ``node_id`` NOT yet consumed by this builder.
+
+        After ``transform`` this is the seed (``start_id``) for the next
+        incremental parse so that node ids stay globally unique across entries.
+        Equal to ``start_id`` when no node has been built.
+        """
+        return self._next_unused
 
     # ------------------------------------------------------------------
     # Program root

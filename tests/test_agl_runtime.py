@@ -729,7 +729,7 @@ class TestDecimalSerialization:
         import decimal
 
         from agm.agl.eval.values import DecimalValue, ExceptionValue, TextValue
-        from agm.agl.runtime.runtime import _exception_value_to_run_error
+        from agm.agl.runtime.runtime import exception_value_to_run_error
 
         exc = ExceptionValue(
             type_name="ValidationError",
@@ -738,7 +738,7 @@ class TestDecimalSerialization:
                 "amount": DecimalValue(decimal.Decimal("0.1")),
             },
         )
-        err = _exception_value_to_run_error(exc)
+        err = exception_value_to_run_error(exc)
         assert err.fields["amount"] == decimal.Decimal("0.1")
         assert isinstance(err.fields["amount"], decimal.Decimal)
 
@@ -1516,67 +1516,67 @@ class TestRuntimeErrorPaths:
         assert result.error.type_name == "Abort"
 
     def test_text_input_not_str_raises(self) -> None:
-        """_convert_input: text type with non-str value → ValueError."""
-        from agm.agl.runtime.runtime import _convert_input
+        """convert_input: text type with non-str value → ValueError."""
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import TextType
 
         with pytest.raises(ValueError, match="expected a text value"):
-            _convert_input("msg", 42, TextType())
+            convert_input("msg", 42, TextType())
 
     def test_int_input_decimal_integral_widened(self) -> None:
-        """_convert_input: integral Decimal → IntValue for int type."""
+        """convert_input: integral Decimal → IntValue for int type."""
         from decimal import Decimal
 
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import IntType
 
-        result = _convert_input("n", Decimal("3"), IntType())
+        result = convert_input("n", Decimal("3"), IntType())
         assert result == IntValue(3)
 
     def test_int_input_non_integral_fails(self) -> None:
-        """_convert_input: non-integral value → ValueError for int type."""
-        from agm.agl.runtime.runtime import _convert_input
+        """convert_input: non-integral value → ValueError for int type."""
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import IntType
 
         with pytest.raises(ValueError, match="expected an integer"):
-            _convert_input("n", "1.5", IntType())
+            convert_input("n", "1.5", IntType())
 
     def test_decimal_input_from_int(self) -> None:
-        """_convert_input: int value → DecimalValue for decimal type."""
+        """convert_input: int value → DecimalValue for decimal type."""
         from decimal import Decimal
 
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import DecimalType
 
-        result = _convert_input("d", 3, DecimalType())
+        result = convert_input("d", 3, DecimalType())
         assert isinstance(result, DecimalValue)
         assert result.value == Decimal(3)
 
     def test_decimal_input_invalid_type_fails(self) -> None:
-        """_convert_input: bool value → ValueError for decimal type."""
-        from agm.agl.runtime.runtime import _convert_input
+        """convert_input: bool value → ValueError for decimal type."""
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import DecimalType
 
         with pytest.raises(ValueError, match="expected a decimal"):
-            _convert_input("d", "true", DecimalType())
+            convert_input("d", "true", DecimalType())
 
     def test_bool_input_invalid_type_fails(self) -> None:
-        """_convert_input: non-bool value → ValueError for bool type."""
-        from agm.agl.runtime.runtime import _convert_input
+        """convert_input: non-bool value → ValueError for bool type."""
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import BoolType
 
         with pytest.raises(ValueError, match="expected a bool"):
-            _convert_input("b", "1", BoolType())
+            convert_input("b", "1", BoolType())
 
     def test_bool_input_true_succeeds(self) -> None:
-        """_convert_input: bool value → BoolValue for bool type."""
+        """convert_input: bool value → BoolValue for bool type."""
         from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import BoolType
 
-        result = _convert_input("b", True, BoolType())
+        result = convert_input("b", True, BoolType())
         assert result == BoolValue(True)
 
     # --- assertions migrated from TestRuntimeExceptionHandlers (eval tests) ---
@@ -1601,7 +1601,7 @@ class TestRuntimeErrorPaths:
             rt.run("let x = 1")
 
     def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
-        """_exception_value_to_run_error converts every Value kind to JSON shape.
+        """exception_value_to_run_error converts every Value kind to JSON shape.
 
         This is the pure converter used to surface an uncaught AgL exception
         (e.g. AgentParseError) as a RunError.
@@ -1620,7 +1620,7 @@ class TestRuntimeErrorPaths:
             RecordValue,
             TextValue,
         )
-        from agm.agl.runtime.runtime import RunError, _exception_value_to_run_error
+        from agm.agl.runtime.runtime import RunError, exception_value_to_run_error
 
         exc_val = ExceptionValue(
             type_name="AgentParseError",
@@ -1642,7 +1642,7 @@ class TestRuntimeErrorPaths:
                 "none_val": JsonValue(None),
             },
         )
-        error = _exception_value_to_run_error(exc_val)
+        error = exception_value_to_run_error(exc_val)
         assert isinstance(error, RunError)
         assert error.type_name == "AgentParseError"
         assert error.fields["message"] == "failed"
@@ -1659,19 +1659,19 @@ class TestRuntimeErrorPaths:
 
     def test_convert_input_json_type_accepts_any(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import JsonType
 
-        result = _convert_input("meta", [1, 2, 3], JsonType())
+        result = convert_input("meta", [1, 2, 3], JsonType())
         assert result == JsonValue([1, 2, 3])
 
     def test_convert_input_list_type_parsed_via_json_codec(self) -> None:
         # M2: list/dict/record/enum inputs are now accepted via the JsonCodec.
         from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import ListType, TextType
 
-        result = _convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
+        result = convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
         assert isinstance(result, ListValue)
         assert result.elements == (TextValue("a"), TextValue("b"))
 
@@ -1711,10 +1711,10 @@ class TestRuntimeErrorPaths:
         import decimal as _decimal
 
         from agm.agl.eval.values import DecimalValue, ListValue
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import DecimalType, ListType
 
-        result = _convert_input(
+        result = convert_input(
             "xs", [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")], ListType(elem=DecimalType())
         )
         assert isinstance(result, ListValue)
@@ -1728,11 +1728,11 @@ class TestRuntimeErrorPaths:
         input-validation error naming the input, not a stringified value or
         traceback.
         """
-        from agm.agl.runtime.runtime import _convert_input
+        from agm.agl.runtime.runtime import convert_input
         from agm.agl.typecheck.types import ListType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
-            _convert_input("xs", {1, 2, 3}, ListType(elem=TextType()))
+            convert_input("xs", {1, 2, 3}, ListType(elem=TextType()))
         # The error message must name the input and mention the type, not
         # contain a raw repr of the set or a json.dumps traceback.
         msg = str(exc_info.value)

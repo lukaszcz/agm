@@ -26,7 +26,7 @@ import logging.handlers
 import pytest
 
 from agm.agl.lexer.lexer import AglLexer
-from agm.agl.parser import AglSyntaxError, parse_program
+from agm.agl.parser import AglSyntaxError, parse_program, parse_program_seeded
 from agm.agl.syntax import (
     AbortPolicy,
     AgentCall,
@@ -90,6 +90,7 @@ from agm.agl.syntax.types import (
     NameT,
     TextT,
 )
+from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------
 # LALR(1) conflict guard
@@ -3081,3 +3082,72 @@ class TestInlineCompoundDiagnostics:
         msg = str(err)
         assert msg == "Unexpected 'let'."
         assert "Token(" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Seeded / incremental parsing (REPL pass seam)
+# ---------------------------------------------------------------------------
+
+
+class TestParseProgramSeeded:
+    """``parse_program_seeded`` keeps node ids unique across incremental entries."""
+
+    def test_default_start_id_preserves_existing_ids(self) -> None:
+        """``start_id=0`` (the default) yields the same ids as ``parse_program``."""
+        src = "let x = 1\nlet y = 2\nprint x"
+        baseline = parse_program(src)
+        prog, _next_id = parse_program_seeded(src, start_id=0)
+        assert all_node_ids(prog) == all_node_ids(baseline)
+
+    def test_consecutive_calls_produce_disjoint_ranges(self) -> None:
+        """Two consecutive seeded parses produce disjoint node-id ranges."""
+        prog1, next1 = parse_program_seeded("let x = 1", start_id=0)
+        prog2, next2 = parse_program_seeded("let y = 2", start_id=next1)
+        ids1 = all_node_ids(prog1)
+        ids2 = all_node_ids(prog2)
+        assert ids1.isdisjoint(ids2)
+        # The second range begins at the first range's reported next seed.
+        assert min(ids2) >= next1
+        assert next2 > next1
+
+    def test_next_start_id_is_first_unconsumed(self) -> None:
+        """``next_start_id`` is the first id NOT consumed, derived from the counter.
+
+        For a simple program the root holds the maximum id, so the next seed is
+        ``program.node_id + 1``; the value is read from the builder counter, not
+        hardcoded to that assumption.
+        """
+        prog, next_id = parse_program_seeded("let x = 1", start_id=0)
+        assert next_id == max(all_node_ids(prog)) + 1
+        assert next_id == prog.node_id + 1
+
+    def test_start_id_offsets_all_ids(self) -> None:
+        """A non-zero ``start_id`` shifts every node id by that offset."""
+        base, _ = parse_program_seeded("let x = 1", start_id=0)
+        shifted, _ = parse_program_seeded("let x = 1", start_id=100)
+        base_ids = sorted(all_node_ids(base))
+        shifted_ids = sorted(all_node_ids(shifted))
+        assert shifted_ids == [i + 100 for i in base_ids]
+
+    def test_parse_program_accepts_start_id(self) -> None:
+        """``parse_program`` honours ``start_id`` while returning only the program."""
+        prog = parse_program("let x = 1", start_id=50)
+        assert min(all_node_ids(prog)) >= 50
+
+    def test_parse_error_lets_caller_reuse_start_id(self) -> None:
+        """A failed seeded parse raises and never advances the caller's seed.
+
+        Contract: ``parse_program_seeded`` returns ``next_start_id`` only on
+        success, so a syntax error leaves the caller free to reuse the SAME
+        ``start_id`` for the corrected entry — which then yields the expected
+        disjoint range as if the bad call never happened.
+        """
+        # A bad entry at start_id=10 raises (no next_start_id is produced).
+        with pytest.raises(AglSyntaxError):
+            parse_program_seeded("let x ==", start_id=10)
+        # Reusing the same start_id for a valid entry yields ids at/above it,
+        # disjoint from a subsequent entry seeded with its reported next id.
+        prog, next_id = parse_program_seeded("let x = 1", start_id=10)
+        assert min(all_node_ids(prog)) >= 10
+        prog2, _ = parse_program_seeded("let y = 2", start_id=next_id)
+        assert all_node_ids(prog).isdisjoint(all_node_ids(prog2))

@@ -168,6 +168,15 @@ class _TypeBuilder:
     def __init__(self, env: TypeEnvironment) -> None:
         self._env = env
         # Track user-declared names → declaration span (excludes built-ins).
+        #
+        # Duplicate-name rejection keys off THIS per-entry table only, which is
+        # exactly the behaviour an incremental session needs: a type name that
+        # exists solely in a seeded ``env`` (copied via ``TypeEnvironment.seed_from``)
+        # is absent from ``self._declared``, so re-declaring it in a new entry
+        # simply overwrites the seeded shell — a shadow, not a duplicate error.
+        # A name declared twice WITHIN one entry still appears in ``self._declared``
+        # on the second pass and is rejected; built-in names remain non-shadowable
+        # via ``_BUILTIN_TYPE_NAMES``.
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum definitions for on-demand phase-2 building.
         self._record_defs: dict[str, RecordDef] = {}
@@ -185,16 +194,22 @@ class _TypeBuilder:
         for stmt in program.body:
             if isinstance(stmt, RecordDef):
                 self._register_name(stmt.name, stmt.span)
+                # A legal redeclaration of a SEEDED name may change its kind;
+                # drop any stale seeded entry (e.g. an alias of the same name)
+                # so ``_types`` and ``_alias_targets`` stay mutually exclusive.
+                self._env.unregister_name(stmt.name)
                 # Register an empty shell so forward references resolve.
                 self._env.register_type(stmt.name, RecordType(name=stmt.name, fields={}))
                 self._record_defs[stmt.name] = stmt
             elif isinstance(stmt, EnumDef):
                 self._register_name(stmt.name, stmt.span)
+                self._env.unregister_name(stmt.name)
                 # Register an empty shell so forward references resolve.
                 self._env.register_type(stmt.name, EnumType(name=stmt.name, variants={}))
                 self._enum_defs[stmt.name] = stmt
             elif isinstance(stmt, TypeAlias):
                 self._register_name(stmt.name, stmt.span)
+                self._env.unregister_name(stmt.name)
                 self._env.register_alias(stmt.name, stmt.type_expr)
 
         # ----------------------------------------------------------------
@@ -1545,7 +1560,12 @@ class _Checker:
 # ---------------------------------------------------------------------------
 
 
-def check(resolved: ResolvedProgram, capabilities: HostCapabilities) -> CheckedProgram:
+def check(
+    resolved: ResolvedProgram,
+    capabilities: HostCapabilities,
+    *,
+    seed_env: TypeEnvironment | None = None,
+) -> CheckedProgram:
     """Run the full M1 type-checking pass.
 
     Parameters
@@ -1554,6 +1574,18 @@ def check(resolved: ResolvedProgram, capabilities: HostCapabilities) -> CheckedP
         Output of the scope resolution pass.
     capabilities:
         Immutable host capability catalog (agents, codecs, renderers).
+    seed_env:
+        When given, the working ``TypeEnvironment`` starts pre-populated with
+        the seed's user-declared types (records/enums/aliases) and prior binding
+        types (keyed by globally-unique ``decl_node_id``), so an incremental
+        session entry can reference earlier declarations and bindings.  A new
+        entry may shadow a seeded binding (fresh ``node_id`` → new entry) or
+        replace a seeded type declaration (override, not duplicate-name error).
+        Default ``None`` → today's behaviour byte-for-byte (``agm exec``).
+
+        The returned ``CheckedProgram.type_env`` contains the *union* (seed plus
+        this entry's new/overridden declarations and binding types), so the
+        session can read it to promote the updated state.
 
     Returns
     -------
@@ -1566,6 +1598,8 @@ def check(resolved: ResolvedProgram, capabilities: HostCapabilities) -> CheckedP
         On the first static type violation (first-error abort).
     """
     env = TypeEnvironment()
+    if seed_env is not None:
+        env.seed_from(seed_env)
     program = resolved.program
 
     # Pre-pass: collect and validate all type declarations.

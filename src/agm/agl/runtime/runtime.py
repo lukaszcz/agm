@@ -20,7 +20,9 @@ from agm.agl.runtime.agents import AgentFn
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agl.capabilities import HostCapabilities
     from agm.agl.eval.values import ExceptionValue, Value
+    from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.render import RendererFn
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
@@ -46,6 +48,34 @@ ALL_TYPE_KINDS: frozenset[str] = frozenset(
         "exception",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class HostEnvironment:
+    """Assembled host-runtime environment shared by ``run`` and the REPL session.
+
+    Bundles the four pieces that both the whole-program runner
+    (``WorkflowRuntime.run``) and the incremental ``ReplSession`` need to build
+    identically from a set of agent/codec/renderer registrations:
+
+    ``registry``
+        The ``AgentRegistry`` (named agents + optional default agent).
+    ``capabilities``
+        The ``HostCapabilities`` static catalog derived from the registry,
+        codecs, and renderers — consumed by the type checker.
+    ``codecs``
+        The merged ``name → OutputCodec`` table (built-ins + host extras),
+        used for contract materialization.
+    ``renderers``
+        The merged ``name → RendererFn`` table (built-ins + host extras), the
+        authoritative interpolation-rendering source threaded into the
+        interpreter.
+    """
+
+    registry: "AgentRegistry"
+    capabilities: "HostCapabilities"
+    codecs: dict[str, "OutputCodec"]
+    renderers: dict[str, "RendererFn"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,6 +303,22 @@ class WorkflowRuntime:
         self._extra_renderers[name] = fn
         self._extra_renderer_kinds[name] = supported_types
 
+    def host_environment(self) -> HostEnvironment:
+        """Assemble the shared host environment from this runtime's registrations.
+
+        Returns the ``AgentRegistry``, derived ``HostCapabilities``, and merged
+        codec/renderer tables — the same bundle ``run`` builds internally.  An
+        embedding host (e.g. ``ReplSession``) calls this to wire identical
+        agent/codec/renderer backing without re-running the assembly itself.
+        """
+        return assemble_host_environment(
+            agents=self._agents,
+            default_agent=self._default_agent,
+            extra_codecs=self._extra_codecs,
+            extra_renderers=self._extra_renderers,
+            extra_renderer_kinds=self._extra_renderer_kinds,
+        )
+
     def run(
         self,
         source: str,
@@ -313,55 +359,15 @@ class WorkflowRuntime:
         warnings: list[Diagnostic] = lex_tab_warnings(source)
 
         # ----------------------------------------------------------------
-        # Build HostCapabilities from registrations.
-        # (CARRY-IN 1: codec_kinds and renderer_names are derived from the
-        # actual codec/renderer registries, not from duplicated constants.)
+        # Build the host environment (registry + capabilities + codecs +
+        # renderers) from registrations.  Shared with ``ReplSession`` so the
+        # incremental driver wires identical agent/codec/renderer backing.
         # ----------------------------------------------------------------
-        from agm.agl.capabilities import HostCapabilities
-        from agm.agl.runtime.agents import AgentRegistry
-        from agm.agl.runtime.codec import JsonCodec, TextCodec
-        from agm.agl.runtime.render import builtin_renderers
-
-        text_codec = TextCodec()
-        json_codec = JsonCodec()
-
-        # Merge built-in codecs with any host-registered extras.
-        all_codecs: dict[str, "OutputCodec"] = {
-            text_codec.name: text_codec,
-            json_codec.name: json_codec,
-            **self._extra_codecs,
-        }
-
-        # Merge built-in renderers with any host-registered extras.  This single
-        # table is the authoritative source for BOTH the static capability
-        # descriptors (names + supported kinds) AND the interpolation rendering
-        # at eval time, so a registered renderer is actually invoked (F1, M3b).
-        all_renderers: dict[str, "RendererFn"] = {
-            **builtin_renderers(),
-            **self._extra_renderers,
-        }
-        # Built-in renderers are type-agnostic (``None`` → all kinds); custom
-        # renderers carry the kinds declared at registration (F6, plan §9.1).
-        renderer_kinds: dict[str, frozenset[str] | None] = {
-            name: None for name in builtin_renderers()
-        }
-        renderer_kinds.update(self._extra_renderer_kinds)
-
-        registry = AgentRegistry(
-            named={name: fn for name, fn in self._agents.items()},
-            default_agent=self._default_agent,
-        )
-        capabilities = HostCapabilities(
-            agent_names=registry.agent_names,
-            has_fallback_agent=registry.has_fallback,
-            has_default_agent=registry.has_default_agent,
-            supports_shell_exec=True,
-            codec_kinds={
-                name: codec.supported_kinds for name, codec in all_codecs.items()
-            },
-            renderer_names=frozenset(all_renderers),
-            renderer_kinds=renderer_kinds,
-        )
+        host_env = self.host_environment()
+        registry = host_env.registry
+        capabilities = host_env.capabilities
+        all_codecs = host_env.codecs
+        all_renderers = host_env.renderers
 
         # ----------------------------------------------------------------
         # [1] Parse
@@ -525,7 +531,7 @@ class WorkflowRuntime:
                 input_type_obj = declared_inputs[stmt.name]
                 # Convert/validate the raw value.
                 try:
-                    typed_val = _convert_input(stmt.name, raw_val, input_type_obj)
+                    typed_val = convert_input(stmt.name, raw_val, input_type_obj)
                 except ValueError as exc:
                     input_bind_errors.append(
                         Diagnostic(message=str(exc), line=stmt.span.start_line)
@@ -603,7 +609,7 @@ class WorkflowRuntime:
             # ONLY the AgL exception carrier is caught here: an unexpected Python
             # exception is an interpreter bug and must propagate (crash loudly)
             # rather than masquerade as a user-facing pre-execution diagnostic.
-            error = _exception_value_to_run_error(exc.exc, span=exc.span)
+            error = exception_value_to_run_error(exc.exc, span=exc.span)
             # Record the uncaught exception in the trace (design §12.6: include
             # the source span when the raise site threaded it through AglRaise).
             trace_id = str(error.fields.get("trace_id", ""))
@@ -657,7 +663,74 @@ class WorkflowRuntime:
 # ---------------------------------------------------------------------------
 
 
-def _convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
+def assemble_host_environment(
+    *,
+    agents: dict[str, AgentFn],
+    default_agent: AgentFn | None,
+    extra_codecs: dict[str, "OutputCodec"],
+    extra_renderers: dict[str, "RendererFn"],
+    extra_renderer_kinds: dict[str, frozenset[str] | None],
+) -> HostEnvironment:
+    """Assemble the shared host runtime environment from registrations.
+
+    Builds the merged codec/renderer tables, the ``AgentRegistry``, and the
+    derived ``HostCapabilities`` exactly as ``WorkflowRuntime.run`` did inline.
+    Used by BOTH ``run`` and ``ReplSession`` so the two share identical
+    agent/codec/renderer wiring (CARRY-IN 1: codec_kinds and renderer_names are
+    derived from the actual registries, not from duplicated constants).
+    """
+    from agm.agl.capabilities import HostCapabilities
+    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.runtime.codec import JsonCodec, TextCodec
+    from agm.agl.runtime.render import builtin_renderers
+
+    text_codec = TextCodec()
+    json_codec = JsonCodec()
+
+    # Merge built-in codecs with any host-registered extras.
+    all_codecs: dict[str, "OutputCodec"] = {
+        text_codec.name: text_codec,
+        json_codec.name: json_codec,
+        **extra_codecs,
+    }
+
+    # Merge built-in renderers with any host-registered extras.  This single
+    # table is the authoritative source for BOTH the static capability
+    # descriptors (names + supported kinds) AND the interpolation rendering at
+    # eval time, so a registered renderer is actually invoked (F1, M3b).
+    all_renderers: dict[str, "RendererFn"] = {
+        **builtin_renderers(),
+        **extra_renderers,
+    }
+    # Built-in renderers are type-agnostic (``None`` → all kinds); custom
+    # renderers carry the kinds declared at registration (F6, plan §9.1).
+    renderer_kinds: dict[str, frozenset[str] | None] = {
+        name: None for name in builtin_renderers()
+    }
+    renderer_kinds.update(extra_renderer_kinds)
+
+    registry = AgentRegistry(
+        named=dict(agents),
+        default_agent=default_agent,
+    )
+    capabilities = HostCapabilities(
+        agent_names=registry.agent_names,
+        has_fallback_agent=registry.has_fallback,
+        has_default_agent=registry.has_default_agent,
+        supports_shell_exec=True,
+        codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},
+        renderer_names=frozenset(all_renderers),
+        renderer_kinds=renderer_kinds,
+    )
+    return HostEnvironment(
+        registry=registry,
+        capabilities=capabilities,
+        codecs=all_codecs,
+        renderers=all_renderers,
+    )
+
+
+def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
     """Convert a raw host input value to the declared AgL type.
 
     Supported types:
@@ -786,7 +859,7 @@ def _is_json_shaped(obj: object) -> bool:
     ``decimal.Decimal``, ``str``, ``list`` (elements recursively JSON-shaped),
     and ``dict`` (str keys, values recursively JSON-shaped).
 
-    Used by :func:`_convert_input` to detect non-JSON-shaped host objects
+    Used by :func:`convert_input` to detect non-JSON-shaped host objects
     (e.g. sets or custom classes) before attempting serialisation, so the
     caller can emit a clean diagnostic instead of a cryptic traceback.
     """
@@ -801,7 +874,7 @@ def _is_json_shaped(obj: object) -> bool:
     return False
 
 
-def _exception_value_to_run_error(
+def exception_value_to_run_error(
     exc: "ExceptionValue",
     *,
     span: "object" = None,  # SourceSpan | None — avoids import cycle

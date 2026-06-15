@@ -125,9 +125,17 @@ class _Resolver:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def run(self, program: Program) -> ResolvedProgram:
-        """Execute the resolution pass over *program*."""
-        root = ScopeNode(node_id=program.node_id)
+    def run(
+        self, program: Program, *, parent_scope: ScopeNode | None = None
+    ) -> ResolvedProgram:
+        """Execute the resolution pass over *program*.
+
+        When *parent_scope* is given, the entry's root scope is parented to it
+        so name lookups fall through to session bindings (incremental REPL
+        sessions); new declarations live in the entry's own root scope and
+        shadow parent bindings without a duplicate-declaration error.
+        """
+        root = ScopeNode(node_id=program.node_id, parent=parent_scope)
         self._push_scope(root)
         self._at_root = True
         for stmt in program.body:
@@ -493,13 +501,21 @@ class _Resolver:
 # ---------------------------------------------------------------------------
 
 
-def resolve(program: Program) -> ResolvedProgram:
+def resolve(
+    program: Program, *, parent_scope: ScopeNode | None = None
+) -> ResolvedProgram:
     """Run the full static name-resolution pass over *program*.
 
     Parameters
     ----------
     program:
         A parsed ``syntax.Program`` AST.
+    parent_scope:
+        When given, the entry's root ``ScopeNode`` is parented to it, so name
+        lookups (``VarRef``, ``set``) fall through to session bindings.  New
+        declarations live in the entry's own root scope and *shadow* parent
+        bindings without raising a duplicate-declaration error.  Default
+        ``None`` → today's standalone behaviour (``agm exec`` unchanged).
 
     Returns
     -------
@@ -511,4 +527,4 @@ def resolve(program: Program) -> ResolvedProgram:
     AglScopeError
         On the first static scope violation (first-error abort).
     """
-    return _Resolver().run(program)
+    return _Resolver().run(program, parent_scope=parent_scope)

@@ -1472,3 +1472,105 @@ class TestReservedNamesInPatternAndCatch:
         msg = err.to_diagnostic().message
         assert "exec" in msg
         assert "reserved" in msg.lower() or "contextual" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# parent_scope seam (incremental REPL sessions)
+# ---------------------------------------------------------------------------
+
+
+class TestParentScopeSeam:
+    """``resolve(program, parent_scope=...)`` resolves into a session scope."""
+
+    def test_default_none_is_standalone(self) -> None:
+        """Without a parent, an undefined name is still an error."""
+        err = reject_scope("print x")
+        assert "not defined" in diag(err)[1]
+
+    def test_reference_resolves_into_parent(self) -> None:
+        """A VarRef to a parent-scope binding resolves through the parent."""
+        session = parse_and_resolve("let x = 1")
+        entry = resolve(parse_program("print x"), parent_scope=session.root_scope)
+        # The print's VarRef resolved to the session's let binding.
+        print_stmt = entry.program.body[0]
+        assert isinstance(print_stmt, PrintStmt)
+        ref = entry.resolution[print_stmt.value.node_id]
+        assert ref.name == "x"
+
+    def test_redeclaring_parent_name_shadows_without_error(self) -> None:
+        """Redeclaring a parent-visible name in the entry shadows (no error)."""
+        session = parse_and_resolve("let x = 1")
+        # Must not raise a duplicate-declaration error.
+        entry = resolve(parse_program("let x = 2"), parent_scope=session.root_scope)
+        let_stmt = entry.program.body[0]
+        assert isinstance(let_stmt, LetDecl)
+        # The new binding lives in the entry's own root scope.
+        assert "x" in entry.root_scope.bindings
+        assert entry.root_scope.bindings["x"].decl_node_id == let_stmt.node_id
+
+    def test_set_on_parent_mutable_resolves(self) -> None:
+        """``set`` of a parent mutable (var) binding resolves through the parent."""
+        session = parse_and_resolve("var n: int = 0")
+        entry = resolve(parse_program("set n = 1"), parent_scope=session.root_scope)
+        set_stmt = entry.program.body[0]
+        assert isinstance(set_stmt, SetStmt)
+        ref = entry.resolution[set_stmt.node_id]
+        assert ref.name == "n"
+        assert ref.mutable is True
+
+    def test_set_on_parent_immutable_still_errors(self) -> None:
+        """``set`` of a parent immutable (let) binding is still rejected."""
+        session = parse_and_resolve("let k = 1")
+        with pytest.raises(AglScopeError) as exc_info:
+            resolve(parse_program("set k = 2"), parent_scope=session.root_scope)
+        assert "Cannot assign" in str(exc_info.value)
+
+    def test_set_on_parent_input_still_errors(self) -> None:
+        """``set`` of a parent ``input`` binding is still rejected."""
+        session = parse_and_resolve("input spec")
+        with pytest.raises(AglScopeError) as exc_info:
+            resolve(parse_program("set spec = 2"), parent_scope=session.root_scope)
+        assert "Cannot assign" in str(exc_info.value)
+
+    def test_set_across_entries_resolves_and_typechecks(self) -> None:
+        """A ``set`` in entry 2 resolves and type-checks against entry 1's ``var``.
+
+        Drives the realistic combined session path: entry 1 declares ``var v = 0``
+        and is both resolved and checked; entry 2's ``set v = 5`` is resolved with
+        entry 1's root scope as the parent and type-checked with entry 1's
+        ``type_env`` as the seed.  Both passes must succeed (the ``set`` binds to
+        the seeded mutable binding and its declared ``int`` type).
+        """
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.typecheck import check
+        from agm.agl.typecheck.types import IntType
+
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_fallback_agent=True,
+            has_default_agent=True,
+            codec_kinds={"text": frozenset({"text"})},
+            renderer_names=frozenset({"default"}),
+        )
+
+        # Entry 1: declare and check a mutable binding.
+        p1 = parse_program("var v = 0")
+        r1 = resolve(p1)
+        c1 = check(r1, caps)
+        var_v = r1.program.body[0]
+        assert isinstance(var_v, VarDecl)
+        assert c1.type_env.get_binding_type(var_v.node_id) == IntType()
+
+        # Entry 2: ``set v = 5`` resolves into entry 1's scope and checks against
+        # the seeded binding type.
+        p2 = parse_program("set v = 5")
+        r2 = resolve(p2, parent_scope=r1.root_scope)
+        set_stmt = r2.program.body[0]
+        assert isinstance(set_stmt, SetStmt)
+        ref = r2.resolution[set_stmt.node_id]
+        assert ref.name == "v"
+        assert ref.mutable is True
+        assert ref.decl_node_id == var_v.node_id
+        # Type-checking must succeed with the seeded env (no mismatch).
+        c2 = check(r2, caps, seed_env=c1.type_env)
+        assert c2 is not None

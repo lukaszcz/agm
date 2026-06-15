@@ -38,6 +38,34 @@ evaluator (`agm.agl.eval.interpreter`) runs every program under a pinned
 via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
 `getcontext().prec` would otherwise change results such as `1 / 3`.
 
+## Incremental REPL session
+
+`agm.agl.repl.session.ReplSession` is a UI-free incremental driver that runs the
+same `parse → resolve → check → host-prep → eval` pipeline **one entry at a
+time** against a *persistent* environment (session scope, type env, value scope,
+declared inputs, source log). It reuses the firewalled passes' seam parameters:
+`parse_program_seeded` (globally-unique node ids across entries),
+`resolve(..., parent_scope=...)` (refs fall through to session bindings; new
+decls shadow), and `check(..., seed_env=...)` (seed with prior decls/binding
+types). Each entry executes **only its own statements** in a child value scope,
+so agent calls fire exactly once and a later entry reads stored `Value`s rather
+than re-invoking. Promotion into the session is **atomic** — a runtime raise
+discards ALL of the entry's in-session effects: new `let`/`var` bindings (held in
+the child scope) AND any `set` mutation of a prior session binding (rolled back
+from a value snapshot taken before eval, since `set` only updates an existing
+binding's value and never changes the value scope's key set). Only genuinely
+external effects already issued during evaluation (agent calls, `exec` shell
+commands) are irreversible.
+
+The session shares the host-environment assembly, input conversion, and
+exception→`RunError` mapping with `WorkflowRuntime` via public helpers in
+`agm.agl.runtime.runtime` (`assemble_host_environment`/`HostEnvironment`,
+`convert_input`, `exception_value_to_run_error`); registration is delegated to an
+internal `WorkflowRuntime` so reserved-name/duplicate validation is not
+duplicated. `EchoInterpreter` (a thin `Interpreter` subclass) captures a trailing
+bare-expression's value for echoing without re-evaluating it. Tracing and the
+prompt_toolkit console are later milestones (trace is a no-op here).
+
 ## Package layout and test locations
 
 | Package | Component | Tests |
@@ -49,6 +77,7 @@ via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
 | `agm.agl.typecheck` | 5 — type checking | `tests/test_agl_typecheck.py` |
 | `agm.agl.eval` | 6 — evaluator | `tests/test_agl_eval.py` |
 | `agm.agl.runtime` | host API | `tests/test_agl_runtime.py` |
+| `agm.agl.repl` | incremental REPL session (UI-free) | `tests/test_agl_repl_session.py` |
 | `agm.commands.exec` | CLI command | `tests/test_exec_command.py` |
 
 The end-to-end acceptance suite lives in `tests/test_agl_e2e.py` and

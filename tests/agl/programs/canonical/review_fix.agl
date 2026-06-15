@@ -17,6 +17,10 @@ enum FixResult
   | Changed(output: text)
   | Blocked(reason: text)
 
+agent impl
+agent reviewer
+agent critic
+
 var artifact: text = impl "Implement ${spec}"
 
 try

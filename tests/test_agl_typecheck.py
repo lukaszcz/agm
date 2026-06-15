@@ -68,7 +68,7 @@ from agm.agl.typecheck.types import (
     ListType,
     RecordType,
 )
-from tests._agl_helpers import all_node_ids
+from tests._agl_helpers import all_node_ids, ambient_agents_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -96,7 +96,8 @@ def parse_resolve_check(
     """Parse, resolve, and type-check *source* with given/default capabilities."""
     if capabilities is None:
         capabilities = default_capabilities()
-    return check(resolve(parse_program(source)), capabilities)
+    prog = parse_program(source)
+    return check(resolve(prog, ambient_agents=ambient_agents_for(prog)), capabilities)
 
 
 def reject_type(

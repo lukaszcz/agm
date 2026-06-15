@@ -168,12 +168,13 @@ class TestFallbackAgent:
     def test_named_agent_registered_accepted(self) -> None:
         rt = WorkflowRuntime()
         rt.register_agent("impl", lambda req: "output")
-        result = rt.run('let x = impl "do it"')
+        result = rt.run('agent impl\nlet x = impl "do it"')
         assert result.ok is True
 
-    def test_unknown_named_agent_without_fallback_is_error(self) -> None:
+    def test_undeclared_named_agent_is_static_error(self) -> None:
         rt = WorkflowRuntime()
-        # No agents registered, no fallback → static error for named agent
+        # An undeclared named agent is a static scope binding error: it is
+        # rejected before execution regardless of host backing.
         result = rt.run('let x = mysterious_agent "hi"')
         assert result.ok is False
         assert result.error is None
@@ -181,8 +182,17 @@ class TestFallbackAgent:
     def test_has_fallback_when_default_agent_is_set(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         # A runtime with a default_agent provides fallback for any name
-        result = rt.run('let x = any_agent_name "hi"')
+        result = rt.run('agent any_agent_name\nlet x = any_agent_name "hi"')
         assert result.ok is True
+
+    def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
+        rt = WorkflowRuntime()
+        # A declared-but-never-called agent is a non-fatal scope warning,
+        # surfaced on result.warnings without affecting result.ok.
+        result = rt.run('agent unused_helper\nprint "hi"')
+        assert result.ok is True
+        joined = " ".join(d.message for d in result.warnings)
+        assert "unused_helper" in joined
 
 
 class TestInputValidationRuntime:
@@ -304,7 +314,7 @@ class TestAgentRequest:
 
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", reviewer)
-        rt.run('let x = reviewer "Review this"')
+        rt.run('agent reviewer\nlet x = reviewer "Review this"')
         assert received[0].agent == "reviewer"
 
 

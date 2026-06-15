@@ -4,6 +4,9 @@ record Spec
   name: text
   level: int
 
+agent builder
+agent critic
+
 try
   let s: Spec = builder[on_parse_error: retry[1]] "Build the spec."
   print s.name

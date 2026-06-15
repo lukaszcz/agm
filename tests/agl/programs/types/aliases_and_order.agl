@@ -2,6 +2,8 @@
 # program-wide, so they may appear after their first use.
 input verdict: Status
 
+agent judge
+
 let initial: Status = verdict
 
 if initial is Status.Approved => print "approved input"

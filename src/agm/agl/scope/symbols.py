@@ -18,8 +18,8 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 
-from agm.agl.diagnostics import AglError
-from agm.agl.syntax.nodes import Program
+from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.syntax.nodes import AgentDecl, Program
 from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
@@ -161,12 +161,22 @@ class ResolvedProgram:
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
+    ``declared_agents``
+        Maps each agent name declared in THIS program (via an ``agent``
+        declaration) to its :class:`AgentDecl` node.  Ambient agents supplied
+        by the host (see ``resolve(..., ambient_agents=...)``) are NOT included
+        here.  Always populated by the resolver.
+    ``warnings``
+        Non-fatal scope-pass diagnostics (severity ``"warning"``), e.g. an
+        agent that is declared but never called.  Empty by default.
     """
 
     program: Program
     resolution: dict[int, BindingRef]
     call_kinds: dict[int, CallKind]
     root_scope: ScopeNode
+    declared_agents: dict[str, AgentDecl] = field(default_factory=dict)
+    warnings: tuple[Diagnostic, ...] = ()
 
 
 # ---------------------------------------------------------------------------

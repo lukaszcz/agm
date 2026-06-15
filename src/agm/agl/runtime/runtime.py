@@ -450,6 +450,10 @@ class WorkflowRuntime:
                 warnings=warnings,
             )
 
+        # Collect scope-pass warnings (e.g. a declared-but-uncalled agent).
+        # Surfaced on every subsequent return path, like typecheck warnings.
+        warnings.extend(resolved.warnings)
+
         # ----------------------------------------------------------------
         # [3] Type checking
         # ----------------------------------------------------------------

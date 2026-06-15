@@ -47,6 +47,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
@@ -57,6 +58,7 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.syntax.nodes import (
     AgentCall,
+    AgentDecl,
     CaseExprBranch,
     CaseStmt,
     CaseStmtBranch,
@@ -120,13 +122,23 @@ class _Resolver:
         self._scope: ScopeNode | None = None
         # Whether we are at the program root (for input-only-at-root check).
         self._at_root: bool = False
+        # Agents declared at the program root (name → decl node).
+        self._declared_agents: dict[str, AgentDecl] = {}
+        # Valid agent names for call validation: declared ∪ ambient.
+        self._valid_agents: frozenset[str] = frozenset()
+        # Program-declared agent names referenced by an agent call.
+        self._referenced_agents: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
 
     def run(
-        self, program: Program, *, parent_scope: ScopeNode | None = None
+        self,
+        program: Program,
+        *,
+        parent_scope: ScopeNode | None = None,
+        ambient_agents: frozenset[str] = frozenset(),
     ) -> ResolvedProgram:
         """Execute the resolution pass over *program*.
 
@@ -134,7 +146,18 @@ class _Resolver:
         so name lookups fall through to session bindings (incremental REPL
         sessions); new declarations live in the entry's own root scope and
         shadow parent bindings without a duplicate-declaration error.
+
+        *ambient_agents* are agent names the host already backs (e.g. session
+        agents from earlier REPL entries).  They count as valid call targets
+        alongside this program's own ``agent`` declarations, but they never
+        appear in ``ResolvedProgram.declared_agents`` and never trigger an
+        unused-agent warning.
         """
+        # Pre-pass: collect root-level agent declarations (mirrors how input
+        # is root-only) so a call may precede the declaration textually.
+        self._collect_agent_decls(program)
+        self._valid_agents = frozenset(self._declared_agents) | ambient_agents
+
         root = ScopeNode(node_id=program.node_id, parent=parent_scope)
         self._push_scope(root)
         self._at_root = True
@@ -147,7 +170,65 @@ class _Resolver:
             resolution=self._resolution,
             call_kinds=self._call_kinds,
             root_scope=root,
+            declared_agents=dict(self._declared_agents),
+            warnings=self._unused_agent_warnings(),
         )
+
+    # ------------------------------------------------------------------
+    # Agent declarations
+    # ------------------------------------------------------------------
+
+    def _collect_agent_decls(self, program: Program) -> None:
+        """Collect root-level ``agent`` declarations into the declared table.
+
+        Validates duplicates and reserved names here; root-only placement is
+        enforced in ``_resolve_stmt`` during the walk (a declaration nested in
+        a block is never collected by this root-only pre-pass).
+        """
+        for stmt in program.body:
+            if isinstance(stmt, AgentDecl):
+                self._declare_agent(stmt)
+
+    def _declare_agent(self, decl: AgentDecl) -> None:
+        if decl.name in _RESERVED_NAMES:
+            raise AglScopeError(
+                f"'{decl.name}' is built-in and cannot be declared as an agent.",
+                span=decl.span,
+            )
+        if decl.name in self._declared_agents:
+            raise AglScopeError(
+                f"agent '{decl.name}' is already declared.",
+                span=decl.span,
+            )
+        self._declared_agents[decl.name] = decl
+
+    def _resolve_agent_decl(self, stmt: AgentDecl) -> None:
+        """Enforce root-only placement for an ``agent`` declaration.
+
+        At the root the pre-pass already recorded and validated the
+        declaration, so this branch is a no-op there; nested in a block it is a
+        static error (mirroring ``input``).
+        """
+        if not self._at_root:
+            raise AglScopeError(
+                f"'agent' declarations are only allowed at the program root, "
+                f"not inside a nested block (found 'agent {stmt.name}' here).",
+                span=stmt.span,
+            )
+
+    def _unused_agent_warnings(self) -> tuple[Diagnostic, ...]:
+        """Warn for each program-declared agent never referenced by a call."""
+        warnings: list[Diagnostic] = []
+        for name, decl in self._declared_agents.items():
+            if name not in self._referenced_agents:
+                warnings.append(
+                    Diagnostic(
+                        message=f"agent '{name}' is declared but never called.",
+                        line=decl.span.start_line,
+                        severity="warning",
+                    )
+                )
+        return tuple(warnings)
 
     # ------------------------------------------------------------------
     # Scope helpers
@@ -218,6 +299,8 @@ class _Resolver:
             self._resolve_set(stmt)
         elif isinstance(stmt, InputDecl):
             self._resolve_input(stmt)
+        elif isinstance(stmt, AgentDecl):
+            self._resolve_agent_decl(stmt)
         elif isinstance(stmt, PrintStmt):
             self._resolve_expr(stmt.value)
         elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
@@ -480,7 +563,14 @@ class _Resolver:
         elif agent == "exec":
             kind = CallKind.shell_exec
         else:
+            if agent not in self._valid_agents:
+                raise AglScopeError(
+                    f"Unknown agent '{agent}'; declare it with `agent {agent}`.",
+                    span=node.span,
+                )
             kind = CallKind.agent
+            if agent in self._declared_agents:
+                self._referenced_agents.add(agent)
         self._call_kinds[node.node_id] = kind
         # Resolve expressions inside the template.
         self._resolve_template(node.template)
@@ -502,7 +592,10 @@ class _Resolver:
 
 
 def resolve(
-    program: Program, *, parent_scope: ScopeNode | None = None
+    program: Program,
+    *,
+    parent_scope: ScopeNode | None = None,
+    ambient_agents: frozenset[str] = frozenset(),
 ) -> ResolvedProgram:
     """Run the full static name-resolution pass over *program*.
 
@@ -516,6 +609,13 @@ def resolve(
         declarations live in the entry's own root scope and *shadow* parent
         bindings without raising a duplicate-declaration error.  Default
         ``None`` → today's standalone behaviour (``agm exec`` unchanged).
+    ambient_agents:
+        Agent names the host already backs (e.g. agents declared in earlier
+        REPL entries of the same session).  They are valid call targets
+        alongside this program's own ``agent`` declarations, but are not
+        reported in ``ResolvedProgram.declared_agents`` and never produce an
+        unused-agent warning.  Default empty → only in-program declarations
+        are valid.
 
     Returns
     -------
@@ -527,4 +627,6 @@ def resolve(
     AglScopeError
         On the first static scope violation (first-error abort).
     """
-    return _Resolver().run(program, parent_scope=parent_scope)
+    return _Resolver().run(
+        program, parent_scope=parent_scope, ambient_agents=ambient_agents
+    )

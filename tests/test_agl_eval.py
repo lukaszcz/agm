@@ -749,7 +749,7 @@ class TestAgentCalls:
 
         rt = WorkflowRuntime()
         rt.register_agent("impl", impl)
-        result = rt.run('let x = impl "Do something"')
+        result = rt.run('agent impl\nlet x = impl "Do something"')
         assert result.ok
         from agm.agl.eval.values import TextValue
 
@@ -788,7 +788,7 @@ class TestAgentCalls:
 
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", reviewer)
-        rt.run('let x = reviewer "Review this."')
+        rt.run('agent reviewer\nlet x = reviewer "Review this."')
         assert len(received) == 1
         assert received[0].agent == "reviewer"
 
@@ -1059,7 +1059,7 @@ class TestAgentRequest:
 
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", reviewer)
-        rt.run('let x = reviewer "Review this"')
+        rt.run('agent reviewer\nlet x = reviewer "Review this"')
         assert received[0].agent == "reviewer"
 
 
@@ -1190,7 +1190,7 @@ class TestMultipleAgentCalls:
             return "impl-response"
 
         result = run_with_agents(
-            'let a = prompt "Hello"\nlet b = impl "Build"',
+            'agent impl\nlet a = prompt "Hello"\nlet b = impl "Build"',
             {"prompt": default_agent, "impl": impl},
         )
         assert result.ok

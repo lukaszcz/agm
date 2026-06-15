@@ -190,6 +190,13 @@ class ReplSession:
         self._pending_inputs: dict[str, str] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
+        # Agents declared by SOURCE ``agent X`` statements in prior promoted
+        # entries.  In the REPL, host registration both declares AND backs an
+        # agent, so the ambient agent set passed to ``resolve`` is the union of
+        # the host-registered names and these cross-entry source declarations.
+        # Declarations from a failed/rolled-back entry never land here (merged
+        # only on successful promotion).
+        self._declared_agents: set[str] = set()
 
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)
@@ -245,9 +252,15 @@ class ReplSession:
             return self._fail([exc.to_diagnostic()], list(tab_warnings))
 
         # [2] Resolve against the session scope (refs fall through; new decls
-        # shadow).  resolve does NOT mutate the parent scope.
+        # shadow).  resolve does NOT mutate the parent scope.  Host-registered
+        # agents and prior cross-entry ``agent`` declarations are ambient, so a
+        # call to them needs no in-entry declaration.
         try:
-            resolved = resolve(program, parent_scope=self._session_scope)
+            resolved = resolve(
+                program,
+                parent_scope=self._session_scope,
+                ambient_agents=self._ambient_agents(host_env),
+            )
         except AglScopeError as exc:
             return self._fail([exc.to_diagnostic()], list(tab_warnings))
 
@@ -258,9 +271,15 @@ class ReplSession:
         except AglTypeError as exc:
             return self._fail([exc.to_diagnostic()], list(tab_warnings))
 
-        # Surface TAB advisories ahead of the type checker's warnings on every
-        # remaining path (typecheck-clean, eval success, or runtime raise).
-        warnings: list[Diagnostic] = [*tab_warnings, *checked.warnings]
+        # Surface TAB advisories ahead of the scope and type-checker warnings on
+        # every remaining path (typecheck-clean, eval success, or runtime raise).
+        # Scope warnings (e.g. an agent declared but never called) are routed the
+        # same way the checker's warnings are.
+        warnings: list[Diagnostic] = [
+            *tab_warnings,
+            *resolved.warnings,
+            *checked.warnings,
+        ]
 
         # [4] Unset-input guard (conservative, syntactic; before any eval).
         unset_diag = self._check_unset_inputs(resolved)
@@ -298,6 +317,16 @@ class ReplSession:
     # ------------------------------------------------------------------
     # eval_entry helpers
     # ------------------------------------------------------------------
+
+    def _ambient_agents(self, host_env: "HostEnvironment") -> frozenset[str]:
+        """Agent names valid WITHOUT an in-entry ``agent`` declaration.
+
+        In the REPL, host registration both declares and backs an agent, so the
+        authoritative set of host-registered names (``capabilities.agent_names``,
+        which excludes the ``prompt``/``exec`` built-ins) is ambient, unioned with
+        agents declared by ``agent X`` statements in prior promoted entries.
+        """
+        return host_env.capabilities.agent_names | self._declared_agents
 
     def _fail(
         self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]
@@ -540,6 +569,11 @@ class ReplSession:
         for bname, ref in entry_root.bindings.items():
             self._session_scope.bindings[bname] = ref
 
+        # Agent declarations: a source ``agent X`` in this entry becomes ambient
+        # for later entries (merged only on this successful promotion, so a
+        # rolled-back entry's declarations never persist).
+        self._declared_agents.update(checked.resolved.declared_agents)
+
         # Types + binding types: union the entry's checked env into the session.
         self._type_env.seed_from(checked.type_env)
 
@@ -656,7 +690,11 @@ class ReplSession:
                 "not a binding, declaration, or statement."
             )
         expr_stmt = program.body[0]
-        resolved = resolve(program, parent_scope=self._session_scope)
+        resolved = resolve(
+            program,
+            parent_scope=self._session_scope,
+            ambient_agents=self._ambient_agents(host_env),
+        )
         checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
         typ = checked.node_types.get(expr_stmt.expr.node_id)
         assert typ is not None
@@ -797,6 +835,7 @@ class ReplSession:
         self._declared_inputs = {}
         self._pending_inputs = {}
         self._source_log = []
+        self._declared_agents = set()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
         """Evaluate the contents of *path* INCREMENTALLY, one statement per entry.

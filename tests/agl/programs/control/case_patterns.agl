@@ -12,6 +12,8 @@ enum Wrapped
 input code: int
 input who
 
+agent picker
+
 let shape: Shape = picker "Pick a shape."
 
 case shape of

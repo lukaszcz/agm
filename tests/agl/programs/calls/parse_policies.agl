@@ -4,6 +4,8 @@ enum Review
   | Pass
   | Fail(issues: list[text])
 
+agent reviewer
+
 let strict_default: Review = reviewer "First review."
 print "first ok"
 

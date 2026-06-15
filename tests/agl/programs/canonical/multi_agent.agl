@@ -5,6 +5,10 @@ enum Review
 
 input spec
 
+agent impl
+agent reviewer
+agent critic
+
 var artifact: text = impl "Implement ${spec}"
 
 do[5]

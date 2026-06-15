@@ -1114,7 +1114,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let r = reviewer "Review this"\n')
+        agl_file.write_text('agent reviewer\nlet r = reviewer "Review this"\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None

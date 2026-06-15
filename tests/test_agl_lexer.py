@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 from lark.lexer import LexerState
 
-from agm.agl.lexer import AglLexer, LexError, tokenize
+from agm.agl.diagnostics import Diagnostic
+from agm.agl.lexer import AglLexer, LexError, lex_tab_warnings, tokenize
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -1450,3 +1451,73 @@ class TestTripleDedentHoleAwareMinIndent:
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         assert frags[0] == "\x00INTERP\x00 "
         assert len([v for t, v in result if t == "INTERP_START"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# TAB character warnings
+# ---------------------------------------------------------------------------
+
+
+class TestTabWarnings:
+    def test_empty_source_no_warnings(self) -> None:
+        assert lex_tab_warnings("") == []
+
+    def test_source_without_tabs_no_warnings(self) -> None:
+        assert lex_tab_warnings("let x = 1\n    y = 2") == []
+
+    def test_single_tab_yields_one_warning(self) -> None:
+        warnings = lex_tab_warnings("\tlet x = 1")
+        assert len(warnings) == 1
+        assert warnings[0].severity == "warning"
+        assert warnings[0].line == 1
+
+    def test_warning_message_mentions_tab(self) -> None:
+        warnings = lex_tab_warnings("let x =\t1")
+        assert len(warnings) == 1
+        assert "TAB" in warnings[0].message or "tab" in warnings[0].message.lower()
+
+    def test_warning_includes_column_info(self) -> None:
+        # Tab is the 9th character (column 9) on the line.
+        warnings = lex_tab_warnings("let x = \t1")
+        assert len(warnings) == 1
+        assert "9" in warnings[0].message
+
+    def test_tab_on_second_line_reported_at_correct_line(self) -> None:
+        warnings = lex_tab_warnings("let x = 1\n\tlet y = 2")
+        assert len(warnings) == 1
+        assert warnings[0].line == 2
+
+    def test_tabs_on_multiple_lines_each_get_warning(self) -> None:
+        warnings = lex_tab_warnings("\tlet x = 1\n\tlet y = 2")
+        assert len(warnings) == 2
+        assert warnings[0].line == 1
+        assert warnings[1].line == 2
+
+    def test_multiple_tabs_on_same_line_each_get_warning(self) -> None:
+        warnings = lex_tab_warnings("let\tx\t= 1")
+        assert len(warnings) == 2
+        lines = [w.line for w in warnings]
+        assert all(ln == 1 for ln in lines)
+
+    def test_crlf_newlines_normalized_correctly(self) -> None:
+        # CRLF: tab on second line should still be line 2.
+        warnings = lex_tab_warnings("let x = 1\r\n\tlet y = 2")
+        assert len(warnings) == 1
+        assert warnings[0].line == 2
+
+    def test_cr_newlines_normalized_correctly(self) -> None:
+        warnings = lex_tab_warnings("let x = 1\r\tlet y = 2")
+        assert len(warnings) == 1
+        assert warnings[0].line == 2
+
+    def test_tab_in_string_literal_context_still_warned(self) -> None:
+        # A literal tab inside a string is still a tab character in the source.
+        source = 'let x = "hello\tworld"'
+        warnings = lex_tab_warnings(source)
+        assert len(warnings) == 1
+        assert warnings[0].line == 1
+
+    def test_warnings_are_diagnostic_instances(self) -> None:
+        warnings = lex_tab_warnings("\tx = 1")
+        assert all(isinstance(w, Diagnostic) for w in warnings)
+        assert all(w.severity == "warning" for w in warnings)

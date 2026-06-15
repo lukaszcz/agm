@@ -1428,6 +1428,29 @@ class TestRuntimeErrorPaths:
         assert result.ok is False
         assert any("unexpected parse error" in d.message for d in result.diagnostics)
 
+    def test_tab_warning_included_even_on_parse_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tab warnings are collected before parsing, so they survive a parse failure."""
+        import agm.agl.parser as parser_mod
+        from agm.agl.parser.errors import AglSyntaxError
+        from agm.agl.syntax.spans import SourceSpan
+
+        def bad_parse(source: str) -> object:
+            raise AglSyntaxError(
+                "syntax error",
+                span=SourceSpan(1, 1, 1, 1, 0, 0),
+                filename="<test>",
+            )
+
+        monkeypatch.setattr(parser_mod, "parse_program", bad_parse)
+        rt = WorkflowRuntime()
+        result = rt.run("\tlet x = 1")  # tab + parse error
+        assert result.ok is False
+        tab_warns = [w for w in result.warnings if w.severity == "warning"]
+        assert len(tab_warns) == 1
+        assert tab_warns[0].line == 1
+
     def test_generic_scope_exception_covered(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2005,3 +2028,42 @@ class TestTraceWriteFailureIsBestEffort:
         assert out.out == "a\nb\nc\n"
         # Exactly one warning about disabled trace logging.
         assert out.err.count("trace logging disabled") == 1
+
+
+# ---------------------------------------------------------------------------
+# TAB character warnings in RunResult
+# ---------------------------------------------------------------------------
+
+
+class TestTabWarningsInRunResult:
+    """Tab characters in source produce warning diagnostics in RunResult.warnings."""
+
+    def test_no_tab_no_warning(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("let x = 1")
+        tab_warns = [w for w in result.warnings if "TAB" in w.message]
+        assert tab_warns == []
+
+    def test_tab_in_valid_source_yields_warning(self) -> None:
+        # TAB used as whitespace inside a valid statement on the second line.
+        source = "let x = 1\nlet\ty = 2"
+        rt = WorkflowRuntime()
+        result = rt.run(source)
+        tab_warns = [w for w in result.warnings if "TAB" in w.message]
+        assert len(tab_warns) == 1
+        assert tab_warns[0].line == 2
+
+    def test_tab_warning_does_not_affect_ok(self) -> None:
+        # A tab warning must not cause ok to become False.
+        source = "let\tx = 1"
+        rt = WorkflowRuntime()
+        result = rt.run(source)
+        assert result.ok is True
+        assert result.error is None
+
+    def test_multiple_tabs_multiple_warnings(self) -> None:
+        source = "let\tx = 1\nlet\ty = 2"
+        rt = WorkflowRuntime()
+        result = rt.run(source)
+        tab_warns = [w for w in result.warnings if "TAB" in w.message]
+        assert len(tab_warns) == 2

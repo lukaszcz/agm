@@ -36,7 +36,7 @@ from typing import Iterator
 from lark.lexer import Token
 
 from agm.agl._text import normalize_newlines
-from agm.agl.diagnostics import SourceSpan
+from agm.agl.diagnostics import Diagnostic, SourceSpan
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
     ARROW,
@@ -849,3 +849,36 @@ def _apply_triple_dedent_with_map(text: str, min_indent: int) -> tuple[str, list
 def scan(source: str) -> Iterator[Token]:
     """Yield raw tokens from *source* (code mode, with ``_NEWLINE`` signals)."""
     return _Scanner(source).scan()
+
+
+def lex_tab_warnings(source: str) -> list[Diagnostic]:
+    """Return a ``Diagnostic`` warning for every TAB character in *source*.
+
+    Newlines are normalised (CRLF/CR → LF) before scanning so that line
+    numbers match those reported by the main scanner.  One warning is emitted
+    per ``\\t`` character, regardless of whether it appears in code or inside a
+    string literal.
+    """
+    text = normalize_newlines(source)
+    warnings: list[Diagnostic] = []
+    line = 1
+    col = 1
+    for ch in text:
+        if ch == "\n":
+            line += 1
+            col = 1
+        elif ch == "\t":
+            warnings.append(
+                Diagnostic(
+                    message=(
+                        f"TAB character at column {col} is not allowed;"
+                        " use spaces for indentation"
+                    ),
+                    line=line,
+                    severity="warning",
+                )
+            )
+            col += 1
+        else:
+            col += 1
+    return warnings

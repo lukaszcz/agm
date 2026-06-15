@@ -306,6 +306,13 @@ class WorkflowRuntime:
             inputs = {}
 
         # ----------------------------------------------------------------
+        # Collect lex warnings (present on every return path).
+        # ----------------------------------------------------------------
+        from agm.agl.lexer import lex_tab_warnings
+
+        warnings: list[Diagnostic] = lex_tab_warnings(source)
+
+        # ----------------------------------------------------------------
         # Build HostCapabilities from registrations.
         # (CARRY-IN 1: codec_kinds and renderer_names are derived from the
         # actual codec/renderer registries, not from duplicated constants.)
@@ -368,12 +375,14 @@ class WorkflowRuntime:
                 ok=False,
                 diagnostics=[exc.to_diagnostic()],
                 error=None,
+                warnings=warnings,
             )
         except Exception as exc:
             return RunResult(
                 ok=False,
                 diagnostics=[Diagnostic(message=str(exc), line=1)],
                 error=None,
+                warnings=warnings,
             )
 
         # ----------------------------------------------------------------
@@ -388,12 +397,14 @@ class WorkflowRuntime:
                 ok=False,
                 diagnostics=[exc.to_diagnostic()],
                 error=None,
+                warnings=warnings,
             )
         except Exception as exc:
             return RunResult(
                 ok=False,
                 diagnostics=[Diagnostic(message=f"Scope error: {exc}", line=1)],
                 error=None,
+                warnings=warnings,
             )
 
         # ----------------------------------------------------------------
@@ -408,16 +419,18 @@ class WorkflowRuntime:
                 ok=False,
                 diagnostics=[exc.to_diagnostic()],
                 error=None,
+                warnings=warnings,
             )
         except Exception as exc:
             return RunResult(
                 ok=False,
                 diagnostics=[Diagnostic(message=f"Type error: {exc}", line=1)],
                 error=None,
+                warnings=warnings,
             )
 
         # Collect warnings from typecheck.
-        warnings: list[Diagnostic] = list(checked.warnings)
+        warnings.extend(checked.warnings)
 
         # ----------------------------------------------------------------
         # [4] Validate host inputs against input declarations

@@ -292,6 +292,14 @@ class ReplSession:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
 
+        # [1b] Reject config pragmas: they are an exec/program feature and cannot
+        # be applied to a live REPL session (session settings come from CLI flags
+        # or config files, not source pragmas).  Check here — after parse, before
+        # resolve — so no session state is mutated.
+        pragma_diag = self._check_no_config_pragmas(program)
+        if pragma_diag is not None:
+            return self._fail([pragma_diag], tab_warnings)
+
         # [2] Resolve against the session scope (refs fall through; new decls
         # shadow).  resolve does NOT mutate the parent scope.  Host-registered
         # agents and prior cross-entry ``agent`` declarations are ambient, so a
@@ -358,6 +366,28 @@ class ReplSession:
     # ------------------------------------------------------------------
     # eval_entry helpers
     # ------------------------------------------------------------------
+
+    def _check_no_config_pragmas(self, program: "Program") -> Diagnostic | None:
+        """Return a diagnostic if the entry contains a ``config`` pragma.
+
+        Config pragmas are an exec/program feature: they set options for a batch
+        ``agm exec`` run and cannot be applied to a live REPL session, whose
+        settings come from CLI flags and config files.  Entering a pragma line
+        is rejected with a clear message; the entry has no effect on session
+        state.
+        """
+        from agm.agl.syntax.nodes import ConfigPragma
+
+        for stmt in program.body:
+            if isinstance(stmt, ConfigPragma):
+                return Diagnostic(
+                    message=(
+                        "config pragmas are not supported in the REPL; "
+                        "set options via CLI flags or the config file"
+                    ),
+                    line=stmt.span.start_line,
+                )
+        return None
 
     def _ambient_agents(self, host_env: "HostEnvironment") -> frozenset[str]:
         """Agent names valid WITHOUT an in-entry ``agent`` declaration.

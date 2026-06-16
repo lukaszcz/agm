@@ -381,8 +381,8 @@ Sandbox settings resolution:
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] (FILE \| -c COMMAND)` | Execute an AgL workflow program |
-| `agm repl [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm exec [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] (FILE \| -c COMMAND)` | Execute an AgL workflow program |
+| `agm repl [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 ### `agm exec (FILE | -c COMMAND)`
 
@@ -393,7 +393,7 @@ program text given with `-c`/`--command`. The AgL language is documented in the
 ```text
 agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
          [--max-iters N] [--runner COMMAND]
-         [--log-file PATH|--no-log]
+         [--log|--log-file PATH|--no-log]
          (FILE | -c COMMAND)
 ```
 
@@ -418,9 +418,13 @@ Options:
 - `--max-iters N`: Override the default `do`-loop iteration limit.
 - `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
   declared agent without its own command). See the runner precedence below.
-- `--log-file PATH`: Write a structured JSONL trace log to PATH (default: auto-generated under
-  `.agent-files/`).
-- `--no-log`: Disable trace logging entirely.
+- `--log`: Enable trace logging with an auto-generated timestamped path under `.agent-files/`.
+  Trace logging is **off by default**; use `--log`, `--log-file`, a `config log = true` source
+  pragma, or `[exec] log = true` in `config.toml` to enable it.
+- `--log-file PATH`: Write a structured JSONL trace log to PATH.
+- `--no-log`: Disable trace logging entirely. Overrides a `config log = true` pragma or
+  `[exec] log = true` config setting.
+  `--log`, `--log-file`, and `--no-log` are mutually exclusive (at most one may be given).
 - `--dry-run`: Run the full static pipeline, input validation, and contract
   materialization, then stop before executing any statement (static errors exit 1; a clean
   check exits 0 with no program output).  When the check succeeds and one or more agent-call
@@ -452,9 +456,10 @@ Agents and runner precedence:
   | 1 | `[exec.agents.<name>]` (config, per-agent) — backs a declared name, overriding any source hint |
   | 2 | the source `agent NAME = "…"` runner string |
   | 3 | `--runner COMMAND` (CLI flag) |
-  | 4 | `[exec] runner` (config) |
-  | 5 | `[loop] runner` (config) |
-  | 6 | `claude -p` (built-in default) |
+  | 4 | `config runner = "…"` source pragma (default runner for all agents) |
+  | 5 | `[exec] runner` (config) |
+  | 6 | `[loop] runner` (config) |
+  | 7 | `claude -p` (built-in default) |
 
   A `[exec.agents.<name>]` entry for a name the program never declares is a host
   configuration error. Because the default runner is always the floor (rung 6), every
@@ -489,6 +494,8 @@ runner = "claude -p"        # default agent runner
 strict_json = false         # lenient JSON recovery is the default
 default_loop_limit = 5      # do[] default iteration bound
 timeout = "30m"             # idle timeout
+log = false                 # trace logging off by default; set true to enable
+# log_file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
 
 [exec.agents]
 reviewer = "claude -p"      # per-agent runner commands; the name must be
@@ -499,6 +506,30 @@ reviewer = "claude -p"      # per-agent runner commands; the name must be
 `[exec.<command>]` sub-tables provide per-command overrides of the base `[exec]`
 settings. The name `agents` is reserved for the structural `[exec.agents]` map
 and is never treated as a per-command override.
+
+#### Source-level config pragmas
+
+An AgL program may set exec options as **config pragmas** in the header (before any
+other statement). Pragmas override config-file settings; CLI flags override pragmas.
+
+```agl
+config log = true             # enable trace logging for this program
+config log_file = "trace.log" # explicit trace path
+config strict_json = true     # require bare JSON from agents
+config max_iters = 10         # do[] iteration cap
+config runner = "claude -p"   # default agent runner
+config timeout = "30s"        # shell exec idle timeout
+input spec
+let result = ask "Process ${spec}"
+print result
+```
+
+Precedence: **CLI > pragma > config file**. For example, `--no-log` overrides
+`config log = true`, and `config max_iters = 10` overrides `[exec] default_loop_limit = 5`.
+
+The REPL does **not** apply config pragmas entered at the prompt; entering a
+`config ...` line in the REPL is a static error. Set session options via CLI flags
+(`--log`, `--strict-json`, `--max-iters`, `--runner`) or `[exec]` config.
 
 ### `agm repl`
 
@@ -511,7 +542,7 @@ entries, so earlier results stay available and agent calls fire exactly once.
 ```text
 agm repl [--input KEY=VALUE]... [--strict-json|--no-strict-json]
          [--max-iters N] [--runner COMMAND] [--auto-agents]
-         [--quiet] [--log-file PATH|--no-log]
+         [--quiet] [--log|--log-file PATH|--no-log]
 ```
 
 The REPL reuses the `[exec]` configuration (runner, per-agent commands, default
@@ -575,11 +606,13 @@ Options:
 - `--auto-agents`: Start in auto mode, firing agent calls without confirming
   each one (the default is confirm-each-call; see *Agent-call confirmation*).
 - `--quiet`: Suppress the automatic echoing of entry results.
+- `--log`: Enable trace logging with an auto-generated timestamped path under `.agent-files/`.
+  Trace logging is **off by default** for the REPL; use `--log`, `--log-file`, or
+  `[exec] log = true` in `config.toml` to enable it.
 - `--log-file PATH` / `--no-log`: Control trace logging. With `--log-file` each
   evaluated entry appends its JSONL trace records (one trace *run* per entry) to
-  PATH; without it a timestamped file is written under `.agent-files/`. `--no-log`
-  disables tracing. `--no-log` and `--log-file` are mutually exclusive, and
-  `--dry-run` writes no trace.
+  PATH. `--no-log` disables tracing. `--log`, `--log-file`, and `--no-log` are
+  mutually exclusive (at most one may be given), and `--dry-run` writes no trace.
 - `--dry-run`: Type-check only. Each entry runs the full static pipeline
   (parse / resolve / typecheck) but is **never evaluated**, so no agent or
   `exec` calls fire and no bindings are persisted. The inferred type is echoed
@@ -600,6 +633,10 @@ are reported inline and never exit the process):
 
 Once the loop is running, a static or runtime error in an entry is printed and
 the prompt returns; it never changes the exit code.
+
+**Config pragmas** (`config KEY = VALUE`) entered at the REPL prompt are rejected
+with a diagnostic: config pragmas are an `agm exec` / batch-program feature.
+Set REPL session options via CLI flags or `[exec]` config instead.
 
 Examples:
 

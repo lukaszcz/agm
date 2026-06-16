@@ -844,18 +844,22 @@ def exec_cmd(
     log_file: str | None = typer.Option(
         None,
         "--log-file",
-        help="Write a structured JSONL trace log to PATH.",
+        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(
         False,
         "--no-log",
-        help="Disable trace logging.",
+        help="Disable trace logging (overrides a config pragma or [exec] log = true).",
     ),
     log: bool = typer.Option(
         False,
         "--log",
-        help="Enable trace logging to an auto-named file.",
+        help=(
+            "Enable trace logging to an auto-named timestamped file under .agent-files/. "
+            "Trace logging is off by default; --log, --log-file, a source 'config log = true' "
+            "pragma, or [exec] log = true in config.toml opt in."
+        ),
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
@@ -925,7 +929,7 @@ def repl_cmd(
     log_file: str | None = typer.Option(
         None,
         "--log-file",
-        help="Write a structured JSONL trace log to PATH.",
+        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(
@@ -936,7 +940,11 @@ def repl_cmd(
     log: bool = typer.Option(
         False,
         "--log",
-        help="Enable trace logging to an auto-named file.",
+        help=(
+            "Enable trace logging to an auto-named timestamped file under .agent-files/. "
+            "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
+            "config.toml opt in. Config pragmas are not applied in the REPL."
+        ),
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),

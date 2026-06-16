@@ -1086,3 +1086,71 @@ def _text(value: object) -> str:
 def _snapshot(s: ReplSession) -> list[tuple[str, str, str]]:
     """A comparable snapshot of promoted bindings (name, type repr, value repr)."""
     return [(n, repr(t), repr(v)) for n, t, v in s.bindings()]
+
+
+# ---------------------------------------------------------------------------
+# Config pragma rejection in the REPL
+# ---------------------------------------------------------------------------
+
+
+class TestReplConfigPragmaRejection:
+    """Config pragmas entered in the REPL are rejected with a clear diagnostic.
+
+    Pragmas are an exec/program feature and cannot be applied to a live session
+    (session settings come from CLI flags and config files).  The entry must
+    fail, leave session state unchanged, and allow subsequent entries to work
+    normally.
+    """
+
+    def test_config_pragma_is_rejected(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("config log = true")
+        assert not r.ok
+        assert len(r.diagnostics) == 1
+        msg = r.diagnostics[0].message
+        assert "config pragmas" in msg.lower() or "config pragma" in msg.lower()
+        assert "REPL" in msg or "repl" in msg.lower()
+
+    def test_config_pragma_rejection_message_mentions_cli(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("config max_iters = 10")
+        assert not r.ok
+        # The error should mention how to set options (CLI flags / config file).
+        msg = r.diagnostics[0].message
+        assert "cli" in msg.lower() or "flag" in msg.lower() or "config file" in msg.lower()
+
+    def test_config_pragma_leaves_session_state_unchanged(self) -> None:
+        s = ReplSession()
+        # Establish some session state first.
+        s.eval_entry("let x = 42")
+        snapshot_before = _snapshot(s)
+
+        # Entering a pragma must not change session bindings.
+        r = s.eval_entry("config strict_json = true")
+        assert not r.ok
+        assert _snapshot(s) == snapshot_before
+
+    def test_normal_entry_works_after_pragma_rejection(self) -> None:
+        s = ReplSession()
+        # Pragma is rejected.
+        r_pragma = s.eval_entry("config log = false")
+        assert not r_pragma.ok
+
+        # Normal entry still evaluates correctly.
+        r_normal = s.eval_entry("let y = 1 + 2")
+        assert r_normal.ok
+        vals = {n: v for n, _t, v in s.bindings()}
+        assert "y" in vals
+
+    def test_multiple_pragma_keys_each_rejected(self) -> None:
+        s = ReplSession()
+        for pragma in [
+            "config log = true",
+            "config max_iters = 5",
+            "config runner = \"echo\"",
+            "config strict_json = false",
+            "config timeout = \"30s\"",
+        ]:
+            r = s.eval_entry(pragma)
+            assert not r.ok, f"Expected rejection for: {pragma}"
+            assert r.diagnostics  # has at least one error diagnostic

@@ -1473,7 +1473,7 @@ class TestUncaughtExceptionOutputFormat:
         self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
     ) -> None:
         """Exit-2 stderr includes 'line N' when only line is set (col is None)."""
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
 
         from agm.agl.runtime.runtime import RunError, RunResult
         from agm.commands import exec as exec_command
@@ -1493,6 +1493,12 @@ class TestUncaughtExceptionOutputFormat:
             ),
         )
         with patch("agm.commands.exec.WorkflowRuntime") as mock_rt:
+            # prepare() must return a fake PreparedProgram with empty pragmas so
+            # the pragma-resolution logic does not choke on MagicMock values.
+            fake_prepared = MagicMock()
+            fake_prepared.config_pragmas = {}
+            fake_prepared.declared_agents = ()
+            mock_rt.prepare.return_value = fake_prepared
             mock_rt.return_value.run_prepared.return_value = fake_result
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
@@ -2072,3 +2078,463 @@ class TestExecAgentPrecedence:
         assert result.returncode == 1, f"stdout: {result.stdout} stderr: {result.stderr}"
         # The runner never ran: no marker on stdout.
         assert "FROM-DEFAULT" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# M3: config pragma wiring — CLI > pragma > config precedence
+# ---------------------------------------------------------------------------
+
+
+def _exec_args_no_log(
+    agl_file: Path,
+    *,
+    strict_json: bool | None = None,
+    max_iters: int | None = None,
+    runner: str | None = None,
+    no_log: bool = True,
+    log_file: str | None = None,
+    log: bool = False,
+) -> ExecArgs:
+    """Build a minimal ExecArgs for M3 pragma-precedence tests."""
+    return ExecArgs(
+        file=str(agl_file),
+        inputs=[],
+        strict_json=strict_json,
+        max_iters=max_iters,
+        runner=runner,
+        no_log=no_log,
+        log_file=log_file,
+        log=log,
+    )
+
+
+class TestExecPragmaPrecedence:
+    """M3: ``config`` pragmas in source (CLI > pragma > config precedence).
+
+    Each test uses behavioral assertions — observable exit codes and output —
+    rather than internal call counts, following the testing policy.
+    """
+
+    # ------------------------------------------------------------------
+    # max_iters pragma
+    # ------------------------------------------------------------------
+
+    def test_pragma_max_iters_caps_loop_at_pragma_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``config max_iters = 3`` in source caps the do loop at 3 iterations.
+
+        The loop ``until n >= 100`` cannot complete in 3 iterations (n starts at
+        0 and increments by 1), so the runtime raises a LoopLimitExceeded and
+        the command exits 2.
+        """
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "config max_iters = 3\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 2
+
+    def test_pragma_max_iters_allows_completion_when_sufficient(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``config max_iters = 100`` allows a do loop that needs exactly 100 iterations."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "config max_iters = 100\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
+            'print "done"\n'
+        )
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None  # exit 0
+        assert capsys.readouterr().out == "done\n"
+
+    def test_cli_max_iters_overrides_pragma_max_iters(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """CLI ``--max-iters 100`` overrides ``config max_iters = 3`` in source.
+
+        With --max-iters 100 the loop completes in 100 iterations (exits 0);
+        with pragma max_iters=3 it would fail (exit 2).
+        """
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "config max_iters = 3\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
+            'print "done"\n'
+        )
+        result = exec_command.run(_exec_args_no_log(agl_file, max_iters=100))
+        assert result is None  # exit 0 — CLI 100 overrides pragma 3
+        assert capsys.readouterr().out == "done\n"
+
+    def test_pragma_max_iters_overrides_config_max_iters(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Source pragma ``config max_iters = 100`` overrides ``[exec] default_loop_limit = 3``.
+
+        Config says 3 (loop would fail); pragma says 100 (loop completes).
+        """
+        from agm.config.general import ExecConfig
+
+        low_limit_config = ExecConfig(
+            runner=None,
+            strict_json=False,
+            default_loop_limit=3,
+            timeout=None,
+            agents={},
+            log=False,
+            log_file=None,
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: low_limit_config)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "config max_iters = 100\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
+            'print "done"\n'
+        )
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None  # exit 0 — pragma 100 overrides config 3
+        assert capsys.readouterr().out == "done\n"
+
+    # ------------------------------------------------------------------
+    # strict_json pragma
+    # ------------------------------------------------------------------
+
+    def test_pragma_strict_json_flows_into_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config strict_json = true`` in source sets ``default_strict_json=True``
+        on the WorkflowRuntime (observable via the spy pattern)."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config strict_json = true\nlet x = 1\n")
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["default_strict_json"] is True
+
+    def test_cli_strict_json_overrides_pragma_strict_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict_json = true``."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config strict_json = true\nlet x = 1\n")
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file, strict_json=False))
+        assert result is None
+        assert captured["default_strict_json"] is False
+
+    def test_pragma_strict_json_overrides_config_strict_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Source pragma ``config strict_json = false`` overrides ``[exec] strict_json = true``."""
+        from agm.config.general import ExecConfig
+
+        strict_config = ExecConfig(
+            runner=None,
+            strict_json=True,
+            default_loop_limit=5,
+            timeout=None,
+            agents={},
+            log=False,
+            log_file=None,
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: strict_config)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config strict_json = false\nlet x = 1\n")
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["default_strict_json"] is False
+
+    # ------------------------------------------------------------------
+    # timeout pragma
+    # ------------------------------------------------------------------
+
+    def test_pragma_timeout_flows_into_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config timeout = "30s"`` in source sets shell_exec_timeout=30.0."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config timeout = "30s"\nlet x = 1\n')
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["shell_exec_timeout"] == 30.0
+
+    def test_pragma_timeout_integer_seconds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config timeout = 60`` (integer) in source sets shell_exec_timeout=60.0."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config timeout = 60\nlet x = 1\n")
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["shell_exec_timeout"] == 60.0
+
+    def test_pragma_timeout_overrides_config_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Source pragma timeout overrides ``[exec] timeout`` from config."""
+        from agm.config.general import ExecConfig
+
+        config_with_timeout = ExecConfig(
+            runner=None,
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=999.0,
+            agents={},
+            log=False,
+            log_file=None,
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: config_with_timeout)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config timeout = "30s"\nlet x = 1\n')
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["shell_exec_timeout"] == 30.0
+
+    def test_pragma_timeout_invalid_string_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pragma timeout string that passes the scope check but fails parse_timeout exits 1.
+
+        The pragma validator accepts any non-empty string; parse_timeout rejects
+        values like "forever" that are not valid duration strings.  We inject the
+        invalid value via a patched prepare() to bypass the scope pass.
+        """
+        from unittest.mock import MagicMock
+
+        from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        real_prepare = RealRuntime.prepare
+
+        def fake_prepare(source: str) -> object:
+            real_pp = real_prepare(source)
+            # Wrap the real PreparedProgram with an invalid timeout in config_pragmas.
+            fake_pp = MagicMock()
+            fake_pp.config_pragmas = {"timeout": "forever"}
+            fake_pp.declared_agents = real_pp.declared_agents
+            # Preserve other attributes for run_prepared.
+            fake_pp.program = real_pp.program
+            fake_pp.resolved = real_pp.resolved
+            fake_pp.diagnostics = real_pp.diagnostics
+            fake_pp.warnings = real_pp.warnings
+            return fake_pp
+
+        monkeypatch.setattr(exec_command.WorkflowRuntime, "prepare", staticmethod(fake_prepare))
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "timeout" in captured.err.lower()
+
+    # ------------------------------------------------------------------
+    # log pragma
+    # ------------------------------------------------------------------
+
+    def test_pragma_log_true_creates_trace_file(self, tmp_path: Path) -> None:
+        """``config log = true`` in source enables trace logging (creates a file)."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config log = true\nprint "hi"\n')
+
+        # Run in tmp_path so .agent-files/ is created there.
+        import os
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            exec_command.run(
+                ExecArgs(
+                    file=str(agl_file),
+                    inputs=[],
+                    strict_json=None,
+                    max_iters=None,
+                    runner=None,
+                    no_log=False,
+                    log_file=None,
+                )
+            )
+        finally:
+            os.chdir(old_cwd)
+
+        agent_files = tmp_path / ".agent-files"
+        log_files = list(agent_files.glob("exec-*.log"))
+        assert log_files, "Expected a trace log file to be created by config log = true"
+
+    def test_pragma_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
+        """``config log_file = "path"`` in source writes the trace to that path."""
+        log_path = tmp_path / "trace.log"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+
+        exec_command.run(
+            ExecArgs(
+                file=str(agl_file),
+                inputs=[],
+                strict_json=None,
+                max_iters=None,
+                runner=None,
+                no_log=False,
+                log_file=None,
+            )
+        )
+        assert log_path.exists(), "Expected trace log at pragma-specified path"
+
+    def test_cli_no_log_overrides_pragma_log_true(self, tmp_path: Path) -> None:
+        """CLI ``--no-log`` overrides ``config log = true`` — no trace file created."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config log = true\nprint "hi"\n')
+
+        import os
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            exec_command.run(_exec_args_no_log(agl_file, no_log=True))
+        finally:
+            os.chdir(old_cwd)
+
+        # --no-log must prevent trace creation even when the pragma says log=true.
+        agent_files = tmp_path / ".agent-files"
+        if agent_files.exists():
+            log_files = list(agent_files.glob("exec-*.log"))
+            assert not log_files, "Expected no trace log when --no-log overrides pragma log=true"
+
+    def test_pragma_log_file_overrides_config_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config log_file`` pragma overrides ``[exec] log = false`` in config."""
+        log_path = tmp_path / "pragma_trace.log"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+
+        from agm.config.general import ExecConfig
+
+        no_log_config = ExecConfig(
+            runner=None,
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=None,
+            agents={},
+            log=False,
+            log_file=None,
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: no_log_config)
+
+        exec_command.run(
+            ExecArgs(
+                file=str(agl_file),
+                inputs=[],
+                strict_json=None,
+                max_iters=None,
+                runner=None,
+                no_log=False,
+                log_file=None,
+            )
+        )
+        assert log_path.exists(), (
+            "Expected trace log at pragma-specified path despite config log=false"
+        )
+
+    # ------------------------------------------------------------------
+    # runner pragma
+    # ------------------------------------------------------------------
+
+    def test_pragma_runner_flows_into_agent_factory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config runner = "..."`` pragma sets the default runner command.
+
+        We capture the runner command passed to runner_backed_agent_factory
+        because it is the single user-observable boundary between exec.py and
+        the subprocess world.
+        """
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config runner = "my-runner"\nlet x = 1\n')
+
+        captured_runner: list[str] = []
+
+        import agm.agl.runtime.agents as agents_mod
+        from agm.agl.runtime.agents import AgentFn
+
+        real_factory = agents_mod.runner_backed_agent_factory
+
+        def spy_factory(
+            *,
+            default_runner_cmd: str,
+            per_agent_cmds: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> AgentFn:
+            captured_runner.append(default_runner_cmd)
+            return real_factory(
+                default_runner_cmd=default_runner_cmd,
+                per_agent_cmds=per_agent_cmds,
+                idle_timeout=idle_timeout,
+            )
+
+        monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
+
+        exec_command.run(_exec_args_no_log(agl_file))
+        assert captured_runner == ["my-runner"]
+
+    def test_cli_runner_overrides_pragma_runner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLI ``--runner`` overrides ``config runner`` pragma."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config runner = "pragma-runner"\nlet x = 1\n')
+
+        captured_runner: list[str] = []
+
+        import agm.agl.runtime.agents as agents_mod
+        from agm.agl.runtime.agents import AgentFn
+
+        real_factory = agents_mod.runner_backed_agent_factory
+
+        def spy_factory(
+            *,
+            default_runner_cmd: str,
+            per_agent_cmds: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> AgentFn:
+            captured_runner.append(default_runner_cmd)
+            return real_factory(
+                default_runner_cmd=default_runner_cmd,
+                per_agent_cmds=per_agent_cmds,
+                idle_timeout=idle_timeout,
+            )
+
+        monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
+
+        exec_command.run(_exec_args_no_log(agl_file, runner="cli-runner"))
+        assert captured_runner == ["cli-runner"]

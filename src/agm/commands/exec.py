@@ -22,10 +22,16 @@ Flag notes:
       return exactly one bare JSON value; the default is lenient recovery
       (fence/prose stripping + trivial repair, then strict schema validation).
       A source-level ``strict_json`` call option overrides this default.
-    - ``--log-file PATH`` writes a structured JSONL trace under the given path.
-    - ``--no-log`` disables trace logging entirely.
+    - Trace logging is OFF by default.  ``--log`` enables it (auto-named path);
+      ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
+      of these three flags may be given (mutually exclusive).  A source-level
+      ``config log = true`` pragma or ``[exec] log = true`` in config also enables
+      logging; CLI flags override pragmas (CLI > pragma > config).
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
+    - Source ``config KEY = VALUE`` pragmas (header-only) override config-file
+      settings for ``strict_json``, ``max_iters``, ``runner``, ``timeout``,
+      ``log``, and ``log_file``.  CLI flags always take precedence.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
       materialization and never writes a trace (side-effect-free).
 """
@@ -34,6 +40,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TypeVar
 
 from agm.agent.runner import split_command
 from agm.agl import WorkflowRuntime
@@ -41,11 +48,18 @@ from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.commands.agent_io import default_agent_runner
 from agm.commands.args import ExecArgs
 from agm.config.context import current_config_context
-from agm.config.general import load_exec_config
+from agm.config.general import load_exec_config, parse_timeout
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log, resolve_log_decision
+
+_T = TypeVar("_T")
+
+
+def _first(*values: _T | None) -> _T | None:
+    """Return the first non-None value, or None if all are None."""
+    return next((v for v in values if v is not None), None)
 
 
 def run(args: ExecArgs) -> None:
@@ -76,12 +90,51 @@ def run(args: ExecArgs) -> None:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    strict_json = args.strict_json if args.strict_json is not None else config.strict_json
-    loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
+    # ----------------------------------------------------------------
+    # Parse the source ONCE to read config pragmas before resolving
+    # any runtime settings.  Pragma values override config; CLI overrides
+    # pragma (CLI > pragma > config).
+    # ----------------------------------------------------------------
+    prepared = WorkflowRuntime.prepare(source)
+    pragmas = prepared.config_pragmas
+
+    # Resolve strict_json: CLI > pragma > config.
+    pragma_strict_json = pragmas.get("strict_json")
+    strict_json = _first(
+        args.strict_json,
+        pragma_strict_json if isinstance(pragma_strict_json, bool) else None,
+        config.strict_json,
+    )
+    # config.strict_json is always a bool, so _first always returns a bool here.
+    assert strict_json is not None
+    resolved_strict_json: bool = strict_json
+
+    # Resolve loop limit: CLI > pragma > config.
+    pragma_max_iters = pragmas.get("max_iters")
+    loop_limit = _first(
+        args.max_iters,
+        pragma_max_iters if isinstance(pragma_max_iters, int) else None,
+        config.default_loop_limit,
+    )
+    assert loop_limit is not None
+    resolved_loop_limit: int = loop_limit
+
+    # Resolve timeout: pragma > config (no CLI flag for timeout).
+    pragma_timeout_raw = pragmas.get("timeout")
+    if pragma_timeout_raw is not None:
+        try:
+            resolved_timeout: float | None = parse_timeout(str(pragma_timeout_raw))
+        except ValueError as exc:
+            print(f"Error: invalid pragma timeout: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+    else:
+        resolved_timeout = config.timeout
 
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
-    # Pragma inputs are None for now (Part A; wired in Milestone 3).
+    # Pragma log/log_file values are wired here (Milestone 3).
+    pragma_log = pragmas.get("log")
+    pragma_log_file = pragmas.get("log_file")
     if dry_run.enabled():
         log_file = None
     else:
@@ -89,8 +142,8 @@ def run(args: ExecArgs) -> None:
             cli_no_log=args.no_log,
             cli_log=args.log,
             cli_log_file=args.log_file,
-            pragma_log=None,
-            pragma_log_file=None,
+            pragma_log=pragma_log if isinstance(pragma_log, bool) else None,
+            pragma_log_file=pragma_log_file if isinstance(pragma_log_file, str) else None,
             config_log=config.log,
             config_log_file=config.log_file,
         )
@@ -101,10 +154,16 @@ def run(args: ExecArgs) -> None:
         )
 
     # ----------------------------------------------------------------
-    # Resolve the runner command: CLI flag > [exec] config > shared loop
-    # default (the same default used by agm loop/review, per plan §9.5).
+    # Resolve the runner command: CLI flag > pragma > [exec] config > shared
+    # loop default (the same default used by agm loop/review, per plan §9.5).
     # ----------------------------------------------------------------
-    runner_cmd = args.runner or config.runner or default_agent_runner()
+    pragma_runner = pragmas.get("runner")
+    runner_cmd = (
+        args.runner
+        or (pragma_runner if isinstance(pragma_runner, str) else None)
+        or config.runner
+        or default_agent_runner()
+    )
 
     # Validate the resolved runner command eagerly: malformed quoting (e.g.
     # unclosed quote) and whitespace-only values are caught here via
@@ -125,12 +184,11 @@ def run(args: ExecArgs) -> None:
     #     source `agent` runner hint
     #     resolved default runner (runner_cmd, the floor)
     #
-    # ``prepare`` parses + scopes the source ONCE (independent of registrations);
-    # the same ``PreparedProgram`` is handed to ``run_prepared`` below, so the
-    # program is never parsed or scoped twice.  On a source with parse/scope
-    # errors ``declared_agents`` is ``()`` and ``run_prepared`` resurfaces the
-    # captured diagnostic (exit 1).
-    prepared = WorkflowRuntime.prepare(source)
+    # ``prepare`` was already called above to read config pragmas; the same
+    # ``PreparedProgram`` is reused here and handed to ``run_prepared`` below,
+    # so the program is never parsed or scoped twice.  On a source with
+    # parse/scope errors ``declared_agents`` is ``()`` and ``run_prepared``
+    # resurfaces the captured diagnostic (exit 1).
     decls = prepared.declared_agents
     source_hints = {d.name: d.runner for d in decls if d.runner is not None}
     # Config wins over source hints (dict merge: later keys override earlier).
@@ -156,14 +214,14 @@ def run(args: ExecArgs) -> None:
     factory = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
         per_agent_cmds=per_agent_cmds,
-        idle_timeout=config.timeout,
+        idle_timeout=resolved_timeout,
     )
 
     runtime = WorkflowRuntime(
-        default_loop_limit=loop_limit,
-        default_strict_json=strict_json,
+        default_loop_limit=resolved_loop_limit,
+        default_strict_json=resolved_strict_json,
         default_agent=factory,
-        shell_exec_timeout=config.timeout,
+        shell_exec_timeout=resolved_timeout,
     )
 
     # Register every declared agent so the registered set equals the declared

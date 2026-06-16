@@ -93,8 +93,16 @@ interpreter, not the agent registry). The `agm repl` command builds ONE
 nested block), validates each key and value kind, and collects the validated
 set into `ResolvedProgram.config_pragmas`. Typecheck and eval treat `ConfigPragma`
 as a no-op. `PreparedProgram.config_pragmas` exposes the collected map (empty on
-parse/scope failure) for the host (`agm exec`, `agm repl`) to read and apply
-with CLI > pragma > config-file precedence (wired in Milestone 3).
+parse/scope failure) for the host to read.
+
+`agm exec` reads `prepared.config_pragmas` after `WorkflowRuntime.prepare(source)`
+and applies each pragma with **CLI > pragma > config-file** precedence: CLI flags
+win, then pragma values, then `[exec]` config. Trace logging is off by default;
+`config log = true` (or `--log` / `[exec] log = true`) opts in.
+
+`agm repl` (`ReplSession.eval_entry`) rejects `ConfigPragma` entries after parse
+with a clear diagnostic. Config pragmas are an exec/program feature; REPL session
+options come from CLI flags and config files, not source pragmas.
 
 ## Agent declarations and source↔host reconciliation
 

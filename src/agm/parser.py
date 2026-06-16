@@ -473,11 +473,16 @@ _HELP_TEXTS: dict[str, str] = {
     "exec": textwrap.dedent("""\
         agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
                  [--max-iters N] [--runner COMMAND]
-                 [--log-file PATH|--no-log]
+                 [--log|--log-file PATH|--no-log]
                  (FILE | -c COMMAND)
 
         Execute an AgL (Agent Language) workflow program from FILE, or from
         the inline program text given with -c/--command.
+
+        Trace logging is OFF by default.  Enable it with --log, --log-file,
+        a source-level "config log = true" pragma, or [exec] log = true in
+        config.toml.  Source pragmas (config KEY = VALUE at the top of the
+        program) override config; CLI flags override pragmas.
 
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
@@ -486,8 +491,10 @@ _HELP_TEXTS: dict[str, str] = {
           --no-strict-json      Use lenient JSON recovery (default).
           --max-iters N         Override the default do-loop iteration limit.
           --runner COMMAND      Override the default agent runner command.
+          --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
-          --no-log              Disable trace logging.
+          --no-log              Disable trace logging (overrides pragma/config).
+          --log, --log-file, and --no-log are mutually exclusive.
 
         FILE and -c/--command are mutually exclusive; exactly one is required.
 
@@ -500,7 +507,7 @@ _HELP_TEXTS: dict[str, str] = {
     "repl": textwrap.dedent("""\
         agm repl [--input KEY=VALUE]... [--strict-json|--no-strict-json]
                  [--max-iters N] [--runner COMMAND] [--auto-agents]
-                 [--quiet] [--log-file PATH|--no-log]
+                 [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
         parsed, type-checked, and evaluated once against a persistent session
@@ -508,6 +515,10 @@ _HELP_TEXTS: dict[str, str] = {
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (runner, per-agent commands,
         loop limit, JSON strictness, timeout).
+
+        Trace logging is OFF by default.  Config pragmas (config KEY = VALUE)
+        entered at the prompt are rejected — set session options via CLI flags
+        or [exec] config instead.
 
         Options:
           --input KEY=VALUE     Pre-seed a host input value (repeatable).
@@ -518,15 +529,16 @@ _HELP_TEXTS: dict[str, str] = {
           --auto-agents         Fire agent calls without confirming each one
                                 (default: confirm each live agent call).
           --quiet               Suppress automatic echoing of entry results.
+          --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write a JSONL trace log to PATH.
           --no-log              Disable trace logging.
+          --log, --log-file, and --no-log are mutually exclusive.
           --dry-run             Type-check only: run the static pipeline for each
                                 entry but never evaluate it (no agent/exec calls,
                                 no persisted bindings); echo the inferred type.
 
         Type :help inside the REPL for the meta-command list; :quit or Ctrl-D
-        exits.  Ctrl-C cancels the current entry without exiting.  --no-log and
-        --log-file are mutually exclusive.
+        exits.  Ctrl-C cancels the current entry without exiting.
 
         Exit codes:
           0  The session ended normally (:quit / :exit / Ctrl-D).

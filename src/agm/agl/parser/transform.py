@@ -223,16 +223,19 @@ class AstBuilder(Transformer):
         name_tok = next(
             a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"
         )
-        runner: str | None = None
-        for a in args:
-            if isinstance(a, syntax.StringLit):
-                runner = a.value
-            elif isinstance(a, syntax.Template):
-                raise AglSyntaxError(
-                    "agent runner string must be a literal string with no "
-                    "interpolation.",
-                    span=a.span,
-                )
+        runner_node = next(
+            (a for a in args if isinstance(a, (syntax.StringLit, syntax.Template))),
+            None,
+        )
+        runner: str | None = (
+            None
+            if runner_node is None
+            else _require_literal_string(
+                runner_node,
+                "agent runner string must be a literal string with no "
+                "interpolation.",
+            ).value
+        )
         span = _span_from_meta(meta)
         return syntax.AgentDecl(
             name=str(name_tok),
@@ -764,18 +767,11 @@ class AstBuilder(Transformer):
         assert len(non_tokens) >= 2, (
             f"dict_entry_str: expected key + expr, got {args!r}"
         )
-        key_node = non_tokens[0]
+        key_lit = _require_literal_string(
+            non_tokens[0],
+            "dict keys must be literal strings (no interpolation).",
+        )
         val_expr = cast(syntax.Expr, non_tokens[1])
-        if isinstance(key_node, syntax.StringLit):
-            key_lit = key_node
-        else:
-            assert isinstance(key_node, syntax.Template), (
-                f"dict_entry_str: expected StringLit or Template for key, got {type(key_node)}"
-            )
-            raise AglSyntaxError(
-                "dict keys must be literal strings (no interpolation).",
-                span=key_node.span,
-            )
         return syntax.DictEntry(
             key=key_lit,
             value=val_expr,
@@ -1482,13 +1478,9 @@ class AstBuilder(Transformer):
         # args: [StringLit | Template] — the template transformer normalises plain strings.
         # A plain string (no interpolation) becomes StringLit; an interpolated string
         # stays as Template and must be rejected as a pattern literal.
-        tmpl = args[0]
-        if isinstance(tmpl, syntax.Template):
-            raise AglSyntaxError(
-                "Pattern string literals cannot contain interpolation.",
-                span=tmpl.span,
-            )
-        assert isinstance(tmpl, syntax.StringLit), f"pat_lit_str: unexpected {type(tmpl)}"
+        tmpl = _require_literal_string(
+            args[0], "Pattern string literals cannot contain interpolation."
+        )
         return self._literal_pattern(tmpl, meta)
 
     def pattern_fields(self, meta: Meta, args: _Args) -> tuple[syntax.PatternField, ...]:
@@ -1653,6 +1645,23 @@ def _find_name_token(args: _Args) -> Token:
         if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT"):
             return a
     raise AssertionError(f"_find_name_token: no name token found in {args!r}")
+
+
+def _require_literal_string(node: object, message: str) -> syntax.StringLit:
+    """Return *node* as a ``StringLit``, rejecting an interpolated ``Template``.
+
+    The ``template`` transformer normalises a plain (non-interpolated) string to
+    a ``StringLit`` and keeps an interpolated one as a ``Template``.  Positions
+    that require a static string — agent runner hints, dict keys, pattern string
+    literals — call this to accept the former and raise ``AglSyntaxError`` with
+    *message* on the latter.
+    """
+    if isinstance(node, syntax.StringLit):
+        return node
+    assert isinstance(node, syntax.Template), (
+        f"_require_literal_string: expected StringLit or Template, got {type(node)}"
+    )
+    raise AglSyntaxError(message, span=node.span)
 
 
 def _is_expr_obj(a: object) -> bool:

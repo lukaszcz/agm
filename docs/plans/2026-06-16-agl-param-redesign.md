@@ -71,13 +71,16 @@ the owner's selection. Alternatives are recorded for rationale.
   simplest. *Con:* no `--help`/completion, silent typos.
 - C. Hybrid (loose now, help later). *Con:* deferred UX, two code shapes.
 
-> Cost note: on the **execution** path this adds **zero** extra parsing — `agm exec`
-> already calls `WorkflowRuntime.prepare(source)` once (`exec.py:121`) and reuses
-> the result via `run_prepared`. We reuse that single `PreparedProgram`. `prepare`
-> runs only lex+parse+scope (not typecheck/eval). Extra parse cost is incurred only
-> for `--help`/completion, where no parse happens today. No threads/async — there is
-> a hard data dependency (options depend on the parse) and the real latency cost is
-> interpreter startup/imports, not the parse.
+> Cost note: on the **execution** path this adds **zero** extra front-end work — `agm
+> exec` already calls `WorkflowRuntime.prepare(source)` once (`exec.py:121`) and
+> reuses the result via `run_prepared`. We reuse that single `PreparedProgram`.
+> `prepare` runs lex+parse+scope; building the typed CLI options additionally needs
+> the **typecheck** pass (to obtain resolved param types — see §6.7), which `run`
+> performs anyway. Discovery just hoists that typecheck ahead of option resolution
+> and caches the result so `run_prepared` does not typecheck twice. Extra cost is
+> incurred only for `--help`/completion, where no parse/typecheck happens today. No
+> threads/async — there is a hard data dependency (options depend on the typed parse)
+> and the real latency cost is interpreter startup/imports, not the front end.
 
 ### D2 — Config layout & precedence
 - **Per-program table keyed by a source-declared name, falling back to the file
@@ -230,8 +233,21 @@ This is the substantive behavioral change: `param` is no longer a static no-op.
 
 - **`PreparedProgram` (`runtime.py:128`):** add a `declared_params` property
   (mirroring `declared_agents:154`) returning ordered `ParamDeclInfo`
-  (`name`, `type_annotation`/resolved type tag, `has_default: bool`, `line`, `col`).
+  (`name`, declared/inferred **resolved type**, `has_default: bool`, `line`, `col`).
   Add a `program_name: str | None` property (the `program` decl name, else `None`).
+  - **Discovery needs typecheck, not just `prepare`.** `program_name`, `name`,
+    declaration order, and `has_default` come from scope alone, so they are available
+    after `prepare` (lex+parse+scope). The **resolved type** cannot: under O5 an
+    unannotated `param x = e` infers its type from the default, and both the bool flag
+    form (D6) and the structured-JSON form (O3) need the resolved type to choose the
+    CLI shape — none of which is known without typechecking. So `declared_params`
+    exposes resolved types only **after typecheck**. Add a typed-discovery entry point
+    — `PreparedProgram.typecheck()` (caching the resulting `type_env`) or a
+    `WorkflowRuntime.discover_params(prepared)` helper — that runs typecheck once.
+    It is **non-raising** like `prepare`: on a typecheck failure it surfaces the
+    diagnostic and degrades to no typed options (mirrors the parse-failure degrade in
+    §7.2). `run_prepared` reuses the cached typecheck result so the source is
+    typechecked exactly once.
   These let the CLI build options and required-ness checks **without** re-parsing.
 - **Value resolution precedence:** CLI option > config value > default expression.
   External values (CLI/config) are strings → `convert_input` to the declared type.

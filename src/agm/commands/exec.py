@@ -113,10 +113,13 @@ def run(args: ExecArgs) -> None:
     #     source `agent` runner hint
     #     resolved default runner (runner_cmd, the floor)
     #
-    # ``declared_agents`` parses + scopes only (independent of registrations);
-    # on a source with parse/scope errors it returns ``()`` and the later
-    # ``runtime.run`` resurfaces the diagnostic (exit 1).
-    decls = WorkflowRuntime.declared_agents(source)
+    # ``prepare`` parses + scopes the source ONCE (independent of registrations);
+    # the same ``PreparedProgram`` is handed to ``run_prepared`` below, so the
+    # program is never parsed or scoped twice.  On a source with parse/scope
+    # errors ``declared_agents`` is ``()`` and ``run_prepared`` resurfaces the
+    # captured diagnostic (exit 1).
+    prepared = WorkflowRuntime.prepare(source)
+    decls = prepared.declared_agents
     source_hints = {d.name: d.runner for d in decls if d.runner is not None}
     # Config wins over source hints (dict merge: later keys override earlier).
     per_agent_cmds = {**source_hints, **config.agents}
@@ -157,10 +160,11 @@ def run(args: ExecArgs) -> None:
     for d in decls:
         runtime.register_agent(d.name, factory)
 
-    # ``parse_inputs`` returns ``dict[str, str]``; ``run`` accepts a
-    # ``Mapping[str, object]``, so no widening copy is needed.
-    result = runtime.run(
-        source,
+    # ``parse_inputs`` returns ``dict[str, str]``; ``run_prepared`` accepts a
+    # ``Mapping[str, object]``, so no widening copy is needed.  Reuse the
+    # ``PreparedProgram`` from above — no second parse/scope of the source.
+    result = runtime.run_prepared(
+        prepared,
         inputs=inputs,
         check_only=dry_run.enabled(),
         log_file=log_file,

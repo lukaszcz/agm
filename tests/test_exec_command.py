@@ -526,7 +526,7 @@ class TestExecExitCodeMapping:
 
         def fake_run(
             self: WorkflowRuntime,
-            source: str,
+            prepared: object,
             *,
             inputs: object = None,
             check_only: bool = False,
@@ -540,7 +540,7 @@ class TestExecExitCodeMapping:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -555,7 +555,7 @@ class TestExecCommandWarnings:
 
     No AgL checker warning is organically producible in M1 (warnings such as
     non-exhaustive ``case`` land with M2/M3 analysis), so the warning paths are
-    driven through a single mocked ``run`` that injects a warning diagnostic.
+    driven through a mocked ``run_prepared`` that injects a warning diagnostic.
     The error→exit-1 path IS reachable through real source and is covered by
     ``test_error_diagnostic_still_exits_1`` below.
     """
@@ -574,7 +574,7 @@ class TestExecCommandWarnings:
 
         def fake_run(
             self: WorkflowRuntime,
-            source: str,
+            prepared: object,
             *,
             inputs: object = None,
             check_only: bool = False,
@@ -584,7 +584,7 @@ class TestExecCommandWarnings:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
 
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -620,7 +620,7 @@ class TestExecCommandWarnings:
 
         def fake_run(
             self: WorkflowRuntime,
-            source: str,
+            prepared: object,
             *,
             inputs: object = None,
             check_only: bool = False,
@@ -632,7 +632,7 @@ class TestExecCommandWarnings:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -642,6 +642,55 @@ class TestExecCommandWarnings:
         assert "warning: line 2: unused binding" in captured.err
         assert "line 5: unknown name" in captured.err
         assert "warning: line 5: unknown name" not in captured.err
+
+
+class TestExecParsesSourceOnce:
+    """``agm exec`` parses + scopes the source exactly ONCE (no double parse).
+
+    Regression guard: ``agm exec`` learns the declared-agent inventory (to wire
+    registrations) AND executes the program.  Both must come from a single
+    ``prepare`` so the source is never parsed or scoped twice.
+    """
+
+    def test_exec_parses_and_scopes_source_exactly_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.agl.parser as parser_mod
+        import agm.agl.scope as scope_mod
+        from agm.agl.scope.symbols import ResolvedProgram
+        from agm.agl.syntax.nodes import Program
+        from agm.core import dry_run
+
+        agl_file = tmp_path / "prog.agl"
+        # A declared+called agent: exec must read the inventory AND run the
+        # static pipeline, the exact scenario that previously parsed twice.
+        agl_file.write_text('agent impl\nlet x = impl "do it"\n')
+
+        real_parse = parser_mod.parse_program
+        real_resolve = scope_mod.resolve
+        parse_calls = 0
+        resolve_calls = 0
+
+        def counting_parse(source: str) -> Program:
+            nonlocal parse_calls
+            parse_calls += 1
+            return real_parse(source)
+
+        # ``prepare`` calls ``resolve(program)`` with no keyword args.
+        def counting_resolve(program: Program) -> ResolvedProgram:
+            nonlocal resolve_calls
+            resolve_calls += 1
+            return real_resolve(program)
+
+        monkeypatch.setattr(parser_mod, "parse_program", counting_parse)
+        monkeypatch.setattr(scope_mod, "resolve", counting_resolve)
+        # Dry-run drives the full static pipeline (parse → scope → typecheck →
+        # reconcile) without executing any agent.
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        assert parse_calls == 1
+        assert resolve_calls == 1
 
 
 class TestExecCLIPaths:
@@ -1444,7 +1493,7 @@ class TestUncaughtExceptionOutputFormat:
             ),
         )
         with patch("agm.commands.exec.WorkflowRuntime") as mock_rt:
-            mock_rt.return_value.run.return_value = fake_result
+            mock_rt.return_value.run_prepared.return_value = fake_result
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
         assert exc_info.value.code == 2

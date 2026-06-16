@@ -26,6 +26,7 @@ from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.runtime import (
     AgentDeclInfo,
     CallSiteInfo,
+    PreparedProgram,
     RunError,
     RunResult,
     WorkflowRuntime,
@@ -42,6 +43,7 @@ __all__ = [
     "OutputCodec",
     "OutputContract",
     "ParseResult",
+    "PreparedProgram",
     "RunError",
     "RunResult",
     "TextCodec",

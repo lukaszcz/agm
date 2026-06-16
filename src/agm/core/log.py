@@ -103,6 +103,39 @@ def resolve_log_decision(
     return LogDecision(enabled=resolved_enabled, explicit_path=resolved_path)
 
 
+def prepare_trace_log_from_layers(
+    *,
+    command_name: str,
+    cli_no_log: bool,
+    cli_log: bool,
+    cli_log_file: str | None,
+    config_log: bool,
+    config_log_file: str | None,
+) -> Path | None:
+    """Resolve the CLI/pragma/config logging decision and prepare the trace file.
+
+    Combines :func:`resolve_log_decision` with :func:`prepare_trace_log` so the
+    two commands that support the full ``--log``/``--no-log``/``--log-file`` +
+    config precedence chain (``agm exec`` and ``agm repl``) share one call site.
+    The pragma layer is inert for now (Part A; wired in Milestone 3).  Callers
+    handle the ``--dry-run`` short-circuit before calling.
+    """
+    decision = resolve_log_decision(
+        cli_no_log=cli_no_log,
+        cli_log=cli_log,
+        cli_log_file=cli_log_file,
+        pragma_log=None,
+        pragma_log_file=None,
+        config_log=config_log,
+        config_log_file=config_log_file,
+    )
+    return prepare_trace_log(
+        command_name=command_name,
+        enabled=decision.enabled,
+        log_file=decision.explicit_path,
+    )
+
+
 def resolve_log_file(
     *,
     command_name: str,

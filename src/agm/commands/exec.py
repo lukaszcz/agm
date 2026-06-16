@@ -45,7 +45,7 @@ from agm.config.general import load_exec_config
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
 from agm.core.fs import read_text_arg
-from agm.core.log import prepare_trace_log, resolve_log_decision
+from agm.core.log import prepare_trace_log_from_layers
 
 
 def run(args: ExecArgs) -> None:
@@ -81,23 +81,16 @@ def run(args: ExecArgs) -> None:
 
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
-    # Pragma inputs are None for now (Part A; wired in Milestone 3).
     if dry_run.enabled():
         log_file = None
     else:
-        log_decision = resolve_log_decision(
+        log_file = prepare_trace_log_from_layers(
+            command_name="exec",
             cli_no_log=args.no_log,
             cli_log=args.log,
             cli_log_file=args.log_file,
-            pragma_log=None,
-            pragma_log_file=None,
             config_log=config.log,
             config_log_file=config.log_file,
-        )
-        log_file = prepare_trace_log(
-            command_name="exec",
-            enabled=log_decision.enabled,
-            log_file=log_decision.explicit_path,
         )
 
     # ----------------------------------------------------------------

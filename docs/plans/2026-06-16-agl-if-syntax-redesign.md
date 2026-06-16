@@ -156,13 +156,17 @@ unchanged structurally.
 
 ## Transformer changes (`src/agm/agl/parser/transform.py`)
 
-- `if_stmt`: unchanged handler — the new `PIPE?` produces no extra child (it's a
-  filtered terminal), and `if_branch` collection by `isinstance` is unaffected.
+- `if_stmt`: unchanged handler. The declared `PIPE` terminal *does* surface as a
+  child token in the transformer args (uppercase terminals are not auto-filtered),
+  but the existing handler already collects branches with
+  `tuple(a for a in args if isinstance(a, syntax.IfBranch))`, so any extra leading
+  `PIPE` token is ignored — exactly as `case_stmt` already tolerates its `PIPE`
+  separators. No handler change is needed.
 - Add `if_expr_cond_branch`, `if_expr_else_branch`, and `if_expr` handlers,
   parallel to the `case_expr*` handlers and the existing `if_*` handlers.
 - `if_expr`: collect branches; enforce **else-must-be-last** here (reuse the same
   check as `if_stmt`, factored into a shared helper to avoid duplication per
-  CLAUDE.md). The *else-required* rule lives in the checker (decision 1), not the
+  AGENTS.md). The *else-required* rule lives in the checker (decision 1), not the
   transformer, so the diagnostic is a type error with proper typing context;
   confirm placement during implementation and keep it in exactly one place.
 
@@ -184,10 +188,15 @@ unchanged structurally.
 
 - Add `IfExpr` to the `_eval_expr` dispatch (next to `CaseExpr`).
 - Add `_eval_if_expr(expr, scope)`: evaluate conditions left-to-right in fresh
-  branch scopes; return the first true branch's body value; the `else` body is
-  the guaranteed fallback (the checker proved `else` exists, so no runtime
-  "no-match" path is reachable — but include a defensive `assert_never`-style
-  guard consistent with the codebase).
+  branch scopes; return the **raw** value of the first true branch's body; the
+  `else` body is the guaranteed fallback (the checker proved `else` exists, so no
+  runtime "no-match" path is reachable — but include a defensive
+  `assert_never`-style guard consistent with the codebase). This mirrors
+  `_eval_case_expr`, which also returns the raw selected branch value without
+  coercing it (`return self._eval_expr(branch.body, branch_scope)`). **No coercion
+  happens inside the `if`-expression**: `int → decimal` widening (and any other
+  implicit coercion) materializes only when the result reaches a binding/`set`/
+  constructor boundary via `_coerce`, identical to how `case_expr` results widen.
 - `_exec_if` (statement) is unchanged.
 
 ## Visitor changes (`src/agm/agl/syntax/visitor.py`)
@@ -203,12 +212,27 @@ mirroring the existing `CaseExpr`/`CaseExprBranch` and `IfStmt`/`IfBranch` entri
 - `src/agm/agl/capabilities.py` and `src/agm/agl/diagnostics.py` — grep for
   `CaseExpr`/`IfStmt` handling and add `IfExpr` symmetrically if these enumerate
   node kinds.
-- REPL (`src/agm/agl/repl/`) — confirm an `if`-expression typed at the prompt is
-  echoed/evaluated like a `case`-expression (it routes through `_eval_expr`, so
-  likely free, but add a REPL test).
-- `src/agm/agl/scope/` — if scope analysis walks expression nodes, ensure branch
-  conditions/bodies of `IfExpr` are traversed (the visitor change should cover
-  this; verify).
+- REPL (`src/agm/agl/repl/`) — a **bare** `if … => … | else => …` at the prompt is
+  a statement, not an echoed expression. Because `expr_stmt: or_expr` (not `expr`),
+  a statement-level bare `if` always reduces to `if_stmt`/`IfStmt`, and the REPL
+  classifier (`session.py::_classify`) only treats a trailing `ExprStmt` as an
+  echoed "expression". This is the same behavior as bare `case` at the prompt. To
+  evaluate/echo an `if`-expression interactively, use the **parenthesized** form
+  `(if … => … | else => …)` — `paren_expr` wraps the `if_expr` into an `ExprStmt`,
+  which the REPL then echoes through `_eval_expr`. Document this in the REPL test:
+  assert the parenthesized form echoes a value and (optionally) that the bare form
+  is classified as a statement. No REPL/parser change is required.
+- `src/agm/agl/scope/` — the resolver (`scope/resolver.py`) does **not** use the
+  visitor; it walks the AST with its own explicit `isinstance` dispatch in
+  `_resolve_expr` / `_resolve_expr_inner`, with a dedicated `CaseExpr` branch and a
+  `_resolve_case_expr_branch` helper. Therefore `IfExpr` requires explicit
+  resolver work (the visitor change does **not** cover it): add an `IfExpr` branch
+  to `_resolve_expr_inner` plus a `_resolve_if_expr_branch` helper that mirrors
+  `_resolve_if_branch`/`_resolve_case_expr_branch` — resolve each non-`else`
+  condition in the current scope, then resolve each branch body inside a fresh
+  child scope (`_child_scope(branch.node_id)`). Without this, `VarRef`/`AgentCall`
+  nodes inside `if`-expression conditions and bodies are left unresolved. Add a
+  scope test covering names used in `if`-expression conditions and branch bodies.
 
 ## Tests (TDD — write failing tests first)
 
@@ -237,13 +261,22 @@ fixtures).
 
 **Interpreter**
 - `if`-expression returns the first true branch's value; `else` fallback taken
-  when no condition holds; branch scopes isolate bindings; widening materializes.
+  when no condition holds; branch scopes isolate bindings. The expression returns
+  the raw branch value (no coercion); assert widening materializes at the
+  surrounding boundary, e.g. `let x: decimal = if c => 1 | else => 2` stores a
+  `decimal`, mirroring how `case_expr` results widen — not at the `if`-expression
+  itself.
+
+**Scope / name resolution**
+- Names referenced in `if`-expression conditions and branch bodies resolve
+  correctly (`VarRef`/`AgentCall`), and bindings introduced in a branch body do
+  not leak out of that branch's scope.
 
 **Program fixtures (`tests/agl/programs/`)**
 - Add a fixture exercising `if`-expressions and the leading-pipe statement form
   (with an expected-output/golden file, matching the existing fixture harness).
 
-## Documentation updates (required by area CLAUDE.md)
+## Documentation updates (required by area AGENTS.md)
 
 Each AgL syntax change MUST update the reference docs and keep arch docs current.
 
@@ -274,14 +307,30 @@ Each AgL syntax change MUST update the reference docs and keep arch docs current
 
 ## Suggested implementation order
 
-1. Grammar: add `PIPE?` + `if_expr` rules; rebuild; **run conflict guard** (gate).
-2. AST nodes (`IfExpr`/`IfExprBranch`) + `Expr` union + visitor registration.
-3. Transformer handlers (+ shared else-last helper).
-4. Type checker (`_check_if_expr` + shared branch-unification helper +
-   else-required rule).
-5. Interpreter (`_eval_if_expr`).
-6. Audit capabilities/diagnostics/REPL/scope touchpoints.
-7. Tests (write per-layer failing tests ahead of each step where practical).
-8. Documentation sweep.
+Per the repo's TDD policy, **each layer below pairs its failing tests first, then
+the implementation that makes them pass** — write the layer's tests, watch them
+fail, then implement. The conflict guard is the one exception: it is a standing
+gate that must pass throughout.
+
+1. Grammar: write the parser/layout tests for `PIPE?` and `if_expr` (statement +
+   expression forms, parenthesization, `else`-not-last); add `PIPE?` + `if_expr`
+   rules; rebuild; **run conflict guard first** (gate) and make the parser tests
+   pass.
+2. AST nodes (`IfExpr`/`IfExprBranch`) + `Expr` union + visitor registration —
+   driven by the transformer tests below (AST shape is asserted there).
+3. Transformer handlers (+ shared else-last helper): write transformer tests
+   asserting the produced `IfExpr`/`IfExprBranch` AST, then implement.
+4. Type checker: write `_check_if_expr` tests (else-required, branch unification
+   with `int → decimal` widening, non-`bool` condition) first, then implement the
+   checker (`_check_if_expr` + shared branch-unification helper + else-required
+   rule).
+5. Scope resolution: write the scope tests (names in conditions/bodies resolve;
+   branch bindings don't leak), then add the `IfExpr` branch to
+   `_resolve_expr_inner` + `_resolve_if_expr_branch` helper.
+6. Interpreter: write `_eval_if_expr` tests (first-true-branch value, `else`
+   fallback, branch-scope isolation, boundary widening), then implement.
+7. Audit capabilities/diagnostics/REPL touchpoints; add the REPL test for the
+   parenthesized `if`-expression echo.
+8. Program fixtures + documentation sweep.
 9. `just check` (lint + tests + strict mypy) — must pass with no `type: ignore`,
    `noqa`, or formatter suppressions (ask the owner if any seems unavoidable).

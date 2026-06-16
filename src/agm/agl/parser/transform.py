@@ -318,23 +318,6 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    # ------------------------------------------------------------------
-    # field_name — reserved-word-tolerant field/key name
-    # ------------------------------------------------------------------
-
-    def field_name(self, meta: Meta, args: _Args) -> Token:
-        """field_name: VAR_NAME | "agent" — return the underlying name Token.
-
-        Field/key positions accept the reserved word ``agent`` (the name of the
-        built-in ``AgentCallError.agent`` / ``AgentParseError.agent`` fields) in
-        addition to ordinary lower-case identifiers.  The token is returned
-        unchanged so callers keep using ``str(tok)`` / span helpers; it carries
-        type ``VAR_NAME`` or ``AGENT`` depending on which alternative matched.
-        """
-        tok = args[0]
-        assert isinstance(tok, Token)
-        return tok
-
     def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
         # Grammar: field_name COLON type_expr
         name_tok = args[0]

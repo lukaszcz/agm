@@ -125,7 +125,9 @@ field_def: field_name COLON type_expr
 // only in *field-name* positions (field defs, named args, dict shorthand keys,
 // postfix field access) — never where a NEW variable is bound (let/var/set/
 // input/catch/loop/pattern var-binders), so `agent` cannot become a variable.
-field_name: VAR_NAME | AGENT
+// Inlined (`?`): each alternative is a single token, so the parent rule receives
+// the name Token (type VAR_NAME or AGENT) directly — see `_find_name_token`.
+?field_name: VAR_NAME | AGENT
 
 // enum_def: flat variant list (design §10.4).
 //   The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT

@@ -378,7 +378,8 @@ class WorkflowRuntime:
         )
         return self._host_env_cache
 
-    def declared_agents(self, source: str) -> tuple[AgentDeclInfo, ...]:
+    @staticmethod
+    def declared_agents(source: str) -> tuple[AgentDeclInfo, ...]:
         """Return the agents declared in *source* (parse + scope only).
 
         Runs ONLY the parse and scope passes (with an empty ambient set —

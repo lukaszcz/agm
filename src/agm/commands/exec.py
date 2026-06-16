@@ -116,7 +116,7 @@ def run(args: ExecArgs) -> None:
     # ``declared_agents`` parses + scopes only (independent of registrations);
     # on a source with parse/scope errors it returns ``()`` and the later
     # ``runtime.run`` resurfaces the diagnostic (exit 1).
-    decls = WorkflowRuntime().declared_agents(source)
+    decls = WorkflowRuntime.declared_agents(source)
     source_hints = {d.name: d.runner for d in decls if d.runner is not None}
     # Config wins over source hints (dict merge: later keys override earlier).
     per_agent_cmds = {**source_hints, **config.agents}

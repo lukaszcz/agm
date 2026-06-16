@@ -35,7 +35,7 @@ from agm.config.context import current_config_context
 from agm.config.general import load_exec_config
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
-from agm.core.log import prepare_trace_log
+from agm.core.log import prepare_trace_log, resolve_log_decision
 
 
 def run(args: ReplArgs) -> None:
@@ -66,7 +66,7 @@ def run(args: ReplArgs) -> None:
 
     # Resolve and validate the trace log file.  ``--dry-run`` is side-effect-free
     # (no eval, no trace), mirroring ``agm exec``.
-    trace_path = _resolve_trace_path(args)
+    trace_path = _resolve_trace_path(args, config_log=config.log, config_log_file=config.log_file)
 
     runner_agent = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
@@ -113,16 +113,29 @@ def run(args: ReplArgs) -> None:
     )
 
 
-def _resolve_trace_path(args: ReplArgs) -> Path | None:
-    """Resolve + validate the JSONL trace path, or ``None`` (dry-run / --no-log).
+def _resolve_trace_path(
+    args: ReplArgs, config_log: bool, config_log_file: str | None
+) -> Path | None:
+    """Resolve + validate the JSONL trace path, or ``None`` (dry-run / disabled).
 
     Mirrors ``agm exec`` via the shared :func:`prepare_trace_log`: ``--dry-run``
     writes no trace; otherwise the path is resolved and validated up front so an
     unwritable ``--log-file`` exits 1 BEFORE the loop starts rather than crashing
-    mid-session.
+    mid-session.  Pragma inputs are None for now (Part A; wired in Milestone 3).
     """
     if dry_run.enabled():
         return None
+    log_decision = resolve_log_decision(
+        cli_no_log=args.no_log,
+        cli_log=args.log,
+        cli_log_file=args.log_file,
+        pragma_log=None,
+        pragma_log_file=None,
+        config_log=config_log,
+        config_log_file=config_log_file,
+    )
     return prepare_trace_log(
-        command_name="repl", no_log=args.no_log, log_file=args.log_file
+        command_name="repl",
+        enabled=log_decision.enabled,
+        log_file=log_decision.explicit_path,
     )

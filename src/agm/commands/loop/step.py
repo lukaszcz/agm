@@ -190,7 +190,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
 
     log_file = resolve_log_file(
         command_name="loop",
-        no_log=args.no_log,
+        enabled=not args.no_log,
         log_file=args.log_file,
     )
     prepare_log_file(log_file)

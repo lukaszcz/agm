@@ -1148,6 +1148,8 @@ class TestWorkflowRuntimeRunnerWiring:
             default_loop_limit=5,
             timeout=None,
             agents={},
+            log=False,
+            log_file=None,
         )
 
         import agm.agl.runtime.runtime as rt_mod

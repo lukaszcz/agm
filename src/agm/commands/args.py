@@ -216,6 +216,7 @@ class ExecArgs:
     runner: str | None
     no_log: bool
     log_file: str | None
+    log: bool = False
     command: str | None = None
 
 
@@ -229,3 +230,4 @@ class ReplArgs:
     quiet: bool
     no_log: bool
     log_file: str | None
+    log: bool = False

@@ -1688,6 +1688,8 @@ class TestExecPerAgentRunnerValidation:
             default_loop_limit=5,
             timeout=None,
             agents={"ghost": "bad 'quote"},  # malformed, but for an undeclared agent
+            log=False,
+            log_file=None,
         )
         monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: bad_config)
         agl_file = tmp_path / "prog.agl"

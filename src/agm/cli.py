@@ -852,6 +852,11 @@ def exec_cmd(
         "--no-log",
         help="Disable trace logging.",
     ),
+    log: bool = typer.Option(
+        False,
+        "--log",
+        help="Enable trace logging to an auto-named file.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -865,9 +870,10 @@ def exec_cmd(
         exit_with_usage_error(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
         )
-    if no_log and log_file is not None:
+    log_flags = sum([no_log, log, log_file is not None])
+    if log_flags > 1:
         exit_with_usage_error(
-            ["exec"], "error: --no-log and --log-file are mutually exclusive"
+            ["exec"], "error: --log, --no-log, and --log-file are mutually exclusive"
         )
     exec_command.run(
         ExecArgs(
@@ -879,6 +885,7 @@ def exec_cmd(
             runner=runner,
             no_log=no_log,
             log_file=log_file,
+            log=log,
         )
     )
 
@@ -926,14 +933,20 @@ def repl_cmd(
         "--no-log",
         help="Disable trace logging.",
     ),
+    log: bool = typer.Option(
+        False,
+        "--log",
+        help="Enable trace logging to an auto-named file.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
     del _dry_run
-    if no_log and log_file is not None:
+    log_flags = sum([no_log, log, log_file is not None])
+    if log_flags > 1:
         exit_with_usage_error(
-            ["repl"], "error: --no-log and --log-file are mutually exclusive"
+            ["repl"], "error: --log, --no-log, and --log-file are mutually exclusive"
         )
     repl_command.run(
         ReplArgs(
@@ -945,6 +958,7 @@ def repl_cmd(
             quiet=quiet,
             no_log=no_log,
             log_file=log_file,
+            log=log,
         )
     )
 

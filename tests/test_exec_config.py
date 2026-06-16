@@ -17,12 +17,16 @@ class TestExecConfig:
             default_loop_limit=5,
             timeout=None,
             agents={},
+            log=False,
+            log_file=None,
         )
         assert cfg.runner is None
         assert cfg.strict_json is False
         assert cfg.default_loop_limit == 5
         assert cfg.timeout is None
         assert cfg.agents == {}
+        assert cfg.log is False
+        assert cfg.log_file is None
 
     def test_frozen(self) -> None:
         cfg = ExecConfig(
@@ -31,6 +35,8 @@ class TestExecConfig:
             default_loop_limit=5,
             timeout=None,
             agents={},
+            log=False,
+            log_file=None,
         )
         with pytest.raises((AttributeError, TypeError)):
             cfg.runner = "something"
@@ -46,6 +52,8 @@ class TestLoadExecConfig:
         assert cfg.default_loop_limit == 5
         assert cfg.timeout is None
         assert cfg.agents == {}
+        assert cfg.log is False
+        assert cfg.log_file is None
 
     def test_load_exec_config_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
@@ -206,3 +214,34 @@ class TestLoadExecConfig:
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert "good" in cfg.agents
         assert "bad" not in cfg.agents
+
+    def test_log_true_loaded_from_config(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text("[exec]\nlog = true\n")
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.log is True
+
+    def test_log_false_by_default(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.log is False
+
+    def test_log_file_loaded_from_config(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".agm").mkdir()
+        log_path = tmp_path / "trace.jsonl"
+        (home / ".agm" / "config.toml").write_text(
+            f"[exec]\nlog_file = {str(log_path)!r}\n"
+        )
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.log_file == str(log_path)
+
+    def test_log_file_none_by_default(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.log_file is None

@@ -980,7 +980,7 @@ class TestPrepareTraceLogTruncates:
         log_path.write_text('{"kind": "run_start", "run_id": "old"}\n', encoding="utf-8")
         assert log_path.read_text(encoding="utf-8").strip(), "pre-condition: file must be non-empty"
 
-        prepare_trace_log(command_name="exec", no_log=False, log_file=str(log_path))
+        prepare_trace_log(command_name="exec", enabled=True, log_file=str(log_path))
 
         content = log_path.read_text(encoding="utf-8")
         assert content == "", (
@@ -997,7 +997,7 @@ class TestPrepareTraceLogTruncates:
         # Simulate a previous run by pre-populating the file.
         log_path.write_text('{"kind": "run_start", "run_id": "old"}\n', encoding="utf-8")
 
-        prepare_trace_log(command_name="exec", no_log=False, log_file=str(log_path))
+        prepare_trace_log(command_name="exec", enabled=True, log_file=str(log_path))
         # Append a single record as the new run would.
         append_jsonl(log_path, {"kind": "run_start", "run_id": "new"})
 

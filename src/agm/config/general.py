@@ -29,6 +29,9 @@ class ConfigCommandNotFound(ValueError):
 # the config file that defines them.  When the config-dir-resolved path does
 # not exist, cwd is used as a fallback.
 _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
+    "exec": [
+        "log_file",
+    ],
     "loop": [
         "tasks_dir",
         "prompt_file",
@@ -512,6 +515,8 @@ class ExecConfig:
     default_loop_limit: int
     timeout: float | None
     agents: dict[str, str]
+    log: bool
+    log_file: str | None
 
 
 def load_exec_config(
@@ -557,12 +562,17 @@ def load_exec_config(
             if isinstance(k, str) and isinstance(v, str) and v.strip():
                 resolved_agents[k] = v
 
+    resolved_log = _optional_bool(exec_table, "log")
+    resolved_log_file = _optional_str(exec_table, "log_file")
+
     return ExecConfig(
         runner=resolved_runner,
         strict_json=resolved_strict_json,
         default_loop_limit=resolved_loop_limit,
         timeout=resolved_timeout,
         agents=resolved_agents,
+        log=resolved_log,
+        log_file=resolved_log_file,
     )
 
 

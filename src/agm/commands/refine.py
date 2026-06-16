@@ -98,7 +98,7 @@ def refine(args: RefineArgs) -> None:
         max_steps = args.max_steps or config.max_steps or DEFAULT_MAX_STEPS
     log_file = resolve_log_file(
         command_name="refine",
-        no_log=args.no_log,
+        enabled=not args.no_log,
         log_file=args.log_file,
     )
     prepare_log_file(log_file)

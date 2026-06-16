@@ -564,7 +564,7 @@ class AstBuilder(Transformer):
         for a in args:
             if not isinstance(a, Token) and a is not None:
                 return cast(syntax.Expr, a)
-        raise AssertionError("paren_expr: no inner expression found")
+        raise AssertionError("paren_expr: no inner expression found")  # pragma: no cover
 
     # ------------------------------------------------------------------
     # Lambda expression
@@ -825,8 +825,8 @@ class AstBuilder(Transformer):
                     field_names.append(str(a))
             elif base is None:
                 base = cast(syntax.Expr, a)
-            else:
-                # Should not occur
+            else:  # pragma: no cover
+                # Should not occur: grammar guarantees exactly one base atom.
                 pass
         # DOT tokens are also in args; we need to collect field name tokens.
         # Re-collect: base is first non-token arg; field names are VAR_NAME/AGENT tokens.
@@ -1091,19 +1091,17 @@ class AstBuilder(Transformer):
 
     def do_expr(self, meta: Meta, args: _Args) -> syntax.Do:
         """do_expr: "do" loop_bound? do_body "until" or_expr"""
+        # Grammar children (post-transform): int? (loop_bound), Expr (do_body),
+        # Expr (until condition) — no Token or None placeholders.
         limit: int | None = None
-        body: syntax.Expr | None = None
-        condition: syntax.Expr | None = None
+        exprs: list[syntax.Expr] = []
         for a in args:
             if isinstance(a, int):
                 limit = a
-            elif a is not None and not isinstance(a, Token):
-                if body is None:
-                    body = cast(syntax.Expr, a)
-                else:
-                    condition = cast(syntax.Expr, a)
-        assert body is not None, "do_expr: no body"
-        assert condition is not None, "do_expr: no condition"
+            else:
+                exprs.append(cast(syntax.Expr, a))
+        assert len(exprs) == 2, "do_expr: expected body and condition"
+        body, condition = exprs[0], exprs[1]
         return syntax.Do(
             limit=limit, body=body, condition=condition,
             span=_span_from_meta(meta), node_id=self._next_id(),
@@ -1167,7 +1165,10 @@ class AstBuilder(Transformer):
                     a[1] is None or isinstance(a[1], str)
                 ):
                     exc_type, binding = cast(tuple[str | None, str | None], a)
-                elif a is not None:
+                elif a is not None:  # pragma: no cover
+                    # Grammar guarantees tuples in catch_clause come only from
+                    # catch_pattern (a (str|None, str|None) pair); no other
+                    # tuple-valued child is possible.
                     body = cast(syntax.Expr, a)
             elif a is not None and not isinstance(a, Token):
                 body = cast(syntax.Expr, a)
@@ -1203,7 +1204,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def suite_expr(self, meta: Meta, args: _Args) -> syntax.Block:
-        """suite_expr: _NEWLINE _INDENT block _DEDENT — unwrap to Block."""
+        """suite_expr: _INDENT block _DEDENT — unwrap to Block."""
         block = next(a for a in args if isinstance(a, syntax.Block))
         return block
 
@@ -1445,7 +1446,7 @@ def _find_type_expr(args: _Args) -> TypeExpr:
     for a in args:
         if isinstance(a, _ALL_TYPE_EXPRS):
             return a
-    raise AssertionError(f"_find_type_expr: no TypeExpr found in {args!r}")
+    raise AssertionError(f"_find_type_expr: no TypeExpr found in {args!r}")  # pragma: no cover
 
 
 def _find_name_token(args: _Args) -> Token:
@@ -1457,7 +1458,7 @@ def _find_name_token(args: _Args) -> Token:
     for a in args:
         if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT"):
             return a
-    raise AssertionError(f"_find_name_token: no name token found in {args!r}")
+    raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
 
 
 def _require_literal_string(node: object, message: str) -> syntax.StringLit:
@@ -1480,15 +1481,18 @@ def _find_expr(args: _Args) -> syntax.Expr:
     for a in args:
         if _is_expr_obj(a):
             return cast(syntax.Expr, a)
-    raise AssertionError(f"_find_expr: no Expr found in {args!r}")
+    raise AssertionError(f"_find_expr: no Expr found in {args!r}")  # pragma: no cover
 
 
 def _find_non_token(args: _Args) -> object:
     """Return the first non-None, non-Token element in args."""
-    for a in args:
-        if a is not None and not isinstance(a, Token):
-            return a
-    raise AssertionError(f"_find_non_token: no non-token found in {args!r}")
+    result = next(
+        (a for a in args if a is not None and not isinstance(a, Token)),
+        None,
+    )
+    if result is None:  # pragma: no cover
+        raise AssertionError(f"_find_non_token: no non-token found in {args!r}")
+    return result
 
 
 def _extract_ann_and_value(
@@ -1524,7 +1528,7 @@ def _find_branch_body(args: _Args) -> syntax.Expr:
     for a in args:
         if a is not None and not isinstance(a, Token):
             return cast(syntax.Expr, a)
-    raise AssertionError(f"_find_branch_body: no Expr found in {args!r}")
+    raise AssertionError(f"_find_branch_body: no Expr found in {args!r}")  # pragma: no cover
 
 
 def _validate_else_last(

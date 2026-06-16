@@ -135,7 +135,16 @@ class TestConflictGuard:
     """
 
     def test_zero_conflicts(self) -> None:
-        """Build the Lark parser and assert the debug log contains no conflicts."""
+        """Build the Lark parser and assert the debug log contains no conflicts.
+
+        Two kinds of LALR(1) conflict manifest differently:
+        - Shift/Reduce: Lark logs a DEBUG message containing "Shift/Reduce".
+        - Reduce/Reduce: Lark raises ``lark.exceptions.GrammarError`` at
+          parser-construction time rather than logging.
+
+        Both are caught and surfaced as explicit pytest failures so that any
+        regression introduced by a grammar change is immediately visible.
+        """
         import io
 
         grammar_text = (
@@ -145,10 +154,12 @@ class TestConflictGuard:
         )
 
         from lark import Lark
+        from lark.exceptions import GrammarError
 
         from agm.agl.lexer.lexer import AglLexer
 
-        # Capture the lark.grammar / lark.parsers.lalr_analysis DEBUG stream.
+        # Capture the lark.grammar / lark.parsers.lalr_analysis DEBUG stream
+        # so that Shift/Reduce conflicts (which are logged, not raised) are caught.
         stream = io.StringIO()
         handler = logging.StreamHandler(stream)
         handler.setLevel(logging.DEBUG)
@@ -164,6 +175,9 @@ class TestConflictGuard:
                 propagate_positions=True,
                 maybe_placeholders=True,
             )
+        except GrammarError as exc:
+            # Reduce/Reduce conflicts raise GrammarError at construction time.
+            pytest.fail(f"LALR(1) conflict (GrammarError) detected: {exc}")
         finally:
             root_logger.removeHandler(handler)
             root_logger.setLevel(old_level)
@@ -1292,3 +1306,185 @@ class TestFullPrograms:
         assert isinstance(rec, RecordDef)
         assert rec.fields[0].name == "agent"
         assert isinstance(rec.fields[0].type_expr, AgentT)
+
+
+# ---------------------------------------------------------------------------
+# Coverage-gap tests — Fix 3
+# ---------------------------------------------------------------------------
+
+
+class TestBinaryOperatorsCoverage:
+    """Covers binary operators not yet tested: >=, -, /."""
+
+    def test_bin_ge(self) -> None:
+        """x >= 0 produces BinaryOp(GE)."""
+        e = first(parse("x >= 0"))
+        assert isinstance(e, BinaryOp)
+        assert e.op == BinOp.GE
+
+    def test_bin_sub(self) -> None:
+        """x - 1 produces BinaryOp(SUB)."""
+        e = first(parse("x - 1"))
+        assert isinstance(e, BinaryOp)
+        assert e.op == BinOp.SUB
+
+    def test_bin_div(self) -> None:
+        """x / 2 produces BinaryOp(DIV)."""
+        e = first(parse("x / 2"))
+        assert isinstance(e, BinaryOp)
+        assert e.op == BinOp.DIV
+
+    def test_is_not_qualified(self) -> None:
+        """x is not Review.Pass produces a negated, qualified IsTest."""
+        e = first(parse("x is not Review.Pass"))
+        assert isinstance(e, IsTest)
+        assert e.qualifier == "Review"
+        assert e.variant == "Pass"
+        assert e.negated
+
+
+class TestLiteralPatternsCoverage:
+    """Covers literal patterns other than int: decimal, true, false, null, string."""
+
+    def test_literal_decimal_pattern(self) -> None:
+        e = first(parse("case x of | 3.14 => a"))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, LiteralPattern)
+        assert isinstance(pat.literal, DecimalLit)
+
+    def test_literal_true_pattern(self) -> None:
+        e = first(parse("case x of | true => a"))
+        assert isinstance(e, Case)
+        assert isinstance(e.branches[0].pattern, LiteralPattern)
+        assert isinstance(e.branches[0].pattern.literal, BoolLit)
+        assert e.branches[0].pattern.literal.value is True
+
+    def test_literal_false_pattern(self) -> None:
+        e = first(parse("case x of | false => a"))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, LiteralPattern)
+        assert isinstance(pat.literal, BoolLit)
+        assert pat.literal.value is False
+
+    def test_literal_null_pattern(self) -> None:
+        e = first(parse("case x of | null => a"))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, LiteralPattern)
+        assert isinstance(pat.literal, NullLit)
+
+    def test_literal_string_pattern(self) -> None:
+        e = first(parse('case x of | "hello" => a'))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, LiteralPattern)
+        assert isinstance(pat.literal, StringLit)
+        assert pat.literal.value == "hello"
+
+
+class TestDeclarationsCoverage:
+    """Covers config pragma values not yet tested: false and decimal."""
+
+    def test_config_pragma_false(self) -> None:
+        cfg = first(parse("config log = false"))
+        assert isinstance(cfg, ConfigPragma)
+        assert cfg.key == "log"
+        assert cfg.value is False
+
+    def test_config_pragma_decimal(self) -> None:
+        cfg = first(parse("config rate = 1.5"))
+        assert isinstance(cfg, ConfigPragma)
+        assert cfg.key == "rate"
+        assert cfg.value == decimal.Decimal("1.5")
+
+
+class TestTypeExprCoverage:
+    """Covers type expression paths not yet tested."""
+
+    def test_named_type_via_varname(self) -> None:
+        """A lowercase VAR_NAME that isn't a keyword maps to NameT."""
+        let = first(parse("let x: mytype = 1"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, NameT)
+        assert let.type_ann.name == "mytype"
+
+    def test_generic_type_unknown_raises(self) -> None:
+        """foo[int] raises AglSyntaxError — only list[T] is valid."""
+        with pytest.raises(AglSyntaxError, match="Unknown generic type"):
+            parse("let x: foo[int] = 1")
+
+    def test_dict_type_bad_key_raises(self) -> None:
+        """dict[int, text] raises — dict keys must be text."""
+        with pytest.raises(AglSyntaxError, match="text"):
+            parse("let x: dict[int, text] = 1")
+
+    def test_dict_type_bad_head_raises(self) -> None:
+        """foo[text, int] raises — only dict[] is valid for two-param generic."""
+        with pytest.raises(AglSyntaxError, match="Unknown generic type"):
+            parse("let x: foo[text, int] = 1")
+
+
+class TestCallsCoverage:
+    """Covers call paths not yet tested."""
+
+    def test_constructor_positional_arg_raises(self) -> None:
+        """Constructor called with positional arg raises AglSyntaxError."""
+        with pytest.raises(AglSyntaxError, match="named"):
+            parse("Issue(1)")
+
+    def test_paren_expr_unwrap(self) -> None:
+        """(expr) parses as the inner expr (paren_expr rule unwraps)."""
+        e = first(parse("(1 + 2)"))
+        assert isinstance(e, BinaryOp)
+        assert e.op == BinOp.ADD
+
+
+class TestVariantPayloadCoverage:
+    """Covers the empty variant_payload () path."""
+
+    def test_empty_variant_payload(self) -> None:
+        """Variant with empty payload () produces a VariantDef with no fields."""
+        prog = parse("enum E\n  | Empty()")
+        en = first(prog)
+        assert isinstance(en, EnumDef)
+        assert en.variants[0].name == "Empty"
+        assert en.variants[0].fields == ()
+
+
+class TestTryBodyCoverage:
+    """Covers try_body with multiple semicolon-separated or_exprs."""
+
+    def test_try_body_multi_stmt_wraps_block(self) -> None:
+        """try x; y catch _ => err wraps the two exprs in a Block."""
+        src = "try x; y catch _ => err"
+        e = first(parse(src))
+        assert isinstance(e, Try)
+        assert isinstance(e.body, Block)
+        assert len(e.body.items) == 2
+
+
+class TestReplSeamCoverage:
+    """Covers is_incomplete_source cache-hit and LexError paths."""
+
+    def test_is_incomplete_source_cache_hit(self) -> None:
+        """Calling is_incomplete_source twice with the same text uses the cache."""
+        text = "let x ="
+        result1 = is_incomplete_source(text)
+        result2 = is_incomplete_source(text)
+        assert result1 == result2
+        assert result1 is True  # dangling '=' is incomplete
+
+    def test_is_incomplete_source_lex_error(self) -> None:
+        """An input that causes a LexError returns False (real error, not incomplete)."""
+        assert not is_incomplete_source("@@@")
+
+
+class TestParserErrorCoverage:
+    """Covers parser error paths not yet tested."""
+
+    def test_lex_error_in_parse_raises(self) -> None:
+        """A character the lexer cannot tokenize raises AglSyntaxError."""
+        with pytest.raises(AglSyntaxError):
+            parse("@@@")

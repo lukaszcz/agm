@@ -65,7 +65,7 @@ def _parse_to_program(
         raise syntax_error_from_lark(exc, filename=filename) from exc
     except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
         raise syntax_error_from_lark(exc, filename=filename) from exc
-    except LarkError as exc:
+    except LarkError as exc:  # pragma: no cover
         # Any other lark-level error (ParseError, GrammarError, etc.) is a
         # genuine syntax/parse problem.  Narrowing to LarkError lets internal
         # bugs (AssertionError and the like) surface instead of being masked.
@@ -79,7 +79,7 @@ def _parse_to_program(
         # exception is already an AglSyntaxError, unwrap and re-raise it.
         if isinstance(exc.orig_exc, AglSyntaxError):
             raise exc.orig_exc from exc
-        raise syntax_error_from_lark(exc, filename=filename) from exc
+        raise syntax_error_from_lark(exc, filename=filename) from exc  # pragma: no cover
     assert isinstance(result, syntax.Program)
     return result, builder.next_node_id
 

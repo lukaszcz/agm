@@ -84,6 +84,15 @@ def _parse_to_program(
     return result, builder.next_node_id
 
 
+# Single-entry memo for is_incomplete_source: (last_text, last_result).
+# The Enter key binding calls is_incomplete_source on each keypress; the
+# submit path then parses the identical text a second time.  Caching the most
+# recent (text → bool) classification eliminates that redundant parse without
+# any risk of stale state — the memo holds at most one entry and is keyed on
+# the exact text string.
+_incomplete_cache: tuple[str, bool] | None = None
+
+
 def is_incomplete_source(text: str) -> bool:
     """Return ``True`` when *text* parses as a *prefix* of a valid program.
 
@@ -109,26 +118,38 @@ def is_incomplete_source(text: str) -> bool:
       mid-line such as ``let = 5`` or ``x == y``) → complete, so the REPL submits
       and the user sees the genuine error instead of being trapped in a
       continuation prompt.
+
+    Results are memoized for the most recently seen text so that the Enter-key
+    check and the immediately following eval-path parse do not trigger two full
+    LALR runs for the same source string.
     """
+    global _incomplete_cache
     from lark.lexer import Token
+
+    if _incomplete_cache is not None and _incomplete_cache[0] == text:
+        return _incomplete_cache[1]
 
     try:
         _PARSER.parse(text)
+        result = False
     except UnexpectedToken as exc:
         # The LALR parser reports a premature end of input as an unexpected
         # ``$END`` token (it never raises ``UnexpectedEOF``), so this single
         # branch classifies every unterminated block / dangling operator.
         token: Token = exc.token
         if token.type == "$END":
-            return True
-        return "_INDENT" in exc.expected
+            result = True
+        else:
+            result = "_INDENT" in exc.expected
     except (LarkError, LexError):
         # Any other parse/lex failure (``UnexpectedCharacters`` and the residual
         # ``LarkError`` family, plus the custom ``LexError`` — which is NOT a
         # ``LarkError`` subclass) is a real error the user should see
         # immediately, not a continuation.
-        return False
-    return False
+        result = False
+
+    _incomplete_cache = (text, result)
+    return result
 
 
 def parse_program(

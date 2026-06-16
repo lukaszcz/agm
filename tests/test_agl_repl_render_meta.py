@@ -250,6 +250,73 @@ class TestDispatchMeta:
         finally:
             meta_mod._COMMANDS.remove(command)
 
+    def test_dispatch_tab_separated_command(self) -> None:
+        # Issue #3: tab (or other whitespace) between command word and arg must
+        # dispatch correctly, not produce "Unknown command".
+        outcome = meta_mod.dispatch_meta(":type\tx + 1", _ctx())
+        # ":type" with no valid binding → some error message, but NOT "Unknown command"
+        assert outcome.text is not None
+        assert "Unknown command" not in outcome.text
+
+    def test_dispatch_tab_command_no_arg(self) -> None:
+        # A tab immediately after a known command name with no trailing arg.
+        outcome = meta_mod.dispatch_meta(":help\t", _ctx())
+        assert outcome.text is not None
+        assert ":quit" in outcome.text
+
+    def test_register_meta_command_cache_invalidation(self) -> None:
+        # Issue #6: after registering a new command, dispatch and meta_command_names
+        # must reflect the new entry (cache must be invalidated).
+        seen: list[str] = []
+
+        def handler2(arg: str, ctx: meta_mod.MetaContext) -> meta_mod.MetaOutcome:
+            seen.append(arg)
+            return meta_mod.MetaOutcome(text="cache-test")
+
+        command2 = meta_mod.MetaCommand(
+            names=("xcachetest",),
+            usage=":xcachetest",
+            summary="Cache invalidation test.",
+            handler=handler2,
+        )
+        meta_mod.register_meta_command(command2)
+        try:
+            # Must be dispatchable immediately (cache invalidated on register).
+            outcome = meta_mod.dispatch_meta(":xcachetest hello", _ctx())
+            assert outcome.text == "cache-test"
+            assert seen == ["hello"]
+            # Must appear in names immediately.
+            assert ":xcachetest" in meta_mod.meta_command_names()
+        finally:
+            meta_mod._COMMANDS.remove(command2)
+            # Force cache rebuild by resetting (implementation detail: the cache
+            # must reflect removal too — call meta_command_names after removal).
+
+
+# ---------------------------------------------------------------------------
+# Issue #4: _handle_set uses parse_key_value
+# ---------------------------------------------------------------------------
+
+
+class TestSetUsesParseKeyValue:
+    def test_set_valid(self) -> None:
+        s = ReplSession()
+        s.eval_entry("input count: int")
+        outcome = meta_mod.dispatch_meta(":set count=5", _session_ctx(s))
+        assert outcome.text is not None
+        assert "5" in outcome.text
+
+    def test_set_no_equals_gives_usage(self) -> None:
+        # parse_key_value raises ValueError for missing '='; handler shows usage.
+        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
+        assert "usage" in (outcome.text or "").lower()
+
+    def test_set_empty_key_gives_usage(self) -> None:
+        # parse_key_value raises ValueError for empty key; handler shows usage.
+        outcome = meta_mod.dispatch_meta(":set =5", _session_ctx())
+        assert "usage" in (outcome.text or "").lower()
+
+
 # ---------------------------------------------------------------------------
 # render helpers (single-sourced binding/value formatting)
 # ---------------------------------------------------------------------------

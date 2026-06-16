@@ -24,6 +24,7 @@ reach into the application object.
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
@@ -168,22 +169,29 @@ class AglPromptLexer(Lexer):
         """Tokenize *text* and return per-line styled ``(style, text)`` fragments.
 
         Styled spans are collected as absolute ``(start, end, style)`` offsets
-        into *text*, then sliced per line.  On any lexer error the whole document
-        falls back to plain text — a partially typed line must never raise out of
-        the prompt.
+        into *text*, then bucketed into per-line lists in a **single pass** over
+        ``spans`` using ``bisect`` over the precomputed line-start offsets.
+        This gives O(spans) total work instead of the O(lines × spans) cost of
+        filtering the full span list once per line.
+
+        On any lexer error the whole document falls back to plain text — a
+        partially typed line must never raise out of the prompt.
         """
         spans = _styled_spans(text)
+        lines = text.split("\n")
         line_starts = _line_start_offsets(text)
-        result: list[StyleAndTextTuples] = []
-        for index, line in enumerate(text.split("\n")):
-            base = line_starts[index]
-            line_spans = [
-                (start - base, end - base, style)
-                for start, end, style in spans
-                if base <= start < base + len(line)
-            ]
-            result.append(_fragments_for_line(line, line_spans))
-        return result
+
+        # Bucket spans by line index in one pass: for each span find the line
+        # whose start ≤ span.start via bisect_right, then subtract 1 to get
+        # the containing line's index.  All spans from _styled_spans are within
+        # the text, so line_index is always in [0, len(lines)-1].
+        per_line: list[list[tuple[int, int, str]]] = [[] for _ in lines]
+        for start, end, style in spans:
+            line_index = bisect.bisect_right(line_starts, start) - 1
+            base = line_starts[line_index]
+            per_line[line_index].append((start - base, end - base, style))
+
+        return [_fragments_for_line(line, per_line[i]) for i, line in enumerate(lines)]
 
 
 def _styled_spans(text: str) -> list[tuple[int, int, str]]:

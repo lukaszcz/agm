@@ -954,3 +954,55 @@ class TestUnparseableFeedback:
         # With empty errors the validation_errors list is empty.
         val_errs = result.error.fields.get("validation_errors")
         assert val_errs == []
+
+
+# ---------------------------------------------------------------------------
+# 13. prepare_trace_log truncates an existing file (clean-file guarantee)
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareTraceLogTruncates:
+    """prepare_trace_log must start each run from a clean (empty) file.
+
+    For auto-generated paths the pid-unique component already guarantees a
+    fresh file.  For an explicit --log-file path a new run must TRUNCATE any
+    pre-existing content so the "first traced entry starts from a clean file"
+    contract in the docstring holds.
+    """
+
+    def test_prepare_trace_log_truncates_existing_content(self, tmp_path: Path) -> None:
+        """Pre-existing content at an explicit log path is erased by prepare_trace_log."""
+        from agm.core.log import prepare_trace_log
+
+        log_path = tmp_path / "trace.jsonl"
+        # Pre-create the file with stale content from a previous run.
+        log_path.write_text('{"kind": "run_start", "run_id": "old"}\n', encoding="utf-8")
+        assert log_path.read_text(encoding="utf-8").strip(), "pre-condition: file must be non-empty"
+
+        prepare_trace_log(command_name="exec", no_log=False, log_file=str(log_path))
+
+        content = log_path.read_text(encoding="utf-8")
+        assert content == "", (
+            "prepare_trace_log must truncate the file so each run starts from a clean slate"
+        )
+
+    def test_prepare_trace_log_subsequent_record_is_only_content(
+        self, tmp_path: Path
+    ) -> None:
+        """After truncation, only records written in the current run appear in the file."""
+        from agm.core.log import append_jsonl, prepare_trace_log
+
+        log_path = tmp_path / "trace.jsonl"
+        # Simulate a previous run by pre-populating the file.
+        log_path.write_text('{"kind": "run_start", "run_id": "old"}\n', encoding="utf-8")
+
+        prepare_trace_log(command_name="exec", no_log=False, log_file=str(log_path))
+        # Append a single record as the new run would.
+        append_jsonl(log_path, {"kind": "run_start", "run_id": "new"})
+
+        import json as _json
+
+        lines = [ln for ln in log_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(lines) == 1, f"Only the new record must be present; got {len(lines)} lines"
+        rec = _json.loads(lines[0])
+        assert rec.get("run_id") == "new"

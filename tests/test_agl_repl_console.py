@@ -594,3 +594,137 @@ class TestConfirmFlowThroughLoop:
         # The aborted entry promoted nothing; the later entry succeeded.
         assert all(n != "g" for n, _t, _v in session.bindings())
         assert any(n == "ok" for n, _t, _v in session.bindings())
+
+
+# ---------------------------------------------------------------------------
+# Issue #5: is_incomplete_source classification memo (no double parse)
+# ---------------------------------------------------------------------------
+
+
+class TestIsIncompleteSourceMemo:
+    """is_incomplete_source must not re-parse text it already classified.
+
+    The Enter key binding checks ``is_incomplete`` on every keypress; when
+    Enter is pressed on a *complete* entry the same text is about to be
+    submitted to eval which triggers another parse.  The classification memo
+    ensures only ONE ``_PARSER.parse`` call is made for a given text within
+    that cycle.
+    """
+
+    def test_repeated_call_with_same_text_parses_only_once(self) -> None:
+        from unittest.mock import patch
+
+        import agm.agl.parser.parser as parser_mod
+        from agm.agl.parser import is_incomplete_source
+
+        text = "let x = 42"
+        real_parse = parser_mod._PARSER.parse
+        with patch.object(parser_mod._PARSER, "parse", wraps=real_parse) as mock_parse:
+            result1 = is_incomplete_source(text)
+            result2 = is_incomplete_source(text)
+        # Both calls return the same (False) classification.
+        assert not result1
+        assert not result2
+        # The underlying parser must be called exactly once despite two
+        # is_incomplete_source calls with the same text.
+        count = mock_parse.call_count
+        assert count == 1, f"Expected 1 parse call for repeated text; got {count}"
+
+    def test_different_text_is_reclassified(self) -> None:
+        """Changing the text invalidates the memo and re-parses."""
+        from unittest.mock import patch
+
+        import agm.agl.parser.parser as parser_mod
+        from agm.agl.parser import is_incomplete_source
+
+        real_parse = parser_mod._PARSER.parse
+        with patch.object(parser_mod._PARSER, "parse", wraps=real_parse) as mock_parse:
+            is_incomplete_source("let x = 1")
+            is_incomplete_source("let y = 2")
+        # Two distinct texts → two parse calls.
+        assert mock_parse.call_count == 2
+
+    def test_incomplete_text_memo(self) -> None:
+        """Memo works correctly for incomplete (True) classification too."""
+        from unittest.mock import patch
+
+        import agm.agl.parser.parser as parser_mod
+        from agm.agl.parser import is_incomplete_source
+
+        text = "record R"
+        real_parse = parser_mod._PARSER.parse
+        with patch.object(parser_mod._PARSER, "parse", wraps=real_parse) as mock_parse:
+            r1 = is_incomplete_source(text)
+            r2 = is_incomplete_source(text)
+        assert r1 is True
+        assert r2 is True
+        assert mock_parse.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #8: _styled_lines O(lines × spans) → O(spans) bucketing
+# ---------------------------------------------------------------------------
+
+
+class TestStyledLinesBucketing:
+    """_styled_lines must produce identical output after the bisect-bucketing refactor.
+
+    The characterizing test captures output from a representative multi-line
+    entry using the full AglPromptLexer surface, then verifies the refactored
+    implementation produces exactly the same per-line fragment lists.
+
+    Because _styled_lines is a static method we test it directly, which lets
+    us compare before/after without needing a full prompt_toolkit Document.
+    """
+
+    _MULTILINE_TEXT = "let x = 42\nlet y = x + 1\nprint y"
+
+    def _get_styled_lines(self, text: str) -> list[list[tuple[str, str]]]:
+        """Return per-line fragments as plain lists for easy comparison."""
+        return [list(line) for line in AglPromptLexer._styled_lines(text)]
+
+    def test_multiline_fragment_text_coverage(self) -> None:
+        """Every character of every line appears exactly once in the fragments."""
+        lines = self._MULTILINE_TEXT.split("\n")
+        styled = self._get_styled_lines(self._MULTILINE_TEXT)
+        assert len(styled) == len(lines)
+        for i, (line, frags) in enumerate(zip(lines, styled)):
+            reconstructed = "".join(text for _style, text in frags)
+            assert reconstructed == line, (
+                f"Line {i}: reconstructed {reconstructed!r} != original {line!r}"
+            )
+
+    def test_keywords_styled_on_correct_lines(self) -> None:
+        """Keywords on each line receive the keyword style class."""
+        styled = self._get_styled_lines(self._MULTILINE_TEXT)
+        # Line 0: 'let x = 42' — 'let' should be styled as keyword
+        line0_styles = {style for style, _ in styled[0]}
+        assert "class:agl.keyword" in line0_styles
+        # Line 2: 'print y' — 'print' should be styled as keyword
+        line2_styles = {style for style, _ in styled[2]}
+        assert "class:agl.keyword" in line2_styles
+
+    def test_no_span_bleed_across_lines(self) -> None:
+        """Tokens from one line must not appear in fragments for a different line."""
+        text = "let a = 1\nlet b = 2"
+        styled = self._get_styled_lines(text)
+        # Line 0 should not contain "b" as styled text (it belongs to line 1)
+        line0_text = "".join(t for _s, t in styled[0])
+        assert "b" not in line0_text or line0_text == "let a = 1"
+        # Line 1 text reconstruction must equal 'let b = 2'
+        line1_text = "".join(t for _s, t in styled[1])
+        assert line1_text == "let b = 2"
+
+    def test_single_line_unchanged(self) -> None:
+        """Single-line input still produces exactly one fragment list."""
+        text = "let x = 1 + 2"
+        styled = self._get_styled_lines(text)
+        assert len(styled) == 1
+        assert "".join(t for _s, t in styled[0]) == text
+
+    def test_empty_line_in_middle(self) -> None:
+        """An empty line in a multi-line input produces an empty fragment list."""
+        text = "let x = 1\n\nlet y = 2"
+        styled = self._get_styled_lines(text)
+        assert len(styled) == 3
+        assert styled[1] == [("", "")]

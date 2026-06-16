@@ -49,6 +49,47 @@ EntryKind = Literal["expression", "binding", "declaration", "statement"]
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 
 
+def _set_targets_in_program(program: "Program") -> frozenset[str]:
+    """Return the set of variable names targeted by ``set`` statements in *program*.
+
+    Recursively walks all statements in the program, including nested bodies
+    inside ``do``/``if``/``case``/``try`` blocks.  Used by
+    ``_evaluate_and_promote`` to determine which session bindings need to be
+    snapshotted before evaluation (only those names can be mutated in-place by
+    a ``set``).
+    """
+    from agm.agl.syntax.nodes import (
+        CaseStmt,
+        DoUntil,
+        IfStmt,
+        SetStmt,
+        TryCatch,
+    )
+    from agm.agl.syntax.nodes import Stmt as StmtType
+
+    targets: set[str] = set()
+
+    def _walk(stmts: "tuple[StmtType, ...]") -> None:
+        for stmt in stmts:
+            if isinstance(stmt, SetStmt):
+                targets.add(stmt.target)
+            elif isinstance(stmt, DoUntil):
+                _walk(stmt.body)
+            elif isinstance(stmt, IfStmt):
+                for if_branch in stmt.branches:
+                    _walk(if_branch.body)
+            elif isinstance(stmt, CaseStmt):
+                for case_branch in stmt.branches:
+                    _walk(case_branch.body)
+            elif isinstance(stmt, TryCatch):
+                _walk(stmt.body)
+                for handler in stmt.handlers:
+                    _walk(handler.body)
+
+    _walk(program.body)
+    return frozenset(targets)
+
+
 def has_runnable_statements(text: str) -> bool:
     """Return ``True`` when *text* contains at least one statement to evaluate.
 
@@ -396,12 +437,21 @@ class ReplSession:
         # binding's ``.value`` in place in the persistent value scope (the child
         # only holds NEW let/var bindings).  New keys never land here and ``set``
         # never adds/removes keys (it only updates an existing binding via
-        # ``Scope.set_value``), so a shallow value snapshot of the session frame
-        # is a complete, correct rollback point — Value objects are immutable, so
-        # storing the reference suffices.  On a runtime raise we restore each
-        # binding's ``.value`` from this snapshot.
+        # ``Scope.set_value``), so a shallow value snapshot of ONLY the binding
+        # names targeted by ``set`` statements in this entry is a complete,
+        # correct rollback point — Value objects are immutable, so storing the
+        # reference suffices.  On a runtime raise we restore each binding's
+        # ``.value`` from this snapshot.
+        #
+        # Optimisation: entries with no ``set`` targeting a prior session binding
+        # need no snapshot at all (new let/var bindings live in the child scope
+        # and are simply discarded on abort).  We collect targeted names
+        # statically from the checked program before evaluation.
+        set_targets = _set_targets_in_program(program)
         value_snapshot: dict[str, Value] = {
-            name: binding.value for name, binding in self._value_scope.bindings.items()
+            name: binding.value
+            for name, binding in self._value_scope.bindings.items()
+            if name in set_targets
         }
 
         # One trace run per entry: a fresh ``TraceStore`` (own ``run_id``)
@@ -516,12 +566,14 @@ class ReplSession:
         Shared by the ``AglRaise`` and cancellation paths.  Discarding the entry's
         child scope drops new ``let``/``var`` bindings; restoring each session
         binding's ``.value`` undoes any in-place ``set`` mutation of a prior
-        binding.  The session frame's key set cannot change during eval (``set``
-        only updates existing bindings), so restoring values is a complete rollback.
+        binding.  The snapshot contains ONLY the names that could have been mutated
+        (those targeted by ``set`` statements in the entry), and all of them must
+        still be present in the session frame (``set`` only updates existing
+        bindings, never adds or removes keys).
         """
-        assert self._value_scope.bindings.keys() == value_snapshot.keys()
-        for bname, binding in self._value_scope.bindings.items():
-            binding.value = value_snapshot[bname]
+        assert value_snapshot.keys() <= self._value_scope.bindings.keys()
+        for bname, old_value in value_snapshot.items():
+            self._value_scope.bindings[bname].value = old_value
 
     def _promote(
         self,
@@ -552,7 +604,10 @@ class ReplSession:
             if isinstance(stmt, InputDecl):
                 input_type = checked.type_env.get_binding_type(stmt.node_id)
                 assert input_type is not None
-                # A re-declared input keeps no stale value (shadows fresh).
+                # A re-declared input keeps no stale value (shadows fresh):
+                # remove any previously-set value from the value scope so that
+                # _declared_inputs and _value_scope agree — both report unset.
+                self._value_scope.bindings.pop(stmt.name, None)
                 self._declared_inputs[stmt.name] = (input_type, None)
                 # Apply a pending pre-seeded value (``--input``/``preset_input``)
                 # now that the input is declared.  A conversion failure leaves the

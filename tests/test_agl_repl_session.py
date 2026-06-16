@@ -881,6 +881,118 @@ class TestPresetInput:
 
 
 # ---------------------------------------------------------------------------
+# Issue #1 — re-declared input: stale value must be purged from value scope
+# ---------------------------------------------------------------------------
+
+
+class TestInputRedeclaration:
+    def test_redeclare_input_purges_stale_value_from_bindings(self) -> None:
+        """Re-declaring an already-:set input must remove the old value.
+
+        After `input x: int` → `:set x=5` → `input x: int` again:
+        - `inputs()` must report x as unset (value is None)
+        - `bindings()` must NOT list x (no value in scope)
+        The two tables must agree: no stale value survives.
+        """
+        s = ReplSession()
+        r1 = s.eval_entry("input x: int")
+        assert r1.ok
+        s.set_input("x", "5")
+
+        # Confirm x is set in both tables before re-declaring.
+        ins = {name: val for name, _t, val in s.inputs()}
+        assert ins["x"] is not None
+        assert any(n == "x" for n, _t, _v in s.bindings())
+
+        # Re-declare the same input.
+        r2 = s.eval_entry("input x: int")
+        assert r2.ok
+
+        # inputs() must report x as unset.
+        ins2 = {name: val for name, _t, val in s.inputs()}
+        assert ins2["x"] is None, "Re-declared input must be unset in inputs()"
+
+        # bindings() must NOT list x — the stale value must be gone from the
+        # value scope so the two tables agree.
+        assert all(n != "x" for n, _t, _v in s.bindings()), (
+            "Re-declared input must not appear in bindings() with its stale value"
+        )
+
+    def test_redeclare_input_then_reference_raises_unset_guard(self) -> None:
+        """After re-declaration the unset-input guard must fire on reference."""
+        s = ReplSession()
+        s.eval_entry("input x: int")
+        s.set_input("x", "5")
+        # Re-declare — x is now unset again.
+        s.eval_entry("input x: int")
+        r = s.eval_entry("x + 1")
+        assert not r.ok
+        assert r.diagnostics
+        assert ":set" in r.diagnostics[0].message
+
+    def test_redeclare_input_then_reset_works(self) -> None:
+        """Re-set after re-declaration succeeds and value is usable."""
+        s = ReplSession()
+        s.eval_entry("input x: int")
+        s.set_input("x", "5")
+        s.eval_entry("input x: int")
+        s.set_input("x", "10")
+        r = s.eval_entry("x + 1")
+        assert r.ok
+        assert _int(r.value) == 11
+
+
+# ---------------------------------------------------------------------------
+# Issue #7 — snapshot optimisation: set-to-prior binding still rolls back
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotOptimisation:
+    def test_set_to_prior_binding_in_raising_entry_rolls_back(self) -> None:
+        """A ``set`` to a prior session binding that raises mid-entry rolls back.
+
+        This verifies the rollback invariant is intact even when the snapshot
+        optimisation narrows what is snapshotted.
+        """
+        s = ReplSession()
+        r1 = s.eval_entry("var counter = 0")
+        assert r1.ok
+        # This entry sets counter=99 then raises (division by zero).
+        r2 = s.eval_entry("set counter = 99\nlet _z: decimal = 1 / 0")
+        assert not r2.ok
+        assert r2.error is not None
+        # The set must have been rolled back.
+        vals = {n: _int(v) for n, _t, v in s.bindings()}
+        assert vals["counter"] == 0
+
+    def test_entry_without_set_does_not_corrupt_prior_bindings(self) -> None:
+        """An entry with no ``set`` statements leaves prior bindings untouched.
+
+        This guards that the optimisation (no snapshot for no-set entries) does
+        not accidentally allow prior bindings to be mutated on success.
+        """
+        s = ReplSession()
+        s.eval_entry("var a = 1")
+        s.eval_entry("let b = 2")
+        # An entry that only reads a and b, with no set.
+        r = s.eval_entry("a + b")
+        assert r.ok
+        vals = {n: _int(v) for n, _t, v in s.bindings()}
+        assert vals["a"] == 1
+        assert vals["b"] == 2
+
+    def test_entry_with_only_new_bindings_does_not_disturb_prior(self) -> None:
+        """Adding new bindings in an entry that raises leaves old bindings clean."""
+        s = ReplSession()
+        s.eval_entry("let x = 10")
+        # Entry raises; it tries to add a new binding (no set to prior).
+        r = s.eval_entry("let _fail: decimal = 1 / 0")
+        assert not r.ok
+        vals = {n: _int(v) for n, _t, v in s.bindings()}
+        assert vals == {"x": 10}  # x untouched; _fail never promoted
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

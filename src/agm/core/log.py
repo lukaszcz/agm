@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
-from agm.core.fs import append_text, mkdir
+from agm.core.fs import append_text, mkdir, write_text
 from agm.core.path import display_path
 from agm.vcs import git as git_helpers
 
@@ -62,12 +62,12 @@ def prepare_trace_log(
 
     Resolves via :func:`resolve_log_file` (``unique=True`` to avoid collisions
     on the second-granularity stamp), then creates the parent directory and
-    touch-appends an empty string to confirm writability without writing a
-    record (so the first traced entry starts from a clean file).  An unwritable
-    path exits 1 with a clean ``Error: ...`` BEFORE any program runs instead of
-    crashing mid-run.  Returns ``None`` when *no_log* is set; callers that
-    suppress tracing for other reasons (e.g. ``--dry-run``) short-circuit before
-    calling.  Shared by ``agm exec`` and ``agm repl``.
+    truncates the file to empty to confirm writability and ensure each run
+    starts from a clean file.  An unwritable path exits 1 with a clean
+    ``Error: ...`` BEFORE any program runs instead of crashing mid-run.
+    Returns ``None`` when *no_log* is set; callers that suppress tracing for
+    other reasons (e.g. ``--dry-run``) short-circuit before calling.  Shared
+    by ``agm exec`` and ``agm repl``.
     """
     log_path = resolve_log_file(
         command_name=command_name, no_log=no_log, log_file=log_file, unique=True
@@ -75,7 +75,7 @@ def prepare_trace_log(
     if log_path is not None:
         try:
             mkdir(log_path.parent, parents=True, exist_ok=True)
-            append_text(log_path, "", encoding="utf-8")
+            write_text(log_path, "", encoding="utf-8")
         except OSError as exc:
             print(f"Error: cannot write trace log to {log_path}: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc

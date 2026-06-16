@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError
 from agm.agl.repl.agentmode import AgentMode
+from agm.core.cli_helpers import parse_key_value
 
 if TYPE_CHECKING:
     from agm.agl.repl.session import ReplSession
@@ -175,11 +176,10 @@ def _handle_set(arg: str, ctx: MetaContext) -> MetaOutcome:
     if echo_outcome is not None:
         return echo_outcome
 
-    name, sep, raw = arg.partition("=")
-    if not sep or not name.strip():
+    try:
+        name, raw = parse_key_value(arg)
+    except ValueError:
         return MetaOutcome(text="usage: :set name=value  |  :set echo on|off")
-    name = name.strip()
-    raw = raw.strip()
     try:
         ctx.session.set_input(name, raw)
     except AglError as exc:
@@ -337,18 +337,38 @@ _COMMANDS: list[MetaCommand] = [
 ]
 
 
-def register_meta_command(command: MetaCommand) -> None:
-    """Register an additional meta-command (the M3 extension entry point)."""
-    _COMMANDS.append(command)
+# Module-level caches for the command index and name tuple.  Both are rebuilt
+# once at import time (when ``_COMMANDS`` is fully populated) and invalidated
+# by ``register_meta_command`` whenever a new command is added at runtime.
+_command_index_cache: dict[str, MetaCommand] | None = None
+_command_names_cache: tuple[str, ...] | None = None
 
 
-def _command_index() -> dict[str, MetaCommand]:
-    """Build a name → command lookup from the current registry."""
+def _rebuild_caches() -> None:
+    """Rebuild both module-level caches from the current ``_COMMANDS`` list."""
+    global _command_index_cache, _command_names_cache
     index: dict[str, MetaCommand] = {}
+    names: list[str] = []
     for command in _COMMANDS:
         for name in command.names:
             index[name] = command
-    return index
+            names.append(f":{name}")
+    _command_index_cache = index
+    _command_names_cache = tuple(names)
+
+
+def register_meta_command(command: MetaCommand) -> None:
+    """Register an additional meta-command (the M3 extension entry point)."""
+    _COMMANDS.append(command)
+    _rebuild_caches()
+
+
+def _command_index() -> dict[str, MetaCommand]:
+    """Return the cached name → command lookup, building it on first call."""
+    if _command_index_cache is None:
+        _rebuild_caches()
+    assert _command_index_cache is not None
+    return _command_index_cache
 
 
 def meta_command_names() -> tuple[str, ...]:
@@ -357,10 +377,10 @@ def meta_command_names() -> tuple[str, ...]:
     This is the single source of truth shared with the console completer so
     tab-completion always matches the live registry.
     """
-    names: list[str] = []
-    for command in _COMMANDS:
-        names.extend(f":{name}" for name in command.names)
-    return tuple(names)
+    if _command_names_cache is None:
+        _rebuild_caches()
+    assert _command_names_cache is not None
+    return _command_names_cache
 
 
 def dispatch_meta(line: str, ctx: MetaContext) -> MetaOutcome:
@@ -374,8 +394,9 @@ def dispatch_meta(line: str, ctx: MetaContext) -> MetaOutcome:
     body = line.strip()
     assert body.startswith(":")  # the loop only calls us for ``:`` lines
     without_colon = body[1:]
-    name, _, rest = without_colon.partition(" ")
-    arg = rest.strip()
+    parts = without_colon.split(None, 1)
+    name = parts[0] if parts else ""
+    arg = parts[1].strip() if len(parts) > 1 else ""
 
     command = _command_index().get(name)
     if command is None:

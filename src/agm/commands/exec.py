@@ -121,6 +121,18 @@ def run(args: ExecArgs) -> None:
     # Config wins over source hints (dict merge: later keys override earlier).
     per_agent_cmds = {**source_hints, **config.agents}
 
+    # Validate each DECLARED agent's resolved runner command eagerly, honouring
+    # the same pre-execution contract as the default runner above: a malformed
+    # (e.g. unclosed quote) or empty per-agent command — from a source `agent`
+    # runner hint or an `[exec.agents.<name>]` config entry — exits 1 before any
+    # statement runs, rather than failing lazily mid-execution at dispatch.
+    # Only declared (dispatchable) agents are checked; a config entry for an
+    # agent the program never declares is inert and never validated.
+    for d in decls:
+        cmd = per_agent_cmds.get(d.name)
+        if cmd is not None:
+            split_command(cmd, kind="runner")
+
     # One factory backs ``prompt`` (the default) and every declared name; it
     # dispatches by ``request.agent`` against ``per_agent_cmds``, falling back
     # to the default runner (the floor).  ``command_with_prompt_target``

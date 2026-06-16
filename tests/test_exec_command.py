@@ -1581,6 +1581,74 @@ class TestExecWhitespaceRunner:
         assert "should-not-run" not in captured.out
 
 
+class TestExecPerAgentRunnerValidation:
+    """A malformed/empty per-agent runner command (source hint or
+    [exec.agents] config) for a DECLARED agent exits 1 BEFORE any statement
+    runs — the same pre-execution contract as the default runner — instead of
+    failing lazily mid-execution at dispatch."""
+
+    def _args(self, file: str) -> ExecArgs:
+        return ExecArgs(
+            file=file,
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner="claude -p",  # valid default; the per-agent hint is the offender
+            no_log=True,
+            log_file=None,
+        )
+
+    def test_empty_source_hint_exits_1_before_execution(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        # 'BEFORE' would print if the empty hint were caught lazily at dispatch.
+        agl_file.write_text('agent x = ""\nprint "BEFORE"\nlet r = x "go"\n')
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(self._args(str(agl_file)))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "BEFORE" not in captured.out
+
+    def test_malformed_quote_source_hint_exits_1_no_traceback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('agent x = "bad \'quote"\nlet r = x "go"\n')
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(self._args(str(agl_file)))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_config_only_undeclared_bad_command_is_inert(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # A malformed [exec.agents] entry for an agent the program never
+        # declares must NOT fail the run — it is inert (never dispatched).
+        from agm.config.general import ExecConfig
+
+        bad_config = ExecConfig(
+            runner="claude -p",
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=None,
+            agents={"ghost": "bad 'quote"},  # malformed, but for an undeclared agent
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: bad_config)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "ran"\n')
+        # Must not raise (the inert ghost command is never validated/dispatched).
+        exec_command.run(self._args(str(agl_file)))
+        captured = capsys.readouterr()
+        assert "ran" in captured.out
+
+
 # ---------------------------------------------------------------------------
 # Task 1 (MAJOR): malformed-quoting --runner exits 1 with clean Error, no traceback
 # ---------------------------------------------------------------------------

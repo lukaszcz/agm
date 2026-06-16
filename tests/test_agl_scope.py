@@ -1635,7 +1635,6 @@ class TestParentScopeSeam:
             agent_names=frozenset(),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default"}),
         )
 
         # Entry 1: declare and check a mutable binding.

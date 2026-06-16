@@ -11,7 +11,7 @@ source (.agl)
   → [5] type checking  (full static pass; selects output contract specs)
   → host preparation  (materializes output contracts; no program execution)
   → [6] evaluator  (tree-walking interpreter)
-        ↘ host runtime: agents, codecs, renderers, trace store
+        ↘ host runtime: agents, codecs, trace store
 ```
 
 ## Firewall rule

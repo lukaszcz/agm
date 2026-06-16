@@ -122,8 +122,7 @@ policy can never fire.
 
 ## The prompt
 
-The template argument is rendered with **prompt rendering**: interpolated
-values are boundary-marked and type-directed
+The template argument is rendered using the uniform interpolation rules
 ([Strings and interpolation](strings-and-interpolation.md)). The rendered
 prompt is delivered to the agent verbatim, together with the contract's
 format instructions; the host must not perform any further template or
@@ -320,8 +319,8 @@ parsing and normally fails with `AgentParseError`.
 ## Text targets
 
 For a `text` target the raw output is bound verbatim — no parsing, no
-validation, no boundary processing. `on_parse_error` on such a call draws a
-static warning, as noted above.
+validation. `on_parse_error` on such a call draws a static warning, as noted
+above.
 
 ## What the agent receives
 

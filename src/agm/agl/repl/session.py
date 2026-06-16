@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from agm.agl.eval.values import Value
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.runtime.render import RendererFn
     from agm.agl.runtime.runtime import HostEnvironment, RunError
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.scope.symbols import ResolvedProgram, ScopeNode
@@ -173,10 +172,9 @@ class ReplSession:
     """Persistent incremental AgL evaluation session (UI-free core).
 
     Constructor parameters mirror ``WorkflowRuntime`` so a host can wire the same
-    agent backing.  Registration (``register_agent``/``register_codec``/
-    ``register_renderer``) is delegated to an internal ``WorkflowRuntime`` so the
-    reserved-name / duplicate validation and host-environment assembly are shared
-    rather than duplicated.
+    agent backing.  Registration (``register_agent``/``register_codec``) is
+    delegated to an internal ``WorkflowRuntime`` so the reserved-name / duplicate
+    validation and host-environment assembly are shared rather than duplicated.
 
     Each entry is promoted into the session **atomically**: if evaluation raises,
     the entry has NO in-session effect — new ``let``/``var`` bindings are discarded
@@ -250,16 +248,6 @@ class ReplSession:
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``WorkflowRuntime`` validation)."""
         self._runtime.register_codec(codec)
-
-    def register_renderer(
-        self,
-        name: str,
-        fn: "RendererFn",
-        *,
-        supported_types: "frozenset[str] | None" = None,
-    ) -> None:
-        """Register a custom renderer (shares ``WorkflowRuntime`` validation)."""
-        self._runtime.register_renderer(name, fn, supported_types=supported_types)
 
     # ------------------------------------------------------------------
     # Core evaluation
@@ -524,7 +512,6 @@ class ReplSession:
             registry=host_env.registry,
             contracts=typed_contracts,
             type_env=checked.type_env,
-            renderers=host_env.renderers,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             source=text,

@@ -708,33 +708,12 @@ class TestRegistrationAndAgents:
         with pytest.raises(ValueError):
             s.register_agent("dup", CountingAgent("y"))
 
-    def test_register_codec_and_renderer_share_validation(self) -> None:
-        from agm.agl.eval.values import Value
+    def test_register_codec_validation(self) -> None:
         from agm.agl.runtime.codec import JsonCodec
 
         s = ReplSession()
         with pytest.raises(ValueError):
             s.register_codec(JsonCodec())  # reserved built-in name
-
-        def my_renderer(value: Value, opt: str | None) -> str:
-            return "x"
-
-        with pytest.raises(ValueError):
-            s.register_renderer("default", my_renderer)  # reserved name
-
-    def test_registered_renderer_is_used(self) -> None:
-        from agm.agl.eval.values import Value
-
-        def shout(value: Value, opt: str | None) -> str:
-            return "SHOUT"
-
-        s = ReplSession()
-        s.register_renderer("shout", shout)
-        # Use it in an interpolation; the rendered output is consumed by print
-        # (no observable echo in M1b) but the entry must type-check & run.
-        s.eval_entry('let x = "hi"')
-        r = s.eval_entry('print "${x as shout}"')
-        assert r.ok
 
 
 # ---------------------------------------------------------------------------

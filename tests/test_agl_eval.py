@@ -9,7 +9,7 @@ NOTE: Tests are scoped to what the M1 parser and typecheck support:
 - Statements: input, let, var, set, pass, print, expr_stmt
 - Expressions: var refs, scalar literals, templates, agent calls
 - Types: text (default), int, decimal, bool, json
-- Templates with default and raw renderers
+- Templates with uniform value rendering
 """
 
 from __future__ import annotations
@@ -188,8 +188,8 @@ def _text_seg(text: str) -> ast.TextSegment:
     return ast.TextSegment(text=text, span=_sp(), node_id=_nid())
 
 
-def _interp_seg(expr: Expr, *, render: str | None = None) -> ast.InterpSegment:
-    return ast.InterpSegment(expr=expr, render=render, span=_sp(), node_id=_nid())
+def _interp_seg(expr: Expr) -> ast.InterpSegment:
+    return ast.InterpSegment(expr=expr, span=_sp(), node_id=_nid())
 
 
 def _case_expr(subject: Expr, *branches: ast.CaseExprBranch) -> ast.CaseExpr:
@@ -376,7 +376,6 @@ def _check_program(
         agent_names=frozenset(),
         has_default_agent=has_default_agent,
         codec_kinds={"text": frozenset({"text"})},
-        renderer_names=frozenset({"default", "raw"}),
     )
     return check(resolved, caps)
 
@@ -568,16 +567,16 @@ class TestTemplates:
 
         assert result.bindings["x"] == TextValue("plain text")
 
-    def test_template_with_int_interp_raw(self) -> None:
-        # int interpolation as raw: no boundary marker
-        result = run("let n = 5\nlet msg = \"n is ${n as raw}\"")
+    def test_template_with_int_interp(self) -> None:
+        # int interpolation: no boundary marker
+        result = run('let n = 5\nlet msg = "n is ${n}"')
         assert result.ok
         from agm.agl.eval.values import TextValue
 
         assert result.bindings["msg"] == TextValue("n is 5")
 
-    def test_template_with_text_interp_raw(self) -> None:
-        result = run('let s = "hello"\nlet msg = "say ${s as raw}"')
+    def test_template_with_text_interp(self) -> None:
+        result = run('let s = "hello"\nlet msg = "say ${s}"')
         assert result.ok
         from agm.agl.eval.values import TextValue
 
@@ -599,25 +598,8 @@ class TestTemplates:
         assert v.value == "x: abc"
         assert "<dsl-value" not in v.value
 
-    def test_template_explicit_as_default_no_boundary_markers(self) -> None:
-        """F3: an explicit ``${v as default}`` in a console context renders as
-        plain text, NOT as a ``<dsl-value>`` boundary tag.
-
-        Regression: the console renderer previously only special-cased an
-        *implicit* (``None``) renderer, so ``as default`` routed through the
-        prompt renderer and leaked boundary tags into ``let``/``print`` output.
-        """
-        result = run('let v = "hi"\nlet t = "x: ${v as default}"')
-        assert result.ok
-        from agm.agl.eval.values import TextValue
-
-        v = result.bindings["t"]
-        assert isinstance(v, TextValue)
-        assert v.value == "x: hi"
-        assert "<dsl-value" not in v.value
-
-    def test_template_with_bool_interp_raw(self) -> None:
-        result = run('let b = true\nlet msg = "${b as raw}"')
+    def test_template_with_bool_interp(self) -> None:
+        result = run('let b = true\nlet msg = "${b}"')
         assert result.ok
         from agm.agl.eval.values import TextValue
 
@@ -772,29 +754,16 @@ class TestAgentCalls:
 
         assert result.bindings["x"] == TextValue("output")
 
-    def test_agent_receives_rendered_prompt_raw(self) -> None:
+    def test_agent_receives_rendered_prompt(self) -> None:
         prompts: list[str] = []
 
         def agent(req: AgentRequest) -> str:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let name = "world"\nlet x = ask "Hello ${name as raw}"', agent)
+        run_with_default_agent('let name = "world"\nlet x = ask "Hello ${name}"', agent)
         assert len(prompts) == 1
-        assert prompts[0] == "Hello world"
-
-    def test_agent_prompt_contains_boundary_markers_for_text(self) -> None:
-        prompts: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            prompts.append(req.prompt)
-            return "ok"
-
-        run_with_default_agent('let artifact = "content"\nlet x = ask "see ${artifact}"', agent)
-        assert len(prompts) == 1
-        assert "<dsl-value" in prompts[0]
-        assert "content" in prompts[0]
-        assert "</dsl-value>" in prompts[0]
+        assert "world" in prompts[0]
 
     def test_agent_receives_request_with_agent_name(self) -> None:
         received: list[AgentRequest] = []
@@ -914,7 +883,7 @@ class TestInputValidation:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('input name\nlet x = ask "Hi ${name as raw}"', inputs={})
+        rt.run('input name\nlet x = ask "Hi ${name}"', inputs={})
         assert calls == []
 
     def test_input_used_in_template(self) -> None:
@@ -925,7 +894,7 @@ class TestInputValidation:
             return "ok"
 
         run_with_default_agent(
-            'input name\nlet x = ask "Hello ${name as raw}"',
+            'input name\nlet x = ask "Hello ${name}"',
             agent,
             inputs={"name": "Alice"},
         )
@@ -940,12 +909,12 @@ class TestInputValidation:
 
 
 # ---------------------------------------------------------------------------
-# Boundary-marked rendering (§2.12)
+# Uniform rendering in prompts (no boundary tags)
 # ---------------------------------------------------------------------------
 
 
-class TestBoundaryRendering:
-    def test_text_interpolation_default_has_dsl_value_tag(self) -> None:
+class TestUniformRendering:
+    def test_text_interpolation_is_verbatim(self) -> None:
         prompts: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -953,22 +922,10 @@ class TestBoundaryRendering:
             return "ok"
 
         run_with_default_agent('let artifact = "hello"\nlet x = ask "see ${artifact}"', agent)
-        assert '<dsl-value name="artifact" type="text">' in prompts[0]
         assert "hello" in prompts[0]
-        assert "</dsl-value>" in prompts[0]
-
-    def test_raw_renderer_bypasses_boundary(self) -> None:
-        prompts: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            prompts.append(req.prompt)
-            return "ok"
-
-        run_with_default_agent('let s = "raw content"\nlet x = ask "${s as raw}"', agent)
-        assert prompts[0] == "raw content"
         assert "<dsl-value" not in prompts[0]
 
-    def test_int_interp_default_is_scalar_no_boundary(self) -> None:
+    def test_int_interp_is_scalar_no_boundary(self) -> None:
         prompts: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -979,7 +936,7 @@ class TestBoundaryRendering:
         assert "5" in prompts[0]
         assert "<dsl-value" not in prompts[0]
 
-    def test_bool_interp_default_is_scalar_no_boundary(self) -> None:
+    def test_bool_interp_is_scalar_no_boundary(self) -> None:
         prompts: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -990,19 +947,7 @@ class TestBoundaryRendering:
         assert "true" in prompts[0]
         assert "<dsl-value" not in prompts[0]
 
-    def test_text_interp_name_attribute_is_varname(self) -> None:
-        prompts: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            prompts.append(req.prompt)
-            return "ok"
-
-        run_with_default_agent(
-            'let my_artifact = "content"\nlet x = ask "${my_artifact}"', agent
-        )
-        assert 'name="my_artifact"' in prompts[0]
-
-    def test_null_interp_boundary_marked(self) -> None:
+    def test_null_interp_is_verbatim(self) -> None:
         prompts: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -1010,35 +955,25 @@ class TestBoundaryRendering:
             return "ok"
 
         run_with_default_agent('let j: json = null\nlet x = ask "data: ${j}"', agent)
-        assert "<dsl-value" in prompts[0]
         assert "null" in prompts[0]
+        assert "<dsl-value" not in prompts[0]
 
-    def test_text_interp_non_varref_has_no_name_attribute(self) -> None:
-        """Non-VarRef interpolation in an agent prompt has no ``name=`` tag.
-
-        When the interpolated expression is not a simple ``VarRef`` (e.g. a
-        field access like ``e.message``), the boundary tag omits the ``name=``
-        attribute (``var_name=None`` in ``_eval_template``).
-        """
+    def test_field_access_interp_renders_value(self) -> None:
+        """FieldAccess interpolation renders the value directly."""
         prompts: list[str] = []
 
         def agent(req: AgentRequest) -> str:
             prompts.append(req.prompt)
             return "ok"
 
-        # ``e.message`` is a FieldAccess, not a VarRef — exercises the
-        # ``var_name = None`` branch in ``_eval_template``.
         source = 'let x = ask "saw ${e.message}"'
         run_with_default_agent(
             "record Err\n  message: text\n"
             'let e = Err(message: "oops")\n' + source,
             agent,
         )
-        # The tag should not have a ``name=`` attribute.
-        assert 'name="e"' not in prompts[0]
-        # But the boundary marker is still present for text values.
-        assert "<dsl-value" in prompts[0]
         assert "oops" in prompts[0]
+        assert "<dsl-value" not in prompts[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1189,7 +1124,7 @@ class TestMultipleAgentCalls:
             return "second-output"
 
         result = run_with_default_agent(
-            'let a = ask "First"\nlet b = ask "Use ${a as raw}"', agent
+            'let a = ask "First"\nlet b = ask "Use ${a}"', agent
         )
         assert result.ok
         assert "first-output" in calls[1]
@@ -1816,56 +1751,56 @@ class TestCodecUnit:
 
 
 class TestRenderUnit:
-    def test_render_for_console_list_value(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_render_value_list_value(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
         v = ListValue(elements=(IntValue(1), IntValue(2)))
-        text = render_for_console(v)
+        text = render_value(v)
         assert "1" in text
         assert "2" in text
 
-    def test_render_for_console_dict_value(self) -> None:
+    def test_render_value_dict_value(self) -> None:
         from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
         v = DictValue(entries={"key": TextValue("val")})
-        text = render_for_console(v)
+        text = render_value(v)
         assert "key" in text
         assert "val" in text
 
-    def test_render_for_console_record_value(self) -> None:
+    def test_render_value_record_value(self) -> None:
         from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
         v = RecordValue(type_name="Point", fields={"x": IntValue(3)})
-        text = render_for_console(v)
+        text = render_value(v)
         assert "3" in text
 
-    def test_render_for_console_enum_value(self) -> None:
+    def test_render_value_enum_value(self) -> None:
         from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
         v = EnumValue(type_name="Status", variant="Active", fields={})
-        text = render_for_console(v)
+        text = render_value(v)
         assert "Active" in text
 
-    def test_render_for_console_exception_value(self) -> None:
+    def test_render_value_exception_value(self) -> None:
         from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
         v = ExceptionValue(
             type_name="Abort", fields={"message": TextValue("fatal"), "trace_id": TextValue("")}
         )
-        text = render_for_console(v)
+        text = render_value(v)
         assert "fatal" in text
 
-    def test_render_for_console_json_value_null(self) -> None:
+    def test_render_value_json_value_null(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
         v = JsonValue(None)
-        text = render_for_console(v)
+        text = render_value(v)
         assert "null" in text
 
     def test_value_to_json_obj_decimal(self) -> None:
@@ -1968,91 +1903,46 @@ class TestRenderUnit:
         assert dumps_exact([], indent=None) == "[]"
         assert dumps_exact({}, indent=None) == "{}"
 
-    def test_render_for_prompt_json_renderer(self) -> None:
+    def test_render_value_int(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
         v = IntValue(42)
-        text = render_for_prompt(v, renderer_name="json", var_name=None)
+        text = render_value(v)
         assert "42" in text
 
-    def test_render_for_prompt_bullets_list(self) -> None:
+    def test_render_value_list_is_pretty_json(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
         v = ListValue(elements=(IntValue(1), IntValue(2)))
-        text = render_for_prompt(v, renderer_name="bullets", var_name=None)
-        assert "- 1" in text
-        assert "- 2" in text
+        text = render_value(v)
+        assert "1" in text
+        assert "2" in text
+        assert "<dsl-value" not in text
 
-    def test_render_for_prompt_bullets_non_list(self) -> None:
-        from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        v = IntValue(5)
-        text = render_for_prompt(v, renderer_name="bullets", var_name=None)
-        assert "5" in text
-
-    def test_render_for_prompt_unknown_renderer_raises(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        v = TextValue("hello")
-        # Unknown renderer is a loud internal error, not a silent default
-        # fallback (F2, M3b).
-        with pytest.raises(AssertionError, match="nonexistent"):
-            render_for_prompt(
-                v, renderer_name="nonexistent", var_name="x", renderers={}
-            )
-
-    def test_render_default_json_value(self) -> None:
+    def test_render_value_json_value(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
         v = JsonValue({"a": 1})
-        text = render_for_prompt(v, renderer_name="default", var_name="data")
-        assert "<dsl-value" in text
+        text = render_value(v)
         assert '"a"' in text
+        assert "<dsl-value" not in text
 
-    def test_type_kind_str_for_all_types(self) -> None:
-        from agm.agl.eval.values import (
-            BoolValue,
-            DecimalValue,
-            DictValue,
-            EnumValue,
-            ExceptionValue,
-            IntValue,
-            JsonValue,
-            ListValue,
-            RecordValue,
-            TextValue,
-        )
-        from agm.agl.runtime.render import _type_kind_str
-
-        assert _type_kind_str(TextValue("x")) == "text"
-        assert _type_kind_str(IntValue(1)) == "int"
-        assert _type_kind_str(DecimalValue(decimal.Decimal("1.5"))) == "decimal"
-        assert _type_kind_str(BoolValue(True)) == "bool"
-        assert _type_kind_str(JsonValue(None)) == "json"
-        assert _type_kind_str(ListValue(elements=())) == "list"
-        assert _type_kind_str(DictValue(entries={})) == "dict"
-        assert _type_kind_str(RecordValue(type_name="P", fields={})) == "P"
-        assert _type_kind_str(EnumValue(type_name="E", variant="V", fields={})) == "E"
-        assert _type_kind_str(ExceptionValue(type_name="Ex", fields={})) == "Ex"
-
-    def test_scalar_text_json_value(self) -> None:
+    def test_render_value_json_value_pretty_json(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import _scalar_text
+        from agm.agl.runtime.render import render_value
 
-        text = _scalar_text(JsonValue({"a": 1}))
+        text = render_value(JsonValue({"a": 1}))
         assert "a" in text
 
-    def test_scalar_text_list_falls_back_to_pretty_json(self) -> None:
+    def test_render_value_list_pretty_json(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import _scalar_text
+        from agm.agl.runtime.render import render_value
 
         v = ListValue(elements=(IntValue(1),))
-        text = _scalar_text(v)
+        text = render_value(v)
         assert "1" in text
 
 
@@ -2630,7 +2520,6 @@ class TestCheckedProgramTypeEnv:
         caps = HostCapabilities(
             agent_names=frozenset(),
             codec_kinds={},
-            renderer_names=frozenset(),
         )
         checked = check(resolved, caps)
         assert isinstance(checked.type_env, TypeEnvironment)
@@ -3305,7 +3194,6 @@ class TestAgentCallEdgeCases:
             agent_names=frozenset(),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default"}),
         )
         checked = check(resolved, caps)
 
@@ -3350,7 +3238,6 @@ class TestAgentCallEdgeCases:
             agent_names=frozenset(),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default"}),
         )
         checked = check(resolved, caps)
 
@@ -3428,7 +3315,6 @@ class TestAgentCallEdgeCases:
             agent_names=frozenset(),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default"}),
         )
         checked = check(resolved, caps)
 
@@ -3504,7 +3390,6 @@ class TestAgentCallEdgeCases:
                 agent_names=frozenset(),
                 has_default_agent=True,
                 codec_kinds={"text": frozenset({"text"})},
-                renderer_names=frozenset({"default"}),
             ),
         )
         let_stmt = checked.resolved.program.body[0]
@@ -3765,7 +3650,6 @@ class TestCheckedProgramTypeEnvConstructors:
         caps = HostCapabilities(
             agent_names=frozenset(),
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default"}),
         )
         checked = check(resolved, caps)
 
@@ -3877,7 +3761,7 @@ class TestAgentCallShellExec:
         model and can be caught by a ``try``/``catch``.
         """
         result = run(
-            'input bad\nlet x = exec "echo ${bad as raw}"\n',
+            'input bad\nlet x = exec "echo ${bad}"\n',
             inputs={"bad": "a\x00b"},
         )
         assert result.ok is False
@@ -3893,7 +3777,7 @@ class TestAgentCallShellExec:
             "input bad\n"
             'var ok = "no"\n'
             "try\n"
-            '  let x = exec "echo ${bad as raw}"\n'
+            '  let x = exec "echo ${bad}"\n'
             "catch ExecError as e =>\n"
             '  set ok = "caught"\n',
             inputs={"bad": "a\x00b"},
@@ -3929,7 +3813,6 @@ class TestAgentCallShellExec:
             has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default", "raw"}),
         )
         # Should not raise — exec is admitted by the checker.
         checked = check(resolved, caps)
@@ -4192,7 +4075,6 @@ class TestRetryFeedbackComposition:
             agent_names=frozenset(),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default"}),
         )
         checked = check(resolved, caps)
 
@@ -4537,7 +4419,6 @@ class TestShellExecInterpreter:
             has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default", "raw"}),
         )
         checked = check(resolved, caps)
         interp = Interpreter(
@@ -4612,7 +4493,6 @@ class TestShellExecInterpreter:
             has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default", "raw"}),
         )
         checked = check(resolved, caps)
         # Pass contracts={} so the node has no contract entry.
@@ -4837,120 +4717,66 @@ class TestExecParseErrorTraceLinkage:
         assert exec_records[0]["trace_id"] == error_trace_id
 
 
-class TestRenderForShell:
-    """Unit tests for the render_for_shell function and _shell_plain_text helper."""
-
-    def test_shell_plain_text_structured_value_is_compact_json(self) -> None:
-        """Structured values are rendered as compact (single-line) JSON for quoting.
-
-        Exercises the ``from agm.agl.runtime.serialize import dumps_exact`` path
-        in ``_shell_plain_text`` (lines 275-277).
-        """
-        from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.render import render_for_shell
-
-        val = ListValue(elements=(TextValue("a"), TextValue("b")))
-        result = render_for_shell(val, renderer_name=None)
-        # Quoted compact JSON — no newlines inside the shell argument.
-        import json
-        import shlex
-
-        # shlex.quote wraps in single quotes or leaves safe strings bare.
-        # The result is a valid shell-quoted string containing compact JSON.
-        # We verify it unquotes to the expected list.
-        unquoted = shlex.split(result)
-        assert len(unquoted) == 1
-        assert json.loads(unquoted[0]) == ["a", "b"]
-
-    def test_render_for_shell_explicit_non_raw_renderer_quotes_result(self) -> None:
-        """An explicit non-raw renderer is applied then the result is shell-quoted.
-
-        Exercises the else-branch of render_for_shell: a named renderer other
-        than ``"default"`` or ``"raw"`` is looked up, applied, and the output is
-        passed through shlex.quote.  Passes no ``renderers`` arg so the None→fallback
-        path (line 314→315) is taken.
-        """
-        import shlex
-
-        from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.render import render_for_shell
-
-        val = ListValue(elements=(TextValue("x"), TextValue("y")))
-        result = render_for_shell(val, renderer_name="json")
-        # "json" renderer produces pretty-printed JSON; the result is shell-quoted.
-        unquoted = shlex.split(result)
-        assert len(unquoted) == 1
-        import json
-
-        assert json.loads(unquoted[0]) == ["x", "y"]
-
-    def test_render_for_shell_explicit_renderer_with_renderers_table(self) -> None:
-        """Exercises the path where ``renderers`` is not None (line 314->316).
-
-        Passes an explicit renderers table; ``render_for_shell`` uses it directly
-        without falling back to the built-in default.
-        """
-        import shlex
-
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_shell
-
-        custom_renderers = {"myrender": lambda v, name: "CUSTOM"}
-        val = TextValue("anything")
-        result = render_for_shell(val, renderer_name="myrender", renderers=custom_renderers)
-        assert shlex.split(result) == ["CUSTOM"]
-
-    def test_render_for_shell_unknown_renderer_raises_assertion_error(self) -> None:
-        """An unknown renderer name raises AssertionError (internal invariant, line 318).
-
-        After type-checking this is unreachable through WorkflowRuntime.run
-        because the checker validates renderer references.
-        """
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_shell
-
-        val = TextValue("x")
-        with pytest.raises(AssertionError, match="not in the renderers table"):
-            render_for_shell(val, renderer_name="no_such_renderer", renderers={})
-
-    def test_render_for_shell_scalar_default_quotes(self) -> None:
-        """Default rendering of a scalar text value quotes it with shlex.quote."""
-        import shlex
-
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_shell
-
-        val = TextValue("hello world")
-        result = render_for_shell(val, renderer_name=None)
-        assert shlex.split(result) == ["hello world"]
-
-    def test_render_for_shell_raw_bypasses_quoting(self) -> None:
-        """``as raw`` returns plain text without shell-quoting."""
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_shell
-
-        val = TextValue("a b c")
-        result = render_for_shell(val, renderer_name="raw")
-        # Raw: no quoting, value is inserted verbatim.
-        assert result == "a b c"
 
 
 class TestShellExecTemplateInterpolation:
-    """Tests for _eval_template_for_shell interpolation path in the interpreter."""
+    """Tests for the exec shell-template interpolation path in the interpreter."""
 
     def test_exec_with_interpolated_value(self) -> None:
-        """An interpolated value in exec template is shell-quoted by default."""
-        # exec "printf '%s' ${name}" where name = "hello world" should produce
-        # "hello world" (the shell-quoted value prevents word-splitting).
+        """An interpolated value in exec template is inserted verbatim."""
+        # exec "echo ${name}" where name = "hello" produces "hello" in stdout.
         result = run(
             'input name\n'
-            'let out = exec "printf \'%s\' ${name}"\n',
-            inputs={"name": "hello world"},
+            'let out = exec "echo ${name}"\n',
+            inputs={"name": "hello"},
         )
         assert result.ok is True
         from agm.agl.eval.values import TextValue
 
-        assert result.bindings.get("out") == TextValue("hello world")
+        assert result.bindings.get("out") == TextValue("hello")
+
+    def test_exec_verbatim_space_causes_word_split(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A value containing spaces is inserted verbatim — NOT shell-quoted.
+
+        If AgL were to call shlex.quote(), "a b" would become "'a b'" and
+        printf '%s|' 'a b' would output "a b|".  Without quoting the shell
+        word-splits the interpolated text so printf sees two arguments "a" and
+        "b", producing "a|b|".  The test therefore asserts "a|b|", proving no
+        quoting was applied.
+        """
+        result = run(
+            'input arg\n'
+            'let out = exec "printf \'%s|\' ${arg}"\n'
+            'print out\n',
+            inputs={"arg": "a b"},
+        )
+        assert result.ok is True, result.error
+        captured = capsys.readouterr()
+        assert captured.out == "a|b|\n"
+
+    def test_exec_verbatim_metachar_passed_through(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shell metacharacters in an interpolated value reach the shell verbatim.
+
+        With shlex.quote() the semicolon would be escaped and echo-y would not
+        run.  Without quoting the shell interprets ";" as a command separator,
+        so "printf '%s' x;echo y" prints "xy\\n" (printf "x" then echo "y").
+        The test asserts both outputs appear, proving verbatim passthrough.
+        """
+        result = run(
+            'input arg\n'
+            'let out = exec "printf \'%s\' ${arg}"\n'
+            'print out\n',
+            inputs={"arg": "x;echo y"},
+        )
+        assert result.ok is True, result.error
+        captured = capsys.readouterr()
+        # printf receives "x" and the shell runs echo y as a second command.
+        assert "x" in captured.out
+        assert "y" in captured.out
 
 
 # ---------------------------------------------------------------------------

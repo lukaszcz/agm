@@ -29,7 +29,7 @@
         "stdout": "accepted\nv3\n",
         "calls": {"impl": 3, "reviewer": 3, "planner": 2},
         "prompts": [
-          {"agent": "planner", "call": 1, "contains": ["- i2"]},
+          {"agent": "planner", "call": 1, "contains": ["i2"]},
           {"agent": "impl", "call": 2, "contains": ["v2"]}
         ]
       }

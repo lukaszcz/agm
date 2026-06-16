@@ -87,12 +87,11 @@ from agm.agl.typecheck.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import ParseResult
     from agm.agl.runtime.contract import OutputContract
-    from agm.agl.runtime.render import RendererFn
     from agm.agl.runtime.request import ValidationError
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.syntax.spans import SourceSpan
@@ -155,9 +154,6 @@ class Interpreter:
     ``contracts`` — materialized ``OutputContract`` per agent-call node_id.
     ``type_env`` — the ``TypeEnvironment`` from the checked program, used to
         resolve record/enum constructors at runtime.
-    ``renderers`` — the interpolation renderer table (built-ins merged with any
-        host-registered renderers); threaded into every ``${expr as name}``
-        rendering so registered renderers are actually invoked (F1, M3b).
     ``loop_limit`` — default bound for ``do`` loops without an explicit limit.
     ``strict_json`` — default strict-JSON flag for codec operations.
     ``source`` — the normalized program source text.  Threaded in so error
@@ -172,7 +168,6 @@ class Interpreter:
         registry: "AgentRegistry",
         contracts: dict[int, "OutputContract"],
         type_env: "TypeEnvironment",
-        renderers: "Mapping[str, RendererFn] | None" = None,
         *,
         loop_limit: int,
         strict_json: bool,
@@ -180,7 +175,6 @@ class Interpreter:
         shell_exec_timeout: float | None = None,
         trace: "TraceStore | None" = None,
     ) -> None:
-        from agm.agl.runtime.render import builtin_renderers
         from agm.agl.runtime.trace import noop_trace
 
         self._checked = checked
@@ -192,12 +186,6 @@ class Interpreter:
         # offset-based slicing.  Shared helper keeps this identical to the
         # scanner's normalization without depending on the lexer (F10).
         self._source = normalize_newlines(source)
-        # ``WorkflowRuntime.run`` always passes the merged built-in + registered
-        # renderer table (F1).  ``None`` (e.g. direct construction in unit tests
-        # that exercise only built-in rendering) falls back to the built-ins.
-        self._renderers: "Mapping[str, RendererFn]" = (
-            renderers if renderers is not None else builtin_renderers()
-        )
         self._loop_limit = loop_limit
         self._strict_json = strict_json
         self._shell_exec_timeout = shell_exec_timeout
@@ -290,66 +278,33 @@ class Interpreter:
         return target_type
 
     def _exec_print(self, stmt: PrintStmt, scope: Scope) -> None:
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
         value = self._eval_expr(stmt.value, scope)
-        rendered = render_for_console(value)
+        rendered = render_value(value)
         print(rendered)
         self._trace.print_stmt(rendered=rendered, span=stmt.span)
 
-    def _walk_template(
-        self,
-        expr: Template,
-        scope: Scope,
-        render_seg: "Callable[[Value, InterpSegment], str]",
-    ) -> str:
-        """Walk *expr*'s segments, concatenate text segments verbatim, and
-        render interpolation segments via *render_seg*.
+    def _eval_template(self, expr: Template, scope: Scope) -> str:
+        """Evaluate *expr* to a string: text segments verbatim, interpolation
+        segments rendered with uniform ``render_value`` rendering.
 
-        This is the single segment-walking loop shared by
-        :meth:`_eval_template_for_console`, :meth:`_eval_template`, and
-        :meth:`_eval_template_for_shell`.  Each caller parameterises how an
-        :class:`~agm.agl.syntax.nodes.InterpSegment`'s value is rendered.
+        Used for every template context — ``prompt`` agent calls, ``exec`` shell
+        commands (no shell quoting is applied; design §4.12, §11.13), and bare
+        template expressions — since interpolation is now context-independent.
         """
+        from agm.agl.runtime.render import render_value
+
         parts: list[str] = []
         for seg in expr.segments:
             if isinstance(seg, TextSegment):
                 parts.append(seg.text)
             elif isinstance(seg, InterpSegment):
                 value = self._eval_expr(seg.expr, scope)
-                parts.append(render_seg(value, seg))
+                parts.append(render_value(value))
             else:
                 assert_never(seg)  # pragma: no cover
         return "".join(parts)
-
-    def _eval_template_for_console(self, expr: Template, scope: Scope) -> str:
-        """Evaluate a template for console (``print``) output.
-
-        Segments without an explicit ``as X`` renderer use
-        :func:`render_for_console` (no boundary markers, plain text for text
-        values).  Segments with an explicit renderer (e.g. ``as bullets``)
-        apply the renderer function directly — the output is never wrapped in
-        ``<dsl-value>`` tags, which are for prompt interpolation only.
-        """
-        from agm.agl.runtime.render import render_for_console, render_for_prompt
-
-        def render_seg(value: Value, seg: InterpSegment) -> str:
-            if seg.render in (None, "default"):
-                # Default (implicit ``None`` or explicit ``as default``):
-                # console rendering, never boundary tags — those are for
-                # prompt interpolation only.
-                return render_for_console(value)
-            # Explicit renderer: apply it.  Pass var_name=None because
-            # console output never carries the boundary-tag ``name=``
-            # attribute even for the default renderer.
-            return render_for_prompt(
-                value,
-                renderer_name=seg.render,
-                var_name=None,
-                renderers=self._renderers,
-            )
-
-        return self._walk_template(expr, scope, render_seg)
 
     def _exec_do_until(self, stmt: DoUntil, scope: Scope) -> None:
         limit = stmt.limit if stmt.limit is not None else self._loop_limit
@@ -484,11 +439,8 @@ class Interpreter:
         if isinstance(expr, FieldAccess):
             return self._eval_field_access(expr, scope)
         # Compound expressions (templates, calls, operators, …).
-        # Template interpolation outside of agent-call prompts uses console
-        # rendering (no ``<dsl-value>`` boundary tags).  Agent-call prompts
-        # call ``_eval_template`` directly via ``_dispatch_agent_call``.
         if isinstance(expr, Template):
-            return TextValue(self._eval_template_for_console(expr, scope))
+            return TextValue(self._eval_template(expr, scope))
         if isinstance(expr, AgentCall):
             return self._eval_agent_call(expr, scope)
         if isinstance(expr, Constructor):
@@ -559,24 +511,6 @@ class Interpreter:
             f"Field access on non-record/exception: {type(obj).__name__}"
         )
 
-    def _eval_template(self, expr: Template, scope: Scope) -> TextValue:
-        """Evaluate a template by rendering each segment and concatenating."""
-        from agm.agl.runtime.render import render_for_prompt
-
-        def render_seg(value: Value, seg: InterpSegment) -> str:
-            # Determine the variable name for the boundary tag.
-            var_name: str | None = None
-            if isinstance(seg.expr, VarRef):
-                var_name = seg.expr.name
-            return render_for_prompt(
-                value,
-                renderer_name=seg.render,
-                var_name=var_name,
-                renderers=self._renderers,
-            )
-
-        return TextValue(self._walk_template(expr, scope, render_seg))
-
     def _eval_agent_call(self, expr: AgentCall, scope: Scope) -> Value:
         """Dispatch an agent call and return the typed result."""
         from agm.agl.scope.symbols import CallKind
@@ -639,7 +573,7 @@ class Interpreter:
         from agm.agl.runtime.request import AgentRequest
 
         # Render the template once (re-used on retries per design).
-        prompt_text = self._eval_template(expr.template, scope).value
+        prompt_text = self._eval_template(expr.template, scope)
         call_span = expr.span
 
         def acquire(
@@ -820,25 +754,6 @@ class Interpreter:
             span=raise_span,  # F7: thread raise-site span for §12.6 source location
         )
 
-    def _eval_template_for_shell(self, expr: Template, scope: Scope) -> str:
-        """Render a template for use as a shell command (design §4.12, §11.13).
-
-        Each interpolated segment is rendered to its plain-text representation
-        and passed through ``shlex.quote`` by default (shell-safe interpolation).
-        ``${x as raw}`` bypasses quoting — the plain text is inserted verbatim.
-        Any other explicit renderer is applied first, then the result is quoted.
-        """
-        from agm.agl.runtime.render import render_for_shell
-
-        def render_seg(value: Value, seg: InterpSegment) -> str:
-            return render_for_shell(
-                value,
-                renderer_name=seg.render,
-                renderers=self._renderers,
-            )
-
-        return self._walk_template(expr, scope, render_seg)
-
     def _exec_shell_exec(self, expr: AgentCall, scope: Scope) -> Value:
         """Execute an ``exec`` shell call and return the typed result (§11.13).
 
@@ -856,7 +771,7 @@ class Interpreter:
         """
         from agm.core.process import run_capture_result
 
-        command = self._eval_template_for_shell(expr.template, scope)
+        command = self._eval_template(expr.template, scope)
 
         exec_span = expr.span
 
@@ -977,8 +892,8 @@ class Interpreter:
 
     def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:
         """Evaluate a record, enum-variant, or exception constructor."""
-        # Evaluate arguments.  Template expressions are handled by ``_eval_expr``
-        # (console rendering, no ``<dsl-value>`` boundary tags).
+        # Evaluate arguments.  Template expressions are handled uniformly by
+        # ``_eval_expr`` (no ``<dsl-value>`` boundary tags).
         arg_values: dict[str, Value] = {}
         for arg in expr.args:
             arg_values[arg.name] = self._eval_expr(arg.value, scope)

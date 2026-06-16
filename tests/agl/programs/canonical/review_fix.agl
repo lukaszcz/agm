@@ -69,7 +69,7 @@ catch AgentParseError as e =>
   ${e.expected_schema}
 
   Raw output:
-  ${e.raw as raw}
+  ${e.raw}
 
   Validation errors:
   ${e.validation_errors}

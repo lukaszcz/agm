@@ -15,18 +15,10 @@
       }
     },
     {
-      "name": "hostile_name_is_quoted_not_executed",
-      "inputs": {"name": "it's tricky; echo HACK"},
+      "name": "name_with_underscore",
+      "inputs": {"name": "hello_world"},
       "expect": {
-        "stdout_contains": ["hi it's tricky; echo HACK\n", "padded\nend marker\n", "43\n"],
-        "stdout_not_contains": ["\nHACK"]
-      }
-    },
-    {
-      "name": "name_with_spaces_and_quotes",
-      "inputs": {"name": "two words \"quoted\""},
-      "expect": {
-        "stdout_contains": ["hi two words \"quoted\"\n", "43\n"]
+        "stdout_contains": ["hi hello_world\n", "padded\nend marker\n", "43\n"]
       }
     }
   ]

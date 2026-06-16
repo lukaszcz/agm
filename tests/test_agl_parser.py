@@ -622,28 +622,19 @@ class TestTemplate:
         assert len(interps) == 1
         assert isinstance(interps[0].expr, VarRef)
         assert interps[0].expr.name == "x"
-        assert interps[0].render is None
 
-    def test_interp_with_renderer(self) -> None:
-        stmt = _parse_one('ask "hello ${x as raw}"')
-        assert isinstance(stmt, ExprStmt)
-        call = stmt.expr
-        assert isinstance(call, AgentCall)
-        tmpl = call.template
-        interps = [s for s in tmpl.segments if isinstance(s, InterpSegment)]
-        assert len(interps) == 1
-        assert interps[0].render == "raw"
+    def test_interp_with_renderer_is_syntax_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            _parse_one('ask "hello ${x as raw}"')
 
     def test_multiple_interpolations(self) -> None:
-        stmt = _parse_one('ask "hello ${x} and ${y as raw}"')
+        stmt = _parse_one('ask "hello ${x} and ${y}"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
         tmpl = call.template
         interps = [s for s in tmpl.segments if isinstance(s, InterpSegment)]
         assert len(interps) == 2
-        assert interps[0].render is None
-        assert interps[1].render == "raw"
 
     def test_template_text_segment_content(self) -> None:
         stmt = _parse_one('ask "hello ${x} world"')
@@ -869,7 +860,7 @@ class TestNodeIds:
         return ids
 
     def test_node_ids_are_unique(self) -> None:
-        prog = parse_program('let x = 42; ask "hello ${x as raw}"')
+        prog = parse_program('let x = 42; ask "hello ${x}"')
         ids = self._collect_ids(prog)
         assert len(ids) == len(set(ids)), f"Duplicate node IDs found: {ids}"
 

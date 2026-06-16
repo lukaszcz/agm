@@ -1,0 +1,11 @@
+# Verbatim interpolation: exec inserts ${expr} text with NO shell quoting.
+# A value containing spaces causes word-splitting; metacharacters are passed
+# through literally — the shell sees them as-is (no quoting applied by AgL).
+input arg
+input k: int
+
+let quoted = exec "printf '%s|' ${arg}"
+print quoted
+
+let digits = exec "printf '%s' ${k}"
+print digits

@@ -13,6 +13,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.eval.values import IntValue, TextValue, Value
 from agm.agl.repl import meta as meta_mod
@@ -301,6 +303,20 @@ class TestDispatchMeta:
             meta_mod._COMMANDS.remove(command2)
             # Force cache rebuild by resetting (implementation detail: the cache
             # must reflect removal too — call meta_command_names after removal).
+
+    def test_command_index_lazy_build_on_cold_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Verify the lazy-build branch of _command_index() is reachable: when both
+        # caches are forced to None the functions rebuild them on the next call.
+        monkeypatch.setattr(meta_mod, "_command_index_cache", None)
+        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
+        # dispatch_meta → _command_index() triggers the lazy build of the index.
+        outcome = meta_mod.dispatch_meta(":help", _ctx())
+        assert outcome.text is not None
+        assert ":quit" in outcome.text
+        # meta_command_names() rebuilds the names cache when it is cold.
+        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
+        names = meta_mod.meta_command_names()
+        assert ":help" in names
 
 
 # ---------------------------------------------------------------------------

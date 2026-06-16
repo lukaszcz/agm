@@ -67,8 +67,8 @@ inside `json` values, where `true` is never equal to `1`.
 lists/dictionaries of JSON-shaped values. The literal `null` has type `json`.
 
 Records, enums, and exceptions are **not** JSON-shaped and are not assignable
-to `json`. To embed one in a `json` value or a prompt, render it explicitly
-(for example `${review as json}` in a template).
+to `json`. When interpolated in a template, structured values render as pretty
+JSON automatically ([Strings and interpolation](strings-and-interpolation.md)).
 
 `null` is not assignable to `text`, `int`, `decimal`, `bool`, records, or
 enums. Use an enum for optionality:

@@ -14,6 +14,7 @@ Public API
 - :class:`TextCodec` — the built-in passthrough text codec.
 - :class:`JsonCodec` — the built-in structured-output codec (M2).
 - :class:`OutputContract` — materialized per-call output contract.
+- :func:`render_value` — uniform value renderer for template interpolation.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from __future__ import annotations
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, OutputCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract
-from agm.agl.runtime.render import render_for_console, render_for_prompt
+from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.runtime import (
     AgentDeclInfo,
@@ -48,6 +49,5 @@ __all__ = [
     "RunResult",
     "TextCodec",
     "WorkflowRuntime",
-    "render_for_console",
-    "render_for_prompt",
+    "render_value",
 ]

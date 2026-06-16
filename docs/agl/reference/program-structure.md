@@ -112,8 +112,8 @@ case review of
 ### `print`
 
 `print expr` evaluates its operand — which may have any type — renders it
-with *console rendering* (text verbatim; numbers and booleans as scalar
-text; everything else as pretty-printed JSON; never any boundary markers),
+using the uniform rendering rules (text verbatim; numbers and booleans as
+scalar text; everything else as pretty-printed JSON),
 writes the result plus a trailing newline to the host's standard output, and
 records the printed text in the trace. `print` never fails on a well-typed
 value and produces no result. See

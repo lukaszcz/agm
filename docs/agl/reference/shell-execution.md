@@ -19,24 +19,23 @@ declared as an agent name; it remains legal as a field name. A host may
 statically disallow shell execution altogether, in which case every `exec`
 call is a static error.
 
-## Shell-safe interpolation
+## Interpolation in shell templates
 
-The command template is rendered with **shell rendering**
-([Strings and interpolation](strings-and-interpolation.md)):
+The command template uses the same uniform rendering as all other templates
+([Strings and interpolation](strings-and-interpolation.md)): `text` values
+interpolate verbatim; `int`, `decimal`, and `bool` as plain scalar text;
+structured values (`list`, `dict`, records, enums, `json`, exceptions) as
+pretty JSON (2-space indent).
 
-- By default, each interpolated value is rendered to plain text — scalars as
-  scalar text, structured values as *compact single-line JSON* — and then
-  **quoted as a single shell word** (POSIX quoting). Interpolated values
-  therefore cannot inject shell syntax.
-- `${x as raw}` bypasses quoting and inserts the plain text verbatim. Use it
-  deliberately: unquoted model-produced text inside a shell command is an
-  injection hazard.
-- Any other explicit renderer (e.g. `as json`) is applied first, and its
-  output is then shell-quoted.
+Interpolated values are inserted **verbatim** into the command string —
+there is **no automatic shell quoting**. The workflow author is responsible
+for writing shell-safe commands. Unvalidated text (for example, model-produced
+content or user-provided input) inside a shell command is an injection hazard
+unless the author explicitly handles quoting.
 
 ```agl
-exec "grep -F ${needle} ${file}"          # both arguments safely quoted
-exec "sh -c ${script as raw}"             # deliberate, unquoted
+exec "grep -F ${needle} ${file}"
+exec "sh -c ${script}"
 ```
 
 ## Execution semantics

@@ -71,6 +71,7 @@ from agm.agl.lexer.tokens import (
     STRING_FRAGMENT,
     TEMPLATE_END,
     TEMPLATE_START,
+    THIN_ARROW,
     TYPE_NAME,
     VAR_NAME,
 )
@@ -81,7 +82,10 @@ from agm.agl.lexer.tokens import (
 
 _TAB_LEN = 4
 
-# Single-char operator table (must not overlap with maximal-munch multi-char ops)
+# Single-char operator table (must not overlap with maximal-munch multi-char ops).
+# NOTE: "-" is intentionally absent — it is handled in the multi-char operator
+# section of _scan_one_code_token so that "->" (THIN_ARROW) takes priority via
+# maximal munch before falling back to MINUS.
 _SINGLE_OPS: dict[str, str] = {
     "(": LPAR,
     ")": RPAR,
@@ -95,7 +99,6 @@ _SINGLE_OPS: dict[str, str] = {
     "|": PIPE,
     ";": SEMICOLON,
     "+": PLUS,
-    "-": MINUS,
     "*": STAR,
     "/": SLASH,
 }
@@ -749,6 +752,15 @@ class _Scanner:
             return
         if ch == ">":
             yield self._make_token(GT, ">", start_pos, start_line, start_col)
+            return
+        # "->" is THIN_ARROW (v2 function/return type); bare "-" is MINUS.
+        # Maximal munch: check the next character before deciding.
+        if ch == "-" and self._peek() == ">":
+            self._advance()
+            yield self._make_token(THIN_ARROW, "->", start_pos, start_line, start_col)
+            return
+        if ch == "-":
+            yield self._make_token(MINUS, "-", start_pos, start_line, start_col)
             return
 
         # Single-char operators

@@ -305,26 +305,24 @@ class TestDispatchMeta:
 
 
 # ---------------------------------------------------------------------------
-# Issue #4: _handle_set uses parse_key_value
+# Issue #4: :set now only handles echo on|off (input-setting removed in M6)
 # ---------------------------------------------------------------------------
 
 
-class TestSetUsesParseKeyValue:
-    def test_set_valid(self) -> None:
-        s = ReplSession()
-        s.eval_entry("param count: int")
-        outcome = meta_mod.dispatch_meta(":set count=5", _session_ctx(s))
+class TestSetEchoOnly:
+    def test_set_echo_off_only_form(self) -> None:
+        ctx = _session_ctx()
+        outcome = meta_mod.dispatch_meta(":set echo off", ctx)
+        assert ctx.echo is False
         assert outcome.text is not None
-        assert "5" in outcome.text
 
-    def test_set_no_equals_gives_usage(self) -> None:
-        # parse_key_value raises ValueError for missing '='; handler shows usage.
-        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
+    def test_set_name_equals_value_gives_usage(self) -> None:
+        # After M6, :set name=value no longer sets inputs; gives usage error.
+        outcome = meta_mod.dispatch_meta(":set foo=bar", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
-    def test_set_empty_key_gives_usage(self) -> None:
-        # parse_key_value raises ValueError for empty key; handler shows usage.
-        outcome = meta_mod.dispatch_meta(":set =5", _session_ctx())
+    def test_set_no_equals_gives_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
 
@@ -337,9 +335,6 @@ class TestRenderHelpers:
     def test_format_typed_value(self) -> None:
         line = render_mod.format_typed_value("x", IntType(), IntValue(Decimal(5)))
         assert line == "x : int = 5"
-
-    def test_format_unset_input(self) -> None:
-        assert render_mod.format_unset_input("n", TextType()) == "n : text = <unset>"
 
     def test_binding_echo_matches_format_helper(self) -> None:
         # The entry-echo path and the shared helper must produce the same line.
@@ -458,41 +453,35 @@ class TestAgents:
 class TestInputs:
     def test_inputs_empty(self) -> None:
         outcome = meta_mod.dispatch_meta(":inputs", _session_ctx())
-        assert outcome.text == "No inputs declared."
+        assert outcome.text == "No params declared."
 
-    def test_inputs_shows_unset_then_set(self) -> None:
+    def test_inputs_shows_resolved_param_with_default(self) -> None:
+        # After M6, :inputs shows declared params with their resolved values.
         s = ReplSession()
-        s.eval_entry("param name: text")
-        out_unset = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
-        assert out_unset is not None
-        assert "name : text = <unset>" in out_unset
-        s.set_input("name", "World")
-        out_set = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
-        assert out_set is not None
-        assert "name : text = World" in out_set
+        s.eval_entry("param name = \"World\"")
+        out = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
+        assert out is not None
+        assert "name : text = World" in out
+
+    def test_inputs_shows_resolved_param_from_config(self) -> None:
+        # A param resolved from config shows its config value.
+        s = ReplSession(
+            params_config_loader=lambda name: {"count": 5} if name == "p" else {}
+        )
+        s.eval_entry("program p")
+        s.eval_entry("param count: int")
+        out = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
+        assert out is not None
+        assert "count : int = 5" in out
 
 
 class TestSet:
-    def test_set_declared_input(self) -> None:
+    def test_set_name_equals_value_now_gives_usage(self) -> None:
+        # After M6, :set name=value is no longer supported for input-setting.
         s = ReplSession()
-        s.eval_entry("param count: int")
+        s.eval_entry("param count = 0")
         outcome = meta_mod.dispatch_meta(":set count=42", _session_ctx(s))
-        assert "42" in (outcome.text or "")
-        r = s.eval_entry("count + 1")
-        assert r.ok
-        assert isinstance(r.value, IntValue)
-        assert r.value.value == 43
-
-    def test_set_undeclared_input_clean_error(self) -> None:
-        outcome = meta_mod.dispatch_meta(":set nope=1", _session_ctx())
-        assert outcome.text is not None
-        assert "nope" in outcome.text
-
-    def test_set_bad_value_clean_error(self) -> None:
-        s = ReplSession()
-        s.eval_entry("param count: int")
-        outcome = meta_mod.dispatch_meta(":set count=oops", _session_ctx(s))
-        assert outcome.text is not None
+        assert "usage" in (outcome.text or "").lower()
 
     def test_set_missing_equals_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())

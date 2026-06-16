@@ -26,9 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agm.agl.diagnostics import AglError
 from agm.agl.repl.agentmode import AgentMode
-from agm.core.cli_helpers import parse_key_value
 
 if TYPE_CHECKING:
     from agm.agl.repl.session import ReplSession
@@ -98,7 +96,7 @@ def _handle_quit(arg: str, ctx: MetaContext) -> MetaOutcome:
 
 
 def _handle_reset(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:reset`` — clear the entire session env (bindings, types, decls, inputs)."""
+    """``:reset`` — clear the entire session env (bindings, types, decls, params)."""
     del arg
     ctx.session.reset()
     return MetaOutcome(text="Session reset.")
@@ -111,6 +109,8 @@ def _handle_type(arg: str, ctx: MetaContext) -> MetaOutcome:
     pipeline failure (syntax / scope / type / non-expression) is caught and
     returned as a clean error string so it never escapes ``dispatch_meta``.
     """
+    from agm.agl.diagnostics import AglError
+
     if not arg:
         return MetaOutcome(text="usage: :type EXPR")
     try:
@@ -147,44 +147,28 @@ def _handle_agents(arg: str, ctx: MetaContext) -> MetaOutcome:
 
 
 def _handle_inputs(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:inputs`` — list declared inputs (``name : Type = value`` or ``<unset>``)."""
+    """``:inputs`` — list declared params with their resolved values (``name : Type = value``)."""
     del arg
-    from agm.agl.repl.render import format_typed_value, format_unset_input
+    from agm.agl.repl.render import format_typed_value
 
-    inputs = ctx.session.inputs()
-    if not inputs:
-        return MetaOutcome(text="No inputs declared.")
-    lines: list[str] = []
-    for name, typ, value in inputs:
-        if value is None:
-            lines.append(format_unset_input(name, typ))
-        else:
-            lines.append(format_typed_value(name, typ, value))
+    params = ctx.session.declared_params()
+    if not params:
+        return MetaOutcome(text="No params declared.")
+    lines = [format_typed_value(name, typ, value) for name, typ, value in params]
     return MetaOutcome(text="\n".join(lines))
 
 
 def _handle_set(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:set name=value`` — supply a host input value; ``:set echo on|off`` toggles echo.
+    """``:set echo on|off`` — toggle result echoing.
 
-    ``echo on|off`` is parsed as a special case BEFORE the ``name=value`` form,
-    since ``echo`` is not a valid input-name target.  An undeclared input or a
-    conversion failure is caught and returned as a clean error.
+    Only ``echo on|off`` is supported.  Input-setting via ``:set name=value``
+    is no longer available (M6): params are resolved eagerly from config or
+    defaults when declared.
     """
-    # The ``echo on|off`` special-case only matches the two-word form, so an
-    # input literally named ``echo`` is still settable via ``:set echo=on``.
     echo_outcome = _try_set_echo(arg, ctx)
     if echo_outcome is not None:
         return echo_outcome
-
-    try:
-        name, raw = parse_key_value(arg)
-    except ValueError:
-        return MetaOutcome(text="usage: :set name=value  |  :set echo on|off")
-    try:
-        ctx.session.set_input(name, raw)
-    except AglError as exc:
-        return MetaOutcome(text=str(exc))
-    return MetaOutcome(text=f"{name} = {raw}")
+    return MetaOutcome(text="usage: :set echo on|off")
 
 
 def _try_set_echo(arg: str, ctx: MetaContext) -> MetaOutcome | None:
@@ -283,7 +267,7 @@ _COMMANDS: list[MetaCommand] = [
     MetaCommand(
         names=("reset",),
         usage=":reset",
-        summary="Clear the entire session (bindings, types, decls, inputs).",
+        summary="Clear the entire session (bindings, types, decls, params).",
         handler=_handle_reset,
     ),
     MetaCommand(
@@ -307,13 +291,13 @@ _COMMANDS: list[MetaCommand] = [
     MetaCommand(
         names=("inputs",),
         usage=":inputs",
-        summary="List declared inputs and their current values.",
+        summary="List declared params with their resolved values.",
         handler=_handle_inputs,
     ),
     MetaCommand(
         names=("set",),
-        usage=":set name=value | echo on|off",
-        summary="Set a host input value, or toggle result echoing.",
+        usage=":set echo on|off",
+        summary="Toggle result echoing.",
         handler=_handle_set,
     ),
     MetaCommand(

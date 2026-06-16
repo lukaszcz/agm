@@ -4,6 +4,8 @@ Covers:
 - the CLI surface maps each flag onto ``ReplArgs`` (parser-contract style;
   ``repl.run`` is mocked so no real terminal is needed);
 - ``--no-log`` / ``--log-file`` are mutually exclusive (usage error, exit 2);
+- ``--input`` option has been REMOVED in M6 (params resolve eagerly from
+  config/defaults; there is no pre-seed CLI option);
 - ``repl.run`` resolves ``[exec]`` config, builds a session, and hands off to
   ``run_console`` (mocked) with the echo flag and a history path derived from
   the config-context home.
@@ -61,7 +63,6 @@ class TestReplArgsParsing:
         result = invoke(runner, ["repl"])
         assert result.exit_code == 0
         args = recorded_runs[0]
-        assert getattr(args, "inputs") == []
         assert getattr(args, "strict_json") is None
         assert getattr(args, "max_iters") is None
         assert getattr(args, "runner") is None
@@ -70,12 +71,12 @@ class TestReplArgsParsing:
         assert getattr(args, "no_log") is False
         assert getattr(args, "log_file") is None
 
-    def test_input_repeatable(
+    def test_input_option_removed(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        result = invoke(runner, ["repl", "--input", "a=1", "--input", "b=2"])
-        assert result.exit_code == 0
-        assert getattr(recorded_runs[0], "inputs") == ["a=1", "b=2"]
+        # M6: --input has been removed from agm repl.
+        result = invoke(runner, ["repl", "--input", "a=1"])
+        assert result.exit_code != 0  # unknown option
 
     def test_strict_json_flag(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -187,7 +188,6 @@ def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 def _args(
     *,
-    inputs: list[str] | None = None,
     strict_json: bool | None = None,
     max_iters: int | None = None,
     runner: str | None = "echo agent",
@@ -198,7 +198,6 @@ def _args(
 ) -> ReplArgs:
     """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
     return ReplArgs(
-        inputs=inputs if inputs is not None else [],
         strict_json=strict_json,
         max_iters=max_iters,
         runner=runner,
@@ -218,7 +217,6 @@ class TestReplRun:
     ) -> None:
         home = _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
-            inputs=[],
             strict_json=None,
             max_iters=None,
             runner="echo agent",
@@ -249,7 +247,6 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         args = ReplArgs(
-            inputs=[],
             strict_json=None,
             max_iters=None,
             runner="echo agent",
@@ -269,7 +266,6 @@ class TestReplRun:
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
-            inputs=[],
             strict_json=None,
             max_iters=None,
             runner="echo agent",
@@ -289,7 +285,6 @@ class TestReplRun:
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
-            inputs=[],
             strict_json=None,
             max_iters=None,
             runner='broken "quote',  # unbalanced quote → split_command raises
@@ -316,7 +311,6 @@ class TestReplRun:
 
         monkeypatch.setattr(repl_command, "load_exec_config", boom)
         args = ReplArgs(
-            inputs=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -366,37 +360,49 @@ class TestReplAgentMode:
         assert mode.mode == "auto"
 
 
-class TestReplInputPreseed:
-    def test_input_preseeds_declared_value(
+class TestReplParamsConfigLoader:
+    def test_params_config_loader_wired_from_context(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_console: list[dict[str, object]],
     ) -> None:
+        # The session built by repl.run should have a params_config_loader
+        # that reads from the config context.  We verify by checking the
+        # session can be used normally (the loader is injected, not null).
         _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(inputs=["count=41"]))
+        repl_command.run(_args())
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
-        # The pending value is applied when the param is later declared.
-        session.eval_entry("param count: int")
-        r = session.eval_entry("count + 1")
+        # Params with defaults resolve eagerly (no pre-seed needed).
+        r = session.eval_entry("param greeting = \"hi\"")
         assert r.ok
-        from agm.agl.eval.values import IntValue
 
-        assert isinstance(r.value, IntValue)
-        assert r.value.value == 42
-
-    def test_malformed_input_exits_1(
+    def test_params_config_loader_invoked_on_program_decl(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_console: list[dict[str, object]],
     ) -> None:
+        # The loader closure must actually be called when a program decl is
+        # entered, exercising the load_params_config wiring.
         _isolated_home(monkeypatch, tmp_path)
-        with pytest.raises(SystemExit) as excinfo:
-            repl_command.run(_args(inputs=["no-equals-sign"]))
-        assert excinfo.value.code == 1
-        assert fake_console == []
+        # Patch load_params_config to track calls and return an empty table.
+        loader_calls: list[str] = []
+
+        def fake_load_params_config(
+            program_name: str, *, home: Path, proj_dir: object, cwd: Path
+        ) -> dict[str, object]:
+            loader_calls.append(program_name)
+            return {}
+
+        monkeypatch.setattr(repl_command, "load_params_config", fake_load_params_config)
+        repl_command.run(_args())
+        session = fake_console[0]["session"]
+        assert isinstance(session, ReplSession)
+        r = session.eval_entry("program myapp")
+        assert r.ok
+        assert loader_calls == ["myapp"]
 
 
 class TestReplTrace:

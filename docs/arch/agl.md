@@ -43,8 +43,7 @@ via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
 `agm.agl.repl.session.ReplSession` is a UI-free incremental driver that runs the
 same `parse → resolve → check → host-prep → eval` pipeline **one entry at a
 time** against a *persistent* environment (session scope, type env, value scope,
-declared inputs, pending pre-seeded inputs, source log). It reuses the firewalled
-passes' seam parameters:
+declared params, source log). It reuses the firewalled passes' seam parameters:
 `parse_program_seeded` (globally-unique node ids across entries),
 `resolve(..., parent_scope=...)` (refs fall through to session bindings; new
 decls shadow), and `check(..., seed_env=...)` (seed with prior decls/binding
@@ -59,9 +58,19 @@ taken before eval, since `set` only updates an existing binding's value and neve
 changes the value scope's key set). Only genuinely external effects already issued
 during evaluation (agent calls, `exec` shell commands) are irreversible.
 
-Pre-seeded inputs (`--input KEY=VALUE` / `preset_input`) are applied when the
-matching `input` declaration is promoted (or immediately if already declared); a
-conversion failure leaves the input unset rather than erroring.
+**param / program (M6):** `param` declarations resolve **eagerly** at evaluation
+time — no deferred "unset" state. Resolution order: `[params.<program>]` config
+value (if a `program` decl is active) > default expression > pre-eval error. A
+`program NAME` decl is session-global, set once; entering the same name is a
+no-op, a different name rejects. Config values are converted via `convert_input`
+in a pre-eval check; a conversion failure rejects the entry cleanly (no eval,
+no agent calls). Atomic rollback covers `program` + `param` promotions: a
+failing entry restores the prior program name and config table. A
+`params_config_loader: Callable[[str], dict[str, object]]` is injected at
+construction (the `agm repl` command supplies a closure over the config context;
+tests supply fakes). `EchoInterpreter` no longer overrides `_exec_param`; it
+inherits the base implementation which uses the pre-converted `param_values`
+dict passed via constructor.
 
 The session shares the host-environment assembly, input conversion, and
 exception→`RunError` mapping with `WorkflowRuntime` via public helpers in

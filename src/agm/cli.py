@@ -927,11 +927,6 @@ def exec_cmd(
 
 @app.command(name="repl")
 def repl_cmd(
-    inputs: list[str] | None = typer.Option(
-        None,
-        "--input",
-        help="Host input value in KEY=VALUE form (repeatable).",
-    ),
     strict_json: bool | None = typer.Option(
         None,
         "--strict-json/--no-strict-json",
@@ -979,7 +974,6 @@ def repl_cmd(
         )
     repl_command.run(
         ReplArgs(
-            inputs=list(inputs) if inputs is not None else [],
             strict_json=strict_json,
             max_iters=max_iters,
             runner=runner,

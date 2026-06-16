@@ -1046,47 +1046,6 @@ class TestExecConfigWiring:
         assert "Error: invalid exec configuration" in capsys.readouterr().err
 
 
-class TestParseKeyValue:
-    """Tests for the general key=value parser helper."""
-
-    def test_parse_valid_key_value(self) -> None:
-        from agm.core.cli_helpers import parse_key_value
-
-        key, value = parse_key_value("name=Alice")
-        assert key == "name"
-        assert value == "Alice"
-
-    def test_parse_key_value_with_equals_in_value(self) -> None:
-        from agm.core.cli_helpers import parse_key_value
-
-        key, value = parse_key_value("expr=a=b")
-        assert key == "expr"
-        assert value == "a=b"
-
-    def test_parse_key_value_invalid_raises(self) -> None:
-        from agm.core.cli_helpers import parse_key_value
-
-        with pytest.raises(ValueError, match="="):
-            parse_key_value("noequals")
-
-    def test_parse_key_value_empty_key_raises(self) -> None:
-        from agm.core.cli_helpers import parse_key_value
-
-        with pytest.raises(ValueError):
-            parse_key_value("=value")
-
-    def test_parse_inputs_list(self) -> None:
-        from agm.core.cli_helpers import parse_inputs
-
-        result = parse_inputs(["a=1", "b=hello"])
-        assert result == {"a": "1", "b": "hello"}
-
-    def test_parse_inputs_duplicate_key_raises(self) -> None:
-        from agm.core.cli_helpers import parse_inputs
-
-        with pytest.raises(ValueError, match="a"):
-            parse_inputs(["a=1", "a=2"])
-
 
 def _exec_args_with_fallback_runtime(
     agl_file: Path,

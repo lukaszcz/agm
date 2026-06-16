@@ -221,7 +221,6 @@ class ExecArgs:
 
 @dataclass(slots=True)
 class ReplArgs:
-    inputs: list[str]
     strict_json: bool | None
     max_iters: int | None
     runner: str | None

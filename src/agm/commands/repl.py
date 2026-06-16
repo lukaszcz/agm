@@ -15,8 +15,12 @@ Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
 default, ``auto`` under ``--auto-agents``) is passed to BOTH the confirming
 wrapper and the console, so the ``:agent`` meta-command, an ``always`` answer,
 and the wrapper all stay in sync.  Trace logging (``--log-file`` / ``--no-log``)
-and ``--input KEY=VALUE`` pre-seed are wired exactly as ``agm exec`` resolves
-them.
+is wired exactly as ``agm exec`` resolves them.
+
+**param / program (M6):** ``param`` declarations in a REPL session resolve
+EAGERLY from ``[params.<program>]`` config (if a ``program`` decl is active)
+or a default expression.  The old ``--input KEY=VALUE`` pre-seed option has
+been removed; there is no CLI-level param seeding for the REPL.
 """
 
 from __future__ import annotations
@@ -32,21 +36,13 @@ from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.commands.agent_io import default_agent_runner
 from agm.commands.args import ReplArgs
 from agm.config.context import current_config_context
-from agm.config.general import load_exec_config
+from agm.config.general import load_exec_config, load_params_config
 from agm.core import dry_run
-from agm.core.cli_helpers import parse_inputs
 from agm.core.log import prepare_trace_log
 
 
 def run(args: ReplArgs) -> None:
     """Run the ``agm repl`` command."""
-    # Parse --input k=v pairs up front (malformed pairs exit 1, like exec).
-    try:
-        inputs = parse_inputs(args.inputs)
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
-
     ctx = current_config_context()
     try:
         config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
@@ -87,17 +83,21 @@ def run(args: ReplArgs) -> None:
         runner_agent, agent_mode, confirm=make_console_confirm()
     )
 
+    # Build the params_config_loader: when a ``program NAME`` decl is entered in
+    # the session, this loader is called to fetch [params.NAME] from merged config.
+    def _params_config_loader(program_name: str) -> dict[str, object]:
+        return load_params_config(
+            program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
+        )
+
     session = ReplSession(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
         default_agent=confirming_agent,
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,
+        params_config_loader=_params_config_loader,
     )
-
-    # Pre-seed declared inputs from ``--input KEY=VALUE`` before the loop starts.
-    for key, value in inputs.items():
-        session.preset_input(key, value)
 
     history_path = ctx.home / "repl_history"
 

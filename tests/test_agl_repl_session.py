@@ -3,8 +3,8 @@
 Drives ``ReplSession`` directly with source strings and fake agents.  Asserts
 user-visible behaviour: persistence across entries, redefinition/shadowing,
 expression/binding echo data, ``type_of`` purity, atomic-on-error promotion,
-exactly-once agent dispatch, the ``:set`` input flow, ``reset``, ``load_file``,
-``dump_source``, surfaced warnings, and ``check_only`` (type-only) runs.
+exactly-once agent dispatch, the eager-param / program-decl flow, ``reset``,
+``load_file``, ``dump_source``, surfaced warnings, and ``check_only`` runs.
 """
 
 from __future__ import annotations
@@ -354,67 +354,224 @@ class TestAgentDeclarations:
 
 
 # ---------------------------------------------------------------------------
-# Inputs / :set flow
+# Eager param resolution (M6)
 # ---------------------------------------------------------------------------
 
 
-class TestInputs:
-    def test_declared_input_listed_unset(self) -> None:
+class TestParamEagerResolution:
+    def test_param_with_default_binds_at_decl(self) -> None:
+        # param with a default expression resolves at entry evaluation time.
         s = ReplSession()
-        s.eval_entry("param name: text")
-        ins = s.inputs()
-        assert len(ins) == 1
-        name, typ, val = ins[0]
-        assert name == "name"
-        assert isinstance(typ, TextType)
-        assert val is None
+        r = s.eval_entry('param greeting = "hello"')
+        assert r.ok
+        # The param is now a binding: a later reference resolves it.
+        r2 = s.eval_entry("greeting")
+        assert r2.ok
+        assert _text(r2.value) == "hello"
 
-    def test_unset_input_reference_is_clean_error(self) -> None:
+    def test_param_with_default_echo_shows_value(self) -> None:
+        # The entry result for a resolved param is a "declaration" kind.
         s = ReplSession()
-        s.eval_entry("param name: text")
-        r = s.eval_entry("name")
+        r = s.eval_entry("param x = 7")
+        assert r.ok
+        assert r.kind == "declaration"
+        assert r.name == "x"
+
+    def test_param_with_default_visible_in_later_reference(self) -> None:
+        s = ReplSession()
+        s.eval_entry("param n = 10")
+        r = s.eval_entry("n * 2")
+        assert r.ok
+        assert _int(r.value) == 20
+
+    def test_param_without_default_and_no_config_rejects_entry(self) -> None:
+        # Required param with no config and no default → clean diagnostic.
+        s = ReplSession()
+        r = s.eval_entry("param required: int")
         assert not r.ok
         assert r.diagnostics
-        assert "name" in r.diagnostics[0].message
-        assert ":set" in r.diagnostics[0].message
+        assert "required" in r.diagnostics[0].message
+        assert "Missing required param" in r.diagnostics[0].message
 
-    def test_set_input_then_reference(self) -> None:
-        s = ReplSession()
-        s.eval_entry("param name: text")
-        s.set_input("name", "World")
-        r = s.eval_entry("name")
+    def test_param_without_default_no_config_no_agent_call(self) -> None:
+        # The entry is rejected before eval; an agent call in the same entry
+        # must NOT fire.
+        agent = CountingAgent("should-not-call")
+        s = ReplSession(default_agent=agent)
+        r = s.eval_entry('param required: text\nlet x = ask """call"""')
+        assert not r.ok
+        assert agent.calls == 0
+
+    def test_param_with_config_value_binds_correctly(self) -> None:
+        # Config value resolves the param: no default needed.
+        s = ReplSession(params_config_loader=lambda name: {"count": 42} if name == "myprog" else {})
+        s.eval_entry("program myprog")
+        r = s.eval_entry("param count: int")
         assert r.ok
-        assert _text(r.value) == "World"
-        # inputs() now reports the value.
-        _n, _t, val = s.inputs()[0]
-        assert val is not None
+        r2 = s.eval_entry("count + 1")
+        assert r2.ok
+        assert _int(r2.value) == 43
 
-    def test_set_input_typed_conversion(self) -> None:
-        s = ReplSession()
-        s.eval_entry("param count: int")
-        s.set_input("count", "42")
-        r = s.eval_entry("count + 1")
+    def test_config_value_wins_over_default(self) -> None:
+        # CLI precedence: config > default.
+        s = ReplSession(params_config_loader=lambda name: {"x": 99} if name == "p" else {})
+        s.eval_entry("program p")
+        r = s.eval_entry("param x = 7")
         assert r.ok
-        assert _int(r.value) == 43
+        r2 = s.eval_entry("x")
+        assert r2.ok
+        assert _int(r2.value) == 99
 
-    def test_set_undeclared_input_errors(self) -> None:
-        s = ReplSession()
-        with pytest.raises(AglError):
-            s.set_input("nope", "1")
+    def test_param_before_program_decl_no_config(self) -> None:
+        # A param declared BEFORE the program decl resolves with defaults only.
+        s = ReplSession(params_config_loader=lambda name: {"n": 5} if name == "p" else {})
+        r_param = s.eval_entry("param n = 3")
+        assert r_param.ok
+        # Even though config has n=5 for program "p", it was declared before program.
+        s.eval_entry("program p")
+        r2 = s.eval_entry("n")
+        assert r2.ok
+        assert _int(r2.value) == 3  # default, not config
 
-    def test_set_input_conversion_failure_errors(self) -> None:
-        s = ReplSession()
-        s.eval_entry("param count: int")
-        with pytest.raises(AglError):
-            s.set_input("count", "not-an-int")
+    def test_config_conversion_failure_rejects_entry(self) -> None:
+        # Bad config value type → clean diagnostic, no eval.
+        def bad_config(name: str) -> dict[str, object]:
+            return {"count": "not-an-int"} if name == "p" else {}
 
-    def test_set_input_excluded_from_bindings_until_set(self) -> None:
+        s = ReplSession(params_config_loader=bad_config)
+        s.eval_entry("program p")
+        r = s.eval_entry("param count: int")
+        assert not r.ok
+        assert r.diagnostics
+        assert "count" in r.diagnostics[0].message
+
+    def test_param_binding_in_bindings_listing(self) -> None:
+        # After eager resolution, param appears in bindings().
         s = ReplSession()
-        s.eval_entry("param name: text")
-        # unset input has no value, so it is not in bindings()
-        assert all(n != "name" for n, _t, _v in s.bindings())
-        s.set_input("name", "hi")
-        assert any(n == "name" for n, _t, _v in s.bindings())
+        s.eval_entry("param n = 42")
+        names = {nm for nm, _t, _v in s.bindings()}
+        assert "n" in names
+
+    def test_param_listed_in_declared_params(self) -> None:
+        # declared_params() returns resolved params with type and value.
+        s = ReplSession()
+        s.eval_entry("param n = 42")
+        params = s.declared_params()
+        assert len(params) == 1
+        name, typ, val = params[0]
+        assert name == "n"
+        assert isinstance(typ, IntType)
+        assert _int(val) == 42
+
+    def test_param_atomic_rollback_on_runtime_failure(self) -> None:
+        # An entry that declares a param then fails does not persist the param
+        # or the program name.
+        s = ReplSession(
+            params_config_loader=lambda name: {"x": 5} if name == "p" else {}
+        )
+        before_params = s.declared_params()
+        r = s.eval_entry("param x = 1\nlet _z: decimal = 1 / 0")
+        assert not r.ok
+        # param x must NOT have been promoted.
+        assert s.declared_params() == before_params
+
+    def test_program_and_param_in_same_entry_config_applies(self) -> None:
+        # Within one entry: program foo then param x — x must see foo's config.
+        s = ReplSession(
+            params_config_loader=lambda name: {"x": 55} if name == "myprog" else {}
+        )
+        r = s.eval_entry("program myprog\nparam x: int")
+        assert r.ok
+        r2 = s.eval_entry("x")
+        assert r2.ok
+        assert _int(r2.value) == 55
+
+
+# ---------------------------------------------------------------------------
+# program decl: session-global, set once (M6)
+# ---------------------------------------------------------------------------
+
+
+class TestProgramDecl:
+    def test_program_name_set_once(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("program myprog")
+        assert r.ok
+        assert s.program_name() == "myprog"
+
+    def test_re_entering_same_program_is_noop(self) -> None:
+        s = ReplSession()
+        s.eval_entry("program myprog")
+        r = s.eval_entry("program myprog")
+        assert r.ok
+        assert s.program_name() == "myprog"
+
+    def test_different_program_name_rejects(self) -> None:
+        s = ReplSession()
+        s.eval_entry("program prog1")
+        r = s.eval_entry("program prog2")
+        assert not r.ok
+        assert r.diagnostics
+        assert "prog2" in r.diagnostics[0].message or "prog1" in r.diagnostics[0].message
+
+    def test_reset_clears_program_name(self) -> None:
+        s = ReplSession()
+        s.eval_entry("program myprog")
+        s.reset()
+        assert s.program_name() is None
+        # After reset a new program name is accepted.
+        r = s.eval_entry("program other")
+        assert r.ok
+        assert s.program_name() == "other"
+
+    def test_program_config_loader_called_on_program_decl(self) -> None:
+        calls: list[str] = []
+
+        def loader(name: str) -> dict[str, object]:
+            calls.append(name)
+            return {}
+
+        s = ReplSession(params_config_loader=loader)
+        s.eval_entry("program myapp")
+        assert calls == ["myapp"]
+
+    def test_program_decl_atomic_rollback(self) -> None:
+        # An entry that sets program then raises must NOT persist the program name.
+        s = ReplSession()
+        r = s.eval_entry("program fail_prog\nlet _z: decimal = 1 / 0")
+        assert not r.ok
+        assert s.program_name() is None
+
+    def test_program_then_param_atomic_rollback(self) -> None:
+        # Entry sets program and declares param, then fails — both rolled back.
+        s = ReplSession(
+            params_config_loader=lambda name: {"x": 1} if name == "rollprog" else {}
+        )
+        r = s.eval_entry("program rollprog\nparam x: int\nlet _z: decimal = 1 / 0")
+        assert not r.ok
+        assert s.program_name() is None
+        assert s.declared_params() == []
+
+
+# ---------------------------------------------------------------------------
+# reset (M6 additions)
+# ---------------------------------------------------------------------------
+
+
+class TestResetM6:
+    def test_reset_clears_declared_params(self) -> None:
+        s = ReplSession()
+        s.eval_entry("param n = 42")
+        s.reset()
+        assert s.declared_params() == []
+
+    def test_reset_allows_new_program(self) -> None:
+        s = ReplSession()
+        s.eval_entry("program p1")
+        s.reset()
+        r = s.eval_entry("program p2")
+        assert r.ok
+        assert s.program_name() == "p2"
 
 
 # ---------------------------------------------------------------------------
@@ -426,10 +583,11 @@ class TestReset:
     def test_reset_clears_all_state(self) -> None:
         s = ReplSession()
         s.eval_entry("let x = 1")
-        s.eval_entry("param n: int")
+        s.eval_entry("param n = 0")
         s.reset()
         assert s.bindings() == []
-        assert s.inputs() == []
+        assert s.declared_params() == []
+        assert s.program_name() is None
         assert s.dump_source() == ""
         # After reset a name previously defined is gone (would error on ref).
         r = s.eval_entry("x")
@@ -900,121 +1058,6 @@ class TestTraceLogging:
 
 
 # ---------------------------------------------------------------------------
-# preset_input — the --input pre-seed flow
-# ---------------------------------------------------------------------------
-
-
-class TestPresetInput:
-    def test_preset_applied_on_later_declaration(self) -> None:
-        s = ReplSession()
-        s.preset_input("count", "42")
-        # Not declared yet → pending; not yet in inputs().
-        assert s.inputs() == []
-        s.eval_entry("param count: int")
-        # Declaring the input applies the pending value.
-        r = s.eval_entry("count + 1")
-        assert r.ok
-        assert _int(r.value) == 43
-
-    def test_preset_for_already_declared_input_applies_immediately(self) -> None:
-        s = ReplSession()
-        s.eval_entry("param name: text")
-        s.preset_input("name", "World")
-        r = s.eval_entry("name")
-        assert r.ok
-        assert _text(r.value) == "World"
-
-    def test_preset_bad_value_leaves_input_unset(self) -> None:
-        s = ReplSession()
-        s.preset_input("count", "not-an-int")
-        s.eval_entry("param count: int")
-        # Conversion failed → input stays unset; referencing it is a clean error.
-        _name, _typ, val = s.inputs()[0]
-        assert val is None
-        r = s.eval_entry("count")
-        assert not r.ok
-        assert ":set" in r.diagnostics[0].message
-
-    def test_preset_bad_value_for_declared_input_leaves_unset(self) -> None:
-        s = ReplSession()
-        s.eval_entry("param count: int")
-        s.preset_input("count", "nope")  # swallowed, not raised
-        _name, _typ, val = s.inputs()[0]
-        assert val is None
-
-    def test_reset_clears_pending_presets(self) -> None:
-        s = ReplSession()
-        s.preset_input("count", "42")
-        s.reset()
-        # After reset the pending value is gone: declaring leaves it unset.
-        s.eval_entry("param count: int")
-        _name, _typ, val = s.inputs()[0]
-        assert val is None
-
-
-# ---------------------------------------------------------------------------
-# Issue #1 — re-declared input: stale value must be purged from value scope
-# ---------------------------------------------------------------------------
-
-
-class TestInputRedeclaration:
-    def test_redeclare_input_purges_stale_value_from_bindings(self) -> None:
-        """Re-declaring an already-:set input must remove the old value.
-
-        After `input x: int` → `:set x=5` → `input x: int` again:
-        - `inputs()` must report x as unset (value is None)
-        - `bindings()` must NOT list x (no value in scope)
-        The two tables must agree: no stale value survives.
-        """
-        s = ReplSession()
-        r1 = s.eval_entry("param x: int")
-        assert r1.ok
-        s.set_input("x", "5")
-
-        # Confirm x is set in both tables before re-declaring.
-        ins = {name: val for name, _t, val in s.inputs()}
-        assert ins["x"] is not None
-        assert any(n == "x" for n, _t, _v in s.bindings())
-
-        # Re-declare the same input.
-        r2 = s.eval_entry("param x: int")
-        assert r2.ok
-
-        # inputs() must report x as unset.
-        ins2 = {name: val for name, _t, val in s.inputs()}
-        assert ins2["x"] is None, "Re-declared input must be unset in inputs()"
-
-        # bindings() must NOT list x — the stale value must be gone from the
-        # value scope so the two tables agree.
-        assert all(n != "x" for n, _t, _v in s.bindings()), (
-            "Re-declared input must not appear in bindings() with its stale value"
-        )
-
-    def test_redeclare_input_then_reference_raises_unset_guard(self) -> None:
-        """After re-declaration the unset-input guard must fire on reference."""
-        s = ReplSession()
-        s.eval_entry("param x: int")
-        s.set_input("x", "5")
-        # Re-declare — x is now unset again.
-        s.eval_entry("param x: int")
-        r = s.eval_entry("x + 1")
-        assert not r.ok
-        assert r.diagnostics
-        assert ":set" in r.diagnostics[0].message
-
-    def test_redeclare_input_then_reset_works(self) -> None:
-        """Re-set after re-declaration succeeds and value is usable."""
-        s = ReplSession()
-        s.eval_entry("param x: int")
-        s.set_input("x", "5")
-        s.eval_entry("param x: int")
-        s.set_input("x", "10")
-        r = s.eval_entry("x + 1")
-        assert r.ok
-        assert _int(r.value) == 11
-
-
-# ---------------------------------------------------------------------------
 # Issue #7 — snapshot optimisation: set-to-prior binding still rolls back
 # ---------------------------------------------------------------------------
 
@@ -1062,6 +1105,117 @@ class TestSnapshotOptimisation:
         assert not r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals == {"x": 10}  # x untouched; _fail never promoted
+
+
+# ---------------------------------------------------------------------------
+# Atomicity leak regression tests (M6 review fixes)
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicityLeaks:
+    """Regression tests for atomicity leaks fixed in M6 review.
+
+    These tests failed BEFORE the fix and verify that:
+    - check_only entries never mutate session state or invoke the loader.
+    - Post-pre-eval reject paths (e.g. contract failure) leave program name unset.
+    - A rejected entry containing ``program foo`` does NOT block a subsequent
+      ``program bar`` declaration.
+    """
+
+    def test_check_only_with_program_does_not_set_program_name(self) -> None:
+        # A check_only entry containing ``program foo`` must leave program_name() == None.
+        loader_calls: list[str] = []
+
+        def loader(name: str) -> dict[str, object]:
+            loader_calls.append(name)
+            return {}
+
+        s = ReplSession(params_config_loader=loader)
+        r = s.eval_entry("program foo", check_only=True)
+        assert r.ok
+        # Session program name must be untouched.
+        assert s.program_name() is None
+        # The loader must NOT have been called.
+        assert loader_calls == []
+
+    def test_check_only_with_program_and_param_does_not_mutate_session(self) -> None:
+        # A check_only entry with both program and param must leave state fully clean.
+        loader_calls: list[str] = []
+
+        def loader(name: str) -> dict[str, object]:
+            loader_calls.append(name)
+            return {"x": 42}
+
+        s = ReplSession(params_config_loader=loader)
+        r = s.eval_entry("program dry\nparam x: int", check_only=True)
+        assert r.ok
+        assert s.program_name() is None
+        assert s.declared_params() == []
+        assert loader_calls == []
+
+    def test_check_only_does_not_block_later_real_program_decl(self) -> None:
+        # After a check_only entry with ``program foo``, a real ``program foo``
+        # entry must succeed (the name was never committed).
+        s = ReplSession()
+        s.eval_entry("program foo", check_only=True)
+        r = s.eval_entry("program foo")
+        assert r.ok
+        assert s.program_name() == "foo"
+
+    def test_contract_error_after_pre_eval_does_not_persist_program_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An entry with ``program foo`` + an agent call that triggers a contract
+        # error at step 6 must leave program_name() == None.
+        import agm.agl.runtime.contract as contract_mod
+
+        def bad_materialize(spec: object, codecs: object) -> object:
+            raise ValueError("bad contract")
+
+        monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
+
+        loader_calls: list[str] = []
+
+        def loader(name: str) -> dict[str, object]:
+            loader_calls.append(name)
+            return {}
+
+        s = ReplSession(
+            default_agent=CountingAgent("ok"),
+            params_config_loader=loader,
+        )
+        r = s.eval_entry('program foo\nlet x = ask """hi"""')
+        assert not r.ok
+        # Program name must NOT have leaked.
+        assert s.program_name() is None
+        # A subsequent different program decl must be accepted (not blocked).
+        r2 = s.eval_entry("program bar")
+        assert r2.ok
+        assert s.program_name() == "bar"
+
+    def test_rejected_program_entry_does_not_block_subsequent_decl(self) -> None:
+        # A required-param rejection on an entry with ``program foo`` must leave
+        # program_name() == None, so ``program bar`` afterwards is not rejected.
+        s = ReplSession()
+        r = s.eval_entry("program foo\nparam required: int")
+        assert not r.ok
+        assert s.program_name() is None
+        # Now a different program must be accepted.
+        r2 = s.eval_entry("program bar")
+        assert r2.ok
+        assert s.program_name() == "bar"
+
+    def test_missing_required_param_hint_includes_program_name_from_same_entry(
+        self,
+    ) -> None:
+        # When ``program foo`` and a required ``param x: int`` appear in the same
+        # entry, the missing-required diagnostic must include [params.foo] in the
+        # hint — even though the session program name was never committed.
+        s = ReplSession()
+        r = s.eval_entry("program foo\nparam x: int")
+        assert not r.ok
+        assert r.diagnostics
+        assert "params.foo" in r.diagnostics[0].message
 
 
 # ---------------------------------------------------------------------------

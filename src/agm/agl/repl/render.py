@@ -42,11 +42,6 @@ def format_typed_value(name: str, value_type: "Type", value: "Value") -> str:
     return f"{name} : {value_type!r} = {render_for_console(value)}"
 
 
-def format_unset_input(name: str, value_type: "Type") -> str:
-    """Format a declared-but-unset input as ``name : Type = <unset>``."""
-    return f"{name} : {value_type!r} = <unset>"
-
-
 def render_entry_result(
     result: "EntryResult", *, echo: bool, check_only: bool = False
 ) -> str | None:

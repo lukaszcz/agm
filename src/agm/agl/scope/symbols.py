@@ -166,6 +166,11 @@ class ResolvedProgram:
         declaration) to its :class:`AgentDecl` node.  Ambient agents supplied
         by the host (see ``resolve(..., ambient_agents=...)``) are NOT included
         here.  Always populated by the resolver.
+    ``program_name``
+        The source-declared program name from a ``program NAME`` declaration,
+        or ``None`` when undeclared.  Used by the runtime/config layer for
+        ``[params.<name>]`` keying.  At most one ``program`` declaration is
+        allowed per program; a duplicate is a scope error.
     ``warnings``
         Non-fatal scope-pass diagnostics (severity ``"warning"``), e.g. an
         agent that is declared but never called.  Empty by default.
@@ -176,6 +181,7 @@ class ResolvedProgram:
     call_kinds: dict[int, CallKind]
     root_scope: ScopeNode
     declared_agents: dict[str, AgentDecl] = field(default_factory=dict)
+    program_name: str | None = None
     warnings: tuple[Diagnostic, ...] = ()
 
 

@@ -129,6 +129,8 @@ class _Resolver:
         self._valid_agents: frozenset[str] = frozenset()
         # Program-declared agent names referenced by an agent call.
         self._referenced_agents: set[str] = set()
+        # Source-declared program name (from a ``program NAME`` decl), or None.
+        self._program_name: str | None = None
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -172,6 +174,7 @@ class _Resolver:
             call_kinds=self._call_kinds,
             root_scope=root,
             declared_agents=dict(self._declared_agents),
+            program_name=self._program_name,
             warnings=self._unused_agent_warnings(),
         )
 
@@ -386,13 +389,20 @@ class _Resolver:
         self._define(stmt.name, ref)
 
     def _resolve_program_decl(self, stmt: ProgramDecl) -> None:
-        """Validate program declarations (root-only, no binding introduced)."""
+        """Validate program declarations (root-only, at most once, no binding)."""
         if not self._at_root:
             raise AglScopeError(
                 f"'program' declarations are only allowed at the program root, "
                 f"not inside a nested block (found 'program {stmt.name}' here).",
                 span=stmt.span,
             )
+        if self._program_name is not None:
+            raise AglScopeError(
+                f"'program' is already declared as '{self._program_name}'; "
+                f"at most one 'program' declaration is allowed per program.",
+                span=stmt.span,
+            )
+        self._program_name = stmt.name
 
     def _resolve_type_decl(self, stmt: RecordDef | EnumDef | TypeAlias) -> None:
         """Reject type declarations that appear outside the program root."""

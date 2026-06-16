@@ -67,6 +67,7 @@ from agm.agl.typecheck.types import (
     JsonType,
     ListType,
     RecordType,
+    Type,
 )
 from tests._agl_helpers import all_node_ids, ambient_agents_for
 
@@ -3457,3 +3458,121 @@ class TestSeedEnvSeam:
         assert isinstance(bt, RecordType) and bt.name == "R"
 
 
+# ---------------------------------------------------------------------------
+# M2: param declaration O5 type rules
+# ---------------------------------------------------------------------------
+
+
+def _param_binding_type(source: str) -> Type:
+    """Parse, resolve, check *source* and return the first param's binding type."""
+    from agm.agl.syntax.nodes import ParamDecl
+
+    r = parse_resolve_check(source, caps_with_json_codec())
+    stmt = r.resolved.program.body[0]
+    assert isinstance(stmt, ParamDecl)
+    bt = r.type_env.get_binding_type(stmt.node_id)
+    assert bt is not None
+    return bt
+
+
+class TestParamTypecheckO5:
+    """O5 type rules: all four param forms record the correct binding type."""
+
+    # Case 1: param x — no annotation, no default → TextType, required
+    def test_param_no_annotation_no_default_is_text(self) -> None:
+        bt = _param_binding_type("param spec")
+        assert isinstance(bt, TextType)
+
+    # Case 2: param x: T — annotation, no default → resolved T, required
+    def test_param_annotation_no_default_resolves_type(self) -> None:
+        bt = _param_binding_type("param count: int")
+        assert isinstance(bt, IntType)
+
+    def test_param_annotation_text_no_default(self) -> None:
+        bt = _param_binding_type("param name: text")
+        assert isinstance(bt, TextType)
+
+    def test_param_annotation_bool_no_default(self) -> None:
+        bt = _param_binding_type("param flag: bool")
+        assert isinstance(bt, BoolType)
+
+    def test_param_annotation_decimal_no_default(self) -> None:
+        bt = _param_binding_type("param ratio: decimal")
+        assert isinstance(bt, DecimalType)
+
+    # Case 3: param x = e — no annotation, default → inferred from e, optional
+    def test_param_no_annotation_int_default_infers_int(self) -> None:
+        bt = _param_binding_type("param n = 3")
+        assert isinstance(bt, IntType)
+
+    def test_param_no_annotation_string_default_infers_text(self) -> None:
+        bt = _param_binding_type('param s = "hello"')
+        assert isinstance(bt, TextType)
+
+    def test_param_no_annotation_bool_default_infers_bool(self) -> None:
+        bt = _param_binding_type("param flag = true")
+        assert isinstance(bt, BoolType)
+
+    def test_param_no_annotation_decimal_default_infers_decimal(self) -> None:
+        bt = _param_binding_type("param ratio = 3.14")
+        assert isinstance(bt, DecimalType)
+
+    # Case 4: param x: T = e — annotation + default → resolved T; default checked
+    def test_param_annotation_and_default_records_annotation_type(self) -> None:
+        bt = _param_binding_type("param count: int = 0")
+        assert isinstance(bt, IntType)
+
+    def test_param_annotation_and_default_int_widen_to_decimal(self) -> None:
+        # int default is assignable to decimal annotation (widening rule)
+        bt = _param_binding_type("param ratio: decimal = 3")
+        assert isinstance(bt, DecimalType)
+
+    def test_param_annotation_and_default_text(self) -> None:
+        bt = _param_binding_type('param greeting: text = "hi"')
+        assert isinstance(bt, TextType)
+
+    # Conformance failure: default does not match annotation
+    def test_param_annotation_int_default_text_rejected(self) -> None:
+        err = reject_type('param n: int = "not an int"', caps_with_json_codec())
+        msg = err.to_diagnostic().message.lower()
+        assert "mismatch" in msg or "expected" in msg
+
+    def test_param_annotation_bool_default_int_rejected(self) -> None:
+        err = reject_type("param flag: bool = 1", caps_with_json_codec())
+        d = err.to_diagnostic()
+        assert "bool" in d.message or "int" in d.message
+
+    # All forms must record a binding type (not None)
+    def test_binding_type_set_for_all_four_forms(self) -> None:
+        """All four param forms must set a binding type on the node."""
+        from agm.agl.syntax.nodes import ParamDecl
+
+        sources = [
+            ("param a", TextType),
+            ("param b: int", IntType),
+            ("param c = 42", IntType),
+            ("param d: int = 0", IntType),
+        ]
+        for source, expected_type in sources:
+            r = parse_resolve_check(source, caps_with_json_codec())
+            stmt = r.resolved.program.body[0]
+            assert isinstance(stmt, ParamDecl)
+            bt = r.type_env.get_binding_type(stmt.node_id)
+            assert bt is not None, f"binding type is None for: {source!r}"
+            assert isinstance(bt, expected_type), f"wrong type for {source!r}: got {bt!r}"
+
+    # default referencing earlier param — typecheck must also succeed
+    def test_param_default_references_earlier_param_typechecks(self) -> None:
+        """param b = a where a: text — type-checks correctly."""
+        r = parse_resolve_check("param a\nparam b = a", caps_with_json_codec())
+        from agm.agl.syntax.nodes import ParamDecl
+
+        stmt0 = r.resolved.program.body[0]
+        stmt1 = r.resolved.program.body[1]
+        assert isinstance(stmt0, ParamDecl)
+        assert isinstance(stmt1, ParamDecl)
+        bt_a = r.type_env.get_binding_type(stmt0.node_id)
+        bt_b = r.type_env.get_binding_type(stmt1.node_id)
+        assert isinstance(bt_a, TextType)
+        # b infers from a, which is text
+        assert isinstance(bt_b, TextType)

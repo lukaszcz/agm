@@ -455,11 +455,33 @@ class _Checker:
         self._assert_assignable(val_type, target_type, stmt.span)
 
     def _check_param(self, stmt: ParamDecl) -> None:
-        if stmt.annotation is not None:
-            typ = self._env.resolve_type_expr(stmt.annotation, span=stmt.span)
+        """Type-check a ``param`` declaration (O5 rules).
+
+        O5 case table (annotation present? × default present?):
+        - No ann, no default  → type = TextType() (required).
+        - Ann,    no default  → type = resolved ann (required).
+        - No ann, default     → type = inferred from default expr (optional).
+        - Ann,    default     → type = resolved ann; default must conform (optional).
+
+        Mirrors ``_check_binding`` for ``let``/``var`` but adapts for ParamDecl's
+        ``.annotation`` field (a raw ``TypeExpr``, not a wrapped ``TypeExpr | None``
+        like ``LetDecl.type_ann``).
+        """
+        ann_type = (
+            self._env.resolve_type_expr(stmt.annotation, span=stmt.span)
+            if stmt.annotation is not None
+            else None
+        )
+        if stmt.default is not None:
+            val_type = self._check_expr(stmt.default, expected=ann_type)
+            if ann_type is not None:
+                self._assert_assignable(val_type, ann_type, stmt.span)
+                declared_type = ann_type
+            else:
+                declared_type = val_type
         else:
-            typ = TextType()
-        self._env.set_binding_type(stmt.node_id, typ)
+            declared_type = ann_type if ann_type is not None else TextType()
+        self._env.set_binding_type(stmt.node_id, declared_type)
 
     def _check_do_until(self, stmt: DoUntil) -> None:
         for s in stmt.body:

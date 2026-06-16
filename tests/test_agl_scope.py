@@ -384,6 +384,65 @@ class TestProgramDeclNotRoot:
 
 
 # ---------------------------------------------------------------------------
+# M2: program decl name recording and at-most-once enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestProgramDeclM2:
+    def test_single_program_decl_records_name(self) -> None:
+        """A single ``program NAME`` decl records the name on ResolvedProgram."""
+        r = parse_and_resolve("program myprog")
+        assert r.program_name == "myprog"
+
+    def test_no_program_decl_gives_none(self) -> None:
+        """Without a ``program`` decl, program_name is None."""
+        r = parse_and_resolve("let x = 1")
+        assert r.program_name is None
+
+    def test_program_decl_with_params_records_name(self) -> None:
+        """program decl combined with params — name still recorded."""
+        r = parse_and_resolve("program review\nparam spec\nparam limit: int")
+        assert r.program_name == "review"
+
+    def test_duplicate_program_decl_rejected(self) -> None:
+        """A second ``program`` decl anywhere is a scope error."""
+        err = reject_scope("program first\nprogram second")
+        line, msg = diag(err)
+        assert line == 2
+        assert "program" in msg.lower()
+
+    def test_duplicate_program_decl_same_name_rejected(self) -> None:
+        """Even repeating the same name twice is rejected."""
+        err = reject_scope("program same\nprogram same")
+        _, msg = diag(err)
+        assert "program" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# M2: param default expression scope rules
+# ---------------------------------------------------------------------------
+
+
+class TestParamDefaultScope:
+    def test_param_default_references_earlier_param(self) -> None:
+        """A default expr may reference an earlier param (declaration order)."""
+        r = parse_and_resolve("param a\nparam b = a")
+        assert r.program is not None
+
+    def test_param_default_forward_ref_rejected(self) -> None:
+        """A default expr referencing a LATER param is a scope error."""
+        err = reject_scope("param b = a\nparam a")
+        _, msg = diag(err)
+        assert "'a' is not defined" in msg
+
+    def test_param_self_reference_in_default_rejected(self) -> None:
+        """``param x = x`` — self-reference in default is a scope error."""
+        err = reject_scope("param x = x")
+        _, msg = diag(err)
+        assert "'x' is not defined" in msg
+
+
+# ---------------------------------------------------------------------------
 # Rejection: scope-escape (deferred: requires do/case/try parser)
 # ---------------------------------------------------------------------------
 

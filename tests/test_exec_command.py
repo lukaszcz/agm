@@ -75,29 +75,22 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "file") == str(agl_file)
 
-    def test_exec_input_flag(
+    def test_exec_param_tokens_in_args(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
+        """Extra ``--name value`` tokens land in ExecArgs.param_tokens."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        result = invoke(runner, ["exec", "--input", "k=v", str(agl_file)])
+        result = invoke(runner, ["exec", str(agl_file), "--foo", "bar"])
+        # exec.run is mocked, so unknown tokens don't cause errors here.
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "inputs") == ["k=v"]
-
-    def test_exec_multiple_inputs(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
-    ) -> None:
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-
-        result = invoke(runner, ["exec", "--input", "a=1", "--input", "b=2", str(agl_file)])
-        assert result.exit_code == 0
-
-        args = recorded_runs[0]
-        assert getattr(args, "inputs") == ["a=1", "b=2"]
+        # param_tokens collects the leftover ctx.args tokens.
+        tokens = getattr(args, "param_tokens")
+        assert "--foo" in tokens
+        assert "bar" in tokens
 
     def test_exec_strict_json_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -216,12 +209,12 @@ class TestExecCommandInline:
     """Behavior tests for executing an inline -c/--command program."""
 
     def _command_args(
-        self, command: str, *, inputs: list[str] | None = None
+        self, command: str, *, param_tokens: list[str] | None = None
     ) -> ExecArgs:
         return ExecArgs(
             file=None,
             command=command,
-            inputs=inputs or [],
+            param_tokens=param_tokens or [],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -235,10 +228,10 @@ class TestExecCommandInline:
         assert exec_command.run(self._command_args('print "hello"')) is None
         assert capsys.readouterr().out == "hello\n"
 
-    def test_inline_command_with_inputs(
+    def test_inline_command_with_param_token(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        args = self._command_args("param msg\nprint msg", inputs=["msg=hi"])
+        args = self._command_args("param msg\nprint msg", param_tokens=["--msg", "hi"])
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
 
@@ -257,7 +250,7 @@ class TestExecCommandInline:
         args = ExecArgs(
             file=None,
             command=None,
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -278,7 +271,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(tmp_path / "nonexistent.agl"),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -296,7 +289,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(tmp_path / "nonexistent.agl"),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -319,7 +312,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(a_dir),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -344,7 +337,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -365,7 +358,7 @@ class TestExecCommandBehavior:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -380,12 +373,15 @@ class TestExecCommandBehavior:
 
 
 def _exec_args(
-    agl_file: Path, *, inputs: list[str] | None = None, log_file: str | None = None
+    agl_file: Path,
+    *,
+    param_tokens: list[str] | None = None,
+    log_file: str | None = None,
 ) -> ExecArgs:
     """Build ExecArgs for *agl_file* with all optional flags defaulted."""
     return ExecArgs(
         file=str(agl_file),
-        inputs=inputs or [],
+        param_tokens=param_tokens or [],
         strict_json=None,
         max_iters=None,
         runner=None,
@@ -450,17 +446,18 @@ class TestExecCommandEdgePaths:
         captured = capsys.readouterr()
         assert captured.out == "ok\n"
 
-    def test_bad_input_format_exits_1(
+    def test_unknown_param_token_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """An unknown --option in param_tokens exits 1 with an error message."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, inputs=["noequals"]))
+            exec_command.run(_exec_args(agl_file, param_tokens=["--unknown-option"]))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "Error" in captured.err
+        assert "error" in captured.err.lower() or "Error" in captured.err
 
     def test_non_exhaustive_case_warns_but_exits_0(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -723,7 +720,7 @@ class TestExecCommandM1:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -740,7 +737,7 @@ class TestExecCommandM1:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=["msg=hello"],
+            param_tokens=["--msg", "hello"],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -757,7 +754,7 @@ class TestExecCommandM1:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],  # missing 'msg'
+            param_tokens=[],  # missing 'msg'
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -783,7 +780,7 @@ class TestExecCommandM1:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -819,7 +816,7 @@ class TestExecCommandM1:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -844,7 +841,7 @@ class TestExecCommandM1:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -862,7 +859,7 @@ class TestExecCommandM1:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -936,7 +933,7 @@ class TestExecConfigWiring:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -967,7 +964,7 @@ class TestExecConfigWiring:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=False,  # CLI --no-strict-json overrides config true
             max_iters=7,  # CLI --max-iters overrides config 9
             runner=None,
@@ -1002,7 +999,7 @@ class TestExecConfigWiring:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1036,7 +1033,7 @@ class TestExecConfigWiring:
             exec_command.run(
                 ExecArgs(
                     file=str(agl_file),
-                    inputs=[],
+                    param_tokens=[],
                     strict_json=None,
                     max_iters=None,
                     runner=None,
@@ -1092,7 +1089,10 @@ class TestParseKeyValue:
 
 
 def _exec_args_with_fallback_runtime(
-    agl_file: Path, monkeypatch: pytest.MonkeyPatch, *, inputs: list[str] | None = None
+    agl_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    param_tokens: list[str] | None = None,
 ) -> ExecArgs:
     """Return ExecArgs for *agl_file* and patch WorkflowRuntime to have a fallback agent.
 
@@ -1123,7 +1123,7 @@ def _exec_args_with_fallback_runtime(
             )
 
     monkeypatch.setattr(exec_command, "WorkflowRuntime", FallbackRuntime)
-    return _exec_args(agl_file, inputs=inputs)
+    return _exec_args(agl_file, param_tokens=param_tokens)
 
 
 class TestDryRunInventory:
@@ -1277,10 +1277,10 @@ class TestDryRunInventory:
 
 
 class TestJsonInputsCLI:
-    """M2: --input with structured (record/list/decimal) types via JsonCodec."""
+    """M4: structured param types via per-param CLI options."""
 
     def test_record_input_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """A record-typed input provided as a JSON string is parsed and usable."""
+        """A record-typed param provided as a JSON string is parsed and usable."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'record Point\n  x: int\n  y: int\n'
@@ -1291,7 +1291,7 @@ class TestJsonInputsCLI:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=['pt={"x": 1, "y": 2}'],
+            param_tokens=["--pt", '{"x": 1, "y": 2}'],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1312,7 +1312,7 @@ class TestJsonInputsCLI:
         assert out.getvalue().strip() == "1"
 
     def test_decimal_input_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """A decimal-typed input provided as a JSON string is accepted."""
+        """A decimal-typed param provided as a string is accepted."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'param price: decimal\n'
@@ -1322,7 +1322,7 @@ class TestJsonInputsCLI:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=["price=1.5"],
+            param_tokens=["--price", "1.5"],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1343,7 +1343,7 @@ class TestJsonInputsCLI:
         assert out.getvalue().strip() == "1.5"
 
     def test_list_input_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """A list-typed input provided as a JSON array string is accepted."""
+        """A list-typed param provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'param tags: list[text]\n'
@@ -1353,7 +1353,7 @@ class TestJsonInputsCLI:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=['tags=["a", "b"]'],
+            param_tokens=["--tags", '["a", "b"]'],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1376,7 +1376,7 @@ class TestJsonInputsCLI:
         assert output  # non-empty
 
     def test_record_input_invalid_json_exits_1(self, tmp_path: Path) -> None:
-        """A record-typed input with invalid JSON exits 1."""
+        """A record-typed param with invalid JSON exits 1."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'record Point\n  x: int\n  y: int\n'
@@ -1387,7 +1387,7 @@ class TestJsonInputsCLI:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=["pt=not_json"],
+            param_tokens=["--pt", "not_json"],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1417,7 +1417,7 @@ class TestUncaughtExceptionOutputFormat:
         from agm.commands.args import ExecArgs
         return ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1452,7 +1452,7 @@ class TestUncaughtExceptionOutputFormat:
         from agm.commands.args import ExecArgs
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1519,7 +1519,7 @@ class TestExecBinaryFileError:
 
         args = ExecArgs(
             file=str(binary_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1544,7 +1544,7 @@ class TestExecBinaryFileError:
 
         args = ExecArgs(
             file=str(binary_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1575,7 +1575,7 @@ class TestExecWhitespaceRunner:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner="   ",  # whitespace-only
@@ -1595,7 +1595,7 @@ class TestExecWhitespaceRunner:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner="   ",
@@ -1617,7 +1617,7 @@ class TestExecWhitespaceRunner:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner="   ",
@@ -1639,7 +1639,7 @@ class TestExecPerAgentRunnerValidation:
     def _args(self, file: str) -> ExecArgs:
         return ExecArgs(
             file=file,
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner="claude -p",  # valid default; the per-agent hint is the offender
@@ -1721,7 +1721,7 @@ class TestExecMalformedQuotingRunner:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner='"foo',  # unclosed quote
@@ -1741,7 +1741,7 @@ class TestExecMalformedQuotingRunner:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner='"foo',
@@ -1764,7 +1764,7 @@ class TestExecMalformedQuotingRunner:
 
         args = ExecArgs(
             file=str(agl_file),
-            inputs=[],
+            param_tokens=[],
             strict_json=None,
             max_iters=None,
             runner='"foo',
@@ -2070,3 +2070,221 @@ class TestExecAgentPrecedence:
         assert result.returncode == 1, f"stdout: {result.stdout} stderr: {result.stderr}"
         # The runner never ran: no marker on stdout.
         assert "FROM-DEFAULT" not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# M4: per-param CLI options for agm exec
+# ---------------------------------------------------------------------------
+
+
+class TestExecParamOptions:
+    """M4: each ``param`` declaration becomes a ``--<name>`` CLI option."""
+
+    def test_param_text_value_assigned(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``param msg: text`` can be supplied via ``--msg hello``."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\nprint msg\n")
+
+        result = exec_command.run(_exec_args(agl_file, param_tokens=["--msg", "hello"]))
+        assert result is None
+        assert capsys.readouterr().out == "hello\n"
+
+    def test_param_equals_form(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``--msg=hello`` works the same as ``--msg hello``."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\nprint msg\n")
+
+        result = exec_command.run(_exec_args(agl_file, param_tokens=["--msg=hello"]))
+        assert result is None
+        assert capsys.readouterr().out == "hello\n"
+
+    def test_param_bool_true(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``--flag`` for a bool param sets it to True."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param flag: bool\nprint flag\n")
+
+        result = exec_command.run(_exec_args(agl_file, param_tokens=["--flag"]))
+        assert result is None
+        assert "true" in capsys.readouterr().out.lower()
+
+    def test_param_bool_false(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``--no-flag`` for a bool param sets it to False."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param flag: bool\nprint flag\n")
+
+        result = exec_command.run(_exec_args(agl_file, param_tokens=["--no-flag"]))
+        assert result is None
+        assert "false" in capsys.readouterr().out.lower()
+
+    def test_param_int_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An int param receives its value from CLI tokens."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param count: int\nprint count\n")
+
+        result = exec_command.run(_exec_args(agl_file, param_tokens=["--count", "42"]))
+        assert result is None
+        assert "42" in capsys.readouterr().out
+
+    def test_unknown_param_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An unknown ``--blah`` token exits 1 with an error."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file, param_tokens=["--blah"]))
+        assert exc_info.value.code == 1
+        assert "error" in capsys.readouterr().err.lower()
+
+    def test_reserved_name_collision_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A program with ``param max_iters`` exits 1 because it collides with a built-in flag."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param max_iters: int\nprint max_iters\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file, param_tokens=["--max_iters", "3"]))
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "max_iters" in err
+        assert "Error" in err
+
+    def test_required_param_missing_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A required param not provided on the CLI exits 1."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\nprint msg\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file, param_tokens=[]))
+        assert exc_info.value.code == 1
+
+    def test_optional_param_uses_default(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A param with a default value succeeds even when not supplied."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('param greeting: text = "hello"\nprint greeting\n')
+
+        result = exec_command.run(_exec_args(agl_file, param_tokens=[]))
+        assert result is None
+        assert "hello" in capsys.readouterr().out
+
+    def test_syntax_error_no_spurious_unknown_option(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A syntax-error program does not produce 'unknown option' errors."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("@@@invalid\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file, param_tokens=["--some_param", "x"]))
+        assert exc_info.value.code == 1
+        # The error should be a parse/syntax error, not "Unknown option"
+        err = capsys.readouterr().err
+        assert "Unknown option" not in err
+
+    def test_input_flag_removed_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The old ``--input k=v`` flag is no longer a recognized option.
+
+        With ``_RUN_CONTEXT_SETTINGS`` it lands in ``ctx.args`` as a param token.
+        When no param is named ``input`` in the program, exec.run exits 1.
+        """
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file, param_tokens=["--input", "k=v"]))
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "error" in err.lower() or "Error" in err
+
+
+class TestExecHelpFlag:
+    """Tests for the ``--help`` and ``-h`` flags in ``agm exec``."""
+
+    def test_help_no_file_shows_base_options(self, runner: CliRunner) -> None:
+        """``agm exec --help`` with no FILE exits 0 and shows base options."""
+        result = invoke(runner, ["exec", "--help"])
+        assert result.exit_code == 0
+        # Base help is printed; should mention the command name.
+        assert "exec" in result.output.lower()
+
+    def test_help_with_file_shows_params(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """``agm exec FILE --help`` appends the program parameters section."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--help"])
+        assert result.exit_code == 0
+        # The param section mentions --msg.
+        assert "--msg" in result.output
+
+    def test_help_with_command_shows_params(self, runner: CliRunner) -> None:
+        """``agm exec -c 'param msg...' --help`` shows program params."""
+        result = invoke(runner, ["exec", "-c", "param msg: text\n", "--help"])
+        assert result.exit_code == 0
+        assert "--msg" in result.output
+
+    def test_help_syntax_error_degrades(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Syntax error in FILE does not crash --help; shows base options."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("@@@invalid\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--help"])
+        assert result.exit_code == 0
+        # At minimum the base exec help should appear (no crash).
+        assert "exec" in result.output.lower()
+
+    def test_help_unreadable_file_degrades(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """An unreadable FILE degrades --help to base options only."""
+        result = invoke(runner, ["exec", "/nonexistent/prog.agl", "--help"])
+        assert result.exit_code == 0
+        assert "exec" in result.output.lower()
+
+    def test_h_flag_also_shows_help(self, runner: CliRunner) -> None:
+        """``agm exec -h`` also exits 0 with help output."""
+        result = invoke(runner, ["exec", "-h"])
+        assert result.exit_code == 0
+        assert "exec" in result.output.lower()
+
+    def test_help_runtime_error_degrades(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unexpected exception from WorkflowRuntime.prepare degrades to base help."""
+        import agm.agl as agl_module
+        from agm.agl.runtime.runtime import PreparedProgram
+
+        def _patched_prepare(source: str) -> PreparedProgram:
+            del source
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(agl_module.WorkflowRuntime, "prepare", staticmethod(_patched_prepare))
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+        result = invoke(runner, ["exec", str(agl_file), "--help"])
+        assert result.exit_code == 0
+        # Base help still rendered despite unexpected runtime error.
+        assert "exec" in result.output.lower()

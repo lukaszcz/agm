@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 import pytest
+import typer
+from click.shell_completion import ShellComplete
 
 import agm.completion as completion
 import agm.vcs.git as git_helpers
@@ -1374,3 +1376,272 @@ class TestCompleteAglFile:
         ctx = click.Context(click.Command("test"))
         result = completion.complete_agl_file(ctx, [], "")
         assert result == []
+
+
+class TestCompleteExecParamOptions:
+    """Tests for ``complete_exec_param_options`` — completion of per-param flags."""
+
+    def _make_ctx(self) -> click.Context:
+        return click.Context(click.Command("test"))
+
+    def test_returns_param_flags_for_text_param(self, tmp_path: Path) -> None:
+        """A program with ``param msg: text`` returns ``--msg`` as a completion."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(ctx, [str(agl_file)], "--")
+        assert "--msg" in result
+
+    def test_bool_param_includes_no_prefix(self, tmp_path: Path) -> None:
+        """A bool param returns both ``--verbose`` and ``--no-verbose``."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param verbose: bool\n")
+
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(ctx, [str(agl_file)], "--")
+        assert "--verbose" in result
+        assert "--no-verbose" in result
+
+    def test_filters_by_incomplete_prefix(self, tmp_path: Path) -> None:
+        """Only options matching the ``incomplete`` prefix are returned."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\nparam count: int\n")
+
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(ctx, [str(agl_file)], "--m")
+        assert "--msg" in result
+        assert "--count" not in result
+
+    def test_bad_file_returns_empty(self) -> None:
+        """A nonexistent file path returns empty list (degrades silently)."""
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(ctx, ["/nonexistent/prog.agl"], "--")
+        assert result == []
+
+    def test_syntax_error_returns_empty(self, tmp_path: Path) -> None:
+        """A program with a syntax error degrades to empty list."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("@@@ invalid syntax\n")
+
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(ctx, [str(agl_file)], "--")
+        assert result == []
+
+    def test_no_args_returns_empty(self) -> None:
+        """Without a FILE in args, returns empty list."""
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(ctx, [], "--")
+        assert result == []
+
+    def test_command_flag_source(self, tmp_path: Path) -> None:
+        """Finds the source via ``-c/--command`` in args."""
+        del tmp_path
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(
+            ctx, ["-c", "param msg: text\n"], "--"
+        )
+        assert "--msg" in result
+
+    def test_command_equals_form(self, tmp_path: Path) -> None:
+        """Finds source via ``--command=...`` form."""
+        del tmp_path
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(
+            ctx, ["--command=param msg: text\n"], "--"
+        )
+        assert "--msg" in result
+
+    def test_only_option_args_returns_empty(self) -> None:
+        """When args only contain options (no FILE), returns empty."""
+        ctx = self._make_ctx()
+        result = completion.complete_exec_param_options(
+            ctx, ["--strict-json", "--no-log"], "--"
+        )
+        assert result == []
+
+    def test_exception_during_discovery_returns_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If an exception occurs during param discovery, returns [] silently."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+
+        import agm.completion as comp_mod
+        from agm.agl import WorkflowRuntime
+
+        def boom(source: str) -> object:
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(WorkflowRuntime, "prepare", staticmethod(boom))
+        ctx = self._make_ctx()
+        result = comp_mod.complete_exec_param_options(ctx, [str(agl_file)], "--")
+        assert result == []
+
+
+class TestExecCommandShellComplete:
+    """Integration tests: ``ExecCommand.shell_complete`` wired through the real CLI.
+
+    These tests drive completion through the Click/Typer shell_complete API
+    (not just the bare helper function) to prove ``--<param>`` options are
+    offered end-to-end in a real shell tab-completion session.
+    """
+
+    def _get_cli(self) -> click.BaseCommand:
+        from agm.cli import app
+
+        return typer.main.get_command(app)
+
+    def _complete(self, args: list[str], incomplete: str) -> list[str]:
+        sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
+        return [c.value for c in sc.get_completions(args, incomplete)]
+
+    def test_file_param_offers_param_options(self, tmp_path: Path) -> None:
+        """``agm exec FILE --<TAB>`` offers ``--<param>`` from the file."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+
+        result = self._complete(["exec", str(agl_file)], "--")
+        assert "--msg" in result
+        # Built-in exec options are still offered alongside param options.
+        assert "--runner" in result
+
+    def test_bool_param_offers_no_prefix_via_shell_complete(self, tmp_path: Path) -> None:
+        """Bool params offer both ``--name`` and ``--no-name`` through shell_complete."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param verbose: bool\n")
+
+        result = self._complete(["exec", str(agl_file)], "--")
+        assert "--verbose" in result
+        assert "--no-verbose" in result
+
+    def test_incomplete_prefix_filters_param_options(self, tmp_path: Path) -> None:
+        """Only ``--<param>`` options whose name starts with *incomplete* are returned."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\nparam count: int\n")
+
+        result = self._complete(["exec", str(agl_file)], "--m")
+        assert "--msg" in result
+        assert "--count" not in result
+
+    def test_command_flag_source_offers_param_options(self) -> None:
+        """``agm exec -c 'param ...' --<TAB>`` discovers params from inline source."""
+        result = self._complete(["exec", "-c", "param count: int"], "--")
+        assert "--count" in result
+
+    def test_nonexistent_file_degrades_to_base_completion(self) -> None:
+        """Unreadable file degrades to standard exec option completion (no crash)."""
+        result = self._complete(["exec", "/nonexistent/prog.agl"], "--")
+        # Built-in options should still appear.
+        assert "--runner" in result
+        # No param options (nothing to discover).
+        assert "--count" not in result
+
+    def test_no_file_no_command_returns_base_completion(self) -> None:
+        """Without FILE or -c, only built-in exec options are offered."""
+        result = self._complete(["exec"], "--")
+        assert "--runner" in result
+
+
+class TestExecParamCompletionItems:
+    """Unit tests for ``_exec_param_completion_items``."""
+
+    def test_text_param_returns_completion_item(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+        items = completion._exec_param_completion_items(agl_file.read_text(), "--")
+        assert any(item.value == "--msg" for item in items)
+
+    def test_bool_param_returns_both_flags(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param flag: bool\n")
+        items = completion._exec_param_completion_items(agl_file.read_text(), "--")
+        values = [item.value for item in items]
+        assert "--flag" in values
+        assert "--no-flag" in values
+
+    def test_bool_param_no_prefix_excluded_when_outside_filter(self) -> None:
+        """Bool --no-flag is excluded when the incomplete prefix does not match it."""
+        # prefix "--fl" matches "--flag" but not "--no-flag"
+        items = completion._exec_param_completion_items("param flag: bool\n", "--fl")
+        values = [item.value for item in items]
+        assert "--flag" in values
+        assert "--no-flag" not in values
+
+    def test_filters_by_incomplete(self) -> None:
+        source = "param apple: text\nparam banana: text\n"
+        items = completion._exec_param_completion_items(source, "--a")
+        values = [item.value for item in items]
+        assert "--apple" in values
+        assert "--banana" not in values
+
+    def test_syntax_error_returns_empty(self) -> None:
+        items = completion._exec_param_completion_items("@@@ bad syntax", "--")
+        assert items == []
+
+    def test_exception_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from agm.agl import WorkflowRuntime
+
+        monkeypatch.setattr(
+            WorkflowRuntime,
+            "prepare",
+            staticmethod(lambda source: (_ for _ in ()).throw(RuntimeError("boom"))),
+        )
+        items = completion._exec_param_completion_items("param x: text\n", "--")
+        assert items == []
+
+
+class TestExecCommandShellCompleteEdgeCases:
+    """Coverage for edge branches in ``ExecCommand.shell_complete``."""
+
+    def _get_cli(self) -> click.BaseCommand:
+        from agm.cli import app
+
+        return typer.main.get_command(app)
+
+    def _get_exec_cmd(self) -> completion.ExecCommand:
+        from agm.cli import app
+
+        cli = typer.main.get_command(app)
+        # cli is a TyperGroup (click.Group); .commands is dict[str, click.Command]
+        cmd = cast(click.Group, cli).commands["exec"]
+        assert isinstance(cmd, completion.ExecCommand)
+        return cmd
+
+    def _complete(self, args: list[str], incomplete: str) -> list[str]:
+        sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
+        return [c.value for c in sc.get_completions(args, incomplete)]
+
+    def test_non_option_incomplete_returns_base_only(self, tmp_path: Path) -> None:
+        """When incomplete does not start with '-', shell_complete returns base result only."""
+        from click.shell_completion import _resolve_context
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+
+        cli = self._get_cli()
+        exec_cmd = self._get_exec_cmd()
+        ctx = _resolve_context(cli, {}, "agm", ["exec", str(agl_file)])
+        # Call shell_complete directly with a non-option incomplete
+        result = exec_cmd.shell_complete(ctx, "foo")
+        # "--msg" must not appear since we short-circuit on non-option prefix
+        assert not any(item.value == "--msg" for item in result)
+
+    def test_exception_in_param_discovery_degrades_to_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exception inside the extra-items block returns base completion (no crash)."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\n")
+
+        # Patch _exec_param_completion_items to raise
+        monkeypatch.setattr(
+            completion,
+            "_exec_param_completion_items",
+            lambda source, incomplete: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        result = self._complete(["exec", str(agl_file)], "--")
+        # Built-in options still returned via base completion.
+        assert "--runner" in result
+        # No param-option items.
+        assert "--msg" not in result

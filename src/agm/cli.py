@@ -808,8 +808,45 @@ def setup(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> N
     setup_command.run()
 
 
-@app.command(name="exec")
+def _exec_print_help(*, file: str | None, command: str | None) -> None:
+    """Print exec help, optionally with program param section, then exit 0.
+
+    When FILE or -c is provided and the source can be prepared + typechecked,
+    appends the discovered ``Program parameters:`` section.  Degrades silently
+    on any error (syntax errors, unreadable files, etc.).
+    """
+    from agm.agl import WorkflowRuntime
+    from agm.commands.param_options import render_param_help_section
+    from agm.core.fs import read_text_arg
+
+    print_help_for_command_path(["exec"])
+
+    source: str | None = None
+    if command is not None:
+        source = command
+    elif file is not None:
+        try:
+            source = read_text_arg(Path(file))
+        except SystemExit:
+            source = None
+
+    if source is not None:
+        try:
+            prepared = WorkflowRuntime.prepare(source)
+            runtime = WorkflowRuntime()
+            discovery = runtime.discover_params(prepared)
+            if discovery.params:
+                section = render_param_help_section(discovery.params)
+                print(section, end="")
+        except (Exception, SystemExit):
+            pass
+
+    raise SystemExit(0)
+
+
+@app.command(name="exec", context_settings=_RUN_CONTEXT_SETTINGS, cls=completion.ExecCommand)
 def exec_cmd(
+    ctx: typer.Context,
     file: str | None = typer.Argument(
         None,
         metavar="FILE",
@@ -820,11 +857,6 @@ def exec_cmd(
         "-c",
         "--command",
         help="Execute the AgL program given as COMMAND instead of reading from FILE.",
-    ),
-    inputs: list[str] | None = typer.Option(
-        None,
-        "--input",
-        help="Host input value in KEY=VALUE form (repeatable).",
     ),
     strict_json: bool | None = typer.Option(
         None,
@@ -852,10 +884,20 @@ def exec_cmd(
         "--no-log",
         help="Disable trace logging.",
     ),
-    _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
-    del _help
+    # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
+    # (``help_option_names: []``) so that per-param ``--name`` tokens can pass
+    # through to ``ctx.args``.  As a side-effect, Click may assign ``--help``/
+    # ``-h`` to the optional FILE positional when they appear without a preceding
+    # FILE argument.  We handle all help-trigger variants explicitly here:
+    # - ``agm exec --help``  → Click assigns ``--help`` to ``file``
+    # - ``agm exec -h``      → Click assigns ``-h`` to ``file``
+    # - ``agm exec FILE --help`` → FILE is correct; ``--help`` lands in ctx.args
+    if file in ("--help", "-h") or "--help" in ctx.args or "-h" in ctx.args:
+        # When the help flag was misassigned to ``file``, treat ``file`` as absent.
+        effective_file = None if file in ("--help", "-h") else file
+        _exec_print_help(file=effective_file, command=command)
     del _dry_run
     if command is not None and file is not None:
         exit_with_usage_error(
@@ -873,7 +915,7 @@ def exec_cmd(
         ExecArgs(
             file=file,
             command=command,
-            inputs=list(inputs) if inputs is not None else [],
+            param_tokens=list(ctx.args),
             strict_json=strict_json,
             max_iters=max_iters,
             runner=runner,

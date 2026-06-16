@@ -1174,7 +1174,7 @@ class TestWorkflowRuntimeRunnerWiring:
         ):
             args = ExecArgs(
                 file=str(agl_file),
-                inputs=[],
+                param_tokens=[],
                 strict_json=None,
                 max_iters=None,
                 runner=None,

@@ -471,30 +471,33 @@ _HELP_TEXTS: dict[str, str] = {
         worktree directory path is shown after each branch name.
     """),
     "exec": textwrap.dedent("""\
-        agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
-                 [--max-iters N] [--runner COMMAND]
+        agm exec [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
                  [--log-file PATH|--no-log]
-                 (FILE | -c COMMAND)
+                 (FILE | -c COMMAND) [--PARAM VALUE]...
 
         Execute an AgL (Agent Language) workflow program from FILE, or from
         the inline program text given with -c/--command.
 
+        Each ``param`` declaration in the program becomes a ``--<name>`` option.
+        Boolean params use the ``--name/--no-name`` flag form.  Structured types
+        (list, dict, record, enum, json) take a JSON string.
+
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
-          --input KEY=VALUE     Provide a host input value (repeatable).
-          --strict-json         Require bare JSON output from agents (no recovery).
-          --no-strict-json      Use lenient JSON recovery (default).
-          --max-iters N         Override the default do-loop iteration limit.
-          --runner COMMAND      Override the default agent runner command.
-          --log-file PATH       Write trace log to PATH.
-          --no-log              Disable trace logging.
+          --strict-json          Require bare JSON output from agents (no recovery).
+          --no-strict-json       Use lenient JSON recovery (default).
+          --max-iters N          Override the default do-loop iteration limit.
+          --runner COMMAND       Override the default agent runner command.
+          --log-file PATH        Write trace log to PATH.
+          --no-log               Disable trace logging.
 
         FILE and -c/--command are mutually exclusive; exactly one is required.
+        Run ``agm exec FILE --help`` to see the discovered program parameters.
 
         Exit codes:
           0  The workflow completed successfully.
           1  Pre-execution failure: unreadable file, static lex/parse/scope/type
-             diagnostics, host configuration error, or input validation failure.
+             diagnostics, host configuration error, or param validation failure.
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\

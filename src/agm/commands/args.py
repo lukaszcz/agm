@@ -210,7 +210,7 @@ class TmuxLayoutArgs:
 @dataclass(slots=True)
 class ExecArgs:
     file: str | None
-    inputs: list[str]
+    param_tokens: list[str]
     strict_json: bool | None
     max_iters: int | None
     runner: str | None

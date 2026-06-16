@@ -14,7 +14,7 @@ from errors on the shared stderr channel.
 
 Exit-code contract (plan §10.1):
     0  success (or a clean ``--dry-run`` static check)
-    1  pre-execution failure (unreadable file, static errors, input validation)
+    1  pre-execution failure (unreadable file, static errors, param validation)
     2  program executed but ended with an uncaught AgL exception
 
 Flag notes:
@@ -28,6 +28,9 @@ Flag notes:
       When set, it is used as the default runner for all unnamed agents.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
       materialization and never writes a trace (side-effect-free).
+    - Each ``param`` declaration in the source program becomes a ``--<name>``
+      option.  Bool params use the ``--name/--no-name`` flag form.  Collision
+      with built-in exec options is detected eagerly and reported before execution.
 """
 
 from __future__ import annotations
@@ -40,12 +43,13 @@ from agm.agl import WorkflowRuntime
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.commands.agent_io import default_agent_runner
 from agm.commands.args import ExecArgs
+from agm.commands.param_options import check_param_collisions, parse_param_tokens
 from agm.config.context import current_config_context
 from agm.config.general import load_exec_config
 from agm.core import dry_run
-from agm.core.cli_helpers import parse_inputs
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log
+from agm.parser import exit_with_usage_error
 
 
 def run(args: ExecArgs) -> None:
@@ -60,13 +64,6 @@ def run(args: ExecArgs) -> None:
     else:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
-
-    # Parse --input k=v pairs (validation: malformed pairs exit 1).
-    try:
-        inputs = parse_inputs(args.inputs)
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
 
     # Load [exec] configuration; CLI flags override config values.
     ctx = current_config_context()
@@ -160,14 +157,49 @@ def run(args: ExecArgs) -> None:
     for d in decls:
         runtime.register_agent(d.name, factory)
 
-    # ``parse_inputs`` returns ``dict[str, str]``; ``run_prepared`` accepts a
-    # ``Mapping[str, object]``, so no widening copy is needed.  Reuse the
+    # ----------------------------------------------------------------
+    # Discover param declarations and validate CLI tokens.
+    #
+    # Only runs when the front-end (parse/scope) succeeded (prepared.resolved
+    # is not None) AND typecheck succeeded (discovery.checked is not None).
+    # On front-end failure we skip CLI-param validation and hand the prepared
+    # program directly to run_prepared, which resurfaces the captured diagnostic.
+    # ----------------------------------------------------------------
+    discovery = runtime.discover_params(prepared)
+
+    # Surface discovery warnings on stderr (e.g. non-exhaustive case at
+    # typecheck time).  They never affect the exit code.
+    for diag in discovery.warnings:
+        print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
+
+    cli_params: dict[str, object] = {}
+    checked = discovery.checked  # None when front-end or typecheck failed
+
+    if checked is not None:
+        # Detect param names that collide with built-in exec flags before
+        # parsing tokens: a collision is a program error (rename the param).
+        collision_errors = check_param_collisions(discovery.params)
+        if collision_errors:
+            for err in collision_errors:
+                print(f"Error: {err}", file=sys.stderr)
+            raise SystemExit(1)
+
+        # Parse the leftover ``ctx.args`` tokens into the param dict.
+        try:
+            cli_params = parse_param_tokens(discovery.params, args.param_tokens)
+        except ValueError as exc:
+            exit_with_usage_error(["exec"], f"error: {exc}")
+
+    # ``run_prepared`` accepts a ``Mapping[str, object]``.  Reuse the
     # ``PreparedProgram`` from above — no second parse/scope of the source.
+    # Pass ``checked`` to skip a redundant typecheck inside run_prepared
+    # (it already ran during discover_params when checked is not None).
     result = runtime.run_prepared(
         prepared,
-        inputs=inputs,
+        inputs=cli_params,
         check_only=dry_run.enabled(),
         log_file=log_file,
+        checked=checked,
     )
 
     # Warnings live on their own channel and never affect the exit code;

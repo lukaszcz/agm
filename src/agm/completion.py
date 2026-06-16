@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import cast
 
 import click
+from click.shell_completion import CompletionItem
+from typer.core import TyperCommand
 
 import agm.vcs.git as git_helpers
 from agm.commands.dep.common import main_dep_repo
@@ -375,6 +377,119 @@ def complete_agl_file(
         return [c for c in candidates if c.endswith(".agl") or c.endswith("/")]
     except (Exception, SystemExit):
         return []
+
+
+def _find_exec_source(args: list[str]) -> str | None:
+    """Find the AgL source from exec CLI args (FILE or -c/--command).
+
+    Returns the source string or ``None`` when not found or unreadable.
+    """
+    # Look for -c/--command with value.
+    for i, arg in enumerate(args):
+        if arg in ("-c", "--command") and i + 1 < len(args):
+            return args[i + 1]
+        if arg.startswith("--command="):
+            return arg[len("--command="):]
+    # Look for a FILE argument (non-option positional arg).
+    for arg in args:
+        if not arg.startswith("-"):
+            try:
+                return Path(arg).read_text()
+            except OSError:
+                return None
+    return None
+
+
+def complete_exec_param_options(
+    ctx: click.Context, args: list[str], incomplete: str
+) -> list[str]:
+    """Complete ``--<param>`` option names for ``agm exec``.
+
+    Locates the FILE or -c/--command in *args*, prepares the source,
+    discovers params, and returns matching option names.  Degrades
+    silently to ``[]`` on any error.
+    """
+    del ctx
+    try:
+        source = _find_exec_source(args)
+        if source is None:
+            return []
+        from agm.agl import WorkflowRuntime
+
+        prepared = WorkflowRuntime.prepare(source)
+        runtime = WorkflowRuntime()
+        discovery = runtime.discover_params(prepared)
+        from agm.agl.typecheck.types import BoolType
+
+        options: list[str] = []
+        for param in discovery.params:
+            options.append(f"--{param.name}")
+            if isinstance(param.type, BoolType):
+                options.append(f"--no-{param.name}")
+        return [o for o in options if o.startswith(incomplete)]
+    except (Exception, SystemExit):
+        return []
+
+
+def _exec_param_completion_items(source: str, incomplete: str) -> list[CompletionItem]:
+    """Return ``CompletionItem`` objects for ``--<param>`` flags discovered in *source*.
+
+    Used by :class:`ExecCommand` to augment the standard shell_complete results.
+    Degrades silently to ``[]`` on any error.
+    """
+    try:
+        from agm.agl import WorkflowRuntime
+        from agm.agl.typecheck.types import BoolType
+
+        prepared = WorkflowRuntime.prepare(source)
+        runtime = WorkflowRuntime()
+        discovery = runtime.discover_params(prepared)
+        items: list[CompletionItem] = []
+        for param in discovery.params:
+            flag = f"--{param.name}"
+            if flag.startswith(incomplete):
+                items.append(CompletionItem(flag))
+            if isinstance(param.type, BoolType):
+                no_flag = f"--no-{param.name}"
+                if no_flag.startswith(incomplete):
+                    items.append(CompletionItem(no_flag))
+        return items
+    except (Exception, SystemExit):
+        return []
+
+
+class ExecCommand(TyperCommand):
+    """Typer Command subclass for ``agm exec`` that augments shell completion.
+
+    When the incomplete token starts with ``--``, the standard completion (built-in
+    exec options) is extended with ``--<param>`` / ``--no-<param>`` items discovered
+    from the FILE or ``-c``/``--command`` source already parsed into ``ctx.params``.
+    Degrades to base completion on any error (unreadable file, parse failure, etc.).
+    """
+
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+        base = super().shell_complete(ctx, incomplete)
+        if not incomplete.startswith("-"):
+            return base
+        try:
+            params = cast(dict[str, object], ctx.params)
+            source: str | None = None
+            raw_command = params.get("command")
+            if isinstance(raw_command, str):
+                source = raw_command
+            else:
+                raw_file = params.get("file")
+                if isinstance(raw_file, str):
+                    try:
+                        source = Path(raw_file).read_text()
+                    except OSError:
+                        source = None
+            if source is None:
+                return base
+            extra = _exec_param_completion_items(source, incomplete)
+        except (Exception, SystemExit):
+            return base
+        return base + extra
 
 
 def complete_revise_command_or_review_file(

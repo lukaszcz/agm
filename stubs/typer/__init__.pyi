@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
+from typer.core import TyperCommand
+
 CommandParam = ParamSpec("CommandParam")
 CommandReturn = TypeVar("CommandReturn")
 OptionValue = TypeVar("OptionValue")
@@ -41,6 +43,7 @@ class Typer:
         self,
         name: str | None = ...,
         *,
+        cls: type[TyperCommand] | None = ...,
         context_settings: dict[str, bool | list[str]] | None = ...,
     ) -> Callable[
         [Callable[CommandParam, CommandReturn]],

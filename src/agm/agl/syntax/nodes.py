@@ -269,6 +269,29 @@ class CaseExpr:
     node_id: int = dc_field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class IfExprBranch:
+    """A single branch in an ``if`` expression.
+
+    ``cond`` is either an ``Expr`` (condition arm) or the singleton ``ELSE``
+    sentinel (the else arm).  ``body`` is a single bar-safe expression.
+    """
+
+    cond: Expr | ElseSentinel
+    body: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class IfExpr:
+    """An ``if … => expr | else => expr`` expression."""
+
+    branches: tuple[IfExprBranch, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 # --- Literals ---
 
 
@@ -356,6 +379,7 @@ Expr = (
     | UnaryNeg
     | IsTest
     | CaseExpr
+    | IfExpr
     | IntLit
     | DecimalLit
     | BoolLit

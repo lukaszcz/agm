@@ -41,7 +41,7 @@ open_stmt   ::= if_stmt | case_stmt | try_stmt
 pass_stmt   ::= "pass"
 print_stmt  ::= "print" expr
 raise_stmt  ::= "raise" expr
-expr_stmt   ::= bar_expr            (* a statement-level bare case is a case_stmt *)
+expr_stmt   ::= bar_expr            (* a statement-level bare case/if is a case_stmt/if_stmt *)
 ```
 
 ## Blocks and bodies
@@ -114,9 +114,13 @@ loop_bound ::= "[" INT "]"            (* INT must be positive *)
 ## `if`
 
 ```ebnf
-if_stmt   ::= "if" if_branch ("|" if_branch)*
-if_branch ::= bar_expr "=>" branch_body
-            | "else" "=>" branch_body   (* must be last *)
+if_stmt        ::= "if" "|"? if_branch ("|" if_branch)*
+if_branch      ::= bar_expr "=>" branch_body
+                 | "else" "=>" branch_body   (* must be last, if present *)
+
+if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)*
+if_expr_branch ::= bar_expr "=>" bar_expr
+                 | "else" "=>" bar_expr      (* must be last; required *)
 ```
 
 ## `case`
@@ -157,8 +161,8 @@ A `STRING` pattern may not contain interpolation.
 ## Expressions
 
 ```ebnf
-expr      ::= case_expr | bar_expr
-bar_expr  ::= or_expr               (* case_expr re-enters via "(" expr ")" *)
+expr      ::= case_expr | if_expr | bar_expr
+bar_expr  ::= or_expr               (* case_expr / if_expr re-enter via "(" expr ")" *)
 
 or_expr   ::= and_expr ("or" and_expr)*
 and_expr  ::= not_expr ("and" not_expr)*

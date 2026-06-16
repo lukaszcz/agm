@@ -43,7 +43,7 @@ The layout rules:
    indentation as the construct that owns them:
 
    ```agl
-   if status is Complete => pass
+   if | status is Complete => pass
    | status is Blocked => let report = critic "Explain ${status}"
    | else => pass
 
@@ -220,6 +220,6 @@ All comparison operators are non-associative: `x = y = z`, `1 < 2 < 3`, and
 if x = y and y = z => pass
 ```
 
-`case` expressions sit below all of this: they are the loosest expression
-form and must be parenthesized in *bar-safe* positions
+`case` and `if` expressions sit below all of this: they are the loosest
+expression forms and must be parenthesized in *bar-safe* positions
 ([Program structure](program-structure.md)).

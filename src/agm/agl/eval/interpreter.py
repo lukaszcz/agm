@@ -46,6 +46,7 @@ from agm.agl.syntax.nodes import (
     Expr,
     ExprStmt,
     FieldAccess,
+    IfExpr,
     IfStmt,
     InputDecl,
     InterpSegment,
@@ -499,6 +500,8 @@ class Interpreter:
             return self._eval_is_test(expr, scope)
         if isinstance(expr, CaseExpr):
             return self._eval_case_expr(expr, scope)
+        if isinstance(expr, IfExpr):
+            return self._eval_if_expr(expr, scope)
         if isinstance(expr, ListLit):
             return self._eval_list_lit(expr, scope)
         if isinstance(expr, DictLit):
@@ -1105,6 +1108,34 @@ class Interpreter:
         raise AglRaise(
             _make_match_error(subject, trace_id=self._trace.new_event_id()),
             span=expr.span,  # F7: thread raise-site span for §12.6 source location
+        )
+
+    def _eval_if_expr(self, expr: IfExpr, scope: Scope) -> Value:
+        """Evaluate an ``if``-expression, returning the first matching branch's value.
+
+        Conditions are evaluated left-to-right in the outer *scope*.  The body
+        of the first branch whose condition is true (or whose condition is the
+        ``else`` sentinel) is evaluated in a fresh child scope and returned raw
+        — no coercion is applied here; ``int → decimal`` widening materialises
+        at the surrounding binding boundary (identical to ``_eval_case_expr``).
+
+        The type checker statically guarantees an ``else`` branch, so the loop
+        always matches; the guard below is a defensive invariant assertion.
+        """
+        for branch in expr.branches:
+            # Evaluate the condition in the outer scope (mirrors _exec_if).
+            # An else branch is always taken without evaluating a condition.
+            take = isinstance(branch.cond, ElseSentinel) or self._require_bool(
+                self._eval_expr(branch.cond, scope)
+            )
+            if take:
+                branch_scope = Scope(parent=scope)
+                return self._eval_expr(branch.body, branch_scope)
+        # Unreachable: the type checker requires an else branch, so the loop
+        # above always returns.  A defensive assertion catches any future
+        # mis-use that bypasses the checker.
+        raise AssertionError(  # pragma: no cover
+            "if-expression had no matching branch and no else; checker should have rejected this"
         )
 
 

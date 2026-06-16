@@ -235,6 +235,44 @@ inline statement) it must be parenthesized
 ([Program structure](program-structure.md)). A bare `case` at statement level
 is always a `case` *statement* ([Control flow](control-flow.md)).
 
+## `if` expressions
+
+An `if` **expression** selects among single-expression branches by boolean
+condition:
+
+```ebnf
+if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)*
+if_expr_branch ::= bar_safe_expr "=>" bar_safe_expr
+                 | "else" "=>" bar_safe_expr   (* must be last; required *)
+```
+
+```agl
+let label: text = if | score > 90 => "A" | score > 75 => "B" | else => "C"
+
+print (if | status is Pass => "passed" | else => "failed")
+```
+
+Semantics:
+
+1. Conditions are evaluated left to right; each must be `bool`.
+2. The first true condition's branch expression is evaluated in a fresh
+   branch scope, and its value is the result.
+3. The `else` branch is the fallback when no condition holds.
+
+An `else` branch is **required** — an `if` expression without `else` is a
+static error. This ensures the expression always has a defined value. (By
+contrast, `case` expressions permit a runtime `MatchError` on non-exhaustive
+patterns; `if` has no pattern structure to drive exhaustiveness analysis, so a
+static `else` requirement is the clean analogue.)
+
+All branch result types must agree after `int → decimal` widening; any other
+mismatch is a static error. An outer expected type propagates into every branch.
+
+Like `case` expressions, `if` expressions are the loosest expression form: in
+bar-safe positions (branch bodies, `if`/`until` conditions) they must be
+parenthesized ([Program structure](program-structure.md)). A bare `if` at
+statement level is always an `if` *statement* ([Control flow](control-flow.md)).
+
 ## Expected-type propagation
 
 The checker propagates an expected type top-down where it helps:
@@ -246,7 +284,7 @@ The checker propagates an expected type top-down where it helps:
 | Constructor argument | declared field type |
 | `list[T]` / `dict[text, V]` expectation | element/value type into each element |
 | `json` expectation over a container literal | `json` into elements |
-| `case` expression with outer expectation | into every branch |
+| `case` / `if` expression with outer expectation | into every branch |
 | Agent call / `exec` | becomes the call's target type ([Agent calls](agent-calls.md)) |
 
 Propagation is what resolves unqualified variant constructors

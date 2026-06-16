@@ -9,16 +9,19 @@ bounded post-test loop `do … until`. (Exception control flow — `try`,
 ## `if`
 
 ```ebnf
-if_stmt   ::= "if" if_branch ("|" if_branch)*
+if_stmt   ::= "if" "|"? if_branch ("|" if_branch)*
 if_branch ::= bar_safe_expr "=>" branch_body
-            | "else" "=>" branch_body
+            | "else" "=>" branch_body   (* must be last, if present *)
 ```
 
-Every branch — including subsequent conditions — is introduced by `|`, and
-the `else` branch, if present, must be last (checked statically):
+An optional leading `|` after `if` is accepted, making all branches —
+including the first — introduced by `|`. The leading-pipe form is preferred
+in docs whenever an `if` has more than one branch; single-branch `if` stays
+pipe-less. The `else` branch, if present, must be last (checked statically):
 
 ```agl
-if code is Fail or design is Fail =>
+if
+| code is Fail or design is Fail =>
   set artifact = impl "Fix valid issues:\n${code}\n${design}"
 | else =>
   pass
@@ -27,7 +30,7 @@ if code is Fail or design is Fail =>
 Inline:
 
 ```agl
-if status is Complete => pass | status is Blocked => print status | else => pass
+if | status is Complete => pass | status is Blocked => print status | else => pass
 ```
 
 Semantics:
@@ -41,8 +44,51 @@ Semantics:
 
 Branch bodies are suites, single bar-safe statements, or `try` statements
 ([Program structure](program-structure.md)). Because conditions are bar-safe
-positions, a `case` expression used as a condition must be parenthesized.
-Mutating an outer `var` with `set` inside a branch persists after the `if`.
+positions, a `case` or `if` expression used as a condition must be
+parenthesized. Mutating an outer `var` with `set` inside a branch persists
+after the `if`.
+
+## `if` expressions
+
+An `if` can also be used where a value is expected:
+
+```ebnf
+if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)*
+if_expr_branch ::= bar_safe_expr "=>" bar_safe_expr
+                 | "else" "=>" bar_safe_expr   (* must be last *)
+```
+
+```agl
+let status_text: text = if | code is Fail => "failed" | else => "ok"
+
+print (if | score > 90 => "A" | score > 75 => "B" | else => "C")
+```
+
+Rules:
+
+1. **`else` is required** — an `if` expression without an `else` branch is a
+   static type error. This ensures every `if` expression always yields a
+   value. (The statement form imposes no such requirement.)
+2. **Branch types must agree** — all branch result expressions must share one
+   type, with `int → decimal` widening as the only coercion, exactly as for
+   `case` expressions.
+3. **Parenthesization in bar-safe positions** — in bar-safe positions (branch
+   bodies, `if`/`until` conditions) an unparenthesized `if` expression is
+   rejected; wrap it in parentheses: `(if | a => 1 | else => 2)`.
+4. **Bare in general expression positions** — wherever a general expression is
+   accepted (`let`/`var`/`set` RHS, `print`/`raise` operand, list and dict
+   element, template interpolation, `case` scrutinee) an `if` expression may
+   appear unparenthesized.
+
+A bare `if` at statement level is always the statement form, never an
+expression. To echo an `if` expression in the REPL, parenthesize it:
+`(if | a => 1 | else => 2)`.
+
+The `if` expression design mirrors the `case` expression
+([Expressions](expressions.md)). The key difference: `case` permits a runtime
+`MatchError` on non-exhaustive patterns, while `if` requires `else` statically
+— `if` has no pattern structure to drive exhaustiveness analysis, so a static
+`else` requirement is the clean analogue.
 
 ## `case` statement
 

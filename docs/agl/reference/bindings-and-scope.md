@@ -181,7 +181,8 @@ their scope:
 ```agl
 let x = "outer"
 
-if condition =>
+if
+| condition =>
   let x = "inner"          # shadows outer x
   ask "Uses ${x}"          # inner
 | else =>

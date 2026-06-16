@@ -172,7 +172,19 @@ tightest).  This matches the `agl.lark` grammar's operator chain.
   operator is an unexpected token.  The parser emits a targeted diagnostic:
   *"Comparisons are non-associative; parenthesize explicitly, e.g. `(x = y) = z`."*
 
-**Case expressions** (`case expr of | …`) are the lowest-precedence expression
-form.  In positions where a `|` would otherwise be ambiguous (the `bar_expr`
-positions: `if` branches, `catch` bodies, assignment RHS, `do…until`
-conditions), a `case` expression must be wrapped in parentheses.
+**Case and `if` expressions** (`case expr of | …` and `if | … => …`) are the
+lowest-precedence expression forms, reached via the `?expr: case_expr |
+if_expr | or_expr` rule.  In positions where a `|` would otherwise be
+ambiguous (the `bar_expr` positions: `if`/`case` branch bodies, `catch`
+bodies, assignment RHS, `do…until` conditions), a `case` or `if` expression
+must be wrapped in parentheses.  Both re-enter bar-safe positions freely via
+`paren_expr: LPAR expr RPAR`.
+
+The statement/expression duality is enforced by reachability stratification:
+`expr_stmt: or_expr` (not `expr`), so a bare `if` or `case` at statement
+level is always `if_stmt`/`case_stmt` and never the expression form.
+`if_stmt` uses `branch_body` (suite / bar-safe statement / try) as its arm
+bodies; `if_expr` uses `bar_expr` (a single bar-safe expression).  The
+optional leading `|` on `if_stmt` and `if_expr` (`PIPE?` in the grammar)
+adds no shift/reduce ambiguity because an `if_branch`/`if_expr_branch` begins
+with `bar_expr` or `else`, never with `PIPE`.

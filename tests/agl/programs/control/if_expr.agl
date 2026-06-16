@@ -1,0 +1,21 @@
+# if-expressions (let/print) and the leading-pipe if-statement form.
+input score: int
+
+# if-expression in a let binding; int/decimal branch widening
+let label = if score >= 90 => "pass" | else => "fail"
+print label
+
+# if-expression with leading pipe in a print (parenthesized, bar-safe)
+print (if | score >= 90 => "high" | else => "low")
+
+# int -> decimal widening via if-expression result bound to a decimal var
+let threshold: decimal = if score >= 50 => 1 | else => 0
+print threshold
+
+# leading-pipe if-statement (multi-line aligned form)
+var status: text = ""
+if
+| score >= 90 => set status = "excellent"
+| score >= 50 => set status = "ok"
+| else => set status = "needs work"
+print status

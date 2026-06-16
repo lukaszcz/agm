@@ -1112,6 +1112,92 @@ class TestScopeViaAstConstruction:
         r = resolve_program(let_x, _make_let("y", case_expr))
         assert r.program is not None
 
+    # --- IfExpr scope ---
+
+    def test_if_expr_condition_resolves_varref(self) -> None:
+        """A VarRef used as an if-expression condition must be resolved."""
+        from agm.agl.syntax.nodes import ELSE, IfExpr, IfExprBranch
+
+        let_x = _make_let("x", _make_boollit(True))
+        cond_branch = IfExprBranch(
+            cond=_make_varref("x"),
+            body=_make_intlit(1),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        else_branch = IfExprBranch(
+            cond=ELSE,
+            body=_make_intlit(2),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        if_expr = IfExpr(branches=(cond_branch, else_branch), span=_sp(), node_id=_nid())
+        r = resolve_program(let_x, _make_let("y", if_expr))
+        assert r.program is not None
+
+    def test_if_expr_body_resolves_varref(self) -> None:
+        """A VarRef referenced in an if-expression branch body must be resolved."""
+        from agm.agl.syntax.nodes import ELSE, IfExpr, IfExprBranch
+
+        let_x = _make_let("x", _make_intlit(42))
+        cond_branch = IfExprBranch(
+            cond=_make_boollit(True),
+            body=_make_varref("x"),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        else_branch = IfExprBranch(
+            cond=ELSE,
+            body=_make_intlit(0),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        if_expr = IfExpr(branches=(cond_branch, else_branch), span=_sp(), node_id=_nid())
+        r = resolve_program(let_x, _make_let("y", if_expr))
+        assert r.program is not None
+
+    def test_if_expr_undefined_name_in_condition_rejected(self) -> None:
+        """An undefined name inside an if-expression condition raises AglScopeError."""
+        from agm.agl.syntax.nodes import ELSE, IfExpr, IfExprBranch
+
+        cond_branch = IfExprBranch(
+            cond=_make_varref("no_such_var"),
+            body=_make_intlit(1),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        else_branch = IfExprBranch(
+            cond=ELSE,
+            body=_make_intlit(2),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        if_expr = IfExpr(branches=(cond_branch, else_branch), span=_sp(), node_id=_nid())
+        err = reject_program(_make_let("y", if_expr))
+        assert "no_such_var" in err.to_diagnostic().message
+        assert "not defined" in err.to_diagnostic().message
+
+    def test_if_expr_undefined_name_in_body_rejected(self) -> None:
+        """An undefined name inside an if-expression body raises AglScopeError."""
+        from agm.agl.syntax.nodes import ELSE, IfExpr, IfExprBranch
+
+        cond_branch = IfExprBranch(
+            cond=_make_boollit(True),
+            body=_make_varref("ghost"),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        else_branch = IfExprBranch(
+            cond=ELSE,
+            body=_make_intlit(0),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        if_expr = IfExpr(branches=(cond_branch, else_branch), span=_sp(), node_id=_nid())
+        err = reject_program(_make_let("y", if_expr))
+        assert "ghost" in err.to_diagnostic().message
+        assert "not defined" in err.to_diagnostic().message
+
 
 def _make_field(name: str, type_expr: "TypeExpr") -> FieldDef:
     return FieldDef(name=name, type_expr=type_expr, span=_sp(), node_id=_nid())

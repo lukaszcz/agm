@@ -264,6 +264,16 @@ class TestDispatchMeta:
         assert outcome.text is not None
         assert ":quit" in outcome.text
 
+    def test_command_index_cold_cache(self) -> None:
+        # _command_index() must rebuild if its cache is None (cold-start path).
+        original = meta_mod._command_index_cache
+        meta_mod._command_index_cache = None
+        try:
+            idx = meta_mod._command_index()
+            assert ":help" in idx or "help" in idx
+        finally:
+            meta_mod._command_index_cache = original
+
     def test_register_meta_command_cache_invalidation(self) -> None:
         # Issue #6: after registering a new command, dispatch and meta_command_names
         # must reflect the new entry (cache must be invalidated).

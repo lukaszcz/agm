@@ -54,6 +54,7 @@ from agm.agl.syntax.nodes import (
     CaseStmt,
     CaseStmtBranch,
     CatchClause,
+    ConfigPragma,
     Constructor,
     ConstructorPattern,
     DecimalLit,
@@ -430,6 +431,8 @@ class _Checker:
             self._check_raise(stmt)
         elif isinstance(stmt, ExprStmt):
             self._check_expr(stmt.expr, expected=None)
+        elif isinstance(stmt, ConfigPragma):
+            pass  # Header pragma — no type-checking action needed.
         else:
             pass  # PassStmt — no-op
 

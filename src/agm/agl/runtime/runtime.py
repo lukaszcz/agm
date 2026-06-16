@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.render import RendererFn
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
-    from agm.agl.syntax.nodes import Program
+    from agm.agl.syntax.nodes import PragmaValue, Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.types import Type as AglType
 
@@ -170,6 +170,18 @@ class PreparedProgram:
         ]
         infos.sort(key=lambda info: (info.line, info.col))
         return tuple(infos)
+
+    @property
+    def config_pragmas(self) -> "dict[str, PragmaValue]":
+        """The validated ``config`` pragmas declared in source.
+
+        Returns a mapping of key → value for each pragma collected by the scope
+        pass.  Empty when parse or scope failed (``resolved is None``), or when
+        the program declares no ``config`` pragmas.
+        """
+        if self.resolved is None:
+            return {}
+        return dict(self.resolved.config_pragmas)
 
 
 @dataclass(frozen=True, slots=True)

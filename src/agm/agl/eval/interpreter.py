@@ -37,6 +37,7 @@ from agm.agl.syntax.nodes import (
     CaseExpr,
     CaseStmt,
     CatchClause,
+    ConfigPragma,
     Constructor,
     DecimalLit,
     DictLit,
@@ -250,6 +251,8 @@ class Interpreter:
             pass  # static declarations: resolved before execution, no runtime action
         elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
             pass  # type declarations: no runtime action
+        elif isinstance(stmt, ConfigPragma):
+            pass  # header pragma: applied at the host level, not at eval time
         else:
             assert_never(stmt)  # pragma: no cover
 

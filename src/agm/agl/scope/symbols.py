@@ -19,7 +19,7 @@ import enum
 from dataclasses import dataclass, field
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.syntax.nodes import AgentDecl, Program
+from agm.agl.syntax.nodes import AgentDecl, PragmaValue, Program
 from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
@@ -176,6 +176,7 @@ class ResolvedProgram:
     call_kinds: dict[int, CallKind]
     root_scope: ScopeNode
     declared_agents: dict[str, AgentDecl] = field(default_factory=dict)
+    config_pragmas: dict[str, PragmaValue] = field(default_factory=dict)
     warnings: tuple[Diagnostic, ...] = ()
 
 

@@ -89,6 +89,7 @@ KW_IN = "in"
 KW_TRUE = "true"
 KW_FALSE = "false"
 KW_NULL = "null"
+KW_CONFIG = "config"
 
 # Set of all reserved keyword strings (used by the scanner for fast lookup).
 KEYWORDS: frozenset[str] = frozenset(
@@ -121,6 +122,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_TRUE,
         KW_FALSE,
         KW_NULL,
+        KW_CONFIG,
     }
 )
 

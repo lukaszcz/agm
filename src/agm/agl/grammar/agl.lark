@@ -91,6 +91,7 @@ closed_stmt: record_def
            | raise_stmt
            | expr_stmt
            | do_until
+           | config_pragma
 
 open_stmt: if_stmt | case_stmt | try_stmt
 
@@ -152,6 +153,18 @@ input_decl: "input" VAR_NAME type_ann?
 // The optional runner string is a template; the transformer rejects any
 // template carrying interpolation (it must be a static string literal).
 agent_decl: AGENT VAR_NAME (EQ template)?
+
+// config_pragma: "config" KEY = VALUE (header-only; enforced in scope pass).
+// pragma_value covers the full set of allowed literal kinds: bool, int,
+// decimal, and static string (interpolated templates are rejected in the
+// transformer, mirroring agent_decl runner handling).
+config_pragma: "config" VAR_NAME EQ pragma_value
+
+pragma_value: "true"     -> pragma_true
+            | "false"    -> pragma_false
+            | INT        -> pragma_int
+            | DECIMAL    -> pragma_decimal
+            | template   -> pragma_str
 
 let_decl:   "let"  VAR_NAME type_ann? EQ expr
 var_decl:   "var"  VAR_NAME type_ann? EQ expr

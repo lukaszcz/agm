@@ -57,11 +57,11 @@ A semicolon `;` also separates statements on one line; see
 
 ## Keywords
 
-The following 28 words are **reserved** and can never be used as variable or
+The following 29 words are **reserved** and can never be used as variable or
 agent names:
 
 ```text
-record enum type input agent let var set do until if else case of
+record enum type input agent config let var set do until if else case of
 try catch raise as pass print and or not is in true false null
 ```
 

@@ -22,6 +22,7 @@ import decimal
 import enum
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from decimal import Decimal
 
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
@@ -659,6 +660,32 @@ class AgentDecl:
 
 
 # ---------------------------------------------------------------------------
+# Config pragma
+# ---------------------------------------------------------------------------
+
+#: The set of value types a config pragma may carry.
+PragmaValue = bool | int | Decimal | str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigPragma:
+    """``config KEY = VALUE`` header pragma.
+
+    Must appear before any non-pragma statement at the program root.
+    Enforced by the scope pass; grammatically it is a ``closed_stmt``.
+
+    ``key``    — the pragma name (e.g. ``"log"``, ``"max_iters"``).
+    ``value``  — a statically-known scalar: ``bool``, ``int``,
+                 ``Decimal``, or ``str``.
+    """
+
+    key: str
+    value: PragmaValue
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+# ---------------------------------------------------------------------------
 # Closed statement union (defined after all Stmt classes)
 # ---------------------------------------------------------------------------
 
@@ -679,6 +706,7 @@ Stmt = (
     | TypeAlias
     | InputDecl
     | AgentDecl
+    | ConfigPragma
 )
 
 

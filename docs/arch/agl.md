@@ -85,6 +85,17 @@ to the one file, bracketed by `run_start`/`run_end`; `check_only` writes no trac
 interpreter, not the agent registry). The `agm repl` command builds ONE
 `AgentMode` and passes that same instance to both the wrapper and the console.
 
+## Config pragma pipeline
+
+`config KEY = VALUE` header pragmas are grammatically `closed_stmt` nodes
+(`ConfigPragma` in the AST). The scope pass enforces header-only placement
+(error if a pragma follows any non-pragma root statement, or appears in a
+nested block), validates each key and value kind, and collects the validated
+set into `ResolvedProgram.config_pragmas`. Typecheck and eval treat `ConfigPragma`
+as a no-op. `PreparedProgram.config_pragmas` exposes the collected map (empty on
+parse/scope failure) for the host (`agm exec`, `agm repl`) to read and apply
+with CLI > pragma > config-file precedence (wired in Milestone 3).
+
 ## Agent declarations and source↔host reconciliation
 
 Named agents must be **declared in source** (`agent NAME [= "runner"]`). The

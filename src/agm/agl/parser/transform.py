@@ -34,7 +34,7 @@ from lark.tree import Meta
 
 import agm.agl.syntax as syntax
 from agm.agl.parser.errors import AglSyntaxError
-from agm.agl.syntax.nodes import ELSE
+from agm.agl.syntax.nodes import ELSE, PragmaValue
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
     BoolT,
@@ -160,6 +160,7 @@ class AstBuilder(Transformer):
                 syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
                 syntax.ExprStmt, syntax.Raise,
                 syntax.DoUntil, syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch,
+                syntax.ConfigPragma,
             ))
         )
 
@@ -174,6 +175,7 @@ class AstBuilder(Transformer):
             syntax.InputDecl, syntax.AgentDecl, syntax.LetDecl, syntax.VarDecl,
             syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
             syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
+            syntax.ConfigPragma,
         ))
         return inner
 
@@ -243,6 +245,52 @@ class AstBuilder(Transformer):
             span=span,
             node_id=self._next_id(),
         )
+
+    # ------------------------------------------------------------------
+    # config_pragma
+    # ------------------------------------------------------------------
+
+    def config_pragma(self, meta: Meta, args: _Args) -> syntax.ConfigPragma:
+        """config_pragma: "config" VAR_NAME EQ pragma_value"""
+        key_tok = next(a for a in args if isinstance(a, Token) and a.type == "VAR_NAME")
+        # pragma_value alternatives (pragma_true/false/int/decimal/str) produce
+        # a bool/int/Decimal/str; find it by excluding Token and None.
+        raw_value = next(
+            a for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        span = _span_from_meta(meta)
+        return syntax.ConfigPragma(
+            key=str(key_tok),
+            value=cast(PragmaValue, raw_value),
+            span=span,
+            node_id=self._next_id(),
+        )
+
+    def pragma_true(self, meta: Meta, args: _Args) -> bool:
+        return True
+
+    def pragma_false(self, meta: Meta, args: _Args) -> bool:
+        return False
+
+    def pragma_int(self, meta: Meta, args: _Args) -> int:
+        tok = args[0]
+        assert isinstance(tok, Token)
+        return int(str(tok))
+
+    def pragma_decimal(self, meta: Meta, args: _Args) -> decimal.Decimal:
+        tok = args[0]
+        assert isinstance(tok, Token)
+        return decimal.Decimal(str(tok))
+
+    def pragma_str(self, meta: Meta, args: _Args) -> str:
+        # args[0] is a StringLit (plain) or Template (interpolated).
+        # Reject interpolated templates: pragma values must be static strings.
+        lit = _require_literal_string(
+            args[0],
+            "config pragma value must be a literal string with no interpolation.",
+        )
+        return lit.value
 
     # ------------------------------------------------------------------
     # let_decl / var_decl / set_stmt  (and bar twins)

@@ -63,6 +63,7 @@ from agm.agl.syntax.nodes import (
     CaseStmt,
     CaseStmtBranch,
     CatchClause,
+    ConfigPragma,
     ConstructorPattern,
     DoUntil,
     EnumDef,
@@ -72,6 +73,7 @@ from agm.agl.syntax.nodes import (
     InterpSegment,
     LetDecl,
     PatternField,
+    PragmaValue,
     PrintStmt,
     Program,
     Raise,
@@ -89,6 +91,18 @@ from agm.agl.syntax.nodes import (
 # Reserved contextual keyword names that may not be used as variable names.
 _RESERVED_NAMES: frozenset[str] = frozenset({"ask", "exec"})
 
+# Allowed config pragma keys and their expected value kinds.
+# Value: one of "bool", "int_pos" (positive int), "str_nonempty", "str_or_int".
+_PRAGMA_KEY_KINDS: dict[str, str] = {
+    "log": "bool",
+    "strict_json": "bool",
+    "max_iters": "int_pos",
+    "runner": "str_nonempty",
+    "log_file": "str_nonempty",
+    "timeout": "str_or_int",
+}
+_ALLOWED_PRAGMA_KEYS: frozenset[str] = frozenset(_PRAGMA_KEY_KINDS)
+
 # Per-binder phrasing for the ``set``-on-immutable rejection (F8).  Each phrase
 # completes ``Cannot assign to 'x': <phrase> (immutable).`` and names the ACTUAL
 # binder kind so a catch binder or pattern binding is not mislabelled as a
@@ -104,6 +118,72 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 def _immutable_binder_phrase(kind: BinderKind) -> str:
     """Return the ``set``-rejection phrase naming *kind*'s binder (F8)."""
     return _IMMUTABLE_BINDER_PHRASES[kind]
+
+
+def _validate_pragma_value(
+    key: str,
+    value: PragmaValue,
+    span: object,
+) -> None:
+    """Validate that *value* matches the expected kind for *key*.
+
+    Raises ``AglScopeError`` on a mismatch.  *span* is forwarded to the error.
+
+    Accepted kinds:
+    - ``"bool"``         — value must be a ``bool``.
+    - ``"int_pos"``      — value must be a positive ``int`` (> 0); also
+                           rejects ``bool`` (which is a subtype of ``int``).
+    - ``"str_nonempty"`` — value must be a non-empty ``str``.
+    - ``"str_or_int"``   — value must be a non-empty ``str`` or a positive
+                           ``int`` (duration or iteration count).
+    """
+    from agm.agl.syntax.spans import SourceSpan
+
+    sp = span if isinstance(span, SourceSpan) else None
+    kind = _PRAGMA_KEY_KINDS[key]
+
+    if kind == "bool":
+        if not isinstance(value, bool):
+            raise AglScopeError(
+                f"config pragma '{key}' requires a bool value (true or false), "
+                f"got {type(value).__name__!r}.",
+                span=sp,
+            )
+    elif kind == "int_pos":
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise AglScopeError(
+                f"config pragma '{key}' requires a positive integer value (> 0), "
+                f"got {value!r}.",
+                span=sp,
+            )
+    elif kind == "str_nonempty":
+        if not isinstance(value, str) or not value:
+            raise AglScopeError(
+                f"config pragma '{key}' requires a non-empty string value, "
+                f"got {value!r}.",
+                span=sp,
+            )
+    else:
+        # kind == "str_or_int": string or positive integer (e.g. timeout)
+        if isinstance(value, bool):
+            raise AglScopeError(
+                f"config pragma '{key}' requires a string or positive integer value, "
+                f"got {value!r}.",
+                span=sp,
+            )
+        if isinstance(value, int):
+            if value <= 0:
+                raise AglScopeError(
+                    f"config pragma '{key}' requires a positive integer value (> 0), "
+                    f"got {value!r}.",
+                    span=sp,
+                )
+        elif not isinstance(value, str) or not value:
+            raise AglScopeError(
+                f"config pragma '{key}' requires a non-empty string or positive "
+                f"integer value, got {value!r}.",
+                span=sp,
+            )
 
 
 class _Resolver:
@@ -128,6 +208,11 @@ class _Resolver:
         self._valid_agents: frozenset[str] = frozenset()
         # Program-declared agent names referenced by an agent call.
         self._referenced_agents: set[str] = set()
+        # Validated config pragmas collected in the header pass.
+        self._config_pragmas: dict[str, PragmaValue] = {}
+        # Tracks whether we have seen a non-pragma root-level statement yet
+        # (for header-only enforcement).
+        self._seen_non_pragma: bool = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -171,6 +256,7 @@ class _Resolver:
             call_kinds=self._call_kinds,
             root_scope=root,
             declared_agents=dict(self._declared_agents),
+            config_pragmas=dict(self._config_pragmas),
             warnings=self._unused_agent_warnings(),
         )
 
@@ -229,6 +315,48 @@ class _Resolver:
                     )
                 )
         return tuple(warnings)
+
+    # ------------------------------------------------------------------
+    # Config pragmas
+    # ------------------------------------------------------------------
+
+    def _resolve_config_pragma(self, stmt: ConfigPragma) -> None:
+        """Validate a ``config`` pragma and collect it.
+
+        Enforces:
+        - Root-only placement: pragmas nested in a block are an error.
+        - Header-only placement: pragmas that follow a non-pragma root
+          statement are an error.
+        - Unknown key: error listing allowed keys.
+        - Duplicate key: error.
+        - Value kind mismatch per key: error.
+        """
+        if not self._at_root:
+            raise AglScopeError(
+                f"'config' pragmas are only allowed at the program root, "
+                f"not inside a nested block (found 'config {stmt.key}' here).",
+                span=stmt.span,
+            )
+        if self._seen_non_pragma:
+            raise AglScopeError(
+                f"'config' pragmas must appear before any other statements "
+                f"(found 'config {stmt.key}' after a non-pragma statement).",
+                span=stmt.span,
+            )
+        if stmt.key not in _ALLOWED_PRAGMA_KEYS:
+            allowed = ", ".join(sorted(_ALLOWED_PRAGMA_KEYS))
+            raise AglScopeError(
+                f"Unknown config pragma key '{stmt.key}'. "
+                f"Allowed keys: {allowed}.",
+                span=stmt.span,
+            )
+        if stmt.key in self._config_pragmas:
+            raise AglScopeError(
+                f"Duplicate config pragma '{stmt.key}'.",
+                span=stmt.span,
+            )
+        _validate_pragma_value(stmt.key, stmt.value, stmt.span)
+        self._config_pragmas[stmt.key] = stmt.value
 
     # ------------------------------------------------------------------
     # Scope helpers
@@ -291,6 +419,11 @@ class _Resolver:
 
     def _resolve_stmt(self, stmt: Stmt) -> None:
         """Dispatch to the appropriate resolver for *stmt*."""
+        if isinstance(stmt, ConfigPragma):
+            self._resolve_config_pragma(stmt)
+            # A pragma is not a non-pragma statement, so leave _seen_non_pragma
+            # untouched (header-only tracking below).
+            return
         if isinstance(stmt, LetDecl):
             self._resolve_let(stmt)
         elif isinstance(stmt, VarDecl):
@@ -322,6 +455,10 @@ class _Resolver:
                 self._resolve_expr(stmt.expr)
             else:
                 assert isinstance(stmt, PassStmt)  # closed Stmt union
+        # Track that we have now seen at least one non-pragma statement
+        # (used for header-only enforcement in _resolve_config_pragma).
+        if self._at_root:
+            self._seen_non_pragma = True
 
     def _resolve_let(self, stmt: LetDecl) -> None:
         self._check_not_reserved(stmt.name, stmt.span)

@@ -28,10 +28,52 @@ restricted to the root:
   a block is a static error. See
   [Bindings and scope](bindings-and-scope.md).
 
+## Config pragmas
+
+A **config pragma** sets a program-level option for the workflow:
+
+```ebnf
+config_pragma ::= "config" KEY "=" VALUE
+VALUE         ::= "true" | "false" | INT | DECIMAL | string_literal
+```
+
+Pragmas must appear **before every other statement** at the program root (the
+*header* position). A pragma that follows any non-pragma statement is a static
+error. Pragmas nested inside a block (a `do` body, an `if` branch, etc.) are
+also a static error.
+
+Each key may appear **at most once** per program; duplicate keys are an error.
+The allowed keys are:
+
+| Key | Value type | Meaning |
+|-----|------------|---------|
+| `log` | `bool` | Enable (`true`) or disable (`false`) trace logging. |
+| `log_file` | non-empty string | Path to the trace log file. |
+| `strict_json` | `bool` | Parse agent JSON output strictly. |
+| `max_iters` | positive integer | Maximum iterations for `do` loops. |
+| `runner` | non-empty string | Default agent runner command. |
+| `timeout` | string or positive integer | Shell execution timeout. |
+
+```agl
+config log = true
+config max_iters = 10
+config runner = "claude -p"
+input spec
+let result = ask "Process ${spec}"
+print result
+```
+
+**Precedence.** CLI flags take precedence over pragma values, which take
+precedence over config-file settings. A `--no-log` flag overrides
+`config log = true`, for example.
+
+**String values** must be static string literals — no interpolation.
+
 ## Statement kinds
 
 ```ebnf
-stmt ::= record_def | enum_def | type_alias        (root only)
+stmt ::= config_pragma                             (header only)
+       | record_def | enum_def | type_alias        (root only)
        | input_decl                                (root only)
        | agent_decl                                (root only)
        | let_decl | var_decl | set_stmt

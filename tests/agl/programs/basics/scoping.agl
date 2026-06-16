@@ -1,5 +1,5 @@
 # Lexical scoping: branch shadowing, set across scopes, do-loop iteration scope.
-input mode
+param mode
 
 let x = 1
 var trail: text = ""

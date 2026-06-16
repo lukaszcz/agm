@@ -223,11 +223,15 @@ class TestAcceptance:
         assert r.resolved.program is not None
 
     def test_input_defaults_to_text(self) -> None:
-        r = parse_resolve_check("input spec\nprint spec")
+        r = parse_resolve_check("param spec\nprint spec")
         assert r.resolved.program is not None
 
     def test_input_with_annotation(self) -> None:
-        r = parse_resolve_check("input count: int")
+        r = parse_resolve_check("param count: int")
+        assert r.resolved.program is not None
+
+    def test_program_decl_passes_typecheck(self) -> None:
+        r = parse_resolve_check("program myprog\nparam spec")
         assert r.resolved.program is not None
 
     def test_untyped_agent_call_defaults_to_text(self) -> None:
@@ -1385,7 +1389,7 @@ class TestWarnings:
 
     def test_warnings_on_complex_program(self) -> None:
         r = parse_resolve_check(
-            "input spec\n"
+            "param spec\n"
             'let x = ask "Process ${spec}"\n'
             "print x\n"
         )

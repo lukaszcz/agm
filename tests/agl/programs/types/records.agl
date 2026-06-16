@@ -12,7 +12,7 @@ record Issue
   extra: json
   author: Author
 
-input min_severity: int
+param min_severity: int
 
 agent tracker
 

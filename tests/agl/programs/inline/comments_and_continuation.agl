@@ -1,6 +1,6 @@
 # Leading full-line comment; comments must not disturb layout, and newlines are
 # suppressed inside brackets.
-input n: int   # trailing comment on a statement
+param n: int   # trailing comment on a statement
 
 # comment between statements
 let xs = [

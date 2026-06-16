@@ -1,5 +1,5 @@
 # let/var/set, literal inference, agent-call targets, bare expression statements.
-input start
+param start
 
 agent impl
 

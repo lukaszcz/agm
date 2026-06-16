@@ -1,6 +1,6 @@
 # ExecError: nonzero exit raises a catchable exception carrying command,
 # exit_code, stdout, stderr, timed_out.
-input mode
+param mode
 
 try
   let out = exec "sh -c 'echo partial; echo oops >&2; exit 3'"

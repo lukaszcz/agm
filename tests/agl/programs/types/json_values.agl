@@ -1,6 +1,6 @@
 # json values, null, literal shorthand vs quoted keys, empty literals with
 # annotations, typed agent targets for every built-in.
-input payload: json
+param payload: json
 
 agent source
 

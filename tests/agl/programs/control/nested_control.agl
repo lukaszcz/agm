@@ -8,7 +8,7 @@ enum Plan
   | Retry
   | GiveUp(why: text)
 
-input spec
+param spec
 
 agent impl
 agent reviewer

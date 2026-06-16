@@ -396,7 +396,7 @@ class ReplSession:
         from agm.agl.scope.symbols import BinderKind
 
         for ref in resolved.resolution.values():
-            if ref.kind is not BinderKind.input_binding:
+            if ref.kind is not BinderKind.param_binding:
                 continue
             entry = self._declared_inputs.get(ref.name)
             if entry is not None and entry[1] is None:
@@ -614,7 +614,7 @@ class ReplSession:
         next_start_id: int,
     ) -> None:
         """Merge the entry's new state into the persistent session (atomic)."""
-        from agm.agl.syntax.nodes import InputDecl
+        from agm.agl.syntax.nodes import ParamDecl
 
         # Symbols: merge the entry root scope's bindings (overwrite/shadow).
         entry_root = checked.resolved.root_scope
@@ -633,9 +633,9 @@ class ReplSession:
         for vname, binding in child_scope.bindings.items():
             self._value_scope.bindings[vname] = binding
 
-        # Declared inputs: register any InputDecl (value None until :set).
+        # Declared inputs: register any ParamDecl (value None until :set).
         for stmt in program.body:
-            if isinstance(stmt, InputDecl):
+            if isinstance(stmt, ParamDecl):
                 input_type = checked.type_env.get_binding_type(stmt.node_id)
                 assert input_type is not None
                 # A re-declared input keeps no stale value (shadows fresh):
@@ -657,8 +657,9 @@ class ReplSession:
         from agm.agl.syntax.nodes import (
             EnumDef,
             ExprStmt,
-            InputDecl,
             LetDecl,
+            ParamDecl,
+            ProgramDecl,
             RecordDef,
             TypeAlias,
             VarDecl,
@@ -671,7 +672,7 @@ class ReplSession:
             return "expression", None
         if isinstance(last, (LetDecl, VarDecl)):
             return "binding", last.name
-        if isinstance(last, (RecordDef, EnumDef, TypeAlias, InputDecl)):
+        if isinstance(last, (RecordDef, EnumDef, TypeAlias, ParamDecl, ProgramDecl)):
             return "declaration", last.name
         return "statement", None
 

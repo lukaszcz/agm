@@ -1,9 +1,9 @@
 # Host inputs: untyped defaults to text; typed inputs are JSON-validated.
-input topic
-input rounds: int
-input ratio: decimal
-input flag: bool
-input meta: json
+param topic
+param rounds: int
+param ratio: decimal
+param flag: bool
+param meta: json
 
 print topic
 print rounds

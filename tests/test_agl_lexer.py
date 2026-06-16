@@ -98,6 +98,29 @@ class TestKeywordsAndIdentifiers:
             ("VAR_NAME", "exec"),
         ]
 
+    def test_param_is_reserved_keyword(self) -> None:
+        # `param` is a reserved keyword — its token type is the literal string.
+        result = tok("param")
+        assert result == [("param", "param")]
+
+    def test_param_not_var_name(self) -> None:
+        types = [t for t, _ in tok("param")]
+        assert "VAR_NAME" not in types
+
+    def test_program_is_reserved_keyword(self) -> None:
+        # `program` is a reserved keyword — its token type is the literal string.
+        result = tok("program")
+        assert result == [("program", "program")]
+
+    def test_program_not_var_name(self) -> None:
+        types = [t for t, _ in tok("program")]
+        assert "VAR_NAME" not in types
+
+    def test_input_is_now_var_name(self) -> None:
+        # `input` is no longer reserved — it lexes as a plain VAR_NAME.
+        result = tok("input")
+        assert result == [("VAR_NAME", "input")]
+
     def test_keyword_prefix_identifier(self) -> None:
         # "letter" starts with 'l' like "let", but is an identifier
         result = tok("letter")

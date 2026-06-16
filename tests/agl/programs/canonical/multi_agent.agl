@@ -3,7 +3,7 @@ enum Review
   | Pass
   | Fail(issues: list[text])
 
-input spec
+param spec
 
 agent impl
 agent reviewer

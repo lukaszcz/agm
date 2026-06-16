@@ -47,16 +47,17 @@ from agm.agl.syntax.nodes import (
     ExprStmt,
     FieldAccess,
     IfStmt,
-    InputDecl,
     InterpSegment,
     IntLit,
     IsTest,
     LetDecl,
     ListLit,
     NullLit,
+    ParamDecl,
     PassStmt,
     Pattern,
     PrintStmt,
+    ProgramDecl,
     Raise,
     RecordDef,
     SetStmt,
@@ -246,7 +247,7 @@ class Interpreter:
             self._exec_try_catch(stmt, scope)
         elif isinstance(stmt, Raise):
             self._exec_raise(stmt, scope)
-        elif isinstance(stmt, (InputDecl, AgentDecl)):
+        elif isinstance(stmt, (ParamDecl, ProgramDecl, AgentDecl)):
             pass  # static declarations: resolved before execution, no runtime action
         elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
             pass  # type declarations: no runtime action

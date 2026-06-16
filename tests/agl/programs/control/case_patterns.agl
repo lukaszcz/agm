@@ -9,8 +9,8 @@ enum Wrapped
   | Inner(shape: Shape)
   | Nothing
 
-input code: int
-input who
+param code: int
+param who
 
 agent picker
 

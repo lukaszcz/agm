@@ -1,5 +1,5 @@
 # String escapes: the JSON set plus \$; bare $ without { is literal.
-input n: int
+param n: int
 
 let s1 = "quote=\" backslash=\\ slash=\/ tab=\tend"
 let s2 = "bell=\b feed=\f"

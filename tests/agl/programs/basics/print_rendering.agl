@@ -8,7 +8,7 @@ enum Verdict
   | Good
   | Bad(reason: text)
 
-input n: int
+param n: int
 
 print "plain text line"
 print "two\nlines"

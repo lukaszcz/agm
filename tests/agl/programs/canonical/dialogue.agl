@@ -3,7 +3,7 @@ enum Turn
   | Continue(message: text)
   | Done(answer: text)
 
-input problem
+param problem
 
 agent researcher
 agent critic

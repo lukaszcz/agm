@@ -629,17 +629,33 @@ class TypeAlias:
 
 
 @dataclass(frozen=True, slots=True)
-class InputDecl:
-    """``input name[: TypeExpr]`` declaration.
+class ParamDecl:
+    """``param name[: TypeExpr] [= expr]`` declaration.
 
-    The type ``annotation`` is optional: ``input spec`` is equivalent to
-    ``input spec: text``.  The default (``text``) is applied by the TYPECHECK
+    The type ``annotation`` is optional: ``param spec`` is equivalent to
+    ``param spec: text``.  The default (``text``) is applied by the TYPECHECK
     pass, not synthesized by the parser, so ``annotation`` is ``None`` when the
     source omits it.
+
+    The ``default`` expression is optional; ``None`` when omitted.  Evaluation
+    of the default is handled by Milestone 2+ passes, not here.
     """
 
     name: str
     annotation: TypeExpr | None
+    default: Expr | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramDecl:
+    """``program NAME`` declaration.
+
+    Declares the program name used for config lookup and CLI integration.
+    """
+
+    name: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -677,7 +693,8 @@ Stmt = (
     | RecordDef
     | EnumDef
     | TypeAlias
-    | InputDecl
+    | ParamDecl
+    | ProgramDecl
     | AgentDecl
 )
 

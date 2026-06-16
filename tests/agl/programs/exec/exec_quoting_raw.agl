@@ -1,7 +1,7 @@
 # Shell-safe interpolation quotes each value; `as raw` deliberately bypasses
 # quoting.
-input arg
-input k: int
+param arg
+param k: int
 
 let quoted = exec "printf '%s|' ${arg}"
 print quoted

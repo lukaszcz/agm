@@ -156,7 +156,8 @@ class AstBuilder(Transformer):
             if s is not None and not isinstance(s, Token)
             if isinstance(s, (
                 syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
-                syntax.InputDecl, syntax.AgentDecl, syntax.LetDecl, syntax.VarDecl,
+                syntax.ParamDecl, syntax.ProgramDecl, syntax.AgentDecl,
+                syntax.LetDecl, syntax.VarDecl,
                 syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
                 syntax.ExprStmt, syntax.Raise,
                 syntax.DoUntil, syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch,
@@ -171,7 +172,8 @@ class AstBuilder(Transformer):
         (inner,) = args
         assert isinstance(inner, (
             syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
-            syntax.InputDecl, syntax.AgentDecl, syntax.LetDecl, syntax.VarDecl,
+            syntax.ParamDecl, syntax.ProgramDecl, syntax.AgentDecl,
+            syntax.LetDecl, syntax.VarDecl,
             syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
             syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
         ))
@@ -194,18 +196,35 @@ class AstBuilder(Transformer):
         return inner
 
     # ------------------------------------------------------------------
-    # input_decl
+    # param_decl / program_decl
     # ------------------------------------------------------------------
 
-    def input_decl(self, meta: Meta, args: _Args) -> syntax.InputDecl:
+    def param_decl(self, meta: Meta, args: _Args) -> syntax.ParamDecl:
+        # Grammar: "param" VAR_NAME type_ann? (EQ expr)?
+        # After transformation:
+        #   args[0] = Token(VAR_NAME)
+        #   args[1:] is the same shape as let/var tail but with the expr optional
         name_tok = args[0]
         assert isinstance(name_tok, Token)
-        # Optional type_ann: present as TypeExpr in args[1] when annotated, absent otherwise.
-        ann: TypeExpr | None = _find_type_expr(args[1:]) if len(args) > 1 else None
+        ann, default = _extract_ann_and_optional_expr(args[1:])
         span = _span_from_meta(meta)
-        return syntax.InputDecl(
+        return syntax.ParamDecl(
             name=str(name_tok),
             annotation=ann,
+            default=default,
+            span=span,
+            node_id=self._next_id(),
+        )
+
+    def program_decl(self, meta: Meta, args: _Args) -> syntax.ProgramDecl:
+        # Grammar: "program" VAR_NAME
+        name_tok = next(
+            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
+        )
+        assert name_tok is not None, "program_decl: no VAR_NAME token"
+        span = _span_from_meta(meta)
+        return syntax.ProgramDecl(
+            name=str(name_tok),
             span=span,
             node_id=self._next_id(),
         )
@@ -1677,13 +1696,17 @@ def _find_expr(args: _Args) -> syntax.Expr:
     raise AssertionError(f"_find_expr: no Expr found in {args!r}")
 
 
-def _extract_ann_and_value(
+def _extract_ann_and_optional_expr(
     tail: _Args,
-) -> tuple[TypeExpr | None, syntax.Expr]:
-    """Extract (type_ann, value) from the tail of a let/var args list.
+) -> tuple[TypeExpr | None, syntax.Expr | None]:
+    """Extract (type_ann, expr_or_None) from a rule tail.
 
-    Grammar tail is: type_ann? EQ expr
-    With maybe_placeholders=True: [None|TypeExpr, Token(EQ), Expr]
+    Grammar tail is: type_ann? (EQ expr)?
+    With maybe_placeholders=True: [None|TypeExpr, Token(EQ)?, Expr?]
+
+    Returns ``None`` for the expression when no ``EQ expr`` was present (e.g.
+    a ``param`` declaration without a default).  Use ``_extract_ann_and_value``
+    when the expression is mandatory (``let``/``var``).
     """
     ann: TypeExpr | None = None
     value: syntax.Expr | None = None
@@ -1693,6 +1716,18 @@ def _extract_ann_and_value(
         elif _is_expr_obj(a) and not isinstance(a, Token):
             value = cast(syntax.Expr, a)
         # None (placeholder) and Token (EQ) are skipped
+    return ann, value
+
+
+def _extract_ann_and_value(
+    tail: _Args,
+) -> tuple[TypeExpr | None, syntax.Expr]:
+    """Extract (type_ann, value) from the tail of a let/var args list.
+
+    Grammar tail is: type_ann? EQ expr
+    With maybe_placeholders=True: [None|TypeExpr, Token(EQ), Expr]
+    """
+    ann, value = _extract_ann_and_optional_expr(tail)
     assert value is not None, f"_extract_ann_and_value: no Expr found in {tail!r}"
     return ann, value
 

@@ -4,7 +4,7 @@ enum Review
   | Fail(issues: list[text])
   | Pass
 
-input artifact
+param artifact
 
 let issues = ["missing tests", "unclear API"]
 let review: Review = Fail(issues: issues)

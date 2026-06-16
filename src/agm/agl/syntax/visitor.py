@@ -53,7 +53,6 @@ from agm.agl.syntax.nodes import (
     FieldDef,
     IfBranch,
     IfStmt,
-    InputDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -62,10 +61,12 @@ from agm.agl.syntax.nodes import (
     LiteralPattern,
     NamedArg,
     NullLit,
+    ParamDecl,
     PassStmt,
     PatternField,
     PrintStmt,
     Program,
+    ProgramDecl,
     Raise,
     RecordDef,
     RetryPolicy,
@@ -145,7 +146,8 @@ class Visitor:
     def visit_VariantDef(self, node: VariantDef) -> None: ...
     def visit_EnumDef(self, node: EnumDef) -> None: ...
     def visit_TypeAlias(self, node: TypeAlias) -> None: ...
-    def visit_InputDecl(self, node: InputDecl) -> None: ...
+    def visit_ParamDecl(self, node: ParamDecl) -> None: ...
+    def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
     def visit_AgentDecl(self, node: AgentDecl) -> None: ...
     def visit_IntLit(self, node: IntLit) -> None: ...
     def visit_DecimalLit(self, node: DecimalLit) -> None: ...
@@ -217,7 +219,8 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         VariantDef,
         EnumDef,
         TypeAlias,
-        InputDecl,
+        ParamDecl,
+        ProgramDecl,
         AgentDecl,
         IntLit,
         DecimalLit,
@@ -323,9 +326,14 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, TypeAlias):
         walk(node.type_expr, callback)
 
-    elif isinstance(node, InputDecl):
+    elif isinstance(node, ParamDecl):
         if node.annotation is not None:
             walk(node.annotation, callback)
+        if node.default is not None:
+            walk(node.default, callback)
+
+    elif isinstance(node, ProgramDecl):
+        pass  # leaf — name is a plain string
 
     elif isinstance(node, AgentDecl):
         pass  # leaf — name and runner are plain strings

@@ -361,7 +361,7 @@ class TestAgentDeclarations:
 class TestInputs:
     def test_declared_input_listed_unset(self) -> None:
         s = ReplSession()
-        s.eval_entry("input name: text")
+        s.eval_entry("param name: text")
         ins = s.inputs()
         assert len(ins) == 1
         name, typ, val = ins[0]
@@ -371,7 +371,7 @@ class TestInputs:
 
     def test_unset_input_reference_is_clean_error(self) -> None:
         s = ReplSession()
-        s.eval_entry("input name: text")
+        s.eval_entry("param name: text")
         r = s.eval_entry("name")
         assert not r.ok
         assert r.diagnostics
@@ -380,7 +380,7 @@ class TestInputs:
 
     def test_set_input_then_reference(self) -> None:
         s = ReplSession()
-        s.eval_entry("input name: text")
+        s.eval_entry("param name: text")
         s.set_input("name", "World")
         r = s.eval_entry("name")
         assert r.ok
@@ -391,7 +391,7 @@ class TestInputs:
 
     def test_set_input_typed_conversion(self) -> None:
         s = ReplSession()
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         s.set_input("count", "42")
         r = s.eval_entry("count + 1")
         assert r.ok
@@ -404,13 +404,13 @@ class TestInputs:
 
     def test_set_input_conversion_failure_errors(self) -> None:
         s = ReplSession()
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         with pytest.raises(AglError):
             s.set_input("count", "not-an-int")
 
     def test_set_input_excluded_from_bindings_until_set(self) -> None:
         s = ReplSession()
-        s.eval_entry("input name: text")
+        s.eval_entry("param name: text")
         # unset input has no value, so it is not in bindings()
         assert all(n != "name" for n, _t, _v in s.bindings())
         s.set_input("name", "hi")
@@ -426,7 +426,7 @@ class TestReset:
     def test_reset_clears_all_state(self) -> None:
         s = ReplSession()
         s.eval_entry("let x = 1")
-        s.eval_entry("input n: int")
+        s.eval_entry("param n: int")
         s.reset()
         assert s.bindings() == []
         assert s.inputs() == []
@@ -910,7 +910,7 @@ class TestPresetInput:
         s.preset_input("count", "42")
         # Not declared yet → pending; not yet in inputs().
         assert s.inputs() == []
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         # Declaring the input applies the pending value.
         r = s.eval_entry("count + 1")
         assert r.ok
@@ -918,7 +918,7 @@ class TestPresetInput:
 
     def test_preset_for_already_declared_input_applies_immediately(self) -> None:
         s = ReplSession()
-        s.eval_entry("input name: text")
+        s.eval_entry("param name: text")
         s.preset_input("name", "World")
         r = s.eval_entry("name")
         assert r.ok
@@ -927,7 +927,7 @@ class TestPresetInput:
     def test_preset_bad_value_leaves_input_unset(self) -> None:
         s = ReplSession()
         s.preset_input("count", "not-an-int")
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         # Conversion failed → input stays unset; referencing it is a clean error.
         _name, _typ, val = s.inputs()[0]
         assert val is None
@@ -937,7 +937,7 @@ class TestPresetInput:
 
     def test_preset_bad_value_for_declared_input_leaves_unset(self) -> None:
         s = ReplSession()
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         s.preset_input("count", "nope")  # swallowed, not raised
         _name, _typ, val = s.inputs()[0]
         assert val is None
@@ -947,7 +947,7 @@ class TestPresetInput:
         s.preset_input("count", "42")
         s.reset()
         # After reset the pending value is gone: declaring leaves it unset.
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         _name, _typ, val = s.inputs()[0]
         assert val is None
 
@@ -967,7 +967,7 @@ class TestInputRedeclaration:
         The two tables must agree: no stale value survives.
         """
         s = ReplSession()
-        r1 = s.eval_entry("input x: int")
+        r1 = s.eval_entry("param x: int")
         assert r1.ok
         s.set_input("x", "5")
 
@@ -977,7 +977,7 @@ class TestInputRedeclaration:
         assert any(n == "x" for n, _t, _v in s.bindings())
 
         # Re-declare the same input.
-        r2 = s.eval_entry("input x: int")
+        r2 = s.eval_entry("param x: int")
         assert r2.ok
 
         # inputs() must report x as unset.
@@ -993,10 +993,10 @@ class TestInputRedeclaration:
     def test_redeclare_input_then_reference_raises_unset_guard(self) -> None:
         """After re-declaration the unset-input guard must fire on reference."""
         s = ReplSession()
-        s.eval_entry("input x: int")
+        s.eval_entry("param x: int")
         s.set_input("x", "5")
         # Re-declare — x is now unset again.
-        s.eval_entry("input x: int")
+        s.eval_entry("param x: int")
         r = s.eval_entry("x + 1")
         assert not r.ok
         assert r.diagnostics
@@ -1005,9 +1005,9 @@ class TestInputRedeclaration:
     def test_redeclare_input_then_reset_works(self) -> None:
         """Re-set after re-declaration succeeds and value is usable."""
         s = ReplSession()
-        s.eval_entry("input x: int")
+        s.eval_entry("param x: int")
         s.set_input("x", "5")
-        s.eval_entry("input x: int")
+        s.eval_entry("param x: int")
         s.set_input("x", "10")
         r = s.eval_entry("x + 1")
         assert r.ok

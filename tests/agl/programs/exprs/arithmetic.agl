@@ -1,8 +1,8 @@
 # Arithmetic: + - * /, unary minus, int/decimal mixing, exact decimals,
 # arbitrary precision, text concatenation.
-input a: int
-input b: int
-input scale: decimal
+param a: int
+param b: int
+param scale: decimal
 
 let sum = a + b
 let diff = a - b

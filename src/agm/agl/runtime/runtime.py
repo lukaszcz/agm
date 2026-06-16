@@ -633,10 +633,10 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         # [4] Validate host inputs against input declarations
         # ----------------------------------------------------------------
-        from agm.agl.syntax.nodes import InputDecl
+        from agm.agl.syntax.nodes import ParamDecl
 
         # Build declared input map.  Read the exact binding type recorded by the
-        # checker (keyed by the InputDecl node_id) rather than re-resolving the
+        # checker (keyed by the ParamDecl node_id) rather than re-resolving the
         # annotation here — the checker is the single source of truth and already
         # handles compound types (list/dict/record/enum) correctly.
         declared_inputs: dict[str, AglType] = {}  # name → declared Type
@@ -645,7 +645,7 @@ class WorkflowRuntime:
         # type-invalid path, which already uses ``stmt.span``).
         declared_input_lines: dict[str, int] = {}  # name → declaration line
         for stmt in program.body:
-            if isinstance(stmt, InputDecl):
+            if isinstance(stmt, ParamDecl):
                 input_type = checked.type_env.get_binding_type(stmt.node_id)
                 if input_type is None:
                     raise AssertionError(
@@ -718,7 +718,7 @@ class WorkflowRuntime:
         input_bind_errors: list[Diagnostic] = []
 
         for stmt in program.body:
-            if isinstance(stmt, InputDecl):
+            if isinstance(stmt, ParamDecl):
                 raw_val = inputs[stmt.name]
                 input_type_obj = declared_inputs[stmt.name]
                 # Convert/validate the raw value.

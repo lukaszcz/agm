@@ -299,8 +299,8 @@ def _raise(exc: Expr) -> ast.Raise:
     return ast.Raise(exc=exc, span=_sp(), node_id=_nid())
 
 
-def _input(name: str, *, annotation: tast.TypeExpr | None = None) -> ast.InputDecl:
-    return ast.InputDecl(name=name, annotation=annotation, span=_sp(), node_id=_nid())
+def _input(name: str, *, annotation: tast.TypeExpr | None = None) -> ast.ParamDecl:
+    return ast.ParamDecl(name=name, annotation=annotation, default=None, span=_sp(), node_id=_nid())
 
 
 # --- type-declaration / annotation builders --------------------------------
@@ -844,45 +844,45 @@ class TestAgentCalls:
 
 class TestInputValidation:
     def test_missing_declared_input_fails(self) -> None:
-        result = run("input name\nprint name", inputs={})
+        result = run("param name\nprint name", inputs={})
         assert result.ok is False
         assert result.error is None
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "name" in msgs.lower()
 
     def test_undeclared_extra_input_fails(self) -> None:
-        result = run("input name\nprint name", inputs={"name": "bob", "bogus": "x"})
+        result = run("param name\nprint name", inputs={"name": "bob", "bogus": "x"})
         assert result.ok is False
         assert result.error is None
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "bogus" in msgs.lower()
 
     def test_text_input_taken_verbatim(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = run("input name\nprint name", inputs={"name": "alice"})
+        result = run("param name\nprint name", inputs={"name": "alice"})
         assert result.ok
         out = capsys.readouterr().out
         assert "alice" in out
 
     def test_int_input_from_json(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = run("input n: int\nprint n", inputs={"n": 42})
+        result = run("param n: int\nprint n", inputs={"n": 42})
         assert result.ok
         out = capsys.readouterr().out
         assert "42" in out
 
     def test_bool_input_from_json(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = run("input flag: bool\nprint flag", inputs={"flag": True})
+        result = run("param flag: bool\nprint flag", inputs={"flag": True})
         assert result.ok
         out = capsys.readouterr().out
         assert "true" in out
 
     def test_json_input_from_json(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = run("input meta: json\nprint meta", inputs={"meta": {"key": 1}})
+        result = run("param meta: json\nprint meta", inputs={"meta": {"key": 1}})
         assert result.ok
         out = capsys.readouterr().out
         assert "key" in out
 
     def test_type_invalid_int_input_fails(self) -> None:
-        result = run("input n: int\nprint n", inputs={"n": "not a number"})
+        result = run("param n: int\nprint n", inputs={"n": "not a number"})
         assert result.ok is False
         assert result.error is None
         msgs = " ".join(d.message for d in result.diagnostics)
@@ -890,7 +890,7 @@ class TestInputValidation:
 
     def test_input_bound_immutably(self) -> None:
         # set on an input binding is a static error (scope pass)
-        result = run("input x\nset x = \"y\"", inputs={"x": "hello"})
+        result = run("param x\nset x = \"y\"", inputs={"x": "hello"})
         assert result.ok is False
 
     def test_no_agent_called_on_input_failure(self) -> None:
@@ -901,7 +901,7 @@ class TestInputValidation:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('input name\nlet x = ask "Hi ${name as raw}"', inputs={})
+        rt.run('param name\nlet x = ask "Hi ${name as raw}"', inputs={})
         assert calls == []
 
     def test_input_used_in_template(self) -> None:
@@ -912,7 +912,7 @@ class TestInputValidation:
             return "ok"
 
         run_with_default_agent(
-            'input name\nlet x = ask "Hello ${name as raw}"',
+            'param name\nlet x = ask "Hello ${name as raw}"',
             agent,
             inputs={"name": "Alice"},
         )
@@ -920,7 +920,7 @@ class TestInputValidation:
         assert "Alice" in prompts[0]
 
     def test_decimal_input_from_json(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = run("input r: decimal\nprint r", inputs={"r": decimal.Decimal("2.5")})
+        result = run("param r: decimal\nprint r", inputs={"r": decimal.Decimal("2.5")})
         assert result.ok
         out = capsys.readouterr().out
         assert "2.5" in out
@@ -1504,13 +1504,13 @@ class TestPrintVarRef:
         assert "3.14" in out
 
     def test_print_input_text(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = run("input msg\nprint msg", inputs={"msg": "from input"})
+        result = run("param msg\nprint msg", inputs={"msg": "from input"})
         assert result.ok
         out = capsys.readouterr().out
         assert out == "from input\n"
 
     def test_print_input_int(self, capsys: pytest.CaptureFixture[str]) -> None:
-        result = run("input n: int\nprint n", inputs={"n": 7})
+        result = run("param n: int\nprint n", inputs={"n": 7})
         assert result.ok
         out = capsys.readouterr().out
         assert out == "7\n"
@@ -2821,7 +2821,7 @@ class TestInterpreterM3Stmts:
             _execute(body)
 
     def test_input_and_type_declarations_are_runtime_noops(self) -> None:
-        """input / record / enum / type-alias declarations bind nothing at runtime."""
+        """param / record / enum / type-alias declarations bind nothing at runtime."""
         body = (
             _input("x"),
             _record_def("Point", _field_def("v", _ty("int"))),
@@ -3864,7 +3864,7 @@ class TestAgentCallShellExec:
         model and can be caught by a ``try``/``catch``.
         """
         result = run(
-            'input bad\nlet x = exec "echo ${bad as raw}"\n',
+            'param bad\nlet x = exec "echo ${bad as raw}"\n',
             inputs={"bad": "a\x00b"},
         )
         assert result.ok is False
@@ -3877,7 +3877,7 @@ class TestAgentCallShellExec:
         from agm.agl.eval.values import TextValue
 
         result = run(
-            "input bad\n"
+            "param bad\n"
             'var ok = "no"\n'
             "try\n"
             '  let x = exec "echo ${bad as raw}"\n'
@@ -4930,7 +4930,7 @@ class TestShellExecTemplateInterpolation:
         # exec "printf '%s' ${name}" where name = "hello world" should produce
         # "hello world" (the shell-quoted value prevents word-splitting).
         result = run(
-            'input name\n'
+            'param name\n'
             'let out = exec "printf \'%s\' ${name}"\n',
             inputs={"name": "hello world"},
         )

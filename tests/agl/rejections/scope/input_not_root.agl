@@ -1,4 +1,4 @@
 if true =>
-  input late
+  param late
 | else =>
   pass

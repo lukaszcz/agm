@@ -5,7 +5,7 @@ enum Outcome
   | Partial(left: int)
   | Failed(reason: text, fatal: bool)
 
-input fallback
+param fallback
 
 agent worker
 

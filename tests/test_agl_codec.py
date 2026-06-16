@@ -1497,17 +1497,17 @@ class TestRecordEnumInputs:
     """Runtime.convert_input now accepts record/enum types via JsonCodec."""
 
     def test_record_input_parsed_from_json_string(self) -> None:
-        # record Issue; title: text; severity: int; input issue: Issue; print issue.title
+        # record Issue; title: text; severity: int; param issue: Issue; print issue.title
         # Use direct-AST since record decl needs M2a parser.
-        from agm.agl.syntax.nodes import InputDecl, PrintStmt
+        from agm.agl.syntax.nodes import ParamDecl, PrintStmt
 
         record_def = _record_def(
             "Issue",
             _field_def("title", _text_ty()),
             _field_def("severity", _int_ty()),
         )
-        input_decl = InputDecl(
-            name="issue", annotation=_name_ty("Issue"), span=_sp(), node_id=_nid()
+        input_decl = ParamDecl(
+            name="issue", annotation=_name_ty("Issue"), default=None, span=_sp(), node_id=_nid()
         )
         from agm.agl.syntax.nodes import VarRef
 
@@ -1564,10 +1564,10 @@ class TestRecordEnumInputs:
         codec = JsonCodec()
         parse_result = codec.parse(raw_input, issue_type, strict_json=False)
         assert parse_result.ok and parse_result.value is not None
-        from agm.agl.syntax.nodes import InputDecl as ID
+        from agm.agl.syntax.nodes import ParamDecl as PD
 
         for stmt in program.body:
-            if isinstance(stmt, ID):
+            if isinstance(stmt, PD):
                 root.define(stmt.name, parse_result.value, mutable=False, decl_span=stmt.span)
         interp.execute(root)
         v = root.snapshot()["issue"]
@@ -1586,7 +1586,7 @@ class TestRecordEnumInputs:
     def test_list_input_parsed_from_json_string(self) -> None:
         rt = WorkflowRuntime()
         result = rt.run(
-            "input tags: list[text]",
+            "param tags: list[text]",
             inputs={"tags": '["a", "b"]'},
         )
         assert result.ok is True
@@ -2372,7 +2372,7 @@ class TestRegisterRenderer:
 
     def test_custom_renderer_typechecks_only_when_registered(self) -> None:
         """A custom renderer is usable in interpolation only after registration (F4)."""
-        src = 'input x\nlet y = ask "${x as myrenderer}"'
+        src = 'param x\nlet y = ask "${x as myrenderer}"'
 
         rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
         unreg = rt_unreg.run(src, inputs={"x": "hi"})

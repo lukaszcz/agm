@@ -1,5 +1,5 @@
 # The compact one-line variant, with the declarations it assumes.
-input spec
+param spec
 enum Review
   | Pass
   | Fail(issues: list[text])

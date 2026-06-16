@@ -4,7 +4,7 @@ enum Review
   | Pass
   | Fail(issues: list[text])
 
-input mode
+param mode
 
 agent reviewer
 

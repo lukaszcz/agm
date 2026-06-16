@@ -88,15 +88,15 @@ class TestAcceptance:
         assert r.program is not None
 
     def test_input_at_root(self) -> None:
-        r = parse_and_resolve("input spec")
+        r = parse_and_resolve("param spec")
         assert r.program is not None
 
     def test_input_with_type(self) -> None:
-        r = parse_and_resolve("input spec: text\nprint spec")
+        r = parse_and_resolve("param spec: text\nprint spec")
         assert r.program is not None
 
     def test_let_after_input(self) -> None:
-        r = parse_and_resolve("input spec\nlet x = spec")
+        r = parse_and_resolve("param spec\nlet x = spec")
         assert r.program is not None
 
     def test_agent_call_ask(self) -> None:
@@ -125,15 +125,15 @@ class TestAcceptance:
 
     def test_let_with_interpolation(self) -> None:
         r = parse_and_resolve(
-            "input name\n"
+            "param name\n"
             'let greeting = "Hello ${name}"\n'
         )
         assert r.program is not None
 
     def test_multiple_inputs(self) -> None:
         r = parse_and_resolve(
-            "input spec\n"
-            "input max_severity: int\n"
+            "param spec\n"
+            "param max_severity: int\n"
             "let x = spec\n"
         )
         assert r.program is not None
@@ -152,6 +152,18 @@ class TestAcceptance:
             "var y = x\n"
             "set y = x\n"
         )
+        assert r.program is not None
+
+    def test_program_decl_at_root(self) -> None:
+        r = parse_and_resolve("program myprog")
+        assert r.program is not None
+
+    def test_param_with_default(self) -> None:
+        r = parse_and_resolve('param name = "default_value"')
+        assert r.program is not None
+
+    def test_param_with_typed_default(self) -> None:
+        r = parse_and_resolve("param count: int = 0")
         assert r.program is not None
 
 
@@ -182,13 +194,13 @@ class TestRedeclaration:
 
     def test_redeclare_input_with_let(self) -> None:
         # matches tests/agl/rejections/scope/input_redeclared.agl
-        err = reject_scope('input spec\nlet spec = "again"')
+        err = reject_scope('param spec\nlet spec = "again"')
         line, msg = diag(err)
         assert line == 2
         assert "spec" in msg
 
-    def test_redeclare_input_with_input(self) -> None:
-        err = reject_scope("input x\ninput x")
+    def test_redeclare_param_with_param(self) -> None:
+        err = reject_scope("param x\nparam x")
         line, msg = diag(err)
         assert line == 2
         assert "x" in msg
@@ -216,7 +228,7 @@ class TestSetErrors:
 
     def test_set_on_input(self) -> None:
         # input bindings are immutable like let.
-        err = reject_scope("input spec\nset spec = 2")
+        err = reject_scope("param spec\nset spec = 2")
         line, msg = diag(err)
         assert line == 2
         assert "spec" in msg
@@ -228,11 +240,11 @@ class TestSetErrors:
         assert "let" in msg
         assert "immutable" in msg
 
-    def test_set_on_input_names_input_not_let(self) -> None:
-        # An input binding must NOT be mislabelled as declared with 'let' (F8).
-        err = reject_scope("input spec\nset spec = 2")
+    def test_set_on_param_names_param_not_let(self) -> None:
+        # A param binding must NOT be mislabelled as declared with 'let' (F8).
+        err = reject_scope("param spec\nset spec = 2")
         _, msg = diag(err)
-        assert "input" in msg
+        assert "param" in msg
         assert "declared with 'let'" not in msg
 
     def test_set_on_catch_binder_names_catch_not_let(self) -> None:
@@ -315,13 +327,13 @@ class TestReservedNames:
         assert "exec" in msg
 
     def test_reserve_ask_input(self) -> None:
-        err = reject_scope("input ask")
+        err = reject_scope("param ask")
         line, msg = diag(err)
         assert line == 1
         assert "ask" in msg
 
     def test_reserve_exec_input(self) -> None:
-        err = reject_scope("input exec")
+        err = reject_scope("param exec")
         line, msg = diag(err)
         assert line == 1
         assert "exec" in msg
@@ -333,29 +345,42 @@ class TestReservedNames:
 
 
 class TestInputNotRoot:
-    def test_input_inside_if(self) -> None:
+    def test_param_inside_if(self) -> None:
         # matches tests/agl/rejections/scope/input_not_root.agl
         err = reject_scope(
             "if true =>\n"
-            "  input late\n"
+            "  param late\n"
             "| else =>\n"
             "  pass\n"
         )
         line, msg = diag(err)
         assert line == 2
-        assert "input" in msg.lower()
+        assert "param" in msg.lower()
 
-    def test_input_inside_do(self) -> None:
-        err = reject_scope("do[2]\n  input x\nuntil true\n")
+    def test_param_inside_do(self) -> None:
+        err = reject_scope("do[2]\n  param x\nuntil true\n")
         line, msg = diag(err)
         assert line == 2
-        assert "input" in msg.lower()
+        assert "param" in msg.lower()
 
-    def test_input_inside_try(self) -> None:
-        err = reject_scope("try\n  input x\ncatch _ =>\n  pass\n")
+    def test_param_inside_try(self) -> None:
+        err = reject_scope("try\n  param x\ncatch _ =>\n  pass\n")
         line, msg = diag(err)
         assert line == 2
-        assert "input" in msg.lower()
+        assert "param" in msg.lower()
+
+
+class TestProgramDeclNotRoot:
+    def test_program_inside_if_rejected(self) -> None:
+        err = reject_scope(
+            "if true =>\n"
+            "  program myprog\n"
+            "| else =>\n"
+            "  pass\n"
+        )
+        line, msg = diag(err)
+        assert line == 2
+        assert "program" in msg.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +467,7 @@ class TestCallKinds:
         assert r.call_kinds[stmt.value.node_id] == CallKind.agent
 
     def test_exec_in_template_prompt(self) -> None:
-        r = parse_and_resolve('input spec\nlet x = ask "Here: ${spec}"')
+        r = parse_and_resolve('param spec\nlet x = ask "Here: ${spec}"')
         from agm.agl.syntax.nodes import AgentCall, LetDecl
 
         stmt = r.program.body[1]
@@ -478,8 +503,8 @@ class TestResolution:
         assert ref.name == "n"
         assert ref.mutable
 
-    def test_input_binding_is_immutable(self) -> None:
-        r = parse_and_resolve("input spec\nprint spec")
+    def test_param_binding_is_immutable(self) -> None:
+        r = parse_and_resolve("param spec\nprint spec")
         from agm.agl.syntax.nodes import PrintStmt, VarRef
 
         print_stmt = r.program.body[1]
@@ -490,7 +515,7 @@ class TestResolution:
         assert not ref.mutable
 
     def test_interp_varref_resolved(self) -> None:
-        r = parse_and_resolve('input name\nlet q = ask "Hello ${name}"')
+        r = parse_and_resolve('param name\nlet q = ask "Hello ${name}"')
         from agm.agl.syntax.nodes import AgentCall, InterpSegment, LetDecl, Template, VarRef
 
         stmt = r.program.body[1]
@@ -701,19 +726,21 @@ class TestScopeViaAstConstruction:
         err = reject_program(do_stmt, print_after)
         assert "inner" in err.to_diagnostic().message
 
-    def test_do_until_input_not_root_error(self) -> None:
-        from agm.agl.syntax.nodes import DoUntil, InputDecl
+    def test_do_until_param_not_root_error(self) -> None:
+        from agm.agl.syntax.nodes import DoUntil, ParamDecl
 
-        input_in_body = InputDecl(name="x", annotation=None, span=_sp(2), node_id=_nid())
+        param_in_body = ParamDecl(
+            name="x", annotation=None, default=None, span=_sp(2), node_id=_nid()
+        )
         do_stmt = DoUntil(
             limit=5,
-            body=(input_in_body,),
+            body=(param_in_body,),
             condition=_make_boollit(True),
             span=_sp(),
             node_id=_nid(),
         )
         err = reject_program(do_stmt)
-        assert "input" in err.to_diagnostic().message.lower()
+        assert "param" in err.to_diagnostic().message.lower()
 
     # --- IfStmt scope ---
 
@@ -760,19 +787,19 @@ class TestScopeViaAstConstruction:
         err = reject_program(if_stmt, print_stmt)
         assert "inner" in err.to_diagnostic().message
 
-    def test_if_stmt_input_not_root_error(self) -> None:
-        from agm.agl.syntax.nodes import IfBranch, IfStmt, InputDecl
+    def test_if_stmt_param_not_root_error(self) -> None:
+        from agm.agl.syntax.nodes import IfBranch, IfStmt, ParamDecl
 
-        input_decl = InputDecl(name="x", annotation=None, span=_sp(2), node_id=_nid())
+        param_decl = ParamDecl(name="x", annotation=None, default=None, span=_sp(2), node_id=_nid())
         branch = IfBranch(
             cond=_make_boollit(True),
-            body=(input_decl,),
+            body=(param_decl,),
             span=_sp(),
             node_id=_nid(),
         )
         if_stmt = IfStmt(branches=(branch,), span=_sp(), node_id=_nid())
         err = reject_program(if_stmt)
-        assert "input" in err.to_diagnostic().message.lower()
+        assert "param" in err.to_diagnostic().message.lower()
 
     # --- CaseStmt scope ---
 
@@ -868,14 +895,14 @@ class TestScopeViaAstConstruction:
         err = reject_program(let_x, case_stmt, print_after)
         assert "inner" in err.to_diagnostic().message
 
-    def test_case_stmt_input_not_root_error(self) -> None:
-        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, InputDecl, WildcardPattern
+    def test_case_stmt_param_not_root_error(self) -> None:
+        from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, ParamDecl, WildcardPattern
 
         let_x = _make_let("x", _make_intlit(1))
-        input_decl = InputDecl(name="y", annotation=None, span=_sp(3), node_id=_nid())
+        param_decl = ParamDecl(name="y", annotation=None, default=None, span=_sp(3), node_id=_nid())
         branch = CaseStmtBranch(
             pattern=WildcardPattern(span=_sp(), node_id=_nid()),
-            body=(input_decl,),
+            body=(param_decl,),
             span=_sp(),
             node_id=_nid(),
         )
@@ -883,7 +910,7 @@ class TestScopeViaAstConstruction:
             subject=_make_varref("x"), branches=(branch,), span=_sp(), node_id=_nid()
         )
         err = reject_program(let_x, case_stmt)
-        assert "input" in err.to_diagnostic().message.lower()
+        assert "param" in err.to_diagnostic().message.lower()
 
     # --- TryCatch scope ---
 
@@ -926,18 +953,18 @@ class TestScopeViaAstConstruction:
         err = reject_program(try_stmt, print_after)
         assert "err" in err.to_diagnostic().message
 
-    def test_try_catch_input_not_root_error(self) -> None:
-        from agm.agl.syntax.nodes import CatchClause, InputDecl, TryCatch
+    def test_try_catch_param_not_root_error(self) -> None:
+        from agm.agl.syntax.nodes import CatchClause, ParamDecl, TryCatch
 
-        input_decl = InputDecl(name="x", annotation=None, span=_sp(2), node_id=_nid())
+        param_decl = ParamDecl(name="x", annotation=None, default=None, span=_sp(2), node_id=_nid())
         clause = CatchClause(
             exc_type=None, binding=None, body=(_make_pass(),), span=_sp(), node_id=_nid()
         )
         try_stmt = TryCatch(
-            body=(input_decl,), handlers=(clause,), span=_sp(), node_id=_nid()
+            body=(param_decl,), handlers=(clause,), span=_sp(), node_id=_nid()
         )
         err = reject_program(try_stmt)
-        assert "input" in err.to_diagnostic().message.lower()
+        assert "param" in err.to_diagnostic().message.lower()
 
     # --- Expression resolution: operators, constructors, lists, dicts ---
 
@@ -1250,12 +1277,12 @@ class TestTypeDeclarationNotAtRoot:
         assert line == 1
         assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
 
-    def test_input_inline_do_body_rejected(self) -> None:
-        """do[2] input x until true — InputDecl in inline body must be rejected."""
-        err = reject_scope("do[2] input x until true\n")
+    def test_param_inline_do_body_rejected(self) -> None:
+        """do[2] param x until true — ParamDecl in inline body must be rejected."""
+        err = reject_scope("do[2] param x until true\n")
         line, msg = diag(err)
         assert line == 1
-        assert "input" in msg.lower()
+        assert "param" in msg.lower()
 
     # --- top-level still accepted ---
 
@@ -1527,7 +1554,7 @@ class TestParentScopeSeam:
 
     def test_set_on_parent_input_still_errors(self) -> None:
         """``set`` of a parent ``input`` binding is still rejected."""
-        session = parse_and_resolve("input spec")
+        session = parse_and_resolve("param spec")
         with pytest.raises(AglScopeError) as exc_info:
             resolve(parse_program("set spec = 2"), parent_scope=session.root_scope)
         assert "Cannot assign" in str(exc_info.value)

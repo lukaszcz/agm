@@ -66,7 +66,6 @@ from agm.agl.syntax.nodes import (
     FieldAccess,
     FieldDef,
     IfStmt,
-    InputDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -74,9 +73,11 @@ from agm.agl.syntax.nodes import (
     ListLit,
     LiteralPattern,
     NullLit,
+    ParamDecl,
     Pattern,
     PrintStmt,
     Program,
+    ProgramDecl,
     Raise,
     RecordDef,
     RetryPolicy,
@@ -411,8 +412,10 @@ class _Checker:
             self._check_binding(stmt)
         elif isinstance(stmt, SetStmt):
             self._check_set(stmt)
-        elif isinstance(stmt, InputDecl):
-            self._check_input(stmt)
+        elif isinstance(stmt, ParamDecl):
+            self._check_param(stmt)
+        elif isinstance(stmt, ProgramDecl):
+            pass  # no type-checking needed for program declaration
         elif isinstance(stmt, PrintStmt):
             # print accepts any type.
             self._check_expr(stmt.value, expected=None)
@@ -451,7 +454,7 @@ class _Checker:
         val_type = self._check_expr(stmt.value, expected=target_type)
         self._assert_assignable(val_type, target_type, stmt.span)
 
-    def _check_input(self, stmt: InputDecl) -> None:
+    def _check_param(self, stmt: ParamDecl) -> None:
         if stmt.annotation is not None:
             typ = self._env.resolve_type_expr(stmt.annotation, span=stmt.span)
         else:

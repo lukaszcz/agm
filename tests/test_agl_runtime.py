@@ -134,7 +134,7 @@ class TestRunBehavior:
 
     def test_run_with_inputs(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("input k\nprint k", inputs={"k": "value"})
+        result = rt.run("param k\nprint k", inputs={"k": "value"})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
@@ -203,26 +203,26 @@ class TestInputValidationRuntime:
 
     def test_missing_input_fails_not_ok(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("input spec\nprint spec", inputs={})
+        result = rt.run("param spec\nprint spec", inputs={})
         assert result.ok is False
         assert result.error is None  # host error, not AgL exception
 
     def test_missing_input_mentions_name(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("input spec\nprint spec", inputs={})
+        result = rt.run("param spec\nprint spec", inputs={})
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "spec" in msgs.lower()
 
     def test_undeclared_extra_fails(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("input a\nprint a", inputs={"a": "ok", "b": "extra"})
+        result = rt.run("param a\nprint a", inputs={"a": "ok", "b": "extra"})
         assert result.ok is False
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "b" in msgs.lower()
 
     def test_text_input_verbatim(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("input msg\nprint msg", inputs={"msg": "hello world"})
+        result = rt.run("param msg\nprint msg", inputs={"msg": "hello world"})
         assert result.ok is True
 
     def test_no_agent_called_on_input_failure(self) -> None:
@@ -233,19 +233,19 @@ class TestInputValidationRuntime:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run("input x\nlet y = ask \"Hi\"", inputs={})
+        rt.run("param x\nlet y = ask \"Hi\"", inputs={})
         assert calls == []
 
     def test_int_input_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("input n: int\nprint n", inputs={"n": 5})
+        result = rt.run("param n: int\nprint n", inputs={"n": 5})
         assert result.ok
         out = capsys.readouterr().out
         assert "5" in out
 
     def test_invalid_typed_input_fails(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("input n: int\nprint n", inputs={"n": "five"})
+        result = rt.run("param n: int\nprint n", inputs={"n": "five"})
         assert result.ok is False
         assert result.error is None
 
@@ -253,7 +253,7 @@ class TestInputValidationRuntime:
         """F3: the missing-input diagnostic carries the declaration's line."""
         rt = WorkflowRuntime()
         # ``input spec`` is on line 3; the diagnostic must report line 3, not 1.
-        src = "let a = 1\nlet b = 2\ninput spec\nprint spec"
+        src = "let a = 1\nlet b = 2\nparam spec\nprint spec"
         result = rt.run(src, inputs={})
         assert result.ok is False
         missing = [d for d in result.diagnostics if "spec" in d.message.lower()]
@@ -263,7 +263,7 @@ class TestInputValidationRuntime:
     def test_invalid_typed_input_reports_declaration_line(self) -> None:
         """F3 parity: the type-invalid diagnostic already reports the line."""
         rt = WorkflowRuntime()
-        src = "let a = 1\nlet b = 2\ninput n: int\nprint n"
+        src = "let a = 1\nlet b = 2\nparam n: int\nprint n"
         result = rt.run(src, inputs={"n": "five"})
         assert result.ok is False
         bad = [d for d in result.diagnostics if "n" in d.message.lower()]
@@ -614,7 +614,8 @@ class TestTokenConstants:
         assert tokens.KW_RECORD == "record"
         assert tokens.KW_ENUM == "enum"
         assert tokens.KW_TYPE == "type"
-        assert tokens.KW_INPUT == "input"
+        assert tokens.KW_PARAM == "param"
+        assert tokens.KW_PROGRAM == "program"
         assert tokens.KW_LET == "let"
         assert tokens.KW_VAR == "var"
         assert tokens.KW_SET == "set"
@@ -708,7 +709,7 @@ class TestDryRunCheckOnly:
     def test_check_only_input_validation_still_runs(self) -> None:
         rt = WorkflowRuntime()
         # Missing declared input is caught even under check_only.
-        result = rt.run("input msg\nprint msg", inputs={}, check_only=True)
+        result = rt.run("param msg\nprint msg", inputs={}, check_only=True)
         assert result.ok is False
         assert any("msg" in d.message for d in result.diagnostics)
 
@@ -721,7 +722,7 @@ class TestDecimalSerialization:
     ) -> None:
         rt = WorkflowRuntime()
         result = rt.run(
-            'input data: json\nprint data', inputs={"data": '{"a": 1.5}'}
+            'param data: json\nprint data', inputs={"data": '{"a": 1.5}'}
         )
         assert result.ok is True
         captured = capsys.readouterr()
@@ -786,7 +787,7 @@ class TestWarningsThreadedOnFailurePaths:
         monkeypatch.setattr(tc_mod, "check", check_with_warning)
 
         rt = WorkflowRuntime()
-        result = rt.run("input msg\nprint msg", inputs={})
+        result = rt.run("param msg\nprint msg", inputs={})
         assert result.ok is False
         # The warning is threaded onto its own channel even on a failure path.
         warning_messages = [d.message for d in result.warnings]
@@ -852,7 +853,7 @@ class TestInputBindingInvariant:
 
         rt = WorkflowRuntime()
         with pytest.raises(AssertionError, match="binding type"):
-            rt.run("input msg\nprint msg", inputs={"msg": "hi"})
+            rt.run("param msg\nprint msg", inputs={"msg": "hi"})
 
 
 # ---------------------------------------------------------------------------
@@ -926,7 +927,7 @@ class TestCapabilitiesBuiltFromRegistrations:
 
     def test_registered_renderer_makes_interpolation_typecheck(self) -> None:
         """``${x as fancy}`` typechecks ONLY when ``fancy`` is registered (F4)."""
-        src = 'input x\nlet y = ask "see ${x as fancy}"'
+        src = 'param x\nlet y = ask "see ${x as fancy}"'
 
         # Without registration: the renderer is unknown → static type error.
         rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
@@ -944,7 +945,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         """An ``as <name>`` for an unregistered renderer is rejected (F4)."""
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         result = rt.run(
-            'input x\nlet y = ask "${x as nope}"', inputs={"x": "hi"}
+            'param x\nlet y = ask "${x as nope}"', inputs={"x": "hi"}
         )
         assert result.ok is False
         assert any("nope" in d.message for d in result.diagnostics)
@@ -961,7 +962,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         assert isinstance(RENDERER_NAMES, frozenset)
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         # ``json`` is a built-in renderer → accepted with no registration.
-        result = rt.run('input x\nlet y = ask "${x as json}"', inputs={"x": "hi"})
+        result = rt.run('param x\nlet y = ask "${x as json}"', inputs={"x": "hi"})
         assert result.ok is True
 
 
@@ -1747,7 +1748,7 @@ class TestRuntimeErrorPaths:
         import decimal as _decimal
 
         result = WorkflowRuntime().run(
-            "input xs: list[decimal]\nprint xs\n",
+            "param xs: list[decimal]\nprint xs\n",
             inputs={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
         )
         assert result.ok is True
@@ -1791,7 +1792,7 @@ class TestRegisteredRendererInvoked:
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_renderer("myrender", my_render)
         result = rt.run(
-            'input x\nlet y = ask "see: ${x as myrender}"',
+            'param x\nlet y = ask "see: ${x as myrender}"',
             inputs={"x": "ignored-by-custom-renderer"},
         )
         assert result.ok is True
@@ -1820,7 +1821,7 @@ class TestRegisteredRendererInvoked:
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_renderer("tag", my_render)
         result = rt.run(
-            'input x\nlet y = ask "${x as tag}"', inputs={"x": "payload"}
+            'param x\nlet y = ask "${x as tag}"', inputs={"x": "payload"}
         )
         assert result.ok is True
         assert seen and seen[0][1] == "x"
@@ -1837,7 +1838,7 @@ class TestRegisteredRendererInvoked:
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_renderer("unused", lambda v, n: "NOPE")
         result = rt.run(
-            'input x\nlet y = ask "${x}"', inputs={"x": "hello"}
+            'param x\nlet y = ask "${x}"', inputs={"x": "hello"}
         )
         assert result.ok is True
         # Default text rendering is boundary-marked; the custom renderer is NOT

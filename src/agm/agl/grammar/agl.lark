@@ -81,7 +81,8 @@ block_stmts: stmt ((_NEWLINE | SEMICOLON) stmt)* (_NEWLINE | SEMICOLON)?
 closed_stmt: record_def
            | enum_def
            | type_alias
-           | input_decl
+           | param_decl
+           | program_decl
            | agent_decl
            | let_decl
            | var_decl
@@ -146,7 +147,8 @@ field_inline: field_name COLON type_expr
 // type_alias: "type" TYPE_NAME EQ type_expr (design §10.4)
 type_alias: "type" TYPE_NAME EQ type_expr
 
-input_decl: "input" VAR_NAME type_ann?
+param_decl:   "param" VAR_NAME type_ann? (EQ expr)?
+program_decl: "program" VAR_NAME
 
 // agent_decl: "agent" VAR_NAME (= "runner string")?
 // The optional runner string is a template; the transformer rejects any

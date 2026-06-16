@@ -238,7 +238,7 @@ class TestExecCommandInline:
     def test_inline_command_with_inputs(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        args = self._command_args("input msg\nprint msg", inputs=["msg=hi"])
+        args = self._command_args("param msg\nprint msg", inputs=["msg=hi"])
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
 
@@ -735,7 +735,7 @@ class TestExecCommandM1:
 
     def test_program_with_inputs_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("input msg\nprint msg\n")
+        agl_file.write_text("param msg\nprint msg\n")
         from agm.commands.args import ExecArgs
 
         args = ExecArgs(
@@ -752,7 +752,7 @@ class TestExecCommandM1:
 
     def test_missing_input_exits_1(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("input msg\nprint msg\n")
+        agl_file.write_text("param msg\nprint msg\n")
         from agm.commands.args import ExecArgs
 
         args = ExecArgs(
@@ -1284,7 +1284,7 @@ class TestJsonInputsCLI:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'record Point\n  x: int\n  y: int\n'
-            'input pt: Point\n'
+            'param pt: Point\n'
             'print pt.x\n'
         )
         from agm.commands.args import ExecArgs
@@ -1315,7 +1315,7 @@ class TestJsonInputsCLI:
         """A decimal-typed input provided as a JSON string is accepted."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'input price: decimal\n'
+            'param price: decimal\n'
             'print price\n'
         )
         from agm.commands.args import ExecArgs
@@ -1346,7 +1346,7 @@ class TestJsonInputsCLI:
         """A list-typed input provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'input tags: list[text]\n'
+            'param tags: list[text]\n'
             'print tags\n'
         )
         from agm.commands.args import ExecArgs
@@ -1380,7 +1380,7 @@ class TestJsonInputsCLI:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'record Point\n  x: int\n  y: int\n'
-            'input pt: Point\n'
+            'param pt: Point\n'
             'print pt.x\n'
         )
         from agm.commands.args import ExecArgs

@@ -60,7 +60,6 @@ from agm.agl.syntax import (
     FieldDef,
     IfBranch,
     IfStmt,
-    InputDecl,
     InterpSegment,
     IntLit,
     IntT,
@@ -74,12 +73,14 @@ from agm.agl.syntax import (
     NamedArg,
     NameT,
     NullLit,
+    ParamDecl,
     PassStmt,
     Pattern,
     PatternField,
     PrintStmt,
     # nodes – program
     Program,
+    ProgramDecl,
     Raise,
     # nodes – declarations
     RecordDef,
@@ -631,16 +632,30 @@ class TestDeclarations:
         node = TypeAlias(name="Names", type_expr=t, span=self._s(), node_id=1)
         assert node.name == "Names"
 
-    def test_input_decl_annotated(self) -> None:
+    def test_param_decl_annotated(self) -> None:
         t = TextT(span=self._s(), node_id=2)
-        node = InputDecl(name="spec", annotation=t, span=self._s(), node_id=1)
+        node = ParamDecl(name="spec", annotation=t, default=None, span=self._s(), node_id=1)
         assert node.name == "spec"
         assert node.annotation is t
 
-    def test_input_decl_unannotated(self) -> None:
-        node = InputDecl(name="spec", annotation=None, span=self._s(), node_id=1)
+    def test_param_decl_unannotated(self) -> None:
+        node = ParamDecl(name="spec", annotation=None, default=None, span=self._s(), node_id=1)
         assert node.name == "spec"
         assert node.annotation is None
+
+    def test_param_decl_with_default(self) -> None:
+        node = ParamDecl(
+            name="spec",
+            annotation=None,
+            default=BoolLit(value=True, span=self._s(), node_id=2),
+            span=self._s(),
+            node_id=1,
+        )
+        assert node.default is not None
+
+    def test_program_decl(self) -> None:
+        node = ProgramDecl(name="myprog", span=self._s(), node_id=1)
+        assert node.name == "myprog"
 
     def test_agent_decl_bare(self) -> None:
         node = AgentDecl(name="reviewer", runner=None, span=self._s(), node_id=1)
@@ -785,7 +800,8 @@ class TestVisitorWalk:
         enum_def = EnumDef(name="Opt", variants=(variant_def,), span=s, node_id=213)
 
         type_alias = TypeAlias(name="Names", type_expr=list_t, span=s, node_id=214)
-        input_decl = InputDecl(name="spec", annotation=text_t, span=s, node_id=215)
+        param_decl = ParamDecl(name="spec", annotation=text_t, default=None, span=s, node_id=215)
+        program_decl = ProgramDecl(name="myprog", span=s, node_id=216)
 
         # --- Literals ---
         int_lit = IntLit(value=1, span=s, node_id=300)
@@ -922,7 +938,7 @@ class TestVisitorWalk:
         expr_stmt_no_policy = ExprStmt(expr=agent_call_no_policy, span=s, node_id=652)
 
         body = (
-            record_def, enum_def, type_alias, input_decl,
+            record_def, enum_def, type_alias, param_decl, program_decl,
             let_decl, let_with_type, var_decl, var_with_type,
             set_stmt, pass_stmt, print_stmt,
             expr_stmt_agent, expr_stmt_fa, expr_stmt_bin, expr_stmt_not,
@@ -965,7 +981,7 @@ class TestVisitorWalk:
         walk(prog, visited.append)
         kinds = {type(n) for n in visited}
 
-        decl_kinds = {RecordDef, EnumDef, TypeAlias, InputDecl, FieldDef, VariantDef}
+        decl_kinds = {RecordDef, EnumDef, TypeAlias, ParamDecl, ProgramDecl, FieldDef, VariantDef}
         for kind in decl_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
 
@@ -978,14 +994,36 @@ class TestVisitorWalk:
         # AgentDecl is a leaf — only itself is visited.
         assert visited == [node]
 
-    def test_walk_input_decl_without_annotation(self) -> None:
+    def test_walk_param_decl_without_annotation_or_default(self) -> None:
         from agm.agl.syntax.visitor import walk
 
         s = span()
-        node = InputDecl(name="spec", annotation=None, span=s, node_id=1)
+        node = ParamDecl(name="spec", annotation=None, default=None, span=s, node_id=1)
         visited: list[object] = []
         walk(node, visited.append)
-        # Only the InputDecl itself is visited; the missing annotation adds no child.
+        # Only the ParamDecl itself is visited; no annotation or default.
+        assert visited == [node]
+
+    def test_walk_param_decl_with_default(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        s = span()
+        default = BoolLit(value=True, span=s, node_id=2)
+        node = ParamDecl(name="spec", annotation=None, default=default, span=s, node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        # The default expression must also be visited.
+        assert node in visited
+        assert default in visited
+
+    def test_walk_program_decl_is_leaf(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        s = span()
+        node = ProgramDecl(name="myprog", span=s, node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        # ProgramDecl is a leaf — only itself is visited.
         assert visited == [node]
 
     def test_walk_visits_all_expr_kinds(self) -> None:

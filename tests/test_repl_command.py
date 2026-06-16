@@ -377,8 +377,8 @@ class TestReplInputPreseed:
         repl_command.run(_args(inputs=["count=41"]))
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
-        # The pending value is applied when the input is later declared.
-        session.eval_entry("input count: int")
+        # The pending value is applied when the param is later declared.
+        session.eval_entry("param count: int")
         r = session.eval_entry("count + 1")
         assert r.ok
         from agm.agl.eval.values import IntValue

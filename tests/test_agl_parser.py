@@ -56,7 +56,6 @@ from agm.agl.syntax import (
     FieldDef,
     IfBranch,
     IfStmt,
-    InputDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -65,10 +64,12 @@ from agm.agl.syntax import (
     LiteralPattern,
     NamedArg,
     NullLit,
+    ParamDecl,
     PassStmt,
     PatternField,
     PrintStmt,
     Program,
+    ProgramDecl,
     Raise,
     RecordDef,
     RetryPolicy,
@@ -303,39 +304,99 @@ class TestSetStmt:
 
 
 # ---------------------------------------------------------------------------
-# InputDecl
+# ParamDecl (formerly InputDecl)
 # ---------------------------------------------------------------------------
 
 
-class TestInputDecl:
-    def test_input_no_annotation(self) -> None:
-        stmt = _parse_one("input name")
-        assert isinstance(stmt, InputDecl)
+class TestParamDecl:
+    def test_param_no_annotation(self) -> None:
+        stmt = _parse_one("param name")
+        assert isinstance(stmt, ParamDecl)
         assert stmt.name == "name"
         assert stmt.annotation is None
+        assert stmt.default is None
 
-    def test_input_with_text_ann(self) -> None:
-        stmt = _parse_one("input spec: text")
-        assert isinstance(stmt, InputDecl)
+    def test_param_with_text_ann(self) -> None:
+        stmt = _parse_one("param spec: text")
+        assert isinstance(stmt, ParamDecl)
         assert stmt.name == "spec"
         assert isinstance(stmt.annotation, TextT)
+        assert stmt.default is None
 
-    def test_input_with_json_ann(self) -> None:
-        stmt = _parse_one("input data: json")
-        assert isinstance(stmt, InputDecl)
+    def test_param_with_json_ann(self) -> None:
+        stmt = _parse_one("param data: json")
+        assert isinstance(stmt, ParamDecl)
         assert isinstance(stmt.annotation, JsonT)
 
-    def test_input_with_named_type(self) -> None:
-        stmt = _parse_one("input spec: MyType")
-        assert isinstance(stmt, InputDecl)
+    def test_param_with_named_type(self) -> None:
+        stmt = _parse_one("param spec: MyType")
+        assert isinstance(stmt, ParamDecl)
         assert isinstance(stmt.annotation, NameT)
         assert stmt.annotation.name == "MyType"
 
-    def test_input_with_list_type(self) -> None:
-        stmt = _parse_one("input items: list[text]")
-        assert isinstance(stmt, InputDecl)
+    def test_param_with_list_type(self) -> None:
+        stmt = _parse_one("param items: list[text]")
+        assert isinstance(stmt, ParamDecl)
         assert isinstance(stmt.annotation, ListT)
         assert isinstance(stmt.annotation.elem, TextT)
+
+    def test_param_with_default(self) -> None:
+        stmt = _parse_one('param name = "fallback"')
+        assert isinstance(stmt, ParamDecl)
+        assert stmt.name == "name"
+        assert stmt.annotation is None
+        assert isinstance(stmt.default, StringLit)
+        assert stmt.default.value == "fallback"
+
+    def test_param_with_annotation_and_default(self) -> None:
+        stmt = _parse_one("param count: int = 42")
+        assert isinstance(stmt, ParamDecl)
+        assert stmt.name == "count"
+        assert isinstance(stmt.annotation, IntT)
+        assert isinstance(stmt.default, IntLit)
+        assert stmt.default.value == 42
+
+    def test_param_with_typed_default(self) -> None:
+        stmt = _parse_one("param flag: bool = true")
+        assert isinstance(stmt, ParamDecl)
+        assert isinstance(stmt.annotation, BoolT)
+        assert isinstance(stmt.default, BoolLit)
+        assert stmt.default.value is True
+
+
+# ---------------------------------------------------------------------------
+# ProgramDecl
+# ---------------------------------------------------------------------------
+
+
+class TestProgramDecl:
+    def test_program_decl(self) -> None:
+        stmt = _parse_one("program myprog")
+        assert isinstance(stmt, ProgramDecl)
+        assert stmt.name == "myprog"
+
+    def test_program_decl_in_program(self) -> None:
+        prog = parse_program("program myapp\nparam x\nprint x")
+        assert isinstance(prog.body[0], ProgramDecl)
+        assert prog.body[0].name == "myapp"
+
+
+# ---------------------------------------------------------------------------
+# input is now VAR_NAME (no longer a keyword)
+# ---------------------------------------------------------------------------
+
+
+class TestInputNowVarName:
+    def test_input_as_variable_name(self) -> None:
+        """'input' is now a plain identifier, not a keyword."""
+        stmt = _parse_one('let input = "x"')
+        assert isinstance(stmt, LetDecl)
+        assert stmt.name == "input"
+
+    def test_input_as_var_ref(self) -> None:
+        prog = parse_program('let input = "x"\nprint input')
+        assert isinstance(prog.body[0], LetDecl)
+        assert isinstance(prog.body[1], PrintStmt)
 
 
 # ---------------------------------------------------------------------------
@@ -743,9 +804,9 @@ class TestMultiStatement:
         assert len(prog.body) == 1
 
     def test_three_statements(self) -> None:
-        prog = parse_program("input x\nlet y = x\nprint y")
+        prog = parse_program("param x\nlet y = x\nprint y")
         assert len(prog.body) == 3
-        assert isinstance(prog.body[0], InputDecl)
+        assert isinstance(prog.body[0], ParamDecl)
         assert isinstance(prog.body[1], LetDecl)
         assert isinstance(prog.body[2], PrintStmt)
 
@@ -2244,12 +2305,12 @@ class TestDoUntil:
         assert len(stmt.body) == 1
         assert isinstance(stmt.body[0], EnumDef)
 
-    def test_inline_input_decl_survives_to_ast(self) -> None:
-        """do[2] input x until true — InputDecl must appear in body, not be dropped."""
-        stmt = _parse_one("do[2] input x until true")
+    def test_inline_param_decl_survives_to_ast(self) -> None:
+        """do[2] param x until true — ParamDecl must appear in body, not be dropped."""
+        stmt = _parse_one("do[2] param x until true")
         assert isinstance(stmt, DoUntil)
         assert len(stmt.body) == 1
-        assert isinstance(stmt.body[0], InputDecl)
+        assert isinstance(stmt.body[0], ParamDecl)
 
     def test_bare_case_expr_after_until_rejected(self) -> None:
         """bare case_expr after until must be rejected (bar-safe violation)."""

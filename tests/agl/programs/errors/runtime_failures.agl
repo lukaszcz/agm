@@ -4,8 +4,8 @@ enum Coin
   | Heads
   | Tails
 
-input d: int
-input mode
+param d: int
+param mode
 
 agent tosser
 

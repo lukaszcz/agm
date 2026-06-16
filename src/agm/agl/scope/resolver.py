@@ -22,12 +22,12 @@ Scope rules (design §9, plan §6.2)
 4. Pattern variables and catch binders are immutable and branch-local.
 5. ``do`` body bindings are visible to the ``until`` condition but not after
    the loop.
-6. ``input`` declarations are only valid at the program root; they bind an
+6. ``param`` declarations are only valid at the program root; they bind an
    immutable root-scope name.  Redeclaration at the root like any other name.
 
 Contextual keywords (design §2.1, §4.12)
 -----------------------------------------
-``ask`` and ``exec`` cannot be declared with ``let``/``var``/``input`` and
+``ask`` and ``exec`` cannot be declared with ``let``/``var``/``param`` and
 cannot shadow existing builtins.  In *call position* (``AgentCall.agent``)
 they always resolve to ``CallKind.default_agent`` and ``CallKind.shell_exec``
 respectively.  Any other ``AgentCall.agent`` name resolves to
@@ -68,12 +68,13 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     IfBranch,
     IfStmt,
-    InputDecl,
     InterpSegment,
     LetDecl,
+    ParamDecl,
     PatternField,
     PrintStmt,
     Program,
+    ProgramDecl,
     Raise,
     RecordDef,
     SetStmt,
@@ -95,7 +96,7 @@ _RESERVED_NAMES: frozenset[str] = frozenset({"ask", "exec"})
 # ``let``.  ``var`` is mutable so it never reaches this table.
 _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.let_binding: "it was declared with 'let'",
-    BinderKind.input_binding: "it is an 'input' binding",
+    BinderKind.param_binding: "it is a 'param' binding",
     BinderKind.catch_binder: "it is a catch binder",
     BinderKind.pattern_binding: "it is a pattern binding",
 }
@@ -297,8 +298,10 @@ class _Resolver:
             self._resolve_var(stmt)
         elif isinstance(stmt, SetStmt):
             self._resolve_set(stmt)
-        elif isinstance(stmt, InputDecl):
-            self._resolve_input(stmt)
+        elif isinstance(stmt, ParamDecl):
+            self._resolve_param(stmt)
+        elif isinstance(stmt, ProgramDecl):
+            self._resolve_program_decl(stmt)
         elif isinstance(stmt, AgentDecl):
             self._resolve_agent_decl(stmt)
         elif isinstance(stmt, PrintStmt):
@@ -363,22 +366,33 @@ class _Resolver:
         self._resolution[stmt.node_id] = ref
         self._resolve_expr(stmt.value)
 
-    def _resolve_input(self, stmt: InputDecl) -> None:
+    def _resolve_param(self, stmt: ParamDecl) -> None:
         if not self._at_root:
             raise AglScopeError(
-                f"'input' declarations are only allowed at the program root, "
-                f"not inside a nested block (found 'input {stmt.name}' here).",
+                f"'param' declarations are only allowed at the program root, "
+                f"not inside a nested block (found 'param {stmt.name}' here).",
                 span=stmt.span,
             )
         self._check_not_reserved(stmt.name, stmt.span)
+        if stmt.default is not None:
+            self._resolve_expr(stmt.default)
         ref = BindingRef(
             name=stmt.name,
             mutable=False,
             decl_span=stmt.span,
             decl_node_id=stmt.node_id,
-            kind=BinderKind.input_binding,
+            kind=BinderKind.param_binding,
         )
         self._define(stmt.name, ref)
+
+    def _resolve_program_decl(self, stmt: ProgramDecl) -> None:
+        """Validate program declarations (root-only, no binding introduced)."""
+        if not self._at_root:
+            raise AglScopeError(
+                f"'program' declarations are only allowed at the program root, "
+                f"not inside a nested block (found 'program {stmt.name}' here).",
+                span=stmt.span,
+            )
 
     def _resolve_type_decl(self, stmt: RecordDef | EnumDef | TypeAlias) -> None:
         """Reject type declarations that appear outside the program root."""

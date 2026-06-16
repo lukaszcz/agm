@@ -7,9 +7,9 @@ enum E
   | A
   | B(t: text)
 
-input x: int
-input y: decimal
-input word
+param x: int
+param y: decimal
+param word
 
 print x = 3
 print x != 3

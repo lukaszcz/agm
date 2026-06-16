@@ -8,7 +8,7 @@ enum Pick
   | One(item: Item)
   | Nothing
 
-input who
+param who
 
 let item = Item(name: "bolt", qty: 7)
 let items = ["alpha", "beta"]

@@ -1,6 +1,6 @@
 # Nested try, rethrow with `raise e`, binderless catch, and an exception that no
 # clause matches propagating out of the program.
-input mode
+param mode
 
 try
   try

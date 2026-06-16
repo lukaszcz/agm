@@ -64,7 +64,8 @@ TEMPLATE_END = "TEMPLATE_END"
 KW_RECORD = "record"
 KW_ENUM = "enum"
 KW_TYPE = "type"
-KW_INPUT = "input"
+KW_PARAM = "param"
+KW_PROGRAM = "program"
 KW_AGENT = "agent"
 KW_LET = "let"
 KW_VAR = "var"
@@ -96,7 +97,8 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_RECORD,
         KW_ENUM,
         KW_TYPE,
-        KW_INPUT,
+        KW_PARAM,
+        KW_PROGRAM,
         KW_AGENT,
         KW_LET,
         KW_VAR,

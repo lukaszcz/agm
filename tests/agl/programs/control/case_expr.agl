@@ -5,7 +5,7 @@ enum Grade
   | Mid(score: int)
   | Low
 
-input bonus: int
+param bonus: int
 
 agent grader
 

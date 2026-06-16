@@ -1,6 +1,6 @@
 # do[N]...until: post-test, loop-carried state through outer vars, iteration
 # bindings visible to the condition, MaxIterationsExceeded on exhaustion.
-input target: int
+param target: int
 
 agent oracle
 

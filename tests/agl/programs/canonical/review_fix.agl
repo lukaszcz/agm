@@ -1,5 +1,5 @@
 # The canonical example, verbatim.
-input spec: text
+param spec: text
 
 record Issue
   title: text

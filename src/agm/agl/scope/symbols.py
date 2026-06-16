@@ -37,8 +37,8 @@ class BinderKind(enum.Enum):
         A ``let`` declaration (immutable).
     ``var_binding``
         A ``var`` declaration (mutable).
-    ``input_binding``
-        An ``input`` declaration (immutable, root-scope).
+    ``param_binding``
+        A ``param`` declaration (immutable, root-scope).
     ``catch_binder``
         The binder introduced by a ``catch e`` clause (immutable, branch-local).
     ``pattern_binding``
@@ -47,7 +47,7 @@ class BinderKind(enum.Enum):
 
     let_binding = "let_binding"
     var_binding = "var_binding"
-    input_binding = "input_binding"
+    param_binding = "param_binding"
     catch_binder = "catch_binder"
     pattern_binding = "pattern_binding"
 
@@ -86,7 +86,7 @@ class BindingRef:
         Source span of the declaration statement (used in error messages).
     ``decl_node_id``
         The ``node_id`` of the declaration node (``LetDecl``, ``VarDecl``,
-        ``InputDecl``, ``VarPattern``, or ``CatchClause``).
+        ``ParamDecl``, ``VarPattern``, or ``CatchClause``).
     ``kind``
         How the binding was introduced (``let``/``var``/``input``/catch
         binder/pattern binding).  Drives the precise ``set`` rejection message

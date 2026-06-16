@@ -292,6 +292,17 @@ class TestDispatchMeta:
             # Force cache rebuild by resetting (implementation detail: the cache
             # must reflect removal too — call meta_command_names after removal).
 
+    def test_command_index_rebuilds_when_cache_cleared(self) -> None:
+        # Verify the lazy-rebuild path in _command_index() by temporarily clearing
+        # the cache and calling dispatch (which uses _command_index internally).
+        original = meta_mod._command_index_cache
+        meta_mod._command_index_cache = None
+        try:
+            outcome = meta_mod.dispatch_meta(":help", _ctx())
+            assert outcome.text is not None
+        finally:
+            meta_mod._command_index_cache = original
+
 
 # ---------------------------------------------------------------------------
 # Issue #4: _handle_set uses parse_key_value
@@ -301,7 +312,7 @@ class TestDispatchMeta:
 class TestSetUsesParseKeyValue:
     def test_set_valid(self) -> None:
         s = ReplSession()
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         outcome = meta_mod.dispatch_meta(":set count=5", _session_ctx(s))
         assert outcome.text is not None
         assert "5" in outcome.text
@@ -451,7 +462,7 @@ class TestInputs:
 
     def test_inputs_shows_unset_then_set(self) -> None:
         s = ReplSession()
-        s.eval_entry("input name: text")
+        s.eval_entry("param name: text")
         out_unset = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
         assert out_unset is not None
         assert "name : text = <unset>" in out_unset
@@ -464,7 +475,7 @@ class TestInputs:
 class TestSet:
     def test_set_declared_input(self) -> None:
         s = ReplSession()
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         outcome = meta_mod.dispatch_meta(":set count=42", _session_ctx(s))
         assert "42" in (outcome.text or "")
         r = s.eval_entry("count + 1")
@@ -479,7 +490,7 @@ class TestSet:
 
     def test_set_bad_value_clean_error(self) -> None:
         s = ReplSession()
-        s.eval_entry("input count: int")
+        s.eval_entry("param count: int")
         outcome = meta_mod.dispatch_meta(":set count=oops", _session_ctx(s))
         assert outcome.text is not None
 

@@ -1,8 +1,8 @@
 # `in` membership (list element / dict key / substring) and boolean composition
 # with precedence.
-input needle
-input numbers: list[int]
-input k: int
+param needle
+param numbers: list[int]
+param k: int
 
 let words = ["alpha", "beta", "gamma"]
 let scores = {alpha: 1, beta: 2}

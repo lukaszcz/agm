@@ -1,6 +1,6 @@
 # Type aliases are transparent; type declarations are collected
 # program-wide, so they may appear after their first use.
-input verdict: Status
+param verdict: Status
 
 agent judge
 

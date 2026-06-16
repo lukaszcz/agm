@@ -441,22 +441,32 @@ class WorkflowRuntime:
         Side-effect-free and NON-raising: any parse (``AglSyntaxError``) or scope
         (``AglScopeError``) failure — and any unexpected error in those passes —
         is captured into :attr:`PreparedProgram.diagnostics` rather than raised,
-        with ``program`` / ``resolved`` left ``None``.
+        with ``program`` / ``resolved`` left ``None``.  TAB advisories come from
+        the parse's single lex pass (no separate TAB scan).
         """
-        from agm.agl.lexer import lex_tab_warnings
+        from agm.agl.lexer import tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program
         from agm.agl.scope import AglScopeError, resolve
 
-        warnings: tuple[Diagnostic, ...] = tuple(lex_tab_warnings(source))
-
-        try:
-            program = parse_program(source)
-        except AglSyntaxError as exc:
-            return PreparedProgram(source, None, None, (exc.to_diagnostic(),), warnings)
-        except Exception as exc:
-            return PreparedProgram(
-                source, None, None, (Diagnostic(message=str(exc), line=1),), warnings
-            )
+        # The collector captures the lexer's TAB advisories during the parse —
+        # populated even when the parse fails (the scan completes before the
+        # grammar is consulted), so they surface on every return path.
+        with tab_warning_collector() as tab_sink:
+            try:
+                program = parse_program(source)
+            except AglSyntaxError as exc:
+                return PreparedProgram(
+                    source, None, None, (exc.to_diagnostic(),), tuple(tab_sink)
+                )
+            except Exception as exc:
+                return PreparedProgram(
+                    source,
+                    None,
+                    None,
+                    (Diagnostic(message=str(exc), line=1),),
+                    tuple(tab_sink),
+                )
+        warnings: tuple[Diagnostic, ...] = tuple(tab_sink)
 
         try:
             resolved = resolve(program)

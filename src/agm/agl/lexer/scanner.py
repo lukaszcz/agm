@@ -8,7 +8,7 @@ The scanner handles:
 - Template mode: single- and triple-quoted string literals with
   ``${...}`` interpolation and the JSON escape set plus ``\\$``.
 - Layout signalling: ``_NEWLINE`` tokens carrying the next real line's leading
-  indentation width (tabs expanded at ``tab_len=8``, comments skipped).
+  indentation width (tabs expanded at ``tab_len=4``, comments skipped).
 
 The layout filter (``layout.py``) consumes this stream and injects
 ``_INDENT``/``_DEDENT`` tokens; together they form the full token stream fed
@@ -79,7 +79,7 @@ from agm.agl.lexer.tokens import (
 # Constants
 # ---------------------------------------------------------------------------
 
-_TAB_LEN = 8
+_TAB_LEN = 4
 
 # Single-char operator table (must not overlap with maximal-munch multi-char ops)
 _SINGLE_OPS: dict[str, str] = {
@@ -164,9 +164,43 @@ class _Scanner:
         self._pos = 0
         self._line = 1
         self._col = 1  # 1-based column
+        # Offset of the first character of the current line (after newline
+        # normalization).  Used to report TAB warnings with a SIMPLE 1-based
+        # column (``pos - line_start + 1``) — distinct from ``self._col``, which
+        # is tab-EXPANDED after indentation.  Updated only at newline boundaries.
+        self._line_start_pos = 0
+        # TAB-character advisories accumulated during this single scan (one per
+        # ``\t`` in code, indentation, a comment, or an interpolation hole —
+        # literal string content is exempt).  The lexer is the sole producer of
+        # these; there is no separate TAB scan pass.
+        self._tab_warnings: list[Diagnostic] = []
         # True once at least one real (non-layout) token has been emitted; used
         # to suppress the leading ``_NEWLINE`` of comment/blank-only prefixes.
         self._emitted_real = False
+
+    @property
+    def tab_warnings(self) -> list[Diagnostic]:
+        """TAB advisories collected so far during the scan."""
+        return self._tab_warnings
+
+    def _record_tab(self) -> None:
+        """Record a TAB advisory for the ``\\t`` at the current scan position.
+
+        Callers invoke this with ``self._pos`` pointing AT the tab character;
+        the reported column is the simple (non-expanded) 1-based offset within
+        the current line.
+        """
+        col = self._pos - self._line_start_pos + 1
+        self._tab_warnings.append(
+            Diagnostic(
+                message=(
+                    f"TAB character at column {col} is not allowed;"
+                    " use spaces for indentation"
+                ),
+                line=self._line,
+                severity="warning",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -181,12 +215,17 @@ class _Scanner:
     def _at_end(self) -> bool:
         return self._pos >= len(self._src)
 
-    def _advance(self) -> str:
+    def _advance(self, *, in_string: bool = False) -> str:
         ch = self._src[self._pos]
+        # A TAB inside string-literal content is allowed; everywhere else (code,
+        # indentation, comments, interpolation) a literal TAB is advised against.
+        if ch == "\t" and not in_string:
+            self._record_tab()
         self._pos += 1
         if ch == "\n":
             self._line += 1
             self._col = 1
+            self._line_start_pos = self._pos
         else:
             self._col += 1
         return ch
@@ -236,20 +275,27 @@ class _Scanner:
             col = 0
             saved_pos = self._pos
             saved_line = self._line
+            # TAB advisories recorded by THIS probe iteration; dropped if the
+            # line turns out to be a whitespace-only EOF tail (restored below
+            # and re-scanned in code mode, which records them once).
+            saved_warn_count = len(self._tab_warnings)
             # Measure leading horizontal whitespace on this line
             while self._pos < len(self._src) and self._src[self._pos] in (" ", "\t"):
                 ch = self._src[self._pos]
                 if ch == "\t":
                     col += _TAB_LEN - (col % _TAB_LEN)
+                    self._record_tab()
                 else:
                     col += 1
                 self._pos += 1
 
             # What's at the current position after whitespace?
             if self._pos >= len(self._src):
-                # EOF — no real line follows; restore position
+                # EOF — no real line follows; restore position and drop the
+                # probe's TAB advisories (they re-record on the code-mode rescan).
                 self._pos = saved_pos
                 self._line = saved_line
+                del self._tab_warnings[saved_warn_count:]
                 return 0
 
             ch = self._src[self._pos]
@@ -258,15 +304,19 @@ class _Scanner:
                 self._pos += 1
                 self._line += 1
                 self._col = 1
+                self._line_start_pos = self._pos
                 continue
             if ch == "#":
                 # Comment-only line — skip to end of line and try next
                 while self._pos < len(self._src) and self._src[self._pos] != "\n":
+                    if self._src[self._pos] == "\t":
+                        self._record_tab()
                     self._pos += 1
                 if self._pos < len(self._src):
                     self._pos += 1
                     self._line += 1
                     self._col = 1
+                    self._line_start_pos = self._pos
                 continue
             # Real content line found; update column counter
             self._col = col + 1
@@ -400,7 +450,8 @@ class _Scanner:
                 frag_start_line = self._line
                 frag_start_col = self._col
             else:
-                self._advance()
+                # Literal string content: a TAB here is allowed (not advised).
+                self._advance(in_string=True)
                 buf.append(ch)
 
     def _scan_interp_code(self) -> Iterator[Token]:
@@ -529,7 +580,8 @@ class _Scanner:
                 lit_start_line = self._line
                 lit_start_col = self._col
             else:
-                self._advance()
+                # Literal string content: a TAB here is allowed (not advised).
+                self._advance(in_string=True)
                 current_lit.append(ch)
 
         # Build combined literal text (literals only — holes contribute zero
@@ -854,31 +906,17 @@ def scan(source: str) -> Iterator[Token]:
 def lex_tab_warnings(source: str) -> list[Diagnostic]:
     """Return a ``Diagnostic`` warning for every TAB character in *source*.
 
-    Newlines are normalised (CRLF/CR → LF) before scanning so that line
-    numbers match those reported by the main scanner.  One warning is emitted
-    per ``\\t`` character, regardless of whether it appears in code or inside a
-    string literal.
+    Drives the real lexer scan (the single source of TAB-detection truth) and
+    returns the advisories it accumulated — there is NO separate TAB scan pass.
+    One warning is emitted per ``\\t`` in code, indentation, a comment, or an
+    interpolation hole (literal string content is exempt), with a simple 1-based
+    column.
+
+    The full scan over *source* must succeed (lex-valid input); callers that may
+    pass lex-invalid source should instead read advisories from the parse path
+    (``tab_warning_collector``), which surfaces whatever was collected.
     """
-    text = normalize_newlines(source)
-    warnings: list[Diagnostic] = []
-    line = 1
-    col = 1
-    for ch in text:
-        if ch == "\n":
-            line += 1
-            col = 1
-        elif ch == "\t":
-            warnings.append(
-                Diagnostic(
-                    message=(
-                        f"TAB character at column {col} is not allowed;"
-                        " use spaces for indentation"
-                    ),
-                    line=line,
-                    severity="warning",
-                )
-            )
-            col += 1
-        else:
-            col += 1
-    return warnings
+    scanner = _Scanner(source)
+    for _ in scanner.scan():
+        pass
+    return scanner.tab_warnings

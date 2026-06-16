@@ -802,7 +802,7 @@ class TestNewlineTokenValue:
         assert "_NEWLINE" not in types
 
     def test_tab_expansion_causes_indent(self) -> None:
-        # Tab expands to tab_len=8 boundary; a single tab at col 0 gives width 8
+        # Tab expands to tab_len=4 boundary; a single tab at col 0 gives width 4
         # which is deeper than 0, so _NEWLINE becomes _INDENT
         source = "a\n\tb"
         result = tok(source)
@@ -1525,12 +1525,36 @@ class TestTabWarnings:
         assert len(warnings) == 1
         assert warnings[0].line == 2
 
-    def test_tab_in_string_literal_context_still_warned(self) -> None:
-        # A literal tab inside a string is still a tab character in the source.
-        source = 'let x = "hello\tworld"'
-        warnings = lex_tab_warnings(source)
+    def test_tab_in_string_literal_is_allowed(self) -> None:
+        # A literal TAB inside string content is allowed (only code TABs are
+        # advised against), so it produces no warning.
+        assert lex_tab_warnings('let x = "hello\tworld"') == []
+
+    def test_tab_in_triple_quoted_string_is_allowed(self) -> None:
+        # Same for triple-quoted templates: TABs in the literal body are fine.
+        assert lex_tab_warnings('let x = """\n\tindented body\n"""') == []
+
+    def test_tab_in_interpolation_is_code_and_warned(self) -> None:
+        # An interpolation hole is CODE, so a TAB inside ``${ ... }`` warns even
+        # though it sits within a string literal.
+        warnings = lex_tab_warnings('let y = 1\nlet x = "${y\t}"')
         assert len(warnings) == 1
-        assert warnings[0].line == 1
+        assert warnings[0].line == 2
+
+    def test_tab_in_comment_only_line_still_warned(self) -> None:
+        # A TAB inside a comment-only line (skipped during indentation
+        # measurement) is still reported, on the comment's line.
+        warnings = lex_tab_warnings("let x = 1\n#\tcomment\nlet y = 2")
+        assert len(warnings) == 1
+        assert warnings[0].line == 2
+
+    def test_tab_in_trailing_whitespace_only_line_warned_once(self) -> None:
+        # A whitespace-only EOF tail containing a TAB is reported exactly once
+        # (the indentation probe rolls back so the code-mode rescan does not
+        # double-count it).
+        warnings = lex_tab_warnings("let x = 1\n\t")
+        assert len(warnings) == 1
+        assert warnings[0].line == 2
 
     def test_warnings_are_diagnostic_instances(self) -> None:
         warnings = lex_tab_warnings("\tx = 1")

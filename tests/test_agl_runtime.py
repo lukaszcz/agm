@@ -1441,25 +1441,14 @@ class TestRuntimeErrorPaths:
         assert result.ok is False
         assert any("unexpected parse error" in d.message for d in result.diagnostics)
 
-    def test_tab_warning_included_even_on_parse_failure(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Tab warnings are collected before parsing, so they survive a parse failure."""
-        import agm.agl.parser as parser_mod
-        from agm.agl.parser.errors import AglSyntaxError
-        from agm.agl.syntax.spans import SourceSpan
-
-        def bad_parse(source: str) -> object:
-            raise AglSyntaxError(
-                "syntax error",
-                span=SourceSpan(1, 1, 1, 1, 0, 0),
-                filename="<test>",
-            )
-
-        monkeypatch.setattr(parser_mod, "parse_program", bad_parse)
+    def test_tab_warning_included_even_on_parse_failure(self) -> None:
+        """Tab advisories come from the lexer's single scan, so they survive a
+        parse failure: the scan completes (recording the TAB) before the grammar
+        rejects the token stream."""
         rt = WorkflowRuntime()
-        result = rt.run("\tlet x = 1")  # tab + parse error
+        result = rt.run("\tprint")  # leading TAB, then an incomplete `print`
         assert result.ok is False
+        assert result.diagnostics  # genuine parse error surfaced
         tab_warns = [w for w in result.warnings if w.severity == "warning"]
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 1

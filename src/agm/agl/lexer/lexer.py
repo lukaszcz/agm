@@ -28,13 +28,41 @@ and downstream tooling rely on.
 
 from __future__ import annotations
 
+import contextvars
+from contextlib import contextmanager
 from typing import Iterator
 
 from lark.lexer import Lexer, LexerState, Token
 
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer.layout import layout
-from agm.agl.lexer.scanner import scan
+from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import GRAMMAR_TOKEN_REMAP, INT, LOOP_BOUND, LSQB, RSQB
+
+# Ambient sink for TAB advisories produced during a Lark-driven parse.  The
+# lexer scans the source exactly once (no separate TAB pass); when a sink is
+# active, ``AglLexer.lex`` deposits the scan's TAB advisories into it so the
+# caller (e.g. ``WorkflowRuntime.prepare``) can surface them alongside parse
+# diagnostics.  A ``ContextVar`` keeps nested/reentrant parses isolated.
+_TAB_WARNING_SINK: contextvars.ContextVar[list[Diagnostic] | None] = (
+    contextvars.ContextVar("agl_tab_warning_sink", default=None)
+)
+
+
+@contextmanager
+def tab_warning_collector() -> Iterator[list[Diagnostic]]:
+    """Collect TAB advisories produced by parses within the ``with`` block.
+
+    Yields a list that ``AglLexer.lex`` appends to as it scans.  The list is
+    populated even when the parse fails (the scan runs to completion before the
+    grammar is consulted), so callers get every TAB advisory on every path.
+    """
+    sink: list[Diagnostic] = []
+    token = _TAB_WARNING_SINK.set(sink)
+    try:
+        yield sink
+    finally:
+        _TAB_WARNING_SINK.reset(token)
 
 
 def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
@@ -128,4 +156,15 @@ class AglLexer(Lexer):
         else:
             # TextSlice: use the underlying .text attribute.
             source = str(raw.text) if hasattr(raw, "text") else str(raw)
-        return _remap(layout(scan(source)))
+        # Drive the scan to completion up front (materialized) so the single
+        # lex pass records EVERY TAB advisory before the grammar is consulted —
+        # the advisories are then complete even if the parse later fails.  The
+        # ``finally`` deposits whatever was collected, including on a LexError.
+        scanner = _Scanner(source)
+        try:
+            tokens = list(_remap(layout(scanner.scan())))
+        finally:
+            sink = _TAB_WARNING_SINK.get()
+            if sink is not None:
+                sink.extend(scanner.tab_warnings)
+        return iter(tokens)

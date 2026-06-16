@@ -231,25 +231,25 @@ class ReplSession:
         full success (atomic).  ``check_only`` runs the full static pipeline but
         never evaluates, never promotes, and never advances the node-id counter.
         """
-        from agm.agl.lexer import lex_tab_warnings
+        from agm.agl.lexer import tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
         from agm.agl.scope import AglScopeError, resolve
         from agm.agl.typecheck import AglTypeError, check
 
         host_env = self._runtime.host_environment()
 
-        # TAB advisories are computed from the raw source up front so they surface
-        # on EVERY return path (mirroring ``WorkflowRuntime.run``), including a
-        # failed parse where there is no other warning channel.
-        tab_warnings = lex_tab_warnings(text)
-
+        # TAB advisories come from the parse's single lex pass (no separate TAB
+        # scan).  The collector is populated even on a failed parse, so they
+        # surface on EVERY return path (mirroring ``WorkflowRuntime.prepare``).
         # [1] Parse (seeded so node ids stay globally unique across entries).
-        try:
-            program, next_start_id = parse_program_seeded(
-                text, start_id=self._next_node_id
-            )
-        except AglSyntaxError as exc:
-            return self._fail([exc.to_diagnostic()], list(tab_warnings))
+        with tab_warning_collector() as tab_sink:
+            try:
+                program, next_start_id = parse_program_seeded(
+                    text, start_id=self._next_node_id
+                )
+            except AglSyntaxError as exc:
+                return self._fail([exc.to_diagnostic()], list(tab_sink))
+        tab_warnings: list[Diagnostic] = list(tab_sink)
 
         # [2] Resolve against the session scope (refs fall through; new decls
         # shadow).  resolve does NOT mutate the parent scope.  Host-registered

@@ -27,7 +27,7 @@ decrease closes it.
 The layout rules:
 
 1. **Indentation width.** Leading spaces count 1 column each; a tab advances
-   to the next multiple of 8 columns. A dedent must return to an indentation
+   to the next multiple of 4 columns. A dedent must return to an indentation
    level previously in effect — a misaligned dedent is a lexical error.
 2. **Blank lines and comment-only lines** are ignored for layout purposes.
 3. **Implicit continuation inside brackets.** While any `(`, `[`, `{`, or

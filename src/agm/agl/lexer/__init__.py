@@ -18,10 +18,16 @@ from lark.lexer import Token
 
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
-from agm.agl.lexer.lexer import AglLexer
+from agm.agl.lexer.lexer import AglLexer, tab_warning_collector
 from agm.agl.lexer.scanner import lex_tab_warnings, scan
 
-__all__ = ["AglLexer", "LexError", "lex_tab_warnings", "tokenize"]
+__all__ = [
+    "AglLexer",
+    "LexError",
+    "lex_tab_warnings",
+    "tab_warning_collector",
+    "tokenize",
+]
 
 
 def tokenize(source: str) -> Iterator[Token]:

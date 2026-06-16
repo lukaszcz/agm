@@ -261,7 +261,8 @@ This is the substantive behavioral change: `param` is no longer a static no-op.
     typechecked exactly once.
   These let the CLI build options and required-ness checks **without** re-parsing.
 - **Value resolution precedence:** CLI option > config value > default expression.
-  External values (CLI/config) are strings → `convert_input` to the declared type.
+  External values (CLI strings; config TOML-native scalars/tables, see §8) are passed
+  to `convert_input` for coercion to the declared type.
 - **Required-ness check stays pre-execution:** before evaluation, every param with
   **no default** must have an external (CLI or config) value, else a clean
   pre-execution error (exit 1), reusing the Step-4 diagnostic path
@@ -335,15 +336,25 @@ machinery (as `loop` already does) rather than injecting dynamic Click options:
 ## 8. Config design
 
 - **Loader (`config/general.py`):** add `load_params_config(program_name, *, home,
-  proj_dir, cwd)` returning a resolved `dict[str, str]` from the merged config's
+  proj_dir, cwd)` returning a resolved `dict[str, object]` (TOML-native values, see
+  conversion rules below — not pre-stringified) from the merged config's
   `[params.<program_name>]` table, following the existing layering/merge
   (`load_merged_config`, `_merge_config`) used by `load_exec_config:517`.
   - **Keying (D2):** `program_name` = `prepared.program_name` if a `program` decl is
     present, else the `.agl` file stem; for `-c` inline programs with no `program`
     decl there is no config table (inline has no stem) — params then come from CLI or
     defaults only.
-  - Values are strings (TOML scalars coerced to their string form, then
-    `convert_input`); structured types use JSON strings (O3), consistent with the CLI.
+  - **Value conversion (do not blindly `str()` TOML scalars).** `str(True)` is
+    `"True"`, which `convert_input`'s bool path (`json.loads`) rejects (JSON bools are
+    lowercase). Instead **preserve the TOML-native value** and feed it to
+    `convert_input`, which already accepts native Python objects (bool/int/Decimal and
+    JSON-shaped dict/list) alongside strings (`runtime.py:976-1095`). Exact rules:
+    - `bool`/`int`/`decimal`: pass the native TOML scalar through unchanged.
+    - structured (`json`/`list`/`dict`/record/enum): accept either a native TOML
+      table/array (preferred, validated as-is) **or** a JSON string (O3), uniform with
+      the CLI — the user need not hand-write JSON inside TOML.
+    - `text`: TOML string verbatim. Reject only genuinely incompatible shapes with the
+      standard `convert_input` error, naming the param and `[params.<name>]` key.
   - Undeclared keys → warning (O4).
 - **Template (`config/config.toml`):** document a `[params.<program>]` section with a
   worked example.

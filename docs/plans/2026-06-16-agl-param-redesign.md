@@ -287,7 +287,12 @@ machinery (as `loop` already does) rather than injecting dynamic Click options:
    parse normally; leftover `--param`/`--no-param`/`--param value` tokens land in
    `ctx.args`.
 2. In `exec.py`, after the existing single `WorkflowRuntime.prepare(source)`
-   (`exec.py:121`), read `prepared.declared_params` and:
+   (`exec.py:121`), run typed discovery (§6.7) and:
+   - **Bail out first on a front-end failure.** If `prepared.resolved is None` (parse
+     or scope error) or typed discovery failed, **skip** leftover-token validation
+     entirely and surface the normal exit-1 diagnostic. Otherwise the param map is
+     empty and a valid `--some_param` would be reported as an "unknown option",
+     masking the real parse error (cf. §7.2's "syntax error ⇒ no options").
    - Build the param → option map (verbatim `--<name>`, O2; bool ⇒ `--name/--no-name`,
      D6).
    - **Validate** every leftover token against that map: unknown/misspelled →
@@ -317,8 +322,9 @@ machinery (as `loop` already does) rather than injecting dynamic Click options:
 - **Completion (`completion.py`):** add an exec completer that locates `FILE` in the
   current argv, prepares it, and offers the `--param` option names (alongside the
   existing `complete_agl_file`).
-- A syntax error in the file yields `declared_params == ()` (no options); the normal
-  exit-1 diagnostic path resurfaces the parse error.
+- A syntax error in the file yields `declared_params == ()` (no options); leftover
+  `--param` validation is **skipped** (§7.1 step 2) so the normal exit-1 diagnostic
+  path resurfaces the parse error rather than a spurious "unknown option".
 
 ### 7.3 Remove `--input` (D7)
 - Delete the `--input` option from `exec_cmd` (`cli.py:824-828`) and the

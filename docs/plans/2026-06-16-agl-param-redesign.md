@@ -118,11 +118,24 @@ the owner's selection. Alternatives are recorded for rationale.
   expressive; rejected by owner.
 
 ### D5 — Name collisions with built-in `exec` options
-- **Reserve built-in option names; error (Chosen).** A param whose `--option`
-  would shadow a built-in (`--command/-c`, `--runner`, `--log-file`, `--no-log`,
-  `--strict-json`, `--max-iters`, `--help/-h`, `--dry-run`) is a clear build-time
-  error telling the author to rename. *Pro:* both namespaces stay predictable.
-  *Con:* a few names are off-limits to params (documented).
+- **Reserve built-in option names; error (Chosen).** A param whose generated flag
+  would shadow a built-in is a clear build-time error telling the author to rename.
+  *Pro:* both namespaces stay predictable. *Con:* a few names are off-limits to
+  params (documented).
+- **Collision is defined on the actual generated flag strings, not the source
+  identifier.** Because O2 maps names verbatim with underscores, `param max_iters`
+  generates `--max_iters`, which does **not** string-collide with the built-in
+  `--max-iters` (kebab); likewise `--strict_json` vs `--strict-json`. So those are
+  *not* collisions under the literal rule — and that divergence (two near-identical
+  flags differing only by `_`/`-`) is itself confusing. Therefore the collision set
+  is **both**: (a) any exact generated-flag match against a built-in flag string, and
+  (b) for a `bool` param, *both* generated flags `--<name>` and `--no-<name>`. The
+  reserved built-in flag strings to check against: `--command`/`-c`, `--runner`,
+  `--log-file`, `--no-log`, `--strict-json`, `--max-iters`, `--help`/`-h`,
+  `--dry-run`. To also avoid the confusing `_`/`-` near-twins, the build-time check
+  additionally rejects a param whose **underscore↔kebab–normalized** form matches a
+  built-in (so `max_iters`/`strict_json` are rejected with a rename hint), keeping the
+  two namespaces unambiguous.
 - Params shadow built-ins / built-ins win silently / namespaced `--param NAME=VAL`.
   *Con:* respectively: lost built-ins; silent CLI gap; less streamlined than the
   bare `--review_prompt` target.

@@ -7,6 +7,8 @@ enum Outcome
 
 input fallback
 
+agent worker
+
 let first: Outcome = worker "Attempt the task."
 
 if first is Done => print "done"

@@ -1113,15 +1113,17 @@ class TestAgentCallErrorViaRuntime:
 class TestWorkflowRuntimeRunnerWiring:
     """WorkflowRuntime accepts runner_config to build runner-backed default + fallback."""
 
-    def test_runtime_with_runner_has_fallback(self) -> None:
-        """A runtime built with a runner cmd has has_fallback_agent via AgentRegistry."""
+    def test_runtime_declared_agent_falls_back_to_default(self) -> None:
+        """A declared agent with no dedicated registration is backed by the default agent."""
         # We wire through the exec.py path; test at the WorkflowRuntime level
-        # by verifying any agent name resolves when a default_agent is set.
+        # by verifying a DECLARED agent name resolves via the default agent.
+        # The default-agent fallback fires only for declared names — calling an
+        # undeclared agent is a static scope error.
         from agm.agl import WorkflowRuntime
 
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = any_random_agent "hi"')
-        assert result.ok is True  # fallback resolves the unknown name
+        result = rt.run('agent any_random_agent\nlet x = any_random_agent "hi"')
+        assert result.ok is True  # default agent backs the declared name
 
     def test_exec_config_runner_wires_through_to_runtime(self) -> None:
         """exec.py constructs runtime using runner from ExecConfig (not dead code)."""
@@ -1343,7 +1345,7 @@ class TestCliRunnerIntegration:
         _install_fake_runner(tmp_path / "bin", env)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = myagent "do this"\nprint x\n')
+        agl_file.write_text('agent myagent\nlet x = myagent "do this"\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()

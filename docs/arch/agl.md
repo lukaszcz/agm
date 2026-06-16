@@ -85,6 +85,39 @@ to the one file, bracketed by `run_start`/`run_end`; `check_only` writes no trac
 interpreter, not the agent registry). The `agm repl` command builds ONE
 `AgentMode` and passes that same instance to both the wrapper and the console.
 
+## Agent declarations and source↔host reconciliation
+
+Named agents must be **declared in source** (`agent NAME [= "runner"]`). The
+scope pass owns binding: it collects declarations into
+`ResolvedProgram.declared_agents` (name → `AgentDecl`) and rejects any call to
+an undeclared name. The **host only backs declared names** — it never owns the
+name set. `WorkflowRuntime.prepare(source)` runs the lex + parse + scope phase
+ONCE, returning a `PreparedProgram` (captured AST/resolution plus diagnostics
+and warnings); `run_prepared` resumes from type checking on that object, and
+`run(source)` is just `run_prepared(prepare(source))`. A host that needs the
+declared inventory before execution (e.g. `agm exec`, to wire registrations)
+calls `prepare` once and hands the same `PreparedProgram` to `run_prepared`, so
+the source is never parsed or scoped twice. `declared_agents(source)` is a thin
+non-raising accessor over `prepare` (returns `()` on any parse/scope error,
+which `run_prepared` resurfaces) yielding `AgentDeclInfo` tuples.
+
+`WorkflowRuntime.run_prepared` enforces the contract before execution (helper
+`_reconcile_agents`), reporting all violations as error diagnostics
+(`ok=False`, nothing executes): a registered name the source never declares,
+and a declared name with neither a dedicated registration nor a default agent.
+A declared agent backed only by the default agent is fine; a declared-but-
+uncalled agent is a non-fatal scope warning.
+
+`agm exec` (`agm.commands.exec`) wires the backings: it calls `prepare(source)`
+once, reads `PreparedProgram.declared_agents`, registers each declared name with
+a runner-backed factory, then executes via `run_prepared(prepared)` (no second
+parse). The factory command is chosen by precedence (highest to
+lowest): config `[exec.agents.<name>]`, the source runner hint, `--runner`,
+`[exec] runner`, `[loop] runner`, built-in `claude -p`. The default runner is
+always the floor, so every declared agent resolves and also backs `prompt`.
+Runner strings (config or source hint) share the `%%` / `%{PROMPT_FILE}`
+prompt-file placeholder handling.
+
 ## Package layout and test locations
 
 | Package | Component | Tests |

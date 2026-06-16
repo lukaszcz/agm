@@ -5,6 +5,9 @@ enum Turn
 
 input problem
 
+agent researcher
+agent critic
+
 var proposal: Turn = researcher[on_parse_error: retry[2]] "Propose a solution for ${problem}."
 var final_answer: text = ""
 

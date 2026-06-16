@@ -68,7 +68,7 @@ from agm.agl.typecheck.types import (
     ListType,
     RecordType,
 )
-from tests._agl_helpers import all_node_ids
+from tests._agl_helpers import all_node_ids, ambient_agents_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,12 +78,11 @@ from tests._agl_helpers import all_node_ids
 def default_capabilities() -> HostCapabilities:
     """The M1 host capabilities used as the default for these tests.
 
-    Mirrors the catalog ``WorkflowRuntime.run`` builds when a default/fallback
-    agent is configured (text codec; default/raw/json/bullets renderers).
+    Mirrors the catalog ``WorkflowRuntime.run`` builds when a default agent is
+    configured (text codec; default/raw/json/bullets renderers).
     """
     return HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=True,
         has_default_agent=True,
         codec_kinds={"text": frozenset({"text"})},
         renderer_names=frozenset({"default", "raw", "json", "bullets"}),
@@ -96,7 +95,8 @@ def parse_resolve_check(
     """Parse, resolve, and type-check *source* with given/default capabilities."""
     if capabilities is None:
         capabilities = default_capabilities()
-    return check(resolve(parse_program(source)), capabilities)
+    prog = parse_program(source)
+    return check(resolve(prog, ambient_agents=ambient_agents_for(prog)), capabilities)
 
 
 def reject_type(
@@ -129,10 +129,9 @@ def diag(err: AglTypeError) -> tuple[int, str]:
 
 
 def caps_no_fallback(*agent_names: str) -> HostCapabilities:
-    """Capabilities with no fallback agent; only named agents accepted."""
+    """Capabilities with no default agent; only the listed named agents are backed."""
     return HostCapabilities(
         agent_names=frozenset(agent_names),
-        has_fallback_agent=False,
         codec_kinds={"text": frozenset({"text"})},
         renderer_names=frozenset({"default", "raw"}),
     )
@@ -142,7 +141,6 @@ def caps_with_shell_exec() -> HostCapabilities:
     """Capabilities that support shell ``exec`` (simulates M4)."""
     return HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=True,
         has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={"text": frozenset({"text"})},
@@ -154,7 +152,6 @@ def caps_with_typed_shell_exec() -> HostCapabilities:
     """Capabilities that support typed shell ``exec`` calls."""
     return HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=True,
         has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={
@@ -171,7 +168,7 @@ def caps_with_json_codec() -> HostCapabilities:
     """Capabilities that include the JSON codec (simulates M2+)."""
     return HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=True,
+        has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
             "json": frozenset(
@@ -279,11 +276,6 @@ class TestAcceptance:
         assert isinstance(spec.target_type, TextType)
         assert spec.codec_name == "text"
 
-    def test_fallback_unknown_agent_ok(self) -> None:
-        # default_capabilities has has_fallback_agent=True, so any name ok.
-        r = parse_resolve_check('let x = unknown_agent "Q"')
-        assert r.resolved.program is not None
-
     def test_pass_stmt(self) -> None:
         r = parse_resolve_check("pass")
         assert r.resolved.program is not None
@@ -300,7 +292,6 @@ def caps_with_renderer_kinds(
     """Default caps plus one custom renderer with a kind descriptor."""
     return HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=True,
         has_default_agent=True,
         codec_kinds={"text": frozenset({"text"})},
         renderer_names=frozenset({"default", "raw", "json", "bullets", name}),
@@ -673,42 +664,23 @@ class TestLiteralTypeMismatches:
 
 
 class TestAgentCapabilities:
-    def test_no_fallback_unknown_agent_error(self) -> None:
-        caps = caps_no_fallback()  # no agents, no fallback
-        err = reject_type('let x = unknown_agent "Q"', capabilities=caps)
-        line, msg = diag(err)
-        assert "unknown_agent" in msg
-
     def test_no_fallback_known_agent_ok(self) -> None:
         caps = caps_no_fallback("my_agent")
         r = parse_resolve_check('let x = my_agent "Q"', capabilities=caps)
         assert r.resolved.program is not None
 
     def test_prompt_rejected_without_default_or_fallback(self) -> None:
-        # F1a: a ``prompt`` call needs a default agent (or a fallback agent).
-        # With neither, it is a static error at the call's span.
-        caps = caps_no_fallback()  # has_default_agent=False, has_fallback_agent=False
+        # F1a: a ``prompt`` call needs a default agent. With ``has_default_agent``
+        # False, it is a static error at the call's span.
+        caps = caps_no_fallback()  # has_default_agent=False
         err = reject_type('let x = prompt "Q"', caps)
         assert "default agent" in str(err).lower()
 
     def test_prompt_ok_with_default_agent(self) -> None:
-        # A configured default agent makes ``prompt`` valid even with no fallback.
+        # A configured default agent makes ``prompt`` valid.
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=False,
             has_default_agent=True,
-            codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default", "raw"}),
-        )
-        r = parse_resolve_check('let x = prompt "Q"', capabilities=caps)
-        assert r.resolved.program is not None
-
-    def test_prompt_ok_with_fallback_agent(self) -> None:
-        # A fallback agent also backs ``prompt``.
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            has_fallback_agent=True,
-            has_default_agent=False,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default", "raw"}),
         )
@@ -1429,12 +1401,10 @@ class TestHostCapabilities:
     def test_capabilities_immutable(self) -> None:
         caps = HostCapabilities(
             agent_names=frozenset({"a"}),
-            has_fallback_agent=False,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),
         )
         assert caps.agent_names == frozenset({"a"})
-        assert not caps.has_fallback_agent
 
 
 # ---------------------------------------------------------------------------

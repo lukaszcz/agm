@@ -644,6 +644,20 @@ class InputDecl:
     node_id: int = dc_field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class AgentDecl:
+    """``agent NAME [= "runner string"]`` declaration.
+
+    ``runner`` is the optional static runner-command hint (a literal string
+    with NO interpolation); ``None`` for a bare declaration.
+    """
+
+    name: str
+    runner: str | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 # ---------------------------------------------------------------------------
 # Closed statement union (defined after all Stmt classes)
 # ---------------------------------------------------------------------------
@@ -664,6 +678,7 @@ Stmt = (
     | EnumDef
     | TypeAlias
     | InputDecl
+    | AgentDecl
 )
 
 

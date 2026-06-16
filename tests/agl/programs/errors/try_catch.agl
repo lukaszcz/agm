@@ -6,6 +6,8 @@ enum Review
 
 input mode
 
+agent reviewer
+
 try
   if mode = "abort" =>
     raise Abort(message: "stop now")

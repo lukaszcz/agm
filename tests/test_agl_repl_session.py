@@ -282,6 +282,78 @@ class TestExactlyOnce:
 
 
 # ---------------------------------------------------------------------------
+# Agent declarations / ambient registration (host registration declares+backs)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentDeclarations:
+    def test_registered_agent_callable_without_declaration(self) -> None:
+        # Host registration both DECLARES and BACKS an agent in the REPL: a call
+        # needs no in-source ``agent`` declaration and raises no scope error.
+        s = ReplSession()
+        s.register_agent("reviewer", CountingAgent("ok"))
+        r = s.eval_entry('reviewer "look"')
+        assert r.ok
+
+    def test_undeclared_unregistered_agent_call_errors(self) -> None:
+        # A call to an agent that is neither registered nor declared in source is
+        # still a static scope binding error.
+        s = ReplSession()
+        r = s.eval_entry('ghost "hi"')
+        assert not r.ok
+        assert r.diagnostics
+
+    def test_cross_entry_source_declaration_resolves(self) -> None:
+        # An ``agent X`` declaration in one entry makes a later call to X resolve
+        # without re-declaring it.  The agent is also registered so the call has
+        # a backing when it actually dispatches.
+        s = ReplSession()
+        s.register_agent("helper", CountingAgent("done"))
+        r1 = s.eval_entry("agent helper")
+        assert r1.ok
+        r2 = s.eval_entry('let out = helper "go"')
+        assert r2.ok
+        assert _text(r2.value) == "done"
+
+    def test_failed_entry_declaration_does_not_persist(self) -> None:
+        # A declaration in an entry that fails to promote must NOT leak into the
+        # ambient set: a later call relying on it is still a scope error.
+        s = ReplSession()
+        # The entry declares ``maybe`` but then has a type error, so it fails and
+        # rolls back; the declaration must not persist.
+        bad = s.eval_entry('agent maybe\nlet x: int = "oops"')
+        assert not bad.ok
+        r = s.eval_entry('maybe "call"')
+        assert not r.ok
+        assert r.diagnostics
+
+    def test_unused_declaration_warning_surfaced(self) -> None:
+        # A bare cross-entry ``agent X`` declaration legitimately produces an
+        # "unused" scope warning, routed alongside type-checker warnings.
+        s = ReplSession()
+        r = s.eval_entry("agent solo")
+        assert r.ok
+        assert any("solo" in w.message for w in r.warnings)
+
+    def test_type_of_allows_registered_agent_call(self) -> None:
+        # The introspection (``type_of``) resolve path must also treat registered
+        # agents as ambient, so typing an agent-calling expression does not raise
+        # a scope error.
+        s = ReplSession()
+        s.register_agent("reviewer", CountingAgent("x"))
+        assert s.type_of('reviewer "ask"') == repr(TextType())
+
+    def test_reset_clears_declared_agents(self) -> None:
+        # After reset, a previously source-declared agent is gone: a call to it
+        # (without re-registration/re-declaration) is a scope error again.
+        s = ReplSession()
+        s.eval_entry("agent transient")
+        s.reset()
+        r = s.eval_entry('transient "hi"')
+        assert not r.ok
+
+
+# ---------------------------------------------------------------------------
 # Inputs / :set flow
 # ---------------------------------------------------------------------------
 

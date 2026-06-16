@@ -12,6 +12,10 @@ Covers:
 from __future__ import annotations
 
 import os
+import re
+import stat
+import subprocess
+import sys
 from pathlib import Path
 from typing import Protocol
 
@@ -522,7 +526,7 @@ class TestExecExitCodeMapping:
 
         def fake_run(
             self: WorkflowRuntime,
-            source: str,
+            prepared: object,
             *,
             inputs: object = None,
             check_only: bool = False,
@@ -536,7 +540,7 @@ class TestExecExitCodeMapping:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -551,7 +555,7 @@ class TestExecCommandWarnings:
 
     No AgL checker warning is organically producible in M1 (warnings such as
     non-exhaustive ``case`` land with M2/M3 analysis), so the warning paths are
-    driven through a single mocked ``run`` that injects a warning diagnostic.
+    driven through a mocked ``run_prepared`` that injects a warning diagnostic.
     The error→exit-1 path IS reachable through real source and is covered by
     ``test_error_diagnostic_still_exits_1`` below.
     """
@@ -570,7 +574,7 @@ class TestExecCommandWarnings:
 
         def fake_run(
             self: WorkflowRuntime,
-            source: str,
+            prepared: object,
             *,
             inputs: object = None,
             check_only: bool = False,
@@ -580,7 +584,7 @@ class TestExecCommandWarnings:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
 
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -616,7 +620,7 @@ class TestExecCommandWarnings:
 
         def fake_run(
             self: WorkflowRuntime,
-            source: str,
+            prepared: object,
             *,
             inputs: object = None,
             check_only: bool = False,
@@ -628,7 +632,7 @@ class TestExecCommandWarnings:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -638,6 +642,55 @@ class TestExecCommandWarnings:
         assert "warning: line 2: unused binding" in captured.err
         assert "line 5: unknown name" in captured.err
         assert "warning: line 5: unknown name" not in captured.err
+
+
+class TestExecParsesSourceOnce:
+    """``agm exec`` parses + scopes the source exactly ONCE (no double parse).
+
+    Regression guard: ``agm exec`` learns the declared-agent inventory (to wire
+    registrations) AND executes the program.  Both must come from a single
+    ``prepare`` so the source is never parsed or scoped twice.
+    """
+
+    def test_exec_parses_and_scopes_source_exactly_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.agl.parser as parser_mod
+        import agm.agl.scope as scope_mod
+        from agm.agl.scope.symbols import ResolvedProgram
+        from agm.agl.syntax.nodes import Program
+        from agm.core import dry_run
+
+        agl_file = tmp_path / "prog.agl"
+        # A declared+called agent: exec must read the inventory AND run the
+        # static pipeline, the exact scenario that previously parsed twice.
+        agl_file.write_text('agent impl\nlet x = impl "do it"\n')
+
+        real_parse = parser_mod.parse_program
+        real_resolve = scope_mod.resolve
+        parse_calls = 0
+        resolve_calls = 0
+
+        def counting_parse(source: str) -> Program:
+            nonlocal parse_calls
+            parse_calls += 1
+            return real_parse(source)
+
+        # ``prepare`` calls ``resolve(program)`` with no keyword args.
+        def counting_resolve(program: Program) -> ResolvedProgram:
+            nonlocal resolve_calls
+            resolve_calls += 1
+            return real_resolve(program)
+
+        monkeypatch.setattr(parser_mod, "parse_program", counting_parse)
+        monkeypatch.setattr(scope_mod, "resolve", counting_resolve)
+        # Dry-run drives the full static pipeline (parse → scope → typecheck →
+        # reconcile) without executing any agent.
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        assert parse_calls == 1
+        assert resolve_calls == 1
 
 
 class TestExecCLIPaths:
@@ -1114,7 +1167,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let r = reviewer "Review this"\n')
+        agl_file.write_text('agent reviewer\nlet r = reviewer "Review this"\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1393,7 +1446,6 @@ class TestUncaughtExceptionOutputFormat:
         self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
     ) -> None:
         """Exit-2 stderr must include the trace_id when it is non-empty."""
-        import re
         log_file = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('let x: int = exec "echo not-an-int"\n')
@@ -1441,7 +1493,7 @@ class TestUncaughtExceptionOutputFormat:
             ),
         )
         with patch("agm.commands.exec.WorkflowRuntime") as mock_rt:
-            mock_rt.return_value.run.return_value = fake_result
+            mock_rt.return_value.run_prepared.return_value = fake_result
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
         assert exc_info.value.code == 2
@@ -1578,6 +1630,74 @@ class TestExecWhitespaceRunner:
         assert "should-not-run" not in captured.out
 
 
+class TestExecPerAgentRunnerValidation:
+    """A malformed/empty per-agent runner command (source hint or
+    [exec.agents] config) for a DECLARED agent exits 1 BEFORE any statement
+    runs — the same pre-execution contract as the default runner — instead of
+    failing lazily mid-execution at dispatch."""
+
+    def _args(self, file: str) -> ExecArgs:
+        return ExecArgs(
+            file=file,
+            inputs=[],
+            strict_json=None,
+            max_iters=None,
+            runner="claude -p",  # valid default; the per-agent hint is the offender
+            no_log=True,
+            log_file=None,
+        )
+
+    def test_empty_source_hint_exits_1_before_execution(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        # 'BEFORE' would print if the empty hint were caught lazily at dispatch.
+        agl_file.write_text('agent x = ""\nprint "BEFORE"\nlet r = x "go"\n')
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(self._args(str(agl_file)))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "BEFORE" not in captured.out
+
+    def test_malformed_quote_source_hint_exits_1_no_traceback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('agent x = "bad \'quote"\nlet r = x "go"\n')
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(self._args(str(agl_file)))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_config_only_undeclared_bad_command_is_inert(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # A malformed [exec.agents] entry for an agent the program never
+        # declares must NOT fail the run — it is inert (never dispatched).
+        from agm.config.general import ExecConfig
+
+        bad_config = ExecConfig(
+            runner="claude -p",
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=None,
+            agents={"ghost": "bad 'quote"},  # malformed, but for an undeclared agent
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: bad_config)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('print "ran"\n')
+        # Must not raise (the inert ghost command is never validated/dispatched).
+        exec_command.run(self._args(str(agl_file)))
+        captured = capsys.readouterr()
+        assert "ran" in captured.out
+
+
 # ---------------------------------------------------------------------------
 # Task 1 (MAJOR): malformed-quoting --runner exits 1 with clean Error, no traceback
 # ---------------------------------------------------------------------------
@@ -1666,3 +1786,287 @@ class TestExecMalformedQuotingRunner:
 
         result = split_command("claude -p", kind="runner")
         assert result == ["claude", "-p"]
+
+
+# ---------------------------------------------------------------------------
+# M5: per-declared-agent registration + runner precedence
+# (config > source runner hint > default runner)
+# ---------------------------------------------------------------------------
+
+
+def _install_marker_runner(
+    directory: Path, env: dict[str, str], *, name: str, marker: str
+) -> Path:
+    """Install a fake runner *name* that echoes *marker* plus the prompt-file path.
+
+    The script prints two lines: the marker (identifying WHICH runner ran) and
+    ``prompt-file=<path>`` (the prompt-file argument it received).  This lets a
+    test assert both the resolved command and that ``%{PROMPT_FILE}`` / ``@file``
+    substitution delivered a real path to the runner.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    runner = directory / name
+    runner.write_text(
+        "#!/bin/bash\n"
+        f'echo "{marker}"\n'
+        'for arg in "$@"; do\n'
+        '  if [[ "$arg" == @* ]]; then\n'
+        '    echo "prompt-file=${arg#@}"\n'
+        '  elif [[ -f "$arg" ]]; then\n'
+        '    echo "prompt-file=$arg"\n'
+        "  fi\n"
+        "done\n"
+    )
+    runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+    if str(directory) not in env["PATH"].split(":"):
+        env["PATH"] = str(directory) + ":" + env["PATH"]
+    return runner
+
+
+def _install_argv_echo_runner(
+    directory: Path, env: dict[str, str], *, name: str, marker: str
+) -> Path:
+    """Install a fake runner *name* that echoes *marker* plus every raw argument.
+
+    Unlike ``_install_marker_runner`` (which normalizes ``@file`` / existing-file
+    arguments into a ``prompt-file=<path>`` line), this runner echoes each argv
+    entry verbatim as ``arg=<raw>``.  That makes the difference between the
+    ``%{PROMPT_FILE}`` placeholder branch (mid-argument substitution, e.g.
+    ``--file=/abs/path``) and the bare-``@file`` append fallback (a separate
+    trailing ``@/abs/path`` argument) observable in stdout.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    runner = directory / name
+    runner.write_text(
+        "#!/bin/bash\n"
+        f'echo "{marker}"\n'
+        'for arg in "$@"; do\n'
+        '  echo "arg=$arg"\n'
+        "done\n"
+    )
+    runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+    if str(directory) not in env["PATH"].split(":"):
+        env["PATH"] = str(directory) + ":" + env["PATH"]
+    return runner
+
+
+class TestExecAgentPrecedence:
+    """M5: declared agents resolve via config > source hint > default runner.
+
+    Driven through real fake-runner binaries (CLI subprocess), asserting which
+    runner produced the agent response — a user-visible behavior, not an
+    internal call.
+    """
+
+    def _run_agm_exec(
+        self, args: list[str], *, env: dict[str, str], cwd: Path
+    ) -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(
+            [sys.executable, "-m", "agm.cli", "exec", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(cwd),
+            check=False,
+        )
+
+    def _base_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env.setdefault("HOME", str(Path.home()))
+        return env
+
+    def test_config_beats_source_hint(self, tmp_path: Path) -> None:
+        """A config [exec.agents] entry overrides the source runner hint."""
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="source-runner", marker="FROM-SOURCE")
+        _install_marker_runner(tmp_path / "bin", env, name="config-runner", marker="FROM-CONFIG")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'agent impl = "source-runner %{PROMPT_FILE}"\n'
+            'let x = impl "do it"\n'
+            "print x\n"
+        )
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[exec]\nrunner = "default-runner"\n\n'
+            '[exec.agents]\nimpl = "config-runner %{PROMPT_FILE}"\n'
+        )
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "FROM-CONFIG" in result.stdout
+        assert "FROM-SOURCE" not in result.stdout
+
+    def test_config_beats_default_for_bare_declaration(self, tmp_path: Path) -> None:
+        """A config [exec.agents] entry overrides the default runner for a BARE
+        declaration (one with no source runner hint)."""
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="config-runner", marker="FROM-CONFIG")
+        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
+
+        agl_file = tmp_path / "prog.agl"
+        # ``impl`` is declared BARE (no ``= "runner"`` hint).
+        agl_file.write_text('agent impl\nlet x = impl "do it"\nprint x\n')
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[exec]\nrunner = "default-runner"\n\n'
+            '[exec.agents]\nimpl = "config-runner %{PROMPT_FILE}"\n'
+        )
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "FROM-CONFIG" in result.stdout
+        assert "FROM-DEFAULT" not in result.stdout
+
+    def test_multiple_agents_mixed_precedence_in_one_run(self, tmp_path: Path) -> None:
+        """Three declared agents in ONE program route by name through the shared
+        factory: config override, source hint, and default runner respectively."""
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="config-a", marker="FROM-CONFIG-A")
+        _install_marker_runner(tmp_path / "bin", env, name="source-a", marker="FROM-SOURCE-A")
+        _install_marker_runner(tmp_path / "bin", env, name="source-b", marker="FROM-SOURCE-B")
+        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'agent a = "source-a %{PROMPT_FILE}"\n'  # config override → CONFIG-A
+            'agent b = "source-b %{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
+            "agent c\n"  # bare, no config entry → DEFAULT
+            'let ra = a "first"\n'
+            'let rb = b "second"\n'
+            'let rc = c "third"\n'
+            "print ra\n"
+            "print rb\n"
+            "print rc\n"
+        )
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[exec]\nrunner = "default-runner"\n\n'
+            '[exec.agents]\na = "config-a %{PROMPT_FILE}"\n'
+        )
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        # Each agent routed to exactly the expected runner.
+        assert "FROM-CONFIG-A" in result.stdout
+        assert "FROM-SOURCE-A" not in result.stdout  # config beat the source hint
+        assert "FROM-SOURCE-B" in result.stdout
+        assert "FROM-DEFAULT" in result.stdout
+
+    def test_source_hint_beats_default_runner(self, tmp_path: Path) -> None:
+        """With no config entry, the source runner hint wins over the default runner."""
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="source-runner", marker="FROM-SOURCE")
+        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'agent impl = "source-runner %{PROMPT_FILE}"\n'
+            'let x = impl "do it"\n'
+            "print x\n"
+        )
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "FROM-SOURCE" in result.stdout
+        assert "FROM-DEFAULT" not in result.stdout
+
+    def test_bare_declaration_uses_default_runner(self, tmp_path: Path) -> None:
+        """A bare ``agent NAME`` with no config entry uses the resolved default runner."""
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('agent impl\nlet x = impl "do it"\nprint x\n')
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "FROM-DEFAULT" in result.stdout
+
+    def test_source_hint_prompt_file_substitution(self, tmp_path: Path) -> None:
+        """``%{PROMPT_FILE}`` in a source runner hint is substituted IN PLACE,
+        mid-argument — proving the placeholder branch ran (not the ``@file``
+        append fallback, which can only add a separate trailing argument)."""
+        env = self._base_env()
+        # An argv-echo runner reveals each raw argument verbatim, so a
+        # mid-argument substitution (``--file=/abs/path``) is distinguishable
+        # from the bare-``@file`` fallback (a separate ``@/abs/path`` argument).
+        _install_argv_echo_runner(tmp_path / "bin", env, name="source-runner", marker="FROM-SOURCE")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'agent impl = "source-runner --file=%{PROMPT_FILE}"\n'
+            'let x = impl "do it"\n'
+            "print x\n"
+        )
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        # The placeholder was substituted mid-argument: the runner saw
+        # ``--file=/<abs path>`` as a single argv entry.  The ``@file`` fallback
+        # could never produce this (it would append a separate ``@/...`` arg).
+        assert re.search(r"^arg=--file=/", result.stdout, re.MULTILINE), (
+            f"Expected mid-argument %{{PROMPT_FILE}} substitution, got: {result.stdout!r}"
+        )
+        # And the fallback form must NOT appear.
+        assert "arg=@/" not in result.stdout
+
+    def test_bare_agent_and_prompt_both_resolve_via_default(self, tmp_path: Path) -> None:
+        """A bare declared agent and built-in ``prompt`` both resolve via the default runner."""
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "agent impl\n"
+            'let a = prompt "first"\n'
+            'let b = impl "second"\n'
+            "print a\n"
+            "print b\n"
+        )
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        # Both calls dispatched to the default runner.
+        assert result.stdout.count("FROM-DEFAULT") == 2
+
+    def test_undeclared_agent_call_exits_1_nothing_runs(self, tmp_path: Path) -> None:
+        """Calling an undeclared agent is a pre-execution scope error: exit 1, no run."""
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
+
+        agl_file = tmp_path / "prog.agl"
+        # ``ghost`` is never declared with ``agent ghost``.
+        agl_file.write_text('let x = ghost "do it"\nprint x\n')
+
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "default-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        assert result.returncode == 1, f"stdout: {result.stdout} stderr: {result.stderr}"
+        # The runner never ran: no marker on stdout.
+        assert "FROM-DEFAULT" not in result.stdout

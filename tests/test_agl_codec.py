@@ -73,6 +73,7 @@ from agm.agl.typecheck.types import (
     TextType,
     Type,
 )
+from tests._agl_helpers import ambient_agents_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -139,10 +140,10 @@ def _variant_schema_for_case(schema: dict[str, object], case: str) -> dict[str, 
 def _check_program_with_json(body: tuple[Stmt, ...]) -> CheckedProgram:
     """Run *body* through real resolve + check with both text and json codecs."""
     program = ast.Program(body=tuple(body), span=_sp(), node_id=_nid())
-    resolved = resolve(program)
+    resolved = resolve(program, ambient_agents=ambient_agents_for(program))
     caps = HostCapabilities(
         agent_names=frozenset(),
-        has_fallback_agent=True,
+        has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
             "json": frozenset(
@@ -1518,7 +1519,7 @@ class TestRecordEnumInputs:
         program = ast.Program(
             body=(record_def, input_decl, print_stmt), span=_sp(), node_id=_nid()
         )
-        resolved = resolve(program)
+        resolved = resolve(program, ambient_agents=ambient_agents_for(program))
         caps = HostCapabilities(
             codec_kinds={
                 "text": frozenset({"text"}),

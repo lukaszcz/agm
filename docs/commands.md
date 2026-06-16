@@ -416,11 +416,8 @@ Options:
   JSON), then validates it strictly against the schema. The recovered (normalized) value is
   traced alongside the raw output.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
-- `--runner COMMAND`: Override the default agent runner command. The full resolution chain for
-  a named agent not listed in `[exec.agents]` is, in precedence order:
-  `[exec.agents.<name>]` → `--runner` flag → `[exec] runner` (config) → `[loop] runner`
-  (config) → `claude -p` (built-in default). Named agents listed in `[exec.agents]` always
-  use their own command regardless of `--runner`.
+- `--runner COMMAND`: Override the default agent runner command (backs `prompt` and any
+  declared agent without its own command). See the runner precedence below.
 - `--log-file PATH`: Write a structured JSONL trace log to PATH (default: auto-generated under
   `.agent-files/`).
 - `--no-log`: Disable trace logging entirely.
@@ -440,6 +437,30 @@ Options:
   optionally whether a JSON Schema is attached (`schema: yes`) and the effective
   parse-failure policy (`abort` or `retry[N]`).  When no agent calls are present, no
   inventory is printed.
+
+Agents and runner precedence:
+
+- Named agents must be **declared in the program source** with `agent NAME`, optionally
+  carrying a runner hint as `agent NAME = "runner"`. Calling an undeclared name is a static
+  binding error (exit 1). The contextual `prompt` (default agent) and `exec` (shell) are
+  built in and need no declaration.
+- For each declared agent, `agm exec` resolves the command that runs it by the following
+  precedence (highest to lowest):
+
+  | Rung | Source |
+  |------|--------|
+  | 1 | `[exec.agents.<name>]` (config, per-agent) — backs a declared name, overriding any source hint |
+  | 2 | the source `agent NAME = "…"` runner string |
+  | 3 | `--runner COMMAND` (CLI flag) |
+  | 4 | `[exec] runner` (config) |
+  | 5 | `[loop] runner` (config) |
+  | 6 | `claude -p` (built-in default) |
+
+  A `[exec.agents.<name>]` entry for a name the program never declares is a host
+  configuration error. Because the default runner is always the floor (rung 6), every
+  declared agent resolves under `agm exec` even with no config and no source hint. Runner
+  strings (config or source hint) support the `%%` / `%{PROMPT_FILE}` placeholders for the
+  rendered prompt-file path.
 
 Exit codes:
 
@@ -470,7 +491,9 @@ default_loop_limit = 5      # do[] default iteration bound
 timeout = "30m"             # idle timeout
 
 [exec.agents]
-reviewer = "claude -p"      # per-agent runner commands
+reviewer = "claude -p"      # per-agent runner commands; the name must be
+                            # declared in the program source (`agent reviewer`),
+                            # and this entry overrides any source runner hint
 ```
 
 `[exec.<command>]` sub-tables provide per-command overrides of the base `[exec]`

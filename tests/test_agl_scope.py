@@ -117,8 +117,8 @@ class TestAcceptance:
 
     def test_named_agent_call(self) -> None:
         from agm.agl.syntax.nodes import LetDecl
-        r = parse_and_resolve('let x = reviewer "Review this"')
-        let_stmt = r.program.body[0]
+        r = parse_and_resolve('agent reviewer\nlet x = reviewer "Review this"')
+        let_stmt = r.program.body[1]
         assert isinstance(let_stmt, LetDecl)
         call_id = let_stmt.value.node_id
         assert r.call_kinds[call_id] == CallKind.agent
@@ -433,10 +433,10 @@ class TestCallKinds:
         assert r.call_kinds[stmt.value.node_id] == CallKind.shell_exec
 
     def test_named_agent_is_agent(self) -> None:
-        r = parse_and_resolve('let x = my_agent "Q"')
+        r = parse_and_resolve('agent my_agent\nlet x = my_agent "Q"')
         from agm.agl.syntax.nodes import AgentCall, LetDecl
 
-        stmt = r.program.body[0]
+        stmt = r.program.body[1]
         assert isinstance(stmt, LetDecl)
         assert isinstance(stmt.value, AgentCall)
         assert r.call_kinds[stmt.value.node_id] == CallKind.agent
@@ -1547,7 +1547,6 @@ class TestParentScopeSeam:
 
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_fallback_agent=True,
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default"}),
@@ -1574,3 +1573,154 @@ class TestParentScopeSeam:
         # Type-checking must succeed with the seeded env (no mismatch).
         c2 = check(r2, caps, seed_env=c1.type_env)
         assert c2 is not None
+
+
+# ---------------------------------------------------------------------------
+# Agent declarations and the binding rule
+# ---------------------------------------------------------------------------
+
+
+class TestAgentDeclarations:
+    """``agent NAME`` declarations and undeclared-call binding errors."""
+
+    def test_undeclared_agent_call_rejected(self) -> None:
+        # matches tests/agl/rejections/scope/undeclared_agent.agl
+        err = reject_scope('let x = reviewer "Review this"')
+        line, msg = diag(err)
+        assert line == 1
+        assert "reviewer" in msg
+        assert "unknown agent" in msg.lower()
+
+    def test_declared_and_called_resolves(self) -> None:
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
+
+        r = parse_and_resolve('agent reviewer\nlet x = reviewer "Review this"')
+        stmt = r.program.body[1]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        assert r.call_kinds[stmt.value.node_id] == CallKind.agent
+        assert "reviewer" in r.declared_agents
+        # A declared-and-called agent produces no unused warning.
+        assert r.warnings == ()
+
+    def test_declared_with_runner_resolves(self) -> None:
+        r = parse_and_resolve(
+            'agent impl = "claude -p %{PROMPT_FILE}"\nlet x = impl "Do it"'
+        )
+        assert "impl" in r.declared_agents
+        assert r.declared_agents["impl"].runner == "claude -p %{PROMPT_FILE}"
+
+    def test_duplicate_declaration_rejected(self) -> None:
+        # matches tests/agl/rejections/scope/agent_redeclared.agl
+        err = reject_scope("agent dup\nagent dup")
+        _, msg = diag(err)
+        assert "dup" in msg
+        assert "already declared" in msg.lower()
+
+    def test_declare_prompt_rejected(self) -> None:
+        # matches tests/agl/rejections/scope/agent_reserved_name.agl
+        err = reject_scope("agent prompt")
+        _, msg = diag(err)
+        assert "prompt" in msg
+        assert "built-in" in msg.lower()
+
+    def test_declare_exec_rejected(self) -> None:
+        err = reject_scope("agent exec")
+        _, msg = diag(err)
+        assert "exec" in msg
+        assert "built-in" in msg.lower()
+
+    def test_declaration_inside_if_rejected(self) -> None:
+        # matches tests/agl/rejections/scope/agent_not_root.agl
+        err = reject_scope("if true =>\n  agent late\n| else =>\n  pass")
+        line, msg = diag(err)
+        assert line == 2
+        assert "agent" in msg.lower()
+        assert "root" in msg.lower()
+
+    def test_declaration_inside_do_rejected(self) -> None:
+        err = reject_scope("do[2]\n  agent late\nuntil true\n")
+        _, msg = diag(err)
+        assert "agent" in msg.lower()
+        assert "root" in msg.lower()
+
+    def test_declared_but_unused_warns(self) -> None:
+        r = parse_and_resolve("agent unused")
+        assert "unused" in r.declared_agents
+        assert len(r.warnings) == 1
+        warning = r.warnings[0]
+        assert warning.severity == "warning"
+        assert "unused" in warning.message
+        assert warning.line == 1
+
+    def test_prompt_needs_no_declaration(self) -> None:
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
+
+        r = parse_and_resolve('let x = prompt "Q"')
+        stmt = r.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        assert r.call_kinds[stmt.value.node_id] == CallKind.default_agent
+        assert r.declared_agents == {}
+        assert r.warnings == ()
+
+    def test_exec_needs_no_declaration(self) -> None:
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
+
+        r = parse_and_resolve('let x = exec "ls"')
+        stmt = r.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        assert r.call_kinds[stmt.value.node_id] == CallKind.shell_exec
+
+    def test_ambient_agent_call_resolves(self) -> None:
+        from agm.agl.syntax.nodes import AgentCall, LetDecl
+
+        r = resolve(
+            parse_program('let x = session_agent "Q"'),
+            ambient_agents=frozenset({"session_agent"}),
+        )
+        stmt = r.program.body[0]
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, AgentCall)
+        assert r.call_kinds[stmt.value.node_id] == CallKind.agent
+        # Ambient agents are not in-program declarations and never warn.
+        assert r.declared_agents == {}
+        assert r.warnings == ()
+
+    def test_agent_namespace_separate_from_variables(self) -> None:
+        # An `agent impl` declaration must not collide with `let impl`.
+        r = parse_and_resolve('agent impl\nlet impl = "x"\nlet y = impl "Q"')
+        assert "impl" in r.declared_agents
+        assert "impl" in r.root_scope.bindings
+
+
+class TestAmbientAgentsHelper:
+    """The ``ambient_agents_for`` test helper collects named-agent call targets."""
+
+    def test_collects_named_agents_only(self) -> None:
+        from tests._agl_helpers import ambient_agents_for
+
+        prog = parse_program(
+            'let a = reviewer "R"\n'
+            'let b = impl "I"\n'
+            'let c = prompt "P"\n'
+            'let d = exec "ls"\n'
+        )
+        assert ambient_agents_for(prog) == frozenset({"reviewer", "impl"})
+
+    def test_empty_when_no_named_calls(self) -> None:
+        from tests._agl_helpers import ambient_agents_for
+
+        prog = parse_program('let a = prompt "P"')
+        assert ambient_agents_for(prog) == frozenset()
+
+    def test_helper_output_resolves_without_declarations(self) -> None:
+        from tests._agl_helpers import ambient_agents_for
+
+        prog = parse_program('let a = reviewer "R"')
+        # Passing the helper output as ambient_agents lets a program that calls
+        # a named agent resolve without any in-source `agent` declaration.
+        r = resolve(prog, ambient_agents=ambient_agents_for(prog))
+        assert r.warnings == ()
+        assert r.declared_agents == {}

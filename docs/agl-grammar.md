@@ -46,9 +46,26 @@ keyword has token type `"let"`); the `KW_*` constants in `tokens.py` are
 readable aliases.  When the Lark parser receives the token stream the custom
 `AglLexer.lex()` method uppercases keyword types (e.g. `"let"` → `"LET"`).
 
-`record` `enum` `type` `input` `let` `var` `set` `do` `until` `if` `else`
-`case` `of` `try` `catch` `raise` `as` `pass` `print` `and` `or` `not`
+`record` `enum` `type` `input` `agent` `let` `var` `set` `do` `until` `if`
+`else` `case` `of` `try` `catch` `raise` `as` `pass` `print` `and` `or` `not`
 `is` `in` `true` `false` `null`
+
+`agent` is reserved (it leads an `agent` declaration) but it is still accepted
+as a *field name* — record/enum field definitions, named constructor arguments,
+dict shorthand keys, and postfix field access — via the `field_name`
+nonterminal (`field_name: VAR_NAME | AGENT`).  This keeps built-in exception
+fields such as `AgentCallError.agent` usable.  It cannot be used as a variable
+binder (`let`/`var`/`set`/`input`/patterns/catch).
+
+The `agent` keyword leads a root-level declaration production:
+
+```
+agent_decl: AGENT VAR_NAME (EQ template)?
+```
+
+The optional runner string reuses the `template` rule, but the AST builder
+rejects a template carrying any interpolation hole — the runner string must be
+a static string literal.  See `src/agm/agl/grammar/agl.lark`.
 
 **Contextual keywords** — `prompt` and `exec` are NOT reserved; they lex as
 plain `VAR_NAME` tokens.  The scope pass gives them their built-in meaning.
@@ -62,7 +79,7 @@ maps them to `TypeExpr` nodes inside type-annotation positions.
 | Token | Pattern | Used for |
 |-------|---------|----------|
 | `TYPE_NAME` | `/[A-Z][A-Za-z0-9_]*/` | Record/enum types, qualified constructors |
-| `VAR_NAME` | `/[a-z_][A-Za-z0-9_]*/` | Variables, field names, agent names, keywords |
+| `VAR_NAME` | `/[a-z_][A-Za-z0-9_]*/` | Variables, field names, agent names (the reserved word `agent` is also accepted as a field name via `field_name`) |
 
 `_` (the wildcard) is NOT a distinct token — it lexes as a plain `VAR_NAME`;
 wildcard interpretation (`WildcardPattern`) happens in the AST builder.

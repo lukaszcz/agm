@@ -101,28 +101,70 @@ def run(args: ExecArgs) -> None:
     # (plan §10.1) and deduplicates the logic already in split_command.
     split_command(runner_cmd, kind="runner")
 
-    # Build a runner-backed agent as both the ``prompt`` default and the
-    # fallback for arbitrary named agents (plan §9.5).  This means any
-    # agent name appearing in the AgL source resolves at runtime even if
-    # not explicitly registered; names listed in ``[exec.agents]`` get their
-    # own dedicated runner command.
-    runner_agent = runner_backed_agent_factory(
+    # ----------------------------------------------------------------
+    # Resolve declared agents and wire each one explicitly (plan §9).
+    #
+    # The source program OWNS the agent name set: every named agent must be
+    # declared.  We register each DECLARED agent against a single runner-backed
+    # factory whose per-agent command map merges, in precedence order
+    # (high → low; decision §4):
+    #
+    #     [exec.agents.<name>]   (config, per-agent)
+    #     source `agent` runner hint
+    #     resolved default runner (runner_cmd, the floor)
+    #
+    # ``prepare`` parses + scopes the source ONCE (independent of registrations);
+    # the same ``PreparedProgram`` is handed to ``run_prepared`` below, so the
+    # program is never parsed or scoped twice.  On a source with parse/scope
+    # errors ``declared_agents`` is ``()`` and ``run_prepared`` resurfaces the
+    # captured diagnostic (exit 1).
+    prepared = WorkflowRuntime.prepare(source)
+    decls = prepared.declared_agents
+    source_hints = {d.name: d.runner for d in decls if d.runner is not None}
+    # Config wins over source hints (dict merge: later keys override earlier).
+    per_agent_cmds = {**source_hints, **config.agents}
+
+    # Validate each DECLARED agent's resolved runner command eagerly, honouring
+    # the same pre-execution contract as the default runner above: a malformed
+    # (e.g. unclosed quote) or empty per-agent command — from a source `agent`
+    # runner hint or an `[exec.agents.<name>]` config entry — exits 1 before any
+    # statement runs, rather than failing lazily mid-execution at dispatch.
+    # Only declared (dispatchable) agents are checked; a config entry for an
+    # agent the program never declares is inert and never validated.
+    for d in decls:
+        cmd = per_agent_cmds.get(d.name)
+        if cmd is not None:
+            split_command(cmd, kind="runner")
+
+    # One factory backs ``prompt`` (the default) and every declared name; it
+    # dispatches by ``request.agent`` against ``per_agent_cmds``, falling back
+    # to the default runner (the floor).  ``command_with_prompt_target``
+    # substitutes ``%%`` / ``%{PROMPT_FILE}`` for source hints and config
+    # commands alike.
+    factory = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
-        per_agent_cmds=config.agents,
+        per_agent_cmds=per_agent_cmds,
         idle_timeout=config.timeout,
     )
 
     runtime = WorkflowRuntime(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
-        default_agent=runner_agent,
+        default_agent=factory,
         shell_exec_timeout=config.timeout,
     )
 
-    # ``parse_inputs`` returns ``dict[str, str]``; ``run`` accepts a
-    # ``Mapping[str, object]``, so no widening copy is needed.
-    result = runtime.run(
-        source,
+    # Register every declared agent so the registered set equals the declared
+    # set: M4 reconciliation always passes; config-only agents the source never
+    # declares stay inert (NOT registered), per plan §9.
+    for d in decls:
+        runtime.register_agent(d.name, factory)
+
+    # ``parse_inputs`` returns ``dict[str, str]``; ``run_prepared`` accepts a
+    # ``Mapping[str, object]``, so no widening copy is needed.  Reuse the
+    # ``PreparedProgram`` from above — no second parse/scope of the source.
+    result = runtime.run_prepared(
+        prepared,
         inputs=inputs,
         check_only=dry_run.enabled(),
         log_file=log_file,

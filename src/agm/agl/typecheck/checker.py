@@ -20,8 +20,9 @@ Rules implemented
     codec ("no registered codec supports type T" otherwise).
 6.  ``strict_json`` is valid only when the selected codec is ``"json"``.
 7.  Renderer names in interpolation segments must exist in capabilities.
-8.  Agent names: when ``has_fallback_agent`` is ``False`` an unknown name is
-    an error.
+8.  Agent names are NOT validated here: the scope pass owns name validity (an
+    undeclared named agent is a scope binding error).  The built-in ``prompt``
+    call still requires ``has_default_agent`` to back it.
 9.  Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
     accepts any JSON-shaped value (scalars and ``list``/``dict`` thereof, but
     not records/enums/exceptions).  List/dict literals propagate the expected
@@ -779,20 +780,12 @@ class _Checker:
                 span=node.options.span,
             )
 
-        # Validate agent name against capabilities.
-        if kind == CallKind.agent:
-            if (
-                not self._caps.has_fallback_agent
-                and node.agent not in self._caps.agent_names
-            ):
-                raise AglTypeError(
-                    f"Unknown agent '{node.agent}'. The host has no fallback agent "
-                    "and this name is not registered.",
-                    span=node.span,
-                )
-        elif kind == CallKind.default_agent:
-            # A ``prompt`` call needs either a default agent or a fallback agent.
-            if not self._caps.has_default_agent and not self._caps.has_fallback_agent:
+        # Named-agent name validity is owned by the scope pass (an undeclared
+        # named agent is a binding error there); the checker does not re-validate
+        # it.  Only the built-in ``prompt`` call needs a backing here.
+        if kind == CallKind.default_agent:
+            # A ``prompt`` call needs a default agent to back it.
+            if not self._caps.has_default_agent:
                 raise AglTypeError(
                     "No default agent is configured; the built-in 'prompt' call "
                     "cannot run. Register a default agent, or run via `agm exec`, "

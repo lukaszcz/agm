@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.render import RendererFn
+    from agm.agl.scope.symbols import ResolvedProgram
+    from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
+    from agm.agl.syntax.nodes import Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.types import Type as AglType
 
@@ -99,6 +102,74 @@ class CallSiteInfo:
     parse_policy: str
     line: int
     col: int
+
+
+@dataclass(frozen=True, slots=True)
+class AgentDeclInfo:
+    """Static summary of one ``agent`` declaration in a program.
+
+    ``name``
+        The declared agent name.
+    ``runner``
+        The optional static runner-command hint (a literal string with NO
+        interpolation), or ``None`` for a bare ``agent NAME`` declaration.
+    ``line``
+        1-based source line of the declaration (``span.start_line``).
+    ``col``
+        1-based source column of the declaration (``span.start_col``).
+    """
+
+    name: str
+    runner: str | None
+    line: int
+    col: int
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedProgram:
+    """Result of the lex + parse + scope phase of an AgL program.
+
+    Produced by :meth:`WorkflowRuntime.prepare` and consumed by
+    :meth:`WorkflowRuntime.run_prepared`, so those two static phases run exactly
+    ONCE even when a host inspects :attr:`declared_agents` (to wire registrations)
+    before executing.  ``run(source)`` is exactly
+    ``run_prepared(prepare(source))``.
+
+    ``program`` / ``resolved``
+        The parsed AST and resolved program, or ``None`` when parse / scope
+        failed (in which case ``diagnostics`` holds the error and
+        ``run_prepared`` short-circuits to an ``ok=False`` result).
+    ``diagnostics``
+        Error-severity parse/scope diagnostics; empty on success.
+    ``warnings``
+        Non-fatal lex (TAB) and scope warnings; present even on failure.
+    """
+
+    source: str
+    program: "Program | None"
+    resolved: "ResolvedProgram | None"
+    diagnostics: tuple[Diagnostic, ...]
+    warnings: tuple[Diagnostic, ...]
+
+    @property
+    def declared_agents(self) -> tuple[AgentDeclInfo, ...]:
+        """The ``agent`` declarations in source, sorted by line/col.
+
+        Empty when parse or scope failed (``resolved is None``).
+        """
+        if self.resolved is None:
+            return ()
+        infos = [
+            AgentDeclInfo(
+                name=decl.name,
+                runner=decl.runner,
+                line=decl.span.start_line,
+                col=decl.span.start_col,
+            )
+            for decl in self.resolved.declared_agents.values()
+        ]
+        infos.sort(key=lambda info: (info.line, info.col))
+        return tuple(infos)
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,6 +427,78 @@ class WorkflowRuntime:
         )
         return self._host_env_cache
 
+    @staticmethod
+    def prepare(source: str) -> PreparedProgram:
+        """Lex + parse + scope *source* ONCE, capturing diagnostics and warnings.
+
+        This is the single front-end phase shared by :meth:`declared_agents` and
+        :meth:`run`: a host that needs the declared-agent inventory to wire
+        registrations calls ``prepare`` once, reads
+        :attr:`PreparedProgram.declared_agents`, then hands the SAME
+        :class:`PreparedProgram` to :meth:`run_prepared` — so the source is never
+        parsed or scoped twice.
+
+        Side-effect-free and NON-raising: any parse (``AglSyntaxError``) or scope
+        (``AglScopeError``) failure — and any unexpected error in those passes —
+        is captured into :attr:`PreparedProgram.diagnostics` rather than raised,
+        with ``program`` / ``resolved`` left ``None``.  TAB advisories come from
+        the parse's single lex pass (no separate TAB scan).
+        """
+        from agm.agl.lexer import tab_warning_collector
+        from agm.agl.parser import AglSyntaxError, parse_program
+        from agm.agl.scope import AglScopeError, resolve
+
+        # The collector captures the lexer's TAB advisories during the parse —
+        # populated even when the parse fails (the scan completes before the
+        # grammar is consulted), so they surface on every return path.
+        with tab_warning_collector() as tab_sink:
+            try:
+                program = parse_program(source)
+            except AglSyntaxError as exc:
+                return PreparedProgram(
+                    source, None, None, (exc.to_diagnostic(),), tuple(tab_sink)
+                )
+            except Exception as exc:
+                return PreparedProgram(
+                    source,
+                    None,
+                    None,
+                    (Diagnostic(message=str(exc), line=1),),
+                    tuple(tab_sink),
+                )
+        warnings: tuple[Diagnostic, ...] = tuple(tab_sink)
+
+        try:
+            resolved = resolve(program)
+        except AglScopeError as exc:
+            return PreparedProgram(
+                source, program, None, (exc.to_diagnostic(),), warnings
+            )
+        except Exception as exc:
+            return PreparedProgram(
+                source,
+                program,
+                None,
+                (Diagnostic(message=f"Scope error: {exc}", line=1),),
+                warnings,
+            )
+
+        # Scope warnings (e.g. a declared-but-uncalled agent) join the lex ones.
+        return PreparedProgram(
+            source, program, resolved, (), (*warnings, *resolved.warnings)
+        )
+
+    @staticmethod
+    def declared_agents(source: str) -> tuple[AgentDeclInfo, ...]:
+        """Return the agents declared in *source* (parse + scope only).
+
+        Thin wrapper over :meth:`prepare`: returns one :class:`AgentDeclInfo` per
+        ``agent`` declaration, sorted by source line/col.  NON-raising — on any
+        parse or scope error it returns ``()`` (the subsequent ``run`` resurfaces
+        the diagnostic).
+        """
+        return WorkflowRuntime.prepare(source).declared_agents
+
     def run(
         self,
         source: str,
@@ -369,6 +512,12 @@ class WorkflowRuntime:
         Pipeline:
             parse → resolve → check (with HostCapabilities) →
             validate inputs → materialize contracts → eval
+
+        Convenience wrapper: ``run(source)`` is exactly
+        ``run_prepared(prepare(source))``.  A host that needs the declared-agent
+        inventory before execution should call :meth:`prepare` once and pass the
+        result to :meth:`run_prepared`, so the source is parsed and scoped only
+        once.
 
         When ``check_only`` is ``True`` (``agm exec --dry-run``) the runtime
         runs the full static pipeline, input validation, and contract
@@ -385,15 +534,48 @@ class WorkflowRuntime:
 
         Returns a ``RunResult`` capturing the outcome.
         """
+        return self.run_prepared(
+            self.prepare(source),
+            inputs=inputs,
+            check_only=check_only,
+            log_file=log_file,
+        )
+
+    def run_prepared(
+        self,
+        prepared: PreparedProgram,
+        *,
+        inputs: Mapping[str, object] | None = None,
+        check_only: bool = False,
+        log_file: "Path | None" = None,
+    ) -> RunResult:
+        """Execute an already parsed + scoped program (no re-parsing).
+
+        Resumes the pipeline at type checking: reconcile agents → check →
+        validate inputs → materialize contracts → eval.  See :meth:`run` for the
+        ``check_only`` / ``log_file`` semantics.  When *prepared* carries a
+        captured parse/scope failure (``resolved is None``), its diagnostics are
+        surfaced unchanged and nothing executes.
+        """
         if inputs is None:
             inputs = {}
 
-        # ----------------------------------------------------------------
-        # Collect lex warnings (present on every return path).
-        # ----------------------------------------------------------------
-        from agm.agl.lexer import lex_tab_warnings
+        # Lex + scope warnings travel with the prepared program (present on
+        # every return path, like typecheck warnings).
+        warnings: list[Diagnostic] = list(prepared.warnings)
 
-        warnings: list[Diagnostic] = lex_tab_warnings(source)
+        # A parse/scope failure captured by ``prepare`` short-circuits here.
+        if prepared.resolved is None:
+            return RunResult(
+                ok=False,
+                diagnostics=list(prepared.diagnostics),
+                error=None,
+                warnings=warnings,
+            )
+        resolved = prepared.resolved
+        program = prepared.program
+        assert program is not None  # resolved set ⇒ parse succeeded
+        source = prepared.source
 
         # ----------------------------------------------------------------
         # Build the host environment (registry + capabilities + codecs +
@@ -407,47 +589,20 @@ class WorkflowRuntime:
         all_renderers = host_env.renderers
 
         # ----------------------------------------------------------------
-        # [1] Parse
+        # [2b] Source↔host agent reconciliation (plan §8, decisions 1 & 11)
+        #
+        # Enforce the source/host contract BEFORE execution (preferred over
+        # waiting for typecheck — a broken contract should preempt execution).
+        # Reported on the same channel as input-validation / host-config
+        # errors: a non-empty diagnostics list ⇒ ok=False, nothing executes.
         # ----------------------------------------------------------------
-        from agm.agl.parser import AglSyntaxError, parse_program
-
-        try:
-            program = parse_program(source)
-        except AglSyntaxError as exc:
+        reconciliation_errors = _reconcile_agents(registry, resolved.declared_agents)
+        if reconciliation_errors:
             return RunResult(
                 ok=False,
-                diagnostics=[exc.to_diagnostic()],
+                diagnostics=reconciliation_errors,
                 error=None,
-                warnings=warnings,
-            )
-        except Exception as exc:
-            return RunResult(
-                ok=False,
-                diagnostics=[Diagnostic(message=str(exc), line=1)],
-                error=None,
-                warnings=warnings,
-            )
-
-        # ----------------------------------------------------------------
-        # [2] Scope / name resolution
-        # ----------------------------------------------------------------
-        from agm.agl.scope import AglScopeError, resolve
-
-        try:
-            resolved = resolve(program)
-        except AglScopeError as exc:
-            return RunResult(
-                ok=False,
-                diagnostics=[exc.to_diagnostic()],
-                error=None,
-                warnings=warnings,
-            )
-        except Exception as exc:
-            return RunResult(
-                ok=False,
-                diagnostics=[Diagnostic(message=f"Scope error: {exc}", line=1)],
-                error=None,
-                warnings=warnings,
+                warnings=list(warnings),
             )
 
         # ----------------------------------------------------------------
@@ -700,6 +855,58 @@ class WorkflowRuntime:
 # ---------------------------------------------------------------------------
 
 
+def _reconcile_agents(
+    registry: "AgentRegistry",
+    declared_agents: "Mapping[str, AgentDeclNode]",
+) -> list[Diagnostic]:
+    """Enforce the source↔host agent contract (plan §8, decisions 1 & 11).
+
+    Returns error :class:`Diagnostic`s for BOTH contract violations (never
+    stopping at the first) so the user sees every mismatch at once:
+
+    - **Registered-but-undeclared** (decision 1): a name in
+      ``registry.agent_names`` that the source never declares.  Reported at
+      ``line=1`` (a registration has no source span).
+    - **Declared-but-unbacked** (decision 11): a declared agent with no
+      dedicated registration AND no default agent.  Reported at the
+      declaration's ``span.start_line``.  When a default agent IS present every
+      declared name is backed by it, so this never fires.
+
+    Order is deterministic: registered-but-undeclared first (sorted by name),
+    then declared-but-unbacked (sorted by name).  ``declared_agents`` maps a
+    declared name to its ``AgentDecl`` (only ``.span.start_line`` is read).
+    """
+    errors: list[Diagnostic] = []
+
+    declared_names = set(declared_agents)
+    for name in sorted(registry.agent_names - declared_names):
+        errors.append(
+            Diagnostic(
+                message=(
+                    f"Agent {name!r} is registered but never declared in the "
+                    f"program. Declare it with `agent {name}` or remove the "
+                    "registration."
+                ),
+                line=1,
+            )
+        )
+
+    if not registry.has_default_agent:
+        for name in sorted(declared_names - registry.agent_names):
+            errors.append(
+                Diagnostic(
+                    message=(
+                        f"Agent {name!r} is declared but has no backing: "
+                        "register it with register_agent or configure a "
+                        "default agent."
+                    ),
+                    line=declared_agents[name].span.start_line,
+                )
+            )
+
+    return errors
+
+
 def assemble_host_environment(
     *,
     agents: dict[str, AgentFn],
@@ -752,7 +959,6 @@ def assemble_host_environment(
     )
     capabilities = HostCapabilities(
         agent_names=registry.agent_names,
-        has_fallback_agent=registry.has_fallback,
         has_default_agent=registry.has_default_agent,
         supports_shell_exec=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},

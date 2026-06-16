@@ -8,13 +8,13 @@ the type checker (Component 5) — the checker never imports agent/codec/rendere
 
 Design
 ------
-- ``agent_names``: the set of explicitly registered named agents.
-- ``has_fallback_agent``: when ``True`` an implicit fallback handles any
-  unregistered agent name, so the checker accepts unknown names.  When
-  ``False`` an unrecognised agent name is a static error.
+- ``agent_names``: the set of named agents the host can *back* (the registered
+  backings).  This is NOT the set of valid names: name validity is owned by the
+  scope pass — an undeclared named agent is a scope binding error.  The runtime
+  cross-checks ``agent_names`` against the source-declared set.
 - ``has_default_agent``: when ``True`` the host has a default agent that backs
-  the built-in ``prompt`` keyword.  When ``False`` (and no fallback agent), a
-  ``prompt`` call is a static error.
+  the built-in ``prompt`` keyword.  When ``False`` a ``prompt`` call is a static
+  error.
 - ``codec_kinds``: mapping from codec name → frozenset of semantic type-kind
   strings the codec supports.  Built-in codecs: ``"text"`` (supports
   ``{"text"}``); ``"json"`` (supports
@@ -42,15 +42,13 @@ class HostCapabilities:
     Parameters
     ----------
     agent_names:
-        Names of explicitly registered agents (does not include ``"prompt"``
-        or ``"exec"`` — those are built-ins handled separately).
-    has_fallback_agent:
-        When ``True``, any agent name is accepted regardless of whether it
-        appears in ``agent_names``.
+        Names of agents the host can *back* (does not include ``"prompt"``
+        or ``"exec"`` — those are built-ins handled separately).  This is the
+        set of host-supplied backings, not the set of valid names: scope owns
+        name validity (an undeclared named agent is a binding error).
     has_default_agent:
         When ``True``, a default agent backs the built-in ``prompt`` keyword.
-        When ``False`` (and ``has_fallback_agent`` is also ``False``), a
-        ``prompt`` call is a static error.
+        When ``False``, a ``prompt`` call is a static error.
     supports_shell_exec:
         When ``True``, the host can execute ``exec`` (shell) calls.  When
         ``False``, any ``exec`` call site is a static error.  ``WorkflowRuntime``
@@ -76,7 +74,6 @@ class HostCapabilities:
     """
 
     agent_names: frozenset[str] = field(default_factory=frozenset)
-    has_fallback_agent: bool = False
     has_default_agent: bool = False
     supports_shell_exec: bool = False
     codec_kinds: dict[str, frozenset[str]] = field(default_factory=dict)

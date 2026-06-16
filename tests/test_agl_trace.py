@@ -208,7 +208,7 @@ class TestAgentCallRecord:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", _agent_returning("good"))
-        rt.run('let x: text = reviewer "check this"', log_file=log_path)
+        rt.run('agent reviewer\nlet x: text = reviewer "check this"', log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "agent_call_attempt" in kinds
@@ -217,7 +217,7 @@ class TestAgentCallRecord:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("critic", _agent_returning("ok"))
-        rt.run('let x: text = critic "review"', log_file=log_path)
+        rt.run('agent critic\nlet x: text = critic "review"', log_file=log_path)
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -227,7 +227,7 @@ class TestAgentCallRecord:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("impl", _agent_returning("result"))
-        rt.run('let x: text = impl "do work"', log_file=log_path)
+        rt.run('agent impl\nlet x: text = impl "do work"', log_file=log_path)
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -256,7 +256,7 @@ class TestRetryRecords:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'let x: int = impl[on_parse_error: retry[2]] "get int"',
+            'agent impl\nlet x: int = impl[on_parse_error: retry[2]] "get int"',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -279,7 +279,7 @@ class TestRetryRecords:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'let x: int = impl[on_parse_error: retry[2]] "get int"',
+            'agent impl\nlet x: int = impl[on_parse_error: retry[2]] "get int"',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -298,7 +298,7 @@ class TestRetryRecords:
         rt.register_agent("impl", agent)
         try:
             rt.run(
-                'let x: int = impl[on_parse_error: retry[1]] "get int"',
+                'agent impl\nlet x: int = impl[on_parse_error: retry[1]] "get int"',
                 log_file=log_path,
             )
         except SystemExit:
@@ -323,7 +323,7 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
         assert not result.ok
         assert result.error is not None
 
@@ -339,7 +339,7 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
         assert not result.ok
 
         records = _load_jsonl(log_path)
@@ -354,7 +354,7 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
         assert not result.ok
 
         records = _load_jsonl(log_path)
@@ -372,7 +372,7 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('let x: int = impl "get int"', log_file=log_path)
+        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
         assert not result.ok
         assert result.error is not None
 
@@ -401,6 +401,7 @@ class TestExceptionRecord:
         rt.register_agent("impl", agent)
         # The AgentParseError is caught and the result is a fallback string.
         result = rt.run(
+            'agent impl\n'
             'try\n'
             '  let x: int = impl "get int"\n'
             'catch AgentParseError as e =>\n'
@@ -559,7 +560,7 @@ class TestNoLog:
     def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
         rt = WorkflowRuntime()
         rt.register_agent("a", _agent_returning("hello"))
-        result = rt.run('let x: text = a "hi"', log_file=None)
+        result = rt.run('agent a\nlet x: text = a "hi"', log_file=None)
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
         assert not jsonl_files
@@ -686,7 +687,7 @@ class TestSourceSpans:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("impl", _agent_returning("hello"))
-        rt.run('let x: text = impl "do work"', log_file=log_path)
+        rt.run('agent impl\nlet x: text = impl "do work"', log_file=log_path)
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -887,7 +888,7 @@ class TestUnparseableFeedback:
 
         rt.register_agent("impl", agent)
         result = rt.run(
-            'let x: int = impl[on_parse_error: retry[1]] "get int"',
+            'agent impl\nlet x: int = impl[on_parse_error: retry[1]] "get int"',
             log_file=log_path,
         )
         assert result.ok
@@ -914,7 +915,7 @@ class TestUnparseableFeedback:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'let x: int = impl[on_parse_error: retry[1]] "get int"',
+            'agent impl\nlet x: int = impl[on_parse_error: retry[1]] "get int"',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -945,7 +946,7 @@ class TestUnparseableFeedback:
         bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
         with patch("agm.agl.runtime.codec.JsonCodec.parse", return_value=bare_fail):
             result = rt.run(
-                'let x: int = impl[on_parse_error: abort] "q"'
+                'agent impl\nlet x: int = impl[on_parse_error: abort] "q"'
             )
         # The program raises AgentParseError; run returns ok=False.
         assert not result.ok

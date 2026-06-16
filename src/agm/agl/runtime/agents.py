@@ -5,12 +5,13 @@
 
 - **Named agents**: registered with ``register_agent(name, fn)``.
 - **Default agent** (``prompt``): registered via the ``default_agent``
-  constructor kwarg; handles the built-in ``prompt`` contextual keyword.
-- **Fallback support**: when ``has_fallback`` is ``True``, any unrecognised
-  agent name is dispatched to the default agent (used by the CLI runtime that
-  wires the runner-backed default agent as a fallback for all names).
+  constructor kwarg; handles the built-in ``prompt`` contextual keyword.  It
+  also backs any *declared* named agent that has no dedicated registration:
+  scope guarantees every named call is declared, so the default agent is the
+  documented backing for a declared name, not an implicit resolver of arbitrary
+  names.
 
-The registry is also the source of the ``HostCapabilities.has_fallback_agent``
+The registry is also the source of the ``HostCapabilities.has_default_agent``
 and ``HostCapabilities.agent_names`` values.
 
 Runner-backed agent
@@ -118,15 +119,6 @@ class AgentRegistry:
         self._default = default_agent
 
     @property
-    def has_fallback(self) -> bool:
-        """True when a default agent is configured.
-
-        With a default agent, any unknown agent name falls back to it, so
-        the capability checker treats all names as valid.
-        """
-        return self._default is not None
-
-    @property
     def has_default_agent(self) -> bool:
         """True when a default agent backs the built-in ``prompt`` keyword."""
         return self._default is not None
@@ -141,9 +133,10 @@ class AgentRegistry:
 
         Resolution order:
         1. Named agents (exact match).
-        2. Default agent fallback (when ``has_fallback`` is True).
+        2. Default agent: backs any *declared* name without a dedicated
+           registration (scope guarantees only declared names reach here).
 
-        Raises ``KeyError`` if the name is unknown and no fallback exists.
+        Raises ``KeyError`` if the name is unknown and no default agent exists.
 
         ``AgentCallHostError`` raised by the callable is converted to
         ``AglRaise(ExceptionValue("AgentCallError", ...))`` so that the AgL
@@ -155,8 +148,8 @@ class AgentRegistry:
         """
         fn: AgentFn | None = self._named.get(name)
         if fn is None:
-            # ``prompt`` and any unregistered named agent both fall back to the
-            # default agent when one is configured.
+            # ``prompt`` and any declared named agent without a dedicated
+            # registration both fall back to the default agent when configured.
             if self._default is not None:
                 fn = self._default
             else:

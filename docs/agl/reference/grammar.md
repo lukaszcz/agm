@@ -26,6 +26,7 @@ closed_stmt ::= record_def
               | enum_def
               | type_alias
               | input_decl
+              | agent_decl
               | let_decl
               | var_decl
               | set_stmt
@@ -79,7 +80,12 @@ field_inline    ::= VAR_NAME ":" type_expr
 type_alias      ::= "type" TYPE_NAME "=" type_expr
 
 input_decl      ::= "input" VAR_NAME (":" type_expr)?
+
+agent_decl      ::= "agent" VAR_NAME ("=" STRING)?
 ```
+
+The runner string of an `agent` declaration must be a literal string with no
+`${…}` interpolation; an interpolation hole is a static error.
 
 ## Type expressions
 

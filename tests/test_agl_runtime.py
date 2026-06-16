@@ -47,8 +47,9 @@ class TestWorkflowRuntimeConstructor:
 
         rt = WorkflowRuntime(default_agent=my_agent)
         rt.register_agent("reviewer", my_agent)  # should not raise
-        result = rt.run("let x = 1")
-        # M1: a valid program with no agent calls returns ok=True
+        # The source declares the registered agent so the source↔host contract
+        # holds (M4); a valid program then returns ok=True.
+        result = rt.run("agent reviewer\nlet x = 1")
         assert result.ok is True
         assert result.error is None
 
@@ -152,7 +153,7 @@ class TestRunBehavior:
 
 
 class TestFallbackAgent:
-    """has_fallback_agent behavior for capability checking."""
+    """Default-agent backing behavior for capability checking."""
 
     def test_no_default_agent_prompt_call_static_error(self) -> None:
         rt = WorkflowRuntime()  # no default_agent
@@ -168,21 +169,33 @@ class TestFallbackAgent:
     def test_named_agent_registered_accepted(self) -> None:
         rt = WorkflowRuntime()
         rt.register_agent("impl", lambda req: "output")
-        result = rt.run('let x = impl "do it"')
+        result = rt.run('agent impl\nlet x = impl "do it"')
         assert result.ok is True
 
-    def test_unknown_named_agent_without_fallback_is_error(self) -> None:
+    def test_undeclared_named_agent_is_static_error(self) -> None:
         rt = WorkflowRuntime()
-        # No agents registered, no fallback → static error for named agent
+        # An undeclared named agent is a static scope binding error: it is
+        # rejected before execution regardless of host backing.
         result = rt.run('let x = mysterious_agent "hi"')
         assert result.ok is False
         assert result.error is None
 
-    def test_has_fallback_when_default_agent_is_set(self) -> None:
+    def test_default_agent_backs_declared_name(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        # A runtime with a default_agent provides fallback for any name
-        result = rt.run('let x = any_agent_name "hi"')
+        # A default_agent backs any declared name without a dedicated registration.
+        result = rt.run('agent any_agent_name\nlet x = any_agent_name "hi"')
         assert result.ok is True
+
+    def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
+        # A default agent backs the declared (but uncalled) agent so the
+        # source↔host contract holds (decision 11): a declared+backed agent
+        # that is never called is a non-fatal scope WARNING, surfaced on
+        # result.warnings without affecting result.ok.
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        result = rt.run('agent unused_helper\nprint "hi"')
+        assert result.ok is True
+        joined = " ".join(d.message for d in result.warnings)
+        assert "unused_helper" in joined
 
 
 class TestInputValidationRuntime:
@@ -304,7 +317,7 @@ class TestAgentRequest:
 
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", reviewer)
-        rt.run('let x = reviewer "Review this"')
+        rt.run('agent reviewer\nlet x = reviewer "Review this"')
         assert received[0].agent == "reviewer"
 
 
@@ -1428,25 +1441,14 @@ class TestRuntimeErrorPaths:
         assert result.ok is False
         assert any("unexpected parse error" in d.message for d in result.diagnostics)
 
-    def test_tab_warning_included_even_on_parse_failure(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Tab warnings are collected before parsing, so they survive a parse failure."""
-        import agm.agl.parser as parser_mod
-        from agm.agl.parser.errors import AglSyntaxError
-        from agm.agl.syntax.spans import SourceSpan
-
-        def bad_parse(source: str) -> object:
-            raise AglSyntaxError(
-                "syntax error",
-                span=SourceSpan(1, 1, 1, 1, 0, 0),
-                filename="<test>",
-            )
-
-        monkeypatch.setattr(parser_mod, "parse_program", bad_parse)
+    def test_tab_warning_included_even_on_parse_failure(self) -> None:
+        """Tab advisories come from the lexer's single scan, so they survive a
+        parse failure: the scan completes (recording the TAB) before the grammar
+        rejects the token stream."""
         rt = WorkflowRuntime()
-        result = rt.run("\tlet x = 1")  # tab + parse error
+        result = rt.run("\tprint")  # leading TAB, then an incomplete `print`
         assert result.ok is False
+        assert result.diagnostics  # genuine parse error surfaced
         tab_warns = [w for w in result.warnings if w.severity == "warning"]
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 1
@@ -2067,3 +2069,140 @@ class TestTabWarningsInRunResult:
         result = rt.run(source)
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert len(tab_warns) == 2
+
+
+# ---------------------------------------------------------------------------
+# declared_agents() API (M4)
+# ---------------------------------------------------------------------------
+
+
+class TestDeclaredAgentsApi:
+    """WorkflowRuntime.declared_agents(): parse + scope only, non-raising."""
+
+    def test_returns_agent_decl_info_with_names_runners_and_positions(self) -> None:
+        from agm.agl import AgentDeclInfo
+
+        rt = WorkflowRuntime()
+        source = 'agent impl = "claude -p %{PROMPT_FILE}"\nagent reviewer'
+        decls = rt.declared_agents(source)
+        assert all(isinstance(d, AgentDeclInfo) for d in decls)
+        # Sorted deterministically by source line/col.
+        assert [d.name for d in decls] == ["impl", "reviewer"]
+        impl, reviewer = decls
+        assert impl.runner == "claude -p %{PROMPT_FILE}"
+        assert reviewer.runner is None
+        # Positions come from the declaration span (1-based).
+        assert impl.line == 1
+        assert impl.col == 1
+        assert reviewer.line == 2
+
+    def test_no_declarations_returns_empty(self) -> None:
+        rt = WorkflowRuntime()
+        assert rt.declared_agents("let x = 1") == ()
+
+    def test_parse_error_returns_empty_tuple(self) -> None:
+        rt = WorkflowRuntime()
+        # Syntax garbage: declared_agents stays non-raising and returns ().
+        assert rt.declared_agents("@@@@@") == ()
+
+    def test_scope_error_returns_empty_tuple(self) -> None:
+        rt = WorkflowRuntime()
+        # Duplicate agent declaration is a scope error → ().
+        assert rt.declared_agents("agent dup\nagent dup") == ()
+
+    def test_undeclared_call_scope_error_returns_empty_tuple(self) -> None:
+        rt = WorkflowRuntime()
+        # Calling an undeclared agent is a scope error → ().
+        assert rt.declared_agents('let x = ghost "hi"') == ()
+
+
+# ---------------------------------------------------------------------------
+# Source↔host reconciliation in run() (M4, plan §8, decisions 1 & 11)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentReconciliation:
+    """run() enforces the source↔host agent contract before execution."""
+
+    def test_registered_but_undeclared_is_host_error(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
+            return "ok"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("ghost", agent)
+        # 'ghost' is registered but the source never declares it.
+        result = rt.run("let x = 1")
+        assert result.ok is False
+        assert result.error is None
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "ghost" in msgs
+        assert "registered" in msgs.lower()
+        # Nothing executed.
+        assert calls == []
+
+    def test_registered_but_undeclared_diagnostic_line_is_one(self) -> None:
+        rt = WorkflowRuntime()
+        rt.register_agent("ghost", lambda req: "ok")
+        result = rt.run("let x = 1")
+        assert result.diagnostics[0].line == 1
+
+    def test_declared_but_unbacked_is_host_error(self) -> None:
+        rt = WorkflowRuntime()  # no registration, no default agent
+        result = rt.run('agent orphan\nlet x = orphan "hi"')
+        assert result.ok is False
+        assert result.error is None
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "orphan" in msgs
+        assert "backing" in msgs.lower()
+
+    def test_declared_but_unbacked_diagnostic_reports_declaration_line(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('let y = 1\nagent orphan\nlet x = orphan "hi"')
+        assert result.ok is False
+        # The declaration is on line 2.
+        assert result.diagnostics[0].line == 2
+
+    def test_declared_and_registered_runs(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
+            return "output"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("impl", agent)
+        result = rt.run('agent impl\nlet x = impl "do it"')
+        assert result.ok is True
+        assert calls == ["do it"]
+
+    def test_declared_with_default_agent_runs(self) -> None:
+        # No dedicated registration, but a default agent backs the declared name.
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        result = rt.run('agent any_name\nlet x = any_name "hi"')
+        assert result.ok is True
+
+    def test_both_error_categories_reported_together(self) -> None:
+        rt = WorkflowRuntime()  # no default agent
+        rt.register_agent("ghost", lambda req: "ok")
+        # 'orphan' is declared but unbacked; 'ghost' is registered but undeclared.
+        result = rt.run('agent orphan\nlet x = orphan "hi"')
+        assert result.ok is False
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "ghost" in msgs
+        assert "orphan" in msgs
+        assert len(result.diagnostics) == 2
+
+    def test_reconciliation_failure_skips_execution(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
+            return "ok"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("ghost", agent)
+        rt.run('print "side effect?"')
+        assert calls == []

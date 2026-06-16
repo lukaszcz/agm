@@ -4,6 +4,8 @@ enum Status
   | Done
   | More
 
+agent stepper
+
 let a = "x"; let b = "y"; print a + b
 var n: int = 0
 do[5] set n = n + 1; let s: Status = stepper "Step ${n}." until s is Done

@@ -1,6 +1,8 @@
 # let/var/set, literal inference, agent-call targets, bare expression statements.
 input start
 
+agent impl
+
 let greeting = "hello"
 let count = 2
 let exact = 1.5

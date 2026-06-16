@@ -2,6 +2,8 @@
 # minimum common indentation), interpolation holes are never dedented.
 input body
 
+agent critic
+
 if true =>
   let block = critic """
   Header line:

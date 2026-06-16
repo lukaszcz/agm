@@ -42,7 +42,7 @@ catch_pattern ::= TYPE_NAME ("as" VAR_NAME)?
 try
   let review: Review = reviewer[on_parse_error: retry[2]] "Review ${artifact}"
 catch AgentParseError as e =>
-  let report = critic "Explain invalid output:\n${e.raw as raw}"
+  let report = critic "Explain invalid output:\n${e.raw}"
   raise e
 catch _ as e =>
   print "unexpected: ${e.message}"

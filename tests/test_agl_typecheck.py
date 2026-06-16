@@ -79,13 +79,12 @@ def default_capabilities() -> HostCapabilities:
     """The M1 host capabilities used as the default for these tests.
 
     Mirrors the catalog ``WorkflowRuntime.run`` builds when a default agent is
-    configured (text codec; default/raw/json/bullets renderers).
+    configured (text codec).
     """
     return HostCapabilities(
         agent_names=frozenset(),
         has_default_agent=True,
         codec_kinds={"text": frozenset({"text"})},
-        renderer_names=frozenset({"default", "raw", "json", "bullets"}),
     )
 
 
@@ -133,7 +132,6 @@ def caps_no_fallback(*agent_names: str) -> HostCapabilities:
     return HostCapabilities(
         agent_names=frozenset(agent_names),
         codec_kinds={"text": frozenset({"text"})},
-        renderer_names=frozenset({"default", "raw"}),
     )
 
 
@@ -144,7 +142,6 @@ def caps_with_shell_exec() -> HostCapabilities:
         has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={"text": frozenset({"text"})},
-        renderer_names=frozenset({"default", "raw", "json", "bullets"}),
     )
 
 
@@ -160,7 +157,6 @@ def caps_with_typed_shell_exec() -> HostCapabilities:
                 {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
             ),
         },
-        renderer_names=frozenset({"default", "raw", "json", "bullets"}),
     )
 
 
@@ -175,7 +171,6 @@ def caps_with_json_codec() -> HostCapabilities:
                 {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
             ),
         },
-        renderer_names=frozenset({"default", "raw"}),
     )
 
 
@@ -259,10 +254,6 @@ class TestAcceptance:
         r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x}"')
         assert r.resolved.program is not None
 
-    def test_renderer_raw_ok(self) -> None:
-        r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x as raw}"')
-        assert r.resolved.program is not None
-
     def test_exec_call_text_default(self) -> None:
         # F6: exec is accepted only when the host supports shell exec (M4); the
         # default M1 capabilities reject it (covered in TestExecRejection).
@@ -281,82 +272,6 @@ class TestAcceptance:
         assert r.resolved.program is not None
 
 
-# ---------------------------------------------------------------------------
-# F6: renderer capability model (kind-restricted custom renderers)
-# ---------------------------------------------------------------------------
-
-
-def caps_with_renderer_kinds(
-    name: str, kinds: frozenset[str] | None
-) -> HostCapabilities:
-    """Default caps plus one custom renderer with a kind descriptor."""
-    return HostCapabilities(
-        agent_names=frozenset(),
-        has_default_agent=True,
-        codec_kinds={"text": frozenset({"text"})},
-        renderer_names=frozenset({"default", "raw", "json", "bullets", name}),
-        renderer_kinds={name: kinds},
-    )
-
-
-class TestRendererKinds:
-    """F6 (plan §9.1): a renderer may restrict the type kinds it accepts."""
-
-    def test_kind_restricted_renderer_accepts_supported_kind(self) -> None:
-        # ``listonly`` accepts only ``list`` kind; ``${xs as listonly}`` where
-        # ``xs`` is a list typechecks.
-        caps = caps_with_renderer_kinds("listonly", frozenset({"list"}))
-        r = parse_resolve_check(
-            'let xs: list[text] = ["a"]\nlet q = prompt "${xs as listonly}"',
-            capabilities=caps,
-        )
-        assert r.resolved.program is not None
-
-    def test_kind_restricted_renderer_rejects_unsupported_kind(self) -> None:
-        # The same renderer rejects a ``text`` operand (unsupported kind).
-        caps = caps_with_renderer_kinds("listonly", frozenset({"list"}))
-        err = reject_type(
-            'let x = "v"\nlet q = prompt "${x as listonly}"',
-            capabilities=caps,
-        )
-        line, msg = diag(err)
-        assert "listonly" in msg
-        assert "list" in msg  # mentions the supported kinds
-
-    def test_type_agnostic_renderer_accepts_any_kind(self) -> None:
-        # ``None`` supported_types → accepts every kind (text and list both ok).
-        caps = caps_with_renderer_kinds("anything", None)
-        r = parse_resolve_check(
-            'let x = "v"\nlet xs: list[text] = ["a"]\n'
-            'let q = prompt "${x as anything} ${xs as anything}"',
-            capabilities=caps,
-        )
-        assert r.resolved.program is not None
-
-    def test_builtin_renderers_accept_all_kinds(self) -> None:
-        # Built-ins are NOT pinned to any kind (absent from renderer_kinds →
-        # type-agnostic), so json/raw/bullets accept a text operand as before.
-        r = parse_resolve_check(
-            'let x = "v"\n'
-            'let a = prompt "${x as raw}"\n'
-            'let b = prompt "${x as json}"\n'
-            'let c = prompt "${x as bullets}"'
-        )
-        assert r.resolved.program is not None
-
-    def test_kind_restricted_multi_kind_renderer(self) -> None:
-        # A renderer supporting {text, int} accepts both but rejects a list.
-        caps = caps_with_renderer_kinds("scalars", frozenset({"text", "int"}))
-        ok = parse_resolve_check(
-            'let n = 1\nlet q = prompt "${n as scalars}"', capabilities=caps
-        )
-        assert ok.resolved.program is not None
-        err = reject_type(
-            'let xs: list[int] = [1]\nlet q = prompt "${xs as scalars}"',
-            capabilities=caps,
-        )
-        _, msg = diag(err)
-        assert "scalars" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +597,6 @@ class TestAgentCapabilities:
             agent_names=frozenset(),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default", "raw"}),
         )
         r = parse_resolve_check('let x = prompt "Q"', capabilities=caps)
         assert r.resolved.program is not None
@@ -800,23 +714,19 @@ class TestFormatOption:
 
 
 # ---------------------------------------------------------------------------
-# Rejection: renderer errors
+# Interpolation syntax
 # ---------------------------------------------------------------------------
 
 
-class TestRendererErrors:
-    def test_unknown_renderer(self) -> None:
-        err = reject_type(
-            'let x = "v"\nlet q = prompt "Hi ${x as unknown_renderer}"'
-        )
-        line, msg = diag(err)
-        assert "unknown_renderer" in msg
+class TestInterpolationSyntax:
+    def test_as_renderer_syntax_is_parse_error(self) -> None:
+        """``${x as name}`` is a syntax error after removal of renderer syntax."""
+        from agm.agl.parser import AglSyntaxError
 
-    def test_known_renderer_raw_ok(self) -> None:
-        r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x as raw}"')
-        assert r.resolved.program is not None
+        with pytest.raises(AglSyntaxError):
+            parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x as unknown_renderer}"')
 
-    def test_known_renderer_default_fallback_ok(self) -> None:
+    def test_plain_interp_ok(self) -> None:
         # No explicit renderer specified (default).
         r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x}"')
         assert r.resolved.program is not None
@@ -1402,7 +1312,6 @@ class TestHostCapabilities:
         caps = HostCapabilities(
             agent_names=frozenset({"a"}),
             codec_kinds={"text": frozenset({"text"})},
-            renderer_names=frozenset({"default"}),
         )
         assert caps.agent_names == frozenset({"a"})
 
@@ -2399,14 +2308,16 @@ class TestCheckerExprs:
 
     # --- Template interpolation ---
 
-    def test_interp_segment_with_render(self) -> None:
-        """A template interpolation with a known renderer name type-checks."""
-        r = accept_type('let x = 1\nlet t = "${x as raw}"\n')
+    def test_interp_segment_plain(self) -> None:
+        """A template interpolation type-checks."""
+        r = accept_type('let x = 1\nlet t = "${x}"\n')
         assert r.resolved.program is not None
 
-    def test_interp_segment_unknown_render(self) -> None:
-        err = reject_type('let x = 1\nlet t = "${x as markdown}"\n')
-        assert "markdown" in err.to_diagnostic().message
+    def test_interp_segment_as_renderer_is_syntax_error(self) -> None:
+        from agm.agl.parser import AglSyntaxError
+
+        with pytest.raises(AglSyntaxError):
+            accept_type('let x = 1\nlet t = "${x as markdown}"\n')
 
     # --- set stmt with annotated var ---
 

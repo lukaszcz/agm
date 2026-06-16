@@ -13,7 +13,7 @@ let next: Status = judge "Re-judge it."
 
 case next of
   | Approved => print "ok"
-  | Rejected(notes) => print "notes:\n${notes as bullets}"
+  | Rejected(notes) => print "notes:\n${notes}"
 
 type Status = Verdict
 

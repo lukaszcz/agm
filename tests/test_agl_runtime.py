@@ -875,10 +875,6 @@ class TestCapabilitiesBuiltFromRegistrations:
         result = rt.run('let x = prompt "hi"')
         assert result.ok is True
 
-    def test_default_runtime_has_builtin_renderer_names(self) -> None:
-        """Built-in renderers (default, raw, json, bullets) are always present."""
-        from agm.agl.runtime.render import RENDERER_NAMES
-        assert frozenset({"default", "raw", "json", "bullets"}) <= RENDERER_NAMES
 
     def test_register_codec_before_run_extends_capabilities(self) -> None:
         """A custom codec registered before run() makes its kinds available to typecheck."""
@@ -924,298 +920,159 @@ class TestCapabilitiesBuiltFromRegistrations:
         result = rt.run("let x = 1")
         assert result.ok is True
 
-    def test_registered_renderer_makes_interpolation_typecheck(self) -> None:
-        """``${x as fancy}`` typechecks ONLY when ``fancy`` is registered (F4)."""
-        src = 'input x\nlet y = prompt "see ${x as fancy}"'
-
-        # Without registration: the renderer is unknown → static type error.
-        rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
-        unreg = rt_unreg.run(src, inputs={"x": "hi"})
-        assert unreg.ok is False
-        assert any("fancy" in d.message for d in unreg.diagnostics)
-
-        # With registration: the same program now passes static checking.
-        rt_reg = WorkflowRuntime(default_agent=lambda req: "ok")
-        rt_reg.register_renderer("fancy", lambda val, name: str(val))
-        reg = rt_reg.run(src, inputs={"x": "hi"})
-        assert reg.ok is True
-
-    def test_unregistered_renderer_is_a_static_error(self) -> None:
-        """An ``as <name>`` for an unregistered renderer is rejected (F4)."""
+    def test_as_renderer_syntax_is_parse_error(self) -> None:
+        """``${x as name}`` is a syntax error (renderer syntax removed)."""
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         result = rt.run(
-            'input x\nlet y = prompt "${x as nope}"', inputs={"x": "hi"}
+            'input x\nlet y = prompt "see ${x as fancy}"', inputs={"x": "hi"}
         )
         assert result.ok is False
-        assert any("nope" in d.message for d in result.diagnostics)
-
-    def test_no_duplicated_constant_in_runtime(self) -> None:
-        """runtime.py derives renderer names from the render module, not a literal.
-
-        Behavioral check: a renderer name that is a built-in (``json``) is
-        accepted in an interpolation without any registration, proving the
-        runtime sources the built-in set from ``render`` (F4).
-        """
-        from agm.agl.runtime.render import RENDERER_NAMES
-
-        assert isinstance(RENDERER_NAMES, frozenset)
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        # ``json`` is a built-in renderer → accepted with no registration.
-        result = rt.run('input x\nlet y = prompt "${x as json}"', inputs={"x": "hi"})
-        assert result.ok is True
 
 
 # ---------------------------------------------------------------------------
-# Coverage: render.py — render_for_prompt / render_for_console / helpers
+# Coverage: render.py — render_value / _scalar_text / _pretty_json
 # ---------------------------------------------------------------------------
 
 
-class TestRenderForPrompt:
-    """Direct unit tests for render_for_prompt and render_for_console."""
+class TestRenderValue:
+    """Unit tests for the uniform render_value function."""
 
-    def test_text_default_renderer_has_boundary(self) -> None:
+    def test_text_value_is_verbatim(self) -> None:
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert render_value(TextValue("hello world")) == "hello world"
 
-        out = render_for_prompt(TextValue("hello"), renderer_name=None, var_name="x")
-        assert "hello" in out
-        assert 'name="x"' in out
-        assert 'type="text"' in out
-
-    def test_text_default_renderer_no_varname(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(TextValue("hi"), renderer_name=None, var_name=None)
-        assert "hi" in out
-        assert 'name="value"' in out
-
-    def test_int_default_renderer_scalar(self) -> None:
+    def test_int_value_is_plain_text(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert render_value(IntValue(42)) == "42"
 
-        out = render_for_prompt(IntValue(42), renderer_name=None, var_name="n")
-        assert out == "42"
-
-    def test_decimal_default_renderer_scalar(self) -> None:
+    def test_decimal_value_is_plain_text(self) -> None:
         from decimal import Decimal
 
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_prompt(DecimalValue(Decimal("1.5")), renderer_name=None, var_name="d")
-        assert out == "1.5"
+        assert render_value(DecimalValue(Decimal("1.5"))) == "1.5"
 
-    def test_bool_default_renderer_scalar(self) -> None:
+    def test_bool_value_is_plain_text(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert render_value(BoolValue(True)) == "true"
+        assert render_value(BoolValue(False)) == "false"
 
-        assert render_for_prompt(BoolValue(True), renderer_name=None, var_name="b") == "true"
-        assert render_for_prompt(BoolValue(False), renderer_name=None, var_name="b") == "false"
-
-    def test_json_default_renderer_structured(self) -> None:
-        from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(JsonValue({"k": 1}), renderer_name=None, var_name="j")
-        assert "k" in out
-        assert 'type="json"' in out
-
-    def test_list_default_renderer_structured(self) -> None:
+    def test_list_value_is_pretty_json(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        v = ListValue([IntValue(1), IntValue(2)])
+        out = render_value(v)
+        assert out == "[\n  1,\n  2\n]"
 
-        out = render_for_prompt(
-            ListValue(elements=(IntValue(1), IntValue(2))),
-            renderer_name=None,
-            var_name="xs",
-        )
-        assert 'type="list"' in out
+    def test_dict_value_is_pretty_json(self) -> None:
+        from agm.agl.eval.values import DictValue, TextValue
+        from agm.agl.runtime.render import render_value
+        v = DictValue({"k": TextValue("v")})
+        out = render_value(v)
+        assert '"k"' in out and '"v"' in out
 
-    def test_dict_default_renderer_structured(self) -> None:
-        from agm.agl.eval.values import DictValue, IntValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(
-            DictValue(entries={"a": IntValue(1)}),
-            renderer_name=None,
-            var_name="d",
-        )
-        assert 'type="dict"' in out
-
-    def test_record_default_renderer_uses_type_name(self) -> None:
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        rv = RecordValue(type_name="Issue", fields={"n": IntValue(3)})
-        out = render_for_prompt(rv, renderer_name=None, var_name="r")
-        assert 'type="Issue"' in out
-
-    def test_enum_default_renderer_uses_type_name(self) -> None:
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        ev = EnumValue(type_name="Status", variant="Done", fields={})
-        out = render_for_prompt(ev, renderer_name=None, var_name="s")
-        assert 'type="Status"' in out
-
-    def test_raw_renderer(self) -> None:
+    def test_no_dsl_value_tags_in_prompt_interpolation(self) -> None:
+        """Interpolation in a prompt never wraps values in <dsl-value> tags."""
         from agm.agl.eval.values import IntValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert "<dsl-value" not in render_value(TextValue("x"))
+        assert "<dsl-value" not in render_value(IntValue(1))
 
-        assert render_for_prompt(TextValue("hi"), renderer_name="raw", var_name="x") == "hi"
-        assert render_for_prompt(IntValue(7), renderer_name="raw", var_name="n") == "7"
-
-    def test_json_renderer(self) -> None:
-        from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(IntValue(5), renderer_name="json", var_name="n")
-        assert "5" in out
-
-    def test_bullets_renderer_list(self) -> None:
-        from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(
-            ListValue(elements=(TextValue("a"), TextValue("b"))),
-            renderer_name="bullets",
-            var_name="xs",
-        )
-        assert "- a" in out
-        assert "- b" in out
-
-    def test_bullets_renderer_non_list(self) -> None:
-        from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        # Non-list falls through to pretty JSON.
-        out = render_for_prompt(IntValue(3), renderer_name="bullets", var_name="n")
-        assert "3" in out
-
-    def test_unknown_renderer_raises_internal_error(self) -> None:
+    def test_render_value_text(self) -> None:
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
-        # An unknown renderer name is a checker-invariant violation, not a silent
-        # fallback (F2, M3b): render_for_prompt fails loudly so a broken
-        # renderers table cannot masquerade as default output.
-        with pytest.raises(AssertionError, match="notarenderer"):
-            render_for_prompt(
-                TextValue("x"),
-                renderer_name="notarenderer",
-                var_name="v",
-                renderers={},
-            )
+        assert render_value(TextValue("hello")) == "hello"
 
-    def test_render_for_console_text(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_console
-
-        assert render_for_console(TextValue("hello")) == "hello"
-
-    def test_render_for_console_int(self) -> None:
+    def test_render_value_int_via_render_value(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        assert render_for_console(IntValue(7)) == "7"
+        assert render_value(IntValue(7)) == "7"
 
-    def test_render_for_console_decimal(self) -> None:
+    def test_render_value_decimal_via_render_value(self) -> None:
         from decimal import Decimal
 
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        assert render_for_console(DecimalValue(Decimal("1.5"))) == "1.5"
+        assert render_value(DecimalValue(Decimal("1.5"))) == "1.5"
 
-    def test_render_for_console_bool(self) -> None:
+    def test_render_value_bool_via_render_value(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        assert render_for_console(BoolValue(True)) == "true"
-        assert render_for_console(BoolValue(False)) == "false"
+        assert render_value(BoolValue(True)) == "true"
+        assert render_value(BoolValue(False)) == "false"
 
-    def test_render_for_console_json(self) -> None:
+    def test_render_value_json_via_render_value(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(JsonValue({"k": 1}))
+        out = render_value(JsonValue({"k": 1}))
         assert "k" in out
 
-    def test_render_for_console_list(self) -> None:
+    def test_render_value_list_via_render_value(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(ListValue(elements=(IntValue(1),)))
+        out = render_value(ListValue(elements=(IntValue(1),)))
         assert "1" in out
 
-    def test_render_for_console_record(self) -> None:
+    def test_render_value_record_via_render_value(self) -> None:
         from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(RecordValue(type_name="R", fields={"x": IntValue(3)}))
+        out = render_value(RecordValue(type_name="R", fields={"x": IntValue(3)}))
         assert "x" in out
 
-    def test_render_for_console_enum(self) -> None:
+    def test_render_value_enum_via_render_value(self) -> None:
         from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(EnumValue(type_name="E", variant="A", fields={}))
+        out = render_value(EnumValue(type_name="E", variant="A", fields={}))
         assert "A" in out
 
-    def test_render_for_console_dict(self) -> None:
+    def test_render_value_dict_via_render_value(self) -> None:
         from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(DictValue(entries={"k": TextValue("v")}))
+        out = render_value(DictValue(entries={"k": TextValue("v")}))
         assert "k" in out
 
-    def test_scalar_text_json_value(self) -> None:
-        """_scalar_text(JsonValue) delegates to dumps_exact (line 67-68)."""
-        from agm.agl.eval.values import JsonValue
+    def test_scalar_text_int(self) -> None:
+        """_scalar_text(IntValue) renders as plain decimal digits."""
+        from agm.agl.eval.values import IntValue
         from agm.agl.runtime.render import _scalar_text
 
-        out = _scalar_text(JsonValue({"a": 1}))
-        assert "a" in out
+        assert _scalar_text(IntValue(42)) == "42"
 
-    def test_scalar_text_list_value_falls_back_to_pretty_json(self) -> None:
-        """_scalar_text with a ListValue falls back to _pretty_json (line 69)."""
-        from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import _scalar_text
-
-        out = _scalar_text(ListValue(elements=(IntValue(1),)))
-        assert "1" in out
-
-    def test_type_kind_str_scalar_types(self) -> None:
-        """_type_kind_str returns the correct kind for each scalar type."""
+    def test_scalar_text_decimal(self) -> None:
+        """_scalar_text(DecimalValue) drops trailing zeros, no sci notation."""
         from decimal import Decimal
 
-        from agm.agl.eval.values import (
-            BoolValue,
-            DecimalValue,
-            ExceptionValue,
-            IntValue,
-            TextValue,
-        )
-        from agm.agl.runtime.render import _type_kind_str
+        from agm.agl.eval.values import DecimalValue
+        from agm.agl.runtime.render import _scalar_text
 
-        assert _type_kind_str(TextValue("x")) == "text"
-        assert _type_kind_str(IntValue(1)) == "int"
-        assert _type_kind_str(DecimalValue(Decimal("1.5"))) == "decimal"
-        assert _type_kind_str(BoolValue(True)) == "bool"
-        assert _type_kind_str(ExceptionValue(type_name="Boom", fields={})) == "Boom"
+        assert _scalar_text(DecimalValue(Decimal("1.50"))) == "1.5"
+        assert _scalar_text(DecimalValue(Decimal("100"))) == "100"
 
-    def test_exception_default_renderer_fenced_pretty_json(self) -> None:
-        """§8.1 / §2.12: ${e} interpolation renders as fenced pretty JSON.
+    def test_scalar_text_bool(self) -> None:
+        """_scalar_text(BoolValue) renders as 'true'/'false'."""
+        from agm.agl.eval.values import BoolValue
+        from agm.agl.runtime.render import _scalar_text
 
-        When an exception value is interpolated via the default renderer, the
-        output must be fenced with <dsl-value> boundary tags carrying the
-        exception's type name and contain the field values as pretty JSON.
-        This pins the ${e} rendering behavior described in §8.1 (whole-value
-        interpolation) and §2.12 (exceptions → fenced pretty JSON).
-        """
+        assert _scalar_text(BoolValue(True)) == "true"
+        assert _scalar_text(BoolValue(False)) == "false"
+
+    def test_exception_value_renders_as_pretty_json(self) -> None:
+        """Exception value renders as pretty JSON (no boundary tags)."""
         from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
         exc_val = ExceptionValue(
             type_name="Abort",
@@ -1224,65 +1081,10 @@ class TestRenderForPrompt:
                 "trace_id": TextValue("abc123"),
             },
         )
-        out = render_for_prompt(exc_val, renderer_name=None, var_name="e")
-        # Must be boundary-marked with the exception's type name.
-        assert 'type="Abort"' in out, f"Expected type=Abort in output: {out!r}"
-        assert 'name="e"' in out, f"Expected name=e in output: {out!r}"
-        # Must contain the field values as JSON (fenced pretty JSON).
+        out = render_value(exc_val)
         assert "fatal" in out, f"Expected message value in output: {out!r}"
         assert "abc123" in out, f"Expected trace_id value in output: {out!r}"
-        # Must be wrapped in dsl-value tags.
-        assert "<dsl-value" in out and "</dsl-value>" in out, (
-            f"Expected dsl-value tags in output: {out!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# §2.12: type= attribute finalization — list/dict/<TypeName> convention
-# ---------------------------------------------------------------------------
-
-
-class TestTypeAttributeFinalization:
-    """§2.12 finalization: verify type= attribute convention for boundary tags.
-
-    §2.12 says a conforming runtime may choose its boundary format (stable
-    and traceable).  Ruling: list/dict/<TypeName> convention.  These tests
-    pin the finalized convention after removing the provisional marker.
-    """
-
-    def test_list_type_attribute_is_list(self) -> None:
-        from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(
-            ListValue(elements=(IntValue(1),)), renderer_name=None, var_name="xs"
-        )
-        assert 'type="list"' in out, f"Expected type=list: {out!r}"
-
-    def test_dict_type_attribute_is_dict(self) -> None:
-        from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(
-            DictValue(entries={"k": TextValue("v")}), renderer_name=None, var_name="d"
-        )
-        assert 'type="dict"' in out, f"Expected type=dict: {out!r}"
-
-    def test_record_type_attribute_is_type_name(self) -> None:
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        rv = RecordValue(type_name="Review", fields={"score": IntValue(5)})
-        out = render_for_prompt(rv, renderer_name=None, var_name="r")
-        assert 'type="Review"' in out, f"Expected type=Review: {out!r}"
-
-    def test_enum_type_attribute_is_type_name(self) -> None:
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        ev = EnumValue(type_name="Status", variant="Pass", fields={})
-        out = render_for_prompt(ev, renderer_name=None, var_name="s")
-        assert 'type="Status"' in out, f"Expected type=Status: {out!r}"
+        assert "<dsl-value" not in out, f"Expected no boundary tags: {out!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1767,67 +1569,28 @@ class TestRuntimeErrorPaths:
         assert _is_json_shaped({"k": 1}) is True
 
 
-class TestRegisteredRendererInvoked:
-    """F1 (M3b): a host-registered renderer is actually invoked at eval time.
+class TestUniformRenderingInPrompts:
+    """Uniform rendering: no boundary tags in agent prompts."""
 
-    Before F1 the registered renderer was never threaded into the interpreter,
-    so ``${x as myrender}`` silently produced the *default* boundary-marked
-    rendering.  These end-to-end tests run a program through ``run()`` with a
-    stub agent and assert the agent's received prompt contains the custom
-    renderer's distinctive output.
-    """
-
-    def test_custom_renderer_output_reaches_agent_prompt(self) -> None:
+    def test_text_interpolation_in_prompt_is_verbatim(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
-        def my_render(value: object, name: str | None) -> str:
-            # Distinctive marker the default renderer would never emit.
-            return "[[CUSTOM-RENDER]]"
-
         rt = WorkflowRuntime(default_agent=agent)
-        rt.register_renderer("myrender", my_render)
         result = rt.run(
-            'input x\nlet y = prompt "see: ${x as myrender}"',
-            inputs={"x": "ignored-by-custom-renderer"},
+            'input x\nlet y = prompt "see: ${x}"',
+            inputs={"x": "hello"},
         )
         assert result.ok is True
         assert received, "agent should have been called"
         prompt = received[0].prompt
-        assert "[[CUSTOM-RENDER]]" in prompt
-        # The default text boundary marker must NOT appear: the custom renderer
-        # fully replaced the default rendering.
+        assert "hello" in prompt
         assert "<dsl-value" not in prompt
 
-    def test_custom_renderer_receives_value_and_name(self) -> None:
-        received: list[AgentRequest] = []
-        seen: list[tuple[object, str | None]] = []
-
-        def agent(req: AgentRequest) -> str:
-            received.append(req)
-            return "ok"
-
-        def my_render(value: object, name: str | None) -> str:
-            seen.append((value, name))
-            from agm.agl.eval.values import TextValue
-
-            assert isinstance(value, TextValue)
-            return f"<{value.value}|{name}>"
-
-        rt = WorkflowRuntime(default_agent=agent)
-        rt.register_renderer("tag", my_render)
-        result = rt.run(
-            'input x\nlet y = prompt "${x as tag}"', inputs={"x": "payload"}
-        )
-        assert result.ok is True
-        assert seen and seen[0][1] == "x"
-        assert "<payload|x>" in received[0].prompt
-
-    def test_builtin_renderer_still_used_when_no_override(self) -> None:
-        """A program with no ``as`` override still gets the default rendering."""
+    def test_list_interpolation_in_prompt_is_pretty_json(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
@@ -1835,15 +1598,14 @@ class TestRegisteredRendererInvoked:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.register_renderer("unused", lambda v, n: "NOPE")
         result = rt.run(
-            'input x\nlet y = prompt "${x}"', inputs={"x": "hello"}
+            'let items: list[text] = ["a", "b"]\nlet y = prompt "items: ${items}"',
         )
         assert result.ok is True
-        # Default text rendering is boundary-marked; the custom renderer is NOT
-        # applied to a plain ``${x}``.
-        assert "<dsl-value" in received[0].prompt
-        assert "NOPE" not in received[0].prompt
+        prompt = received[0].prompt
+        assert "a" in prompt
+        assert "b" in prompt
+        assert "<dsl-value" not in prompt
 
 
 class TestMaxIterationsExceededSchema:

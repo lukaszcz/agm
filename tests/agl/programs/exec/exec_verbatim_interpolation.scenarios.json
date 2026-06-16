@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "simple_arg_printed",
+      "inputs": {"arg": "hello", "k": 4},
+      "expect": {
+        "stdout": "hello|\n4\n"
+      }
+    },
+    {
+      "name": "negative_int",
+      "inputs": {"arg": "test", "k": -12},
+      "expect": {
+        "stdout": "test|\n-12\n"
+      }
+    },
+    {
+      "name": "space_causes_word_split",
+      "inputs": {"arg": "a b", "k": 0},
+      "expect": {
+        "stdout": "a|b|\n0\n"
+      }
+    }
+  ]
+}

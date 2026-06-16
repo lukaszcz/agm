@@ -98,7 +98,7 @@ Identifiers are ASCII:
 | Token | Pattern | Used for |
 | ----- | ------- | -------- |
 | `TYPE_NAME` | `[A-Z][A-Za-z0-9_]*` | Record, enum, alias, and exception type names; enum variant constructors |
-| `VAR_NAME` | `[a-z_][A-Za-z0-9_]*` | Variables, fields, inputs, agent names, call options, renderers |
+| `VAR_NAME` | `[a-z_][A-Za-z0-9_]*` | Variables, fields, inputs, agent names, call options |
 
 Capitalization is significant: a name starting with an uppercase letter is a
 type/constructor name; anything else is a value-level name.
@@ -144,8 +144,7 @@ A `$` not followed by `{` is literal without any escaping. **Any other
 backslash sequence is a lexical error**, as is an incomplete or malformed
 `\uXXXX` escape.
 
-Interpolation has the form `${expr}` or `${expr as renderer}`, where
-`renderer` is a lowercase identifier. Newlines are not permitted inside an
+Interpolation has the form `${expr}`. Newlines are not permitted inside an
 interpolation. A nested `{ … }` (for example a dictionary literal) inside an
 interpolation is balanced correctly and does not close it.
 

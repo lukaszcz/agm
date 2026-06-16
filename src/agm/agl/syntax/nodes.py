@@ -125,13 +125,12 @@ class TextSegment:
 class InterpSegment:
     """An interpolated expression inside a template string (``${expr}``).
 
-    ``render`` holds the BARE renderer name with no leading colon
-    (e.g. ``"raw"``, ``"json"``, ``"bullets"``); ``None`` means default
-    rendering.
+    ``expr`` is an arbitrary expression; rendering is always uniform — text
+    verbatim, scalars as plain text, structured values as pretty JSON.  There
+    is no ``as <renderer>`` override: the grammar accepts only ``${expr}``.
     """
 
     expr: Expr
-    render: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 

@@ -313,20 +313,14 @@ class TestTemplate:
 
     def test_interp_segment_no_render(self) -> None:
         expr = VarRef(name="x", span=self._s(), node_id=2)
-        seg = InterpSegment(expr=expr, render=None, span=self._s(), node_id=1)
-        assert seg.render is None
-
-    def test_interp_segment_with_render(self) -> None:
-        expr = VarRef(name="x", span=self._s(), node_id=2)
-        seg = InterpSegment(expr=expr, render="json", span=self._s(), node_id=1)
-        assert seg.render == "json"
+        seg = InterpSegment(expr=expr, span=self._s(), node_id=1)
+        assert seg.expr is expr
 
     def test_template_segments_are_tuple(self) -> None:
         segs: tuple[TemplateSegment, ...] = (
             TextSegment(text="hello ", span=self._s(), node_id=2),
             InterpSegment(
                 expr=VarRef(name="name", span=self._s(), node_id=3),
-                render=None,
                 span=self._s(),
                 node_id=4,
             ),
@@ -801,7 +795,7 @@ class TestVisitorWalk:
         # --- Template ---
         text_seg = TextSegment(text="hi ", span=s, node_id=308)
         var_ref_tmpl = VarRef(name="name", span=s, node_id=309)
-        interp_seg = InterpSegment(expr=var_ref_tmpl, render=None, span=s, node_id=310)
+        interp_seg = InterpSegment(expr=var_ref_tmpl, span=s, node_id=310)
         template = Template(segments=(text_seg, interp_seg), span=s, node_id=311)
 
         # --- Expressions ---

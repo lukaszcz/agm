@@ -13,7 +13,7 @@
         "judge": ["{\"$case\": \"Rejected\", \"notes\": [\"missing tests\", \"unclear API\"]}"]
       },
       "expect": {
-        "stdout_contains": ["not approved\n", "- missing tests", "- unclear API"],
+        "stdout_contains": ["not approved\n", "missing tests", "unclear API"],
         "calls": {"judge": 1}
       }
     },

@@ -1569,24 +1569,11 @@ class AstBuilder(Transformer):
         return seg
 
     def interp(self, meta: Meta, args: _Args) -> syntax.InterpSegment:
-        # Grammar: INTERP_START expr ("as" VAR_NAME)? INTERP_END
-        # Lark drops the "as" anonymous terminal from the tree, so args are:
-        #   [Token(INTERP_START), <expr-node>, Token?(VAR_NAME renderer), Token(INTERP_END)]
-        # The renderer VAR_NAME is the only non-synthetic Token after the expr.
-        # Extract the non-token (expr) and any VAR_NAME tokens that follow it.
+        # Grammar: INTERP_START expr INTERP_END
+        # Extract the expression (the only non-token element).
         expr: syntax.Expr = _find_expr(args)
-        render: str | None = None
-        # Scan for a VAR_NAME token that appears after the expr in the args list.
-        past_expr = False
-        for a in args:
-            if not isinstance(a, Token):
-                past_expr = True
-            elif past_expr and a.type == "VAR_NAME":
-                render = str(a)
-                break
         return syntax.InterpSegment(
             expr=expr,
-            render=render,
             span=_span_from_meta(meta),
             node_id=self._next_id(),
         )

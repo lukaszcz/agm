@@ -23,7 +23,7 @@ do[3]
     | Pass =>
         set status = "accepted"
     | Fail(issues) =>
-        let plan: Plan = planner "Plan for:\n${issues as bullets}"
+        let plan: Plan = planner "Plan for:\n${issues}"
         case plan of
           | Retry =>
               set artifact = impl "Fix ${issues} in ${artifact}"

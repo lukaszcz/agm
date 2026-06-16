@@ -15,7 +15,7 @@ catch AgentParseError as e =>
   Agent ${e.agent} failed for type ${e.target_type} after ${e.attempts} attempts.
 
   Raw:
-  ${e.raw as raw}
+  ${e.raw}
 
   Errors:
   ${e.validation_errors}

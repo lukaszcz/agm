@@ -226,7 +226,7 @@ def is_json_shaped(value_type: Type) -> bool:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
     ``list``/``dict`` whose element/value types are themselves JSON-shaped.
     Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
-    ``json`` value they must be rendered explicitly (e.g. ``${review as json}``).
+    ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
     """
     if isinstance(value_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
         return True

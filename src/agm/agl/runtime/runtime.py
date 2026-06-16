@@ -1,7 +1,7 @@
 """WorkflowRuntime — the public façade for the AgL host runtime.
 
 Drives the full ``parse → scope → typecheck → host-prep → eval`` pipeline:
-registers agents/codecs/renderers, validates host inputs, materializes output
+registers agents/codecs, validates host inputs, materializes output
 contracts, and executes the program (or stops after static checking for
 ``agm exec --dry-run``).  Structured outputs use the JSON codec with
 lenient-by-default recovery (design §2.8).
@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from agm.agl.eval.values import ExceptionValue, Value
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.runtime.render import RendererFn
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.syntax.nodes import Program
@@ -34,51 +33,28 @@ if TYPE_CHECKING:
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
 
-# The full v1 vocabulary of semantic type *kinds* (matches ``Type.kind`` for
-# every member of the ``Type`` union in ``agm.agl.typecheck.types``).  Used to
-# validate a renderer's ``supported_types`` capability descriptor (F6, §9.1).
-ALL_TYPE_KINDS: frozenset[str] = frozenset(
-    {
-        "text",
-        "json",
-        "bool",
-        "int",
-        "decimal",
-        "list",
-        "dict",
-        "record",
-        "enum",
-        "exception",
-    }
-)
-
 
 @dataclass(frozen=True, slots=True)
 class HostEnvironment:
     """Assembled host-runtime environment shared by ``run`` and the REPL session.
 
-    Bundles the four pieces that both the whole-program runner
+    Bundles the three pieces that both the whole-program runner
     (``WorkflowRuntime.run``) and the incremental ``ReplSession`` need to build
-    identically from a set of agent/codec/renderer registrations:
+    identically from a set of agent/codec registrations:
 
     ``registry``
         The ``AgentRegistry`` (named agents + optional default agent).
     ``capabilities``
-        The ``HostCapabilities`` static catalog derived from the registry,
-        codecs, and renderers — consumed by the type checker.
+        The ``HostCapabilities`` static catalog derived from the registry and
+        codecs — consumed by the type checker.
     ``codecs``
         The merged ``name → OutputCodec`` table (built-ins + host extras),
         used for contract materialization.
-    ``renderers``
-        The merged ``name → RendererFn`` table (built-ins + host extras), the
-        authoritative interpolation-rendering source threaded into the
-        interpreter.
     """
 
     registry: "AgentRegistry"
     capabilities: "HostCapabilities"
     codecs: dict[str, "OutputCodec"]
-    renderers: dict[str, "RendererFn"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,11 +270,8 @@ class WorkflowRuntime:
         self._default_agent = default_agent
         self._shell_exec_timeout = shell_exec_timeout
         self._agents: dict[str, AgentFn] = {}
-        # Extra codecs/renderers registered by the host (beyond the built-ins).
+        # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
-        self._extra_renderers: dict[str, "RendererFn"] = {}
-        # Per-renderer supported type kinds (``None`` → type-agnostic / all kinds).
-        self._extra_renderer_kinds: dict[str, frozenset[str] | None] = {}
         # Cached assembled environment: invariant between registrations, so the
         # REPL's per-entry ``host_environment()`` calls reuse one bundle.  Any
         # ``register_*`` invalidates it.
@@ -353,57 +326,6 @@ class WorkflowRuntime:
         self._extra_codecs[name] = codec
         self._host_env_cache = None
 
-    def register_renderer(
-        self,
-        name: str,
-        fn: "RendererFn",
-        *,
-        supported_types: "frozenset[str] | None" = None,
-    ) -> None:
-        """Register a custom renderer function (§2.12 / design §7.6, plan §9.1).
-
-        *name* is the ``as <name>`` identifier used in prompt interpolation
-        segments.  Built-in renderer names (``"default"``, ``"raw"``,
-        ``"json"``, ``"bullets"``) are reserved.  Duplicate names are
-        rejected.
-
-        *fn* must match the ``RendererFn`` signature:
-        ``Callable[[Value, str | None], str]``.
-
-        *supported_types* is the renderer's capability descriptor: a frozenset
-        of semantic type **kinds** (the same vocabulary as a codec's
-        ``supported_kinds`` — ``"text"``, ``"int"``, ``"list"``, ``"record"``,
-        …).  The type-checker rejects ``${x as <name>}`` when ``x``'s kind is
-        not in this set (F6, plan §9.1).  ``None`` (the default) means the
-        renderer is type-agnostic and accepts every kind, matching the built-in
-        renderers.
-
-        Raises ``ValueError`` for reserved or duplicate names, or for an
-        unknown type kind in *supported_types*.
-        """
-        from agm.agl.runtime.render import RENDERER_NAMES
-
-        if name in RENDERER_NAMES:
-            raise ValueError(
-                f"Cannot register renderer with reserved name {name!r}. "
-                f"Reserved renderer names: {sorted(RENDERER_NAMES)}"
-            )
-        if name in self._extra_renderers:
-            raise ValueError(
-                f"A renderer named {name!r} is already registered. "
-                "Duplicate renderer registrations are not allowed."
-            )
-        if supported_types is not None:
-            unknown = supported_types - ALL_TYPE_KINDS
-            if unknown:
-                raise ValueError(
-                    f"Renderer {name!r} declares unknown type kind(s) "
-                    f"{sorted(unknown)}. Valid kinds: {sorted(ALL_TYPE_KINDS)}."
-                )
-        self._extra_renderers[name] = fn
-        self._extra_renderer_kinds[name] = supported_types
-        self._host_env_cache = None
-
     def host_environment(self) -> HostEnvironment:
         """Assemble the shared host environment from this runtime's registrations.
 
@@ -422,8 +344,6 @@ class WorkflowRuntime:
             agents=self._agents,
             default_agent=self._default_agent,
             extra_codecs=self._extra_codecs,
-            extra_renderers=self._extra_renderers,
-            extra_renderer_kinds=self._extra_renderer_kinds,
         )
         return self._host_env_cache
 
@@ -585,8 +505,6 @@ class WorkflowRuntime:
         host_env = self.host_environment()
         registry = host_env.registry
         capabilities = host_env.capabilities
-        all_codecs = host_env.codecs
-        all_renderers = host_env.renderers
 
         # ----------------------------------------------------------------
         # [2b] Source↔host agent reconciliation (plan §8, decisions 1 & 11)
@@ -689,7 +607,7 @@ class WorkflowRuntime:
         from agm.agl.runtime.contract import materialize_contract
 
         # Reuse the merged codec map built for HostCapabilities above.
-        codecs = all_codecs
+        codecs = host_env.codecs
         contracts: dict[int, object] = {}
         contract_errors: list[Diagnostic] = []
 
@@ -786,7 +704,6 @@ class WorkflowRuntime:
             registry=registry,
             contracts=typed_contracts,
             type_env=checked.type_env,
-            renderers=all_renderers,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             source=source,
@@ -912,21 +829,18 @@ def assemble_host_environment(
     agents: dict[str, AgentFn],
     default_agent: AgentFn | None,
     extra_codecs: dict[str, "OutputCodec"],
-    extra_renderers: dict[str, "RendererFn"],
-    extra_renderer_kinds: dict[str, frozenset[str] | None],
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
-    Builds the merged codec/renderer tables, the ``AgentRegistry``, and the
-    derived ``HostCapabilities`` exactly as ``WorkflowRuntime.run`` did inline.
+    Builds the merged codec table, the ``AgentRegistry``, and the derived
+    ``HostCapabilities`` exactly as ``WorkflowRuntime.run`` did inline.
     Used by BOTH ``run`` and ``ReplSession`` so the two share identical
-    agent/codec/renderer wiring (CARRY-IN 1: codec_kinds and renderer_names are
-    derived from the actual registries, not from duplicated constants).
+    agent/codec wiring (CARRY-IN 1: codec_kinds are derived from the actual
+    registries, not from duplicated constants).
     """
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import JsonCodec, TextCodec
-    from agm.agl.runtime.render import builtin_renderers
 
     text_codec = TextCodec()
     json_codec = JsonCodec()
@@ -938,21 +852,6 @@ def assemble_host_environment(
         **extra_codecs,
     }
 
-    # Merge built-in renderers with any host-registered extras.  This single
-    # table is the authoritative source for BOTH the static capability
-    # descriptors (names + supported kinds) AND the interpolation rendering at
-    # eval time, so a registered renderer is actually invoked (F1, M3b).
-    all_renderers: dict[str, "RendererFn"] = {
-        **builtin_renderers(),
-        **extra_renderers,
-    }
-    # Built-in renderers are type-agnostic (``None`` → all kinds); custom
-    # renderers carry the kinds declared at registration (F6, plan §9.1).
-    renderer_kinds: dict[str, frozenset[str] | None] = {
-        name: None for name in builtin_renderers()
-    }
-    renderer_kinds.update(extra_renderer_kinds)
-
     registry = AgentRegistry(
         named=dict(agents),
         default_agent=default_agent,
@@ -962,14 +861,11 @@ def assemble_host_environment(
         has_default_agent=registry.has_default_agent,
         supports_shell_exec=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},
-        renderer_names=frozenset(all_renderers),
-        renderer_kinds=renderer_kinds,
     )
     return HostEnvironment(
         registry=registry,
         capabilities=capabilities,
         codecs=all_codecs,
-        renderers=all_renderers,
     )
 
 

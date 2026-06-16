@@ -150,7 +150,6 @@ def _check_program_with_json(body: tuple[Stmt, ...]) -> CheckedProgram:
                 {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
             ),
         },
-        renderer_names=frozenset({"default", "raw"}),
     )
     return check(resolved, caps)
 
@@ -1397,7 +1396,6 @@ class TestWorkflowRuntimeWireUp:
         }
         caps = HostCapabilities(
             codec_kinds=kinds,
-            renderer_names=frozenset({"default", "raw"}),
         )
         # json kind must appear in some codec's supported kinds
         all_supported = set().union(*caps.codec_kinds.values())
@@ -1527,7 +1525,6 @@ class TestRecordEnumInputs:
                     {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
                 ),
             },
-            renderer_names=frozenset({"default", "raw"}),
         )
         checked = check(resolved, caps)
         from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
@@ -2213,7 +2210,7 @@ class TestCodecSupportedKinds:
 
 
 # ---------------------------------------------------------------------------
-# 20. CARRY-IN 1 — register_codec / register_renderer public API
+# 20. CARRY-IN 1 — register_codec public API
 # ---------------------------------------------------------------------------
 
 
@@ -2351,78 +2348,10 @@ class TestRegisterCodec:
         )
 
 
-class TestRegisterRenderer:
-    """CARRY-IN 1: register_renderer adds a custom renderer to the runtime."""
-
-    def test_register_renderer_accepted(self) -> None:
-        rt = WorkflowRuntime()
-        rt.register_renderer("myrenderer", lambda val, name: str(val))  # should not raise
-
-    def test_register_duplicate_renderer_raises(self) -> None:
-        rt = WorkflowRuntime()
-        rt.register_renderer("myrenderer", lambda val, name: str(val))
-        with pytest.raises(ValueError, match="myrenderer"):
-            rt.register_renderer("myrenderer", lambda val, name: str(val))
-
-    def test_register_reserved_renderer_raises(self) -> None:
-        rt = WorkflowRuntime()
-        for name in ("default", "raw", "json", "bullets"):
-            with pytest.raises(ValueError, match=name):
-                rt.register_renderer(name, lambda val, n: str(val))
-
-    def test_custom_renderer_typechecks_only_when_registered(self) -> None:
-        """A custom renderer is usable in interpolation only after registration (F4)."""
-        src = 'input x\nlet y = prompt "${x as myrenderer}"'
-
-        rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
-        unreg = rt_unreg.run(src, inputs={"x": "hi"})
-        assert unreg.ok is False
-        assert any("myrenderer" in d.message for d in unreg.diagnostics)
-
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        rt.register_renderer("myrenderer", lambda val, name: str(val))
-        reg = rt.run(src, inputs={"x": "hi"})
-        assert reg.ok is True
-
-    def test_register_renderer_with_supported_types_restricts_kinds(self) -> None:
-        """F6: a kind-restricted renderer is accepted only for supported kinds."""
-
-        def listonly(val: object, name: str | None) -> str:
-            return "L"
-
-        # ``listonly`` supports only the ``list`` kind.
-        rt_ok = WorkflowRuntime(default_agent=lambda req: "ok")
-        rt_ok.register_renderer(
-            "listonly", listonly, supported_types=frozenset({"list"})
-        )
-        ok = rt_ok.run(
-            'let xs: list[text] = ["a"]\nlet q = prompt "${xs as listonly}"'
-        )
-        assert ok.ok is True
-
-        # A text operand is an unsupported kind → static error.
-        rt_bad = WorkflowRuntime(default_agent=lambda req: "ok")
-        rt_bad.register_renderer(
-            "listonly", listonly, supported_types=frozenset({"list"})
-        )
-        bad = rt_bad.run('let x = "v"\nlet q = prompt "${x as listonly}"')
-        assert bad.ok is False
-        assert any("listonly" in d.message for d in bad.diagnostics)
-
-    def test_register_renderer_unknown_kind_raises(self) -> None:
-        """F6: declaring an unknown type kind in supported_types is rejected."""
-        rt = WorkflowRuntime()
-        with pytest.raises(ValueError, match="boguskind"):
-            rt.register_renderer(
-                "r", lambda v, n: "x", supported_types=frozenset({"boguskind"})
-            )
+class TestRuntimeBuildsCodecKinds:
+    """A custom codec is selectable via ``format:`` only after registration."""
 
     def test_runtime_builds_codec_kinds_from_registered_codec(self) -> None:
-        """A custom codec is selectable via ``format:`` only after registration (F4).
-
-        This proves ``HostCapabilities.codec_kinds`` is sourced from the
-        registered codec's ``supported_kinds`` rather than a hardcoded set.
-        """
         from agm.agl.runtime.codec import TextCodec
 
         class AltCodec(TextCodec):
@@ -2445,11 +2374,3 @@ class TestRegisterRenderer:
         rt.register_codec(AltCodec())
         reg = rt.run(src)
         assert reg.ok is True
-
-    def test_renderer_names_exposed_from_render_module(self) -> None:
-        """render.RENDERER_NAMES is the authoritative set of built-in renderer names."""
-        from agm.agl.runtime.render import RENDERER_NAMES
-        assert "default" in RENDERER_NAMES
-        assert "raw" in RENDERER_NAMES
-        assert "json" in RENDERER_NAMES
-        assert "bullets" in RENDERER_NAMES

@@ -72,9 +72,9 @@ var artifact: text = impl "Implement ${spec}"; do[5] let review: Review = review
 | [Expressions](expressions.md) | Literals, constructors, field access, operators, `case` expressions, type inference |
 | [Pattern matching](pattern-matching.md) | Patterns, matching semantics, exhaustiveness |
 | [Control flow](control-flow.md) | `if`, `case` statements, `do … until` loops |
-| [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `${…}` interpolation, renderers, rendering contexts |
+| [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `${…}` interpolation, uniform rendering rules |
 | [Agent calls](agent-calls.md) | Calling agents, call options, output contracts, the JSON wire format, parse policies and retries |
-| [Shell execution](shell-execution.md) | The `exec` built-in, shell-safe interpolation, `ExecError` |
+| [Shell execution](shell-execution.md) | The `exec` built-in, shell interpolation, `ExecError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
 | [Host environment](host-environment.md) | Agents, inputs, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |

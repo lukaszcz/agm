@@ -88,8 +88,8 @@ strings are literal tokens. Token names in `UPPER_CASE` refer to the lexical
 tokens defined in [Lexical structure](lexical-structure.md).
 
 Throughout the reference, "the host" refers to the runtime environment that
-embeds AgL: it registers agents, supplies program inputs, executes shell
-commands, and records traces. Behavior marked *host-configurable* has a
+embeds AgL: it backs the program's declared agents, supplies program inputs,
+executes shell commands, and records traces. Behavior marked *host-configurable* has a
 documented portable default that hosts may override; everything else is fixed
 by the language.
 

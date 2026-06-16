@@ -80,7 +80,7 @@ Two further names are **contextual keywords**, not reserved:
   ([Shell execution](shell-execution.md)).
 
 `prompt` and `exec` may not be declared with `let`, `var`, or `input`, may
-not be bound by patterns or `catch` binders, and may not be registered as
+not be bound by patterns or `catch` binders, and may not be declared as
 agent names — but they remain legal as record/enum **field names**:
 `Continue(prompt: text)` is a valid variant declaration. To destructure such
 a field, bind it under another name — `Continue(prompt: p)` — since the

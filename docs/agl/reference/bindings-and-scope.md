@@ -2,7 +2,8 @@
 
 [← Index](index.md)
 
-AgL has three binding statements and one input declaration. There is no bare
+AgL has three binding statements, an input declaration, and an agent
+declaration. There is no bare
 assignment: `x = e` as a statement is a static error with the guidance to use
 `let`, `var`, or `set`. A single `=` in expression position is the equality
 operator ([Expressions](expressions.md)).
@@ -115,10 +116,53 @@ Inputs are never mutable. To derive mutable workflow state from an input,
 copy it into a `var`:
 
 ```agl
+agent critic
 input spec: text
 var current_spec: text = spec
 set current_spec = critic "Refine this spec:\n${current_spec}"
 ```
+
+## `agent` — declared agents
+
+```ebnf
+agent_decl ::= "agent" VAR_NAME ("=" STRING)?
+```
+
+A program declares the named agents it may call with top-level `agent`
+declarations. A bare declaration names the agent; the optional `= "…"` form
+attaches a *runner hint* — a host-consumed string with no effect on the
+language ([Host environment](host-environment.md)):
+
+```agl
+agent reviewer
+agent impl = "claude -p %{PROMPT_FILE}"
+```
+
+A declared name may then be called like any agent ([Agent calls](agent-calls.md)):
+
+```agl
+let review: Review = reviewer "Review ${artifact}"
+```
+
+Rules:
+
+1. `agent` declarations are valid **only at the program root**; anywhere else
+   is a static error (like `input`).
+2. **Agent names occupy a namespace separate from variables.** Because an
+   agent call is syntactically distinct (a name applied to a template), an
+   `agent impl` declaration does not collide with a `let impl` or `input impl`
+   binding — both may coexist, the call form selecting the agent and a
+   reference selecting the value.
+3. Declaring the same agent name twice is a static error.
+4. The contextual keywords `prompt` and `exec` are built in and cannot be
+   declared as agents; `agent prompt` and `agent exec` are static errors.
+5. **Calling an undeclared name is a static binding error.** This is what ties
+   a call to a declaration ([Agent calls](agent-calls.md)).
+6. A declared agent that is never called is reported as a non-fatal
+   **warning** — it never prevents execution.
+7. The runner hint, when present, is a **static string literal**: it must
+   contain no `${…}` interpolation. Interpolation in a runner hint is a static
+   error. The language does not interpret the hint in any way.
 
 ## Lexical scoping
 

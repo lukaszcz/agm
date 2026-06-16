@@ -29,18 +29,34 @@ prevent execution.
 
 ## Agents
 
-The host provides agents by name. Three resolution categories exist:
+**The program owns the set of named agents.** Every named agent a program
+calls must be declared at the program root with an `agent` declaration
+([Bindings and scope](bindings-and-scope.md)); a call to an undeclared name
+is a static binding error. The host does *not* contribute names and there is
+**no implicit fallback** that makes arbitrary names resolve. Two names need
+no declaration:
 
-- **Named agents** — registered under specific names (`reviewer`, `impl`,
-  `critic`, …).
-- **The default agent** — backs the contextual keyword `prompt`.
-- **A fallback agent** — optionally, the host may declare that *any* agent
-  name resolves (typically routed to the default agent with the name made
-  available for per-name configuration).
+- **The default agent** backs the contextual keyword `prompt`.
+- **`exec`** denotes the shell executor ([Shell execution](shell-execution.md)).
 
-At check time, a call to an unregistered name with no fallback — or a
-`prompt` call with no default agent — is a static error. The names `prompt`
-and `exec` can never be registered as agents.
+The host's role is to **supply a backing** — the actual agent that runs — for
+each declared name. A declaration may also carry an optional *runner hint*, an
+opaque static string the host may use to launch the agent; the host ignores
+it if it has its own backing, and host configuration for a given name always
+takes precedence over the source hint. The hint is never interpreted by the
+language (no interpolation; see [Bindings and scope](bindings-and-scope.md)).
+
+Because the program owns the names and the host owns the backings, two
+mismatches are **host configuration errors**, reported before anything
+executes:
+
+- a backing supplied for a name the program never declares (*registered but
+  undeclared*), and
+- a declared agent for which the host provides neither a dedicated backing
+  nor a default agent to fall back on (*declared but unbacked*).
+
+A `prompt` call requires a default agent to be configured, or it is a static
+error. The names `prompt` and `exec` can never be declared as agents.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends

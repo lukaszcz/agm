@@ -13,7 +13,7 @@ stmt_list  ::= stmt ((NEWLINE | ";") stmt)* (NEWLINE | ";")?
 ```
 
 The program root is itself a lexical scope
-([Bindings and scope](bindings-and-scope.md)). Two statement kinds are
+([Bindings and scope](bindings-and-scope.md)). Three statement kinds are
 restricted to the root:
 
 - **Type declarations** (`record`, `enum`, `type`) — a type declaration inside
@@ -23,12 +23,17 @@ restricted to the root:
   fine ([Types](types.md)).
 - **Input declarations** (`input`) — see
   [Bindings and scope](bindings-and-scope.md).
+- **Agent declarations** (`agent`) — the names of the agents the program may
+  call. Like inputs, they may appear only at the root; a declaration nested in
+  a block is a static error. See
+  [Bindings and scope](bindings-and-scope.md).
 
 ## Statement kinds
 
 ```ebnf
 stmt ::= record_def | enum_def | type_alias        (root only)
        | input_decl                                (root only)
+       | agent_decl                                (root only)
        | let_decl | var_decl | set_stmt
        | do_until
        | if_stmt | case_stmt | try_stmt
@@ -104,7 +109,7 @@ Statements are classified by how they end:
 
 - **Closed statements** — self-contained; safe anywhere inline and may be
   followed by `;`: `let`, `var`, `set`, `pass`, `raise`, `print`, expression
-  statements, type and input declarations, and `do … until` (which is
+  statements, type, input, and agent declarations, and `do … until` (which is
   right-delimited by its `until` clause).
 - **Open statements** — extend open-endedly to the right: `if`, `case`, and
   `try`. Inline, an open statement is valid only as the **last** element of a

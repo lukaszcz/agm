@@ -102,6 +102,15 @@ and a declared name with neither a dedicated registration nor a default agent.
 A declared agent backed only by the default agent is fine; a declared-but-
 uncalled agent is a non-fatal scope warning.
 
+`agm exec` (`agm.commands.exec`) wires the backings: it calls
+`declared_agents(source)`, then registers each declared name with a
+runner-backed factory whose command is chosen by precedence (highest to
+lowest): config `[exec.agents.<name>]`, the source runner hint, `--runner`,
+`[exec] runner`, `[loop] runner`, built-in `claude -p`. The default runner is
+always the floor, so every declared agent resolves and also backs `prompt`.
+Runner strings (config or source hint) share the `%%` / `%{PROMPT_FILE}`
+prompt-file placeholder handling.
+
 ## Package layout and test locations
 
 | Package | Component | Tests |

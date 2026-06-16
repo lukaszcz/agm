@@ -57,6 +57,16 @@ nonterminal (`field_name: VAR_NAME | AGENT`).  This keeps built-in exception
 fields such as `AgentCallError.agent` usable.  It cannot be used as a variable
 binder (`let`/`var`/`set`/`input`/patterns/catch).
 
+The `agent` keyword leads a root-level declaration production:
+
+```
+agent_decl: AGENT VAR_NAME (EQ template)?
+```
+
+The optional runner string reuses the `template` rule, but the AST builder
+rejects a template carrying any interpolation hole — the runner string must be
+a static string literal.  See `src/agm/agl/grammar/agl.lark`.
+
 **Contextual keywords** — `prompt` and `exec` are NOT reserved; they lex as
 plain `VAR_NAME` tokens.  The scope pass gives them their built-in meaning.
 

@@ -12,6 +12,9 @@ call_options ::= "[" call_option ("," call_option)* ","? "]"
 ```
 
 ```agl
+agent reviewer
+agent planner
+
 prompt "Summarize ${input}"
 reviewer "Review this artifact:\n${artifact}"
 reviewer[on_parse_error: retry[2]] "Review this artifact:\n${artifact}"
@@ -22,17 +25,30 @@ planner[format: json, on_parse_error: abort] "Plan the work."
 
 The callee is a lowercase name resolved at check time:
 
-- **`prompt`** is a contextual keyword denoting the host's *default agent*.
-  It cannot be declared as a variable, bound by a pattern or `catch`, or
-  registered as an agent name, but it remains legal as a field name
+- **`prompt`** is a contextual keyword denoting the *default agent*. It cannot
+  be declared as a variable, bound by a pattern or `catch`, or declared as an
+  agent name, but it remains legal as a field name
   ([Lexical structure](lexical-structure.md)).
 - **`exec`** in call position denotes the shell executor — same call shape,
-  different semantics ([Shell execution](shell-execution.md)).
-- Any other name must resolve against the host's capability catalog: either
-  a registered agent of that name exists, or the host declares a *fallback*
-  agent that handles all names. Otherwise the call is a static error
-  (*"Unknown agent 'x'…"*), reported before anything executes. A `prompt`
-  call similarly requires the host to configure a default agent.
+  different semantics ([Shell execution](shell-execution.md)). It too is never
+  declared.
+- **Any other name must be declared** at program root with an `agent`
+  declaration before it may be called
+  ([Bindings and scope](bindings-and-scope.md)). Calling a name that the
+  program never declares is a static binding error
+  (*"Unknown agent 'x'…"*), reported before anything executes. The
+  declaration fixes the program's set of named agents; the environment that
+  runs the program only supplies a *backing* for each declared name
+  ([Host environment](host-environment.md)). A `prompt` call similarly
+  requires a default agent to be configured.
+
+```agl
+agent reviewer
+agent planner
+
+let review: Review = reviewer "Review ${artifact}"
+let plan = planner "Plan the work."
+```
 
 ## Target types: types as contracts
 

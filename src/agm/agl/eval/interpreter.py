@@ -178,6 +178,7 @@ class Interpreter:
         source: str = "",
         shell_exec_timeout: float | None = None,
         trace: "TraceStore | None" = None,
+        param_values: "Mapping[str, Value] | None" = None,
     ) -> None:
         from agm.agl.runtime.render import builtin_renderers
         from agm.agl.runtime.trace import noop_trace
@@ -202,6 +203,11 @@ class Interpreter:
         self._shell_exec_timeout = shell_exec_timeout
         # Trace store: no-op when not provided (no-log mode or direct tests).
         self._trace: "TraceStore" = trace if trace is not None else noop_trace()
+        # Pre-converted external param values (name → Value); empty when no
+        # external values are supplied (direct tests, REPL, etc.).
+        self._param_values: "Mapping[str, Value]" = (
+            param_values if param_values is not None else {}
+        )
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -247,8 +253,10 @@ class Interpreter:
             self._exec_try_catch(stmt, scope)
         elif isinstance(stmt, Raise):
             self._exec_raise(stmt, scope)
-        elif isinstance(stmt, (ParamDecl, ProgramDecl, AgentDecl)):
-            pass  # static declarations: resolved before execution, no runtime action
+        elif isinstance(stmt, ParamDecl):
+            self._exec_param(stmt, scope)
+        elif isinstance(stmt, (ProgramDecl, AgentDecl)):
+            pass  # static declarations: no runtime action
         elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
             pass  # type declarations: no runtime action
         else:
@@ -275,6 +283,34 @@ class Interpreter:
         coerced = _coerce(value, target_type)
         scope.set_value(stmt.target, coerced)
         self._trace.mutation(name=stmt.target, value=coerced, span=stmt.span)
+
+    def _exec_param(self, stmt: ParamDecl, scope: Scope) -> None:
+        """Bind a ``param`` declaration: external value or default expression."""
+        if stmt.name in self._param_values:
+            # External value already converted by the runtime; bind directly.
+            scope.define(
+                stmt.name,
+                self._param_values[stmt.name],
+                mutable=False,
+                decl_span=stmt.span,
+            )
+        elif stmt.default is not None:
+            # Evaluate default expression in declaration order (earlier params
+            # already bound in scope).
+            value = self._eval_expr(stmt.default, scope)
+            target_type = self._binding_type_for(stmt.node_id)
+            scope.define(
+                stmt.name,
+                _coerce(value, target_type),
+                mutable=False,
+                decl_span=stmt.span,
+            )
+        else:
+            # Required param with no value: unreachable (runtime checked pre-exec).
+            raise AssertionError(
+                f"Required param {stmt.name!r} has no value at execution time; "
+                "pre-execution required check should have caught this."
+            )
 
     def _binding_type_for(self, decl_node_id: int) -> Type:
         """Return the declared type the checker recorded for a binding node.

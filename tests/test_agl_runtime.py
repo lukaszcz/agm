@@ -216,9 +216,7 @@ class TestInputValidationRuntime:
     def test_undeclared_extra_fails(self) -> None:
         rt = WorkflowRuntime()
         result = rt.run("param a\nprint a", inputs={"a": "ok", "b": "extra"})
-        assert result.ok is False
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "b" in msgs.lower()
+        assert result.ok is True  # undeclared extras silently ignored per O4/runtime contract
 
     def test_text_input_verbatim(self) -> None:
         rt = WorkflowRuntime()
@@ -2207,3 +2205,276 @@ class TestAgentReconciliation:
         rt.register_agent("ghost", agent)
         rt.run('print "side effect?"')
         assert calls == []
+
+
+class TestM3ParamSemantics:
+    """M3: param as executable binding — default expressions, precedence, discovery."""
+
+    # --- Precedence: external value overrides default ---
+
+    def test_external_value_overrides_default(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('param x = "fallback"\nprint x', inputs={"x": "supplied"})
+        assert result.ok is True
+        out = capsys.readouterr().out
+        assert "supplied" in out
+        assert "fallback" not in out
+
+    def test_default_used_when_param_absent(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('param x = "default_val"\nprint x', inputs={})
+        assert result.ok is True
+        out = capsys.readouterr().out
+        assert "default_val" in out
+
+    # --- Required param errors ---
+
+    def test_required_param_missing_fails(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("param x\nprint x", inputs={})
+        assert result.ok is False
+        assert result.error is None
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "x" in msgs
+
+    def test_required_param_missing_message_format(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("param x\nprint x", inputs={})
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "missing required param" in msgs.lower()
+
+    def test_required_param_missing_reports_decl_line(self) -> None:
+        rt = WorkflowRuntime()
+        src = "let a = 1\nlet b = 2\nparam x\nprint x"
+        result = rt.run(src, inputs={})
+        assert result.ok is False
+        missing = [d for d in result.diagnostics if "x" in d.message.lower()]
+        assert missing
+        assert missing[0].line == 3
+
+    def test_required_param_missing_also_under_check_only(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("param x\nprint x", inputs={}, check_only=True)
+        assert result.ok is False
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "x" in msgs
+
+    def test_all_missing_required_params_reported(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("param a\nparam b\nprint a", inputs={})
+        assert result.ok is False
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "a" in msgs
+        assert "b" in msgs
+
+    # --- Undeclared extras silently ignored ---
+
+    def test_undeclared_extra_input_silently_ignored(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('param a\nprint a', inputs={"a": "ok", "b": "extra"})
+        assert result.ok is True
+
+    # --- Default expression referencing earlier param ---
+
+    def test_default_references_earlier_param(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = 'param a = "x"\nparam b = a\nprint b'
+        rt = WorkflowRuntime()
+        result = rt.run(src, inputs={})
+        assert result.ok is True
+        out = capsys.readouterr().out
+        assert "x" in out
+
+    def test_default_chain_multiple_params(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = 'param a: int = 10\nparam b: int = a\nparam c: int = b\nprint c'
+        rt = WorkflowRuntime()
+        result = rt.run(src, inputs={})
+        assert result.ok is True
+        out = capsys.readouterr().out
+        assert "10" in out
+
+    # --- Effectful default fires only when param unsupplied ---
+
+    def test_effectful_default_fires_when_unsupplied(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append(req.prompt)
+            return "agent_answer"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        result = rt.run('param x = ask "give me x"\nprint x', inputs={})
+        assert result.ok is True
+        assert len(calls) == 1
+
+    def test_effectful_default_does_not_fire_when_supplied(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append("called")
+            return "should_not_appear"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        result = rt.run('param x = ask "give me x"\nprint x', inputs={"x": "supplied"})
+        assert result.ok is True
+        assert calls == []
+
+    # --- Dry-run: effectful default does NOT fire ---
+
+    def test_effectful_default_does_not_fire_under_dry_run(self) -> None:
+        calls: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            calls.append("called")
+            return "should_not_appear"
+
+        rt = WorkflowRuntime(default_agent=agent)
+        result = rt.run(
+            'param x = ask "give me x"\nprint x', inputs={}, check_only=True
+        )
+        assert result.ok is True
+        assert calls == []
+
+    def test_dry_run_still_errors_on_missing_required_param(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run("param x\nprint x", inputs={}, check_only=True)
+        assert result.ok is False
+        msgs = " ".join(d.message for d in result.diagnostics)
+        assert "x" in msgs
+
+    # --- discover_params API ---
+
+    def test_discover_params_returns_ordered_infos(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare(
+            "program myapp\nparam first\nparam second: int\nparam third = \"hi\""
+        )
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        assert len(discovery.params) == 3
+        names = [p.name for p in discovery.params]
+        assert names == ["first", "second", "third"]
+
+    def test_discover_params_has_correct_has_default(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare('param a\nparam b = "hi"')
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        infos = {p.name: p for p in discovery.params}
+        assert infos["a"].has_default is False
+        assert infos["b"].has_default is True
+
+    def test_discover_params_program_name(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare("program myapp\nparam x")
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        assert discovery.program_name == "myapp"
+
+    def test_discover_params_no_program_name(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare("param x")
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        assert discovery.program_name is None
+
+    def test_discover_params_degrades_on_type_error(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        # Type error: int + text is a type mismatch
+        prepared = WorkflowRuntime.prepare('param x: int = "not_an_int"')
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        assert discovery.params == ()
+        assert discovery.checked is None
+        assert len(discovery.diagnostics) >= 1
+
+    def test_discover_params_degrades_on_parse_error(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare("@@@invalid@@@")
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        assert discovery.params == ()
+        assert len(discovery.diagnostics) >= 1
+
+    def test_discover_params_checked_is_set_on_success(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare("param x\nparam y: int")
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        assert discovery.checked is not None
+
+    def test_discover_params_line_col(self) -> None:
+        from agm.agl.runtime.runtime import ParamDiscovery
+
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare("let a = 1\nparam x\nparam y")
+        discovery = rt.discover_params(prepared)
+        assert isinstance(discovery, ParamDiscovery)
+        names_lines = {p.name: p.line for p in discovery.params}
+        assert names_lines["x"] == 2
+        assert names_lines["y"] == 3
+
+    # --- run_prepared with pre-checked program ---
+
+    def test_run_prepared_with_checked_reuses_it(self) -> None:
+        rt = WorkflowRuntime()
+        prepared = WorkflowRuntime.prepare('param x\nprint x')
+        discovery = rt.discover_params(prepared)
+        assert discovery.checked is not None
+        result = rt.run_prepared(prepared, inputs={"x": "hello"}, checked=discovery.checked)
+        assert result.ok is True
+
+    def test_run_prepared_with_checked_same_result_as_without(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = WorkflowRuntime()
+        src = 'param x = "default"\nprint x'
+        prepared = WorkflowRuntime.prepare(src)
+        discovery = rt.discover_params(prepared)
+
+        # Run without pre-checked
+        result1 = rt.run_prepared(prepared, inputs={})
+        out1 = capsys.readouterr().out
+
+        # Run with pre-checked
+        result2 = rt.run_prepared(prepared, inputs={}, checked=discovery.checked)
+        out2 = capsys.readouterr().out
+
+        assert result1.ok is True
+        assert result2.ok is True
+        assert out1 == out2
+
+    # --- PreparedProgram.program_name property ---
+
+    def test_prepared_program_name_from_decl(self) -> None:
+        prepared = WorkflowRuntime.prepare("program myapp\nlet x = 1")
+        assert prepared.program_name == "myapp"
+
+    def test_prepared_program_name_none_without_decl(self) -> None:
+        prepared = WorkflowRuntime.prepare("let x = 1")
+        assert prepared.program_name is None
+
+    def test_prepared_program_name_none_on_parse_error(self) -> None:
+        prepared = WorkflowRuntime.prepare("@@@")
+        assert prepared.program_name is None

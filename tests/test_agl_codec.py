@@ -1546,6 +1546,15 @@ class TestRecordEnumInputs:
         from agm.agl.eval.interpreter import Interpreter
         from agm.agl.runtime.agents import AgentRegistry
 
+        # Parse the input value to pass as param_values.
+        raw_input = '{"title": "Bug", "severity": 5}'
+        issue_type = RecordType(
+            name="Issue", fields={"title": TextType(), "severity": IntType()}
+        )
+        codec = JsonCodec()
+        parse_result = codec.parse(raw_input, issue_type, strict_json=False)
+        assert parse_result.ok and parse_result.value is not None
+
         registry = AgentRegistry(named={}, default_agent=None)
         interp = Interpreter(
             checked=checked,
@@ -1554,21 +1563,9 @@ class TestRecordEnumInputs:
             type_env=checked.type_env,
             loop_limit=3,
             strict_json=False,
+            param_values={"issue": parse_result.value},
         )
         root = Scope(parent=None)
-        # Manually bind the input.
-        raw_input = '{"title": "Bug", "severity": 5}'
-        issue_type = RecordType(
-            name="Issue", fields={"title": TextType(), "severity": IntType()}
-        )
-        codec = JsonCodec()
-        parse_result = codec.parse(raw_input, issue_type, strict_json=False)
-        assert parse_result.ok and parse_result.value is not None
-        from agm.agl.syntax.nodes import ParamDecl as PD
-
-        for stmt in program.body:
-            if isinstance(stmt, PD):
-                root.define(stmt.name, parse_result.value, mutable=False, decl_span=stmt.span)
         interp.execute(root)
         v = root.snapshot()["issue"]
         assert isinstance(v, RecordValue)

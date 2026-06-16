@@ -374,6 +374,7 @@ def _execute(
     default_agent: AgentFn | None = None,
     named: dict[str, AgentFn] | None = None,
     has_default_agent: bool = False,
+    param_values: dict[str, object] | None = None,
 ) -> Scope:
     """Build + resolve + check + execute *body*, returning the root ``Scope``.
 
@@ -381,14 +382,23 @@ def _execute(
     yet: drives the program through the real static passes and the public
     ``Interpreter.execute`` entry point.  Raised ``AglRaise`` / ``RuntimeError``
     propagate to the caller (the user-visible failure surface).
+
+    *param_values* maps param names to pre-converted ``Value`` objects (same
+    contract as ``Interpreter.param_values``).
     """
     from agm.agl.eval.interpreter import Interpreter
+    from agm.agl.eval.values import Value
     from agm.agl.runtime.agents import AgentRegistry
 
     checked = _check_program(
         body, has_default_agent=has_default_agent or default_agent is not None
     )
     registry = AgentRegistry(named=named or {}, default_agent=default_agent)
+    pv: dict[str, Value] = {}
+    if param_values:
+        for k, v in param_values.items():
+            assert isinstance(v, Value), f"param_values[{k!r}] must be a Value, got {type(v)}"
+            pv[k] = v
     interp = Interpreter(
         checked=checked,
         registry=registry,
@@ -396,6 +406,7 @@ def _execute(
         type_env=checked.type_env,
         loop_limit=3,
         strict_json=False,
+        param_values=pv,
     )
     root = Scope(parent=None)
     interp.execute(root)
@@ -850,12 +861,10 @@ class TestInputValidation:
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "name" in msgs.lower()
 
-    def test_undeclared_extra_input_fails(self) -> None:
+    def test_undeclared_extra_input_silently_ignored(self) -> None:
+        # Undeclared extras in inputs are silently ignored per O4/runtime contract.
         result = run("param name\nprint name", inputs={"name": "bob", "bogus": "x"})
-        assert result.ok is False
-        assert result.error is None
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "bogus" in msgs.lower()
+        assert result.ok is True
 
     def test_text_input_taken_verbatim(self, capsys: pytest.CaptureFixture[str]) -> None:
         result = run("param name\nprint name", inputs={"name": "alice"})
@@ -2820,10 +2829,9 @@ class TestInterpreterM3Stmts:
         with pytest.raises(AglTypeError, match="raise"):
             _execute(body)
 
-    def test_input_and_type_declarations_are_runtime_noops(self) -> None:
-        """param / record / enum / type-alias declarations bind nothing at runtime."""
+    def test_type_declarations_are_runtime_noops(self) -> None:
+        """record / enum / type-alias declarations bind nothing at runtime."""
         body = (
-            _input("x"),
             _record_def("Point", _field_def("v", _ty("int"))),
             _enum_def("Color", _variant_def("Red")),
             _type_alias("Num", _ty("int")),
@@ -2831,6 +2839,26 @@ class TestInterpreterM3Stmts:
         )
         root = _execute(body)
         assert root.snapshot() == {}
+
+    def test_param_with_external_value_binds_at_runtime(self) -> None:
+        """param binds the supplied external value at execution time (M3)."""
+        from agm.agl.eval.values import TextValue
+
+        body = (_input("x"),)
+        root = _execute(body, param_values={"x": TextValue("hello")})
+        assert root.snapshot()["x"] == TextValue("hello")
+
+    def test_param_without_value_and_no_default_raises_assertion(self) -> None:
+        """_exec_param AssertionError fires when a required param reaches eval without a value.
+
+        This is the unreachable-in-production path: the runtime's required-param
+        check prevents reaching eval with a missing required param.  The assert
+        guards against interpreter misuse (e.g. direct construction without
+        param_values).
+        """
+        body = (_input("x"),)
+        with pytest.raises(AssertionError, match="pre-execution required check"):
+            _execute(body)
 
     def test_exception_constructor_eval(self) -> None:
         """Exception constructors (e.g. Abort) are evaluated to ExceptionValue."""

@@ -60,8 +60,11 @@
         "meta": {},
         "bogus": "nope"
       },
-      "agents": {"ask": []},
-      "expect": {"host_error": {"message_contains": ["bogus"]}}
+      "agents": {"ask": ["summary"]},
+      "expect": {
+        "stdout_contains": ["x\n", "1\n", "1.5\n", "true\n"],
+        "calls": {"ask": 1}
+      }
     },
     {
       "name": "type_invalid_input",

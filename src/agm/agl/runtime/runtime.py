@@ -126,6 +126,32 @@ class AgentDeclInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class ParamDeclInfo:
+    """Static summary of one ``param`` declaration in a program.
+
+    Available after typecheck (``discover_params``).  The ``type`` is the
+    resolved/inferred AgL type (``TextType``, ``IntType``, etc.) per O5.
+    """
+
+    name: str
+    type: "AglType"
+    has_default: bool
+    line: int
+    col: int
+
+
+@dataclass(frozen=True, slots=True)
+class ParamDiscovery:
+    """Result of ``WorkflowRuntime.discover_params``."""
+
+    params: "tuple[ParamDeclInfo, ...]"
+    program_name: "str | None"
+    checked: "CheckedProgramType | None"
+    diagnostics: "tuple[Diagnostic, ...]"
+    warnings: "tuple[Diagnostic, ...]"
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedProgram:
     """Result of the lex + parse + scope phase of an AgL program.
 
@@ -170,6 +196,13 @@ class PreparedProgram:
         ]
         infos.sort(key=lambda info: (info.line, info.col))
         return tuple(infos)
+
+    @property
+    def program_name(self) -> "str | None":
+        """The declared program name, or ``None`` when undeclared."""
+        if self.resolved is None:
+            return None
+        return self.resolved.program_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +532,66 @@ class WorkflowRuntime:
         """
         return WorkflowRuntime.prepare(source).declared_agents
 
+    def discover_params(self, prepared: PreparedProgram) -> ParamDiscovery:
+        """Run typecheck-only discovery to enumerate typed ``param`` declarations.
+
+        Non-raising. On any failure (parse/scope already captured in ``prepared``,
+        or typecheck error), degrades to empty ``params`` and surfaces the error
+        in ``diagnostics`` so help/completion still renders with base options.
+        Uses ``_run_typecheck`` shared with ``run_prepared``.
+        """
+        from agm.agl.syntax.nodes import ParamDecl
+
+        if prepared.resolved is None:
+            return ParamDiscovery(
+                params=(),
+                program_name=prepared.program_name,
+                checked=None,
+                diagnostics=prepared.diagnostics,
+                warnings=prepared.warnings,
+            )
+
+        capabilities = self.host_environment().capabilities
+        checked, tc_diagnostics = _run_typecheck(prepared.resolved, capabilities)
+
+        all_warnings = (*prepared.warnings, *(checked.warnings if checked is not None else ()))
+
+        # ``_run_typecheck`` returns diagnostics only when ``checked`` is None, so
+        # this single condition covers the typecheck-failure degrade path.
+        if checked is None:
+            return ParamDiscovery(
+                params=(),
+                program_name=prepared.program_name,
+                checked=None,
+                diagnostics=tc_diagnostics,
+                warnings=all_warnings,
+            )
+
+        assert prepared.program is not None
+        infos: list[ParamDeclInfo] = []
+        for stmt in prepared.program.body:
+            if isinstance(stmt, ParamDecl):
+                param_type = checked.type_env.get_binding_type(stmt.node_id)
+                assert param_type is not None, (
+                    f"Param {stmt.name!r} has no recorded binding type; checker invariant violated."
+                )
+                infos.append(ParamDeclInfo(
+                    name=stmt.name,
+                    type=param_type,
+                    has_default=stmt.default is not None,
+                    line=stmt.span.start_line,
+                    col=stmt.span.start_col,
+                ))
+        infos.sort(key=lambda i: (i.line, i.col))
+
+        return ParamDiscovery(
+            params=tuple(infos),
+            program_name=prepared.program_name,
+            checked=checked,
+            diagnostics=(),
+            warnings=all_warnings,
+        )
+
     def run(
         self,
         source: str,
@@ -548,6 +641,7 @@ class WorkflowRuntime:
         inputs: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
+        checked: "CheckedProgramType | None" = None,
     ) -> RunResult:
         """Execute an already parsed + scoped program (no re-parsing).
 
@@ -606,74 +700,59 @@ class WorkflowRuntime:
             )
 
         # ----------------------------------------------------------------
-        # [3] Type checking
+        # [3] Type checking (reuse cached result from discover_params if provided)
         # ----------------------------------------------------------------
-        from agm.agl.typecheck import AglTypeError, check
-
-        try:
-            checked = check(resolved, capabilities)
-        except AglTypeError as exc:
-            return RunResult(
-                ok=False,
-                diagnostics=[exc.to_diagnostic()],
-                error=None,
-                warnings=warnings,
-            )
-        except Exception as exc:
-            return RunResult(
-                ok=False,
-                diagnostics=[Diagnostic(message=f"Type error: {exc}", line=1)],
-                error=None,
-                warnings=warnings,
-            )
+        if checked is None:
+            checked, tc_diagnostics = _run_typecheck(resolved, capabilities)
+            if checked is None:
+                return RunResult(
+                    ok=False,
+                    diagnostics=list(tc_diagnostics),
+                    error=None,
+                    warnings=warnings,
+                )
+        else:
+            # Caller supplied a pre-checked program (e.g. from discover_params);
+            # reuse it — typecheck runs exactly once across discover + run.
+            tc_diagnostics = ()
 
         # Collect warnings from typecheck.
         warnings.extend(checked.warnings)
 
         # ----------------------------------------------------------------
-        # [4] Validate host inputs against input declarations
+        # [4] Required-param check: params with no default and no supplied value
+        #     are a pre-execution error.  Undeclared extras in inputs are silently
+        #     ignored — the CLI layer hard-rejects unknown options; the runtime
+        #     treats the merged inputs dict as authoritative.
         # ----------------------------------------------------------------
         from agm.agl.syntax.nodes import ParamDecl
 
-        # Build declared input map.  Read the exact binding type recorded by the
-        # checker (keyed by the ParamDecl node_id) rather than re-resolving the
-        # annotation here — the checker is the single source of truth and already
-        # handles compound types (list/dict/record/enum) correctly.
-        declared_inputs: dict[str, AglType] = {}  # name → declared Type
-        # Track each declaration's source line so the "missing declared input"
-        # diagnostic can report the declaration site (parity with the
-        # type-invalid path, which already uses ``stmt.span``).
-        declared_input_lines: dict[str, int] = {}  # name → declaration line
+        # Build declared param map (name → type, has_default, decl_line).
+        declared_params: dict[str, AglType] = {}
+        declared_param_has_default: dict[str, bool] = {}
+        declared_param_lines: dict[str, int] = {}
         for stmt in program.body:
             if isinstance(stmt, ParamDecl):
-                input_type = checked.type_env.get_binding_type(stmt.node_id)
-                if input_type is None:
+                param_type = checked.type_env.get_binding_type(stmt.node_id)
+                if param_type is None:
                     raise AssertionError(
-                        f"Input {stmt.name!r} has no recorded binding type; "
+                        f"Param {stmt.name!r} has no recorded binding type; "
                         "checker invariant violated."
                     )
-                declared_inputs[stmt.name] = input_type
-                declared_input_lines[stmt.name] = stmt.span.start_line
+                declared_params[stmt.name] = param_type
+                declared_param_has_default[stmt.name] = stmt.default is not None
+                declared_param_lines[stmt.name] = stmt.span.start_line
 
-        # Validate: check for missing and undeclared.
+        # Check for missing required params (no default + not in inputs).
         input_errors: list[Diagnostic] = []
-        provided_keys = set(inputs.keys())
-        declared_keys = set(declared_inputs.keys())
-
-        for name in declared_keys - provided_keys:
-            input_errors.append(
-                Diagnostic(
-                    message=f"Missing declared input: {name!r}",
-                    line=declared_input_lines[name],
+        for name, has_default in declared_param_has_default.items():
+            if not has_default and name not in inputs:
+                input_errors.append(
+                    Diagnostic(
+                        message=f"Missing required param: {name!r}",
+                        line=declared_param_lines[name],
+                    )
                 )
-            )
-        for name in provided_keys - declared_keys:
-            input_errors.append(
-                Diagnostic(
-                    message=f"Undeclared input: {name!r} was provided but not declared",
-                    line=1,
-                )
-            )
 
         if input_errors:
             return RunResult(
@@ -710,18 +789,17 @@ class WorkflowRuntime:
             )
 
         # ----------------------------------------------------------------
-        # [6] Build root scope from inputs + type-check declarations
+        # [5b] Convert supplied external param values.
+        #      For each declared param present in inputs: convert/validate.
+        #      Errors are pre-execution (effect-free); collect all, fail if any.
         # ----------------------------------------------------------------
-        from agm.agl.eval.scope import Scope
-
-        root_scope = Scope(parent=None)
+        converted_params: dict[str, Value] = {}
         input_bind_errors: list[Diagnostic] = []
 
         for stmt in program.body:
-            if isinstance(stmt, ParamDecl):
+            if isinstance(stmt, ParamDecl) and stmt.name in inputs:
                 raw_val = inputs[stmt.name]
-                input_type_obj = declared_inputs[stmt.name]
-                # Convert/validate the raw value.
+                input_type_obj = declared_params[stmt.name]
                 try:
                     typed_val = convert_input(stmt.name, raw_val, input_type_obj)
                 except ValueError as exc:
@@ -729,9 +807,7 @@ class WorkflowRuntime:
                         Diagnostic(message=str(exc), line=stmt.span.start_line)
                     )
                     continue
-                root_scope.define(
-                    stmt.name, typed_val, mutable=False, decl_span=stmt.span
-                )
+                converted_params[stmt.name] = typed_val
 
         if input_bind_errors:
             return RunResult(
@@ -765,6 +841,7 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.eval.scope import Scope
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.runtime.trace import TraceStore
 
@@ -781,6 +858,8 @@ class WorkflowRuntime:
             nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
         }
 
+        root_scope = Scope(parent=None)
+
         interp = Interpreter(
             checked=checked,
             registry=registry,
@@ -792,6 +871,7 @@ class WorkflowRuntime:
             source=source,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
+            param_values=converted_params,
         )
 
         try:
@@ -853,6 +933,26 @@ class WorkflowRuntime:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _run_typecheck(
+    resolved: "ResolvedProgram",
+    capabilities: "HostCapabilities",
+) -> "tuple[CheckedProgramType | None, tuple[Diagnostic, ...]]":
+    """Run the typecheck pass, returning (checked, error_diagnostics).
+
+    On success: (CheckedProgram, ()). On failure: (None, (error_diag,)).
+    Non-raising — mirrors prepare()'s degrade contract.
+    """
+    from agm.agl.typecheck import AglTypeError, check
+
+    try:
+        checked = check(resolved, capabilities)
+        return checked, ()
+    except AglTypeError as exc:
+        return None, (exc.to_diagnostic(),)
+    except Exception as exc:
+        return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
 
 
 def _reconcile_agents(

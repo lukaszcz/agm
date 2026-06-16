@@ -67,7 +67,7 @@ The optional runner string reuses the `template` rule, but the AST builder
 rejects a template carrying any interpolation hole — the runner string must be
 a static string literal.  See `src/agm/agl/grammar/agl.lark`.
 
-**Contextual keywords** — `prompt` and `exec` are NOT reserved; they lex as
+**Contextual keywords** — `ask` and `exec` are NOT reserved; they lex as
 plain `VAR_NAME` tokens.  The scope pass gives them their built-in meaning.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,

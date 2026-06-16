@@ -36,7 +36,7 @@ def ambient_agents_for(program: Program) -> frozenset[str]:
     """Return the named-agent call targets in *program* as an ambient set.
 
     Walks the AST for every ``AgentCall`` and collects each ``agent`` name that
-    is a named agent (i.e. not the ``prompt``/``exec`` contextual keywords).
+    is a named agent (i.e. not the ``ask``/``exec`` contextual keywords).
     The result is suitable to pass as ``resolve(..., ambient_agents=...)`` so a
     non-scope unit test can resolve a program that calls named agents without
     adding an explicit ``agent`` declaration to its source.
@@ -44,7 +44,7 @@ def ambient_agents_for(program: Program) -> frozenset[str]:
     names: set[str] = set()
 
     def collect(node: object) -> None:
-        if isinstance(node, AgentCall) and node.agent not in ("prompt", "exec"):
+        if isinstance(node, AgentCall) and node.agent not in ("ask", "exec"):
             names.add(node.agent)
 
     walk(program, collect)

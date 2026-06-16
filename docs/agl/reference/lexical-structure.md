@@ -74,17 +74,17 @@ binder, or agent name.
 
 Two further names are **contextual keywords**, not reserved:
 
-- `prompt` — in call position it denotes the built-in default agent
+- `ask` — in call position it denotes the built-in default agent
   ([Agent calls](agent-calls.md)).
 - `exec` — in call position it denotes the built-in shell executor
   ([Shell execution](shell-execution.md)).
 
-`prompt` and `exec` may not be declared with `let`, `var`, or `input`, may
+`ask` and `exec` may not be declared with `let`, `var`, or `input`, may
 not be bound by patterns or `catch` binders, and may not be declared as
 agent names — but they remain legal as record/enum **field names**:
-`Continue(prompt: text)` is a valid variant declaration. To destructure such
-a field, bind it under another name — `Continue(prompt: p)` — since the
-shorthand pattern `Continue(prompt)` would bind the reserved name and is
+`Continue(ask: text)` is a valid variant declaration. To destructure such
+a field, bind it under another name — `Continue(ask: a)` — since the
+shorthand pattern `Continue(ask)` would bind the reserved name and is
 rejected.
 
 The built-in type names `text`, `json`, `bool`, `int`, `decimal`, `list`,

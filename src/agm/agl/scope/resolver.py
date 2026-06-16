@@ -27,7 +27,7 @@ Scope rules (design §9, plan §6.2)
 
 Contextual keywords (design §2.1, §4.12)
 -----------------------------------------
-``prompt`` and ``exec`` cannot be declared with ``let``/``var``/``input`` and
+``ask`` and ``exec`` cannot be declared with ``let``/``var``/``input`` and
 cannot shadow existing builtins.  In *call position* (``AgentCall.agent``)
 they always resolve to ``CallKind.default_agent`` and ``CallKind.shell_exec``
 respectively.  Any other ``AgentCall.agent`` name resolves to
@@ -87,7 +87,7 @@ from agm.agl.syntax.nodes import (
 )
 
 # Reserved contextual keyword names that may not be used as variable names.
-_RESERVED_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
+_RESERVED_NAMES: frozenset[str] = frozenset({"ask", "exec"})
 
 # Per-binder phrasing for the ``set``-on-immutable rejection (F8).  Each phrase
 # completes ``Cannot assign to 'x': <phrase> (immutable).`` and names the ACTUAL
@@ -274,7 +274,7 @@ class _Resolver:
         scope.define(name, ref)
 
     def _check_not_reserved(self, name: str, span: object) -> None:
-        """Raise if *name* is a contextual keyword (prompt/exec)."""
+        """Raise if *name* is a contextual keyword (ask/exec)."""
         from agm.agl.syntax.spans import SourceSpan
 
         if name in _RESERVED_NAMES:
@@ -558,7 +558,7 @@ class _Resolver:
 
     def _resolve_agent_call(self, node: AgentCall) -> None:
         agent = node.agent
-        if agent == "prompt":
+        if agent == "ask":
             kind = CallKind.default_agent
         elif agent == "exec":
             kind = CallKind.shell_exec

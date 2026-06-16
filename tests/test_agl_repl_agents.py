@@ -38,7 +38,7 @@ class InterruptingAgent:
         raise KeyboardInterrupt
 
 
-def _request(agent: str = "prompt", prompt: str = "hi") -> AgentRequest:
+def _request(agent: str = "ask", prompt: str = "hi") -> AgentRequest:
     return AgentRequest(agent=agent, prompt=prompt)
 
 

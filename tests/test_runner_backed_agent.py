@@ -653,7 +653,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.run_prepared_prompt_result", return_value=run_mock),
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
-            factory_fn(AgentRequest(agent="prompt", prompt="hi"))
+            factory_fn(AgentRequest(agent="ask", prompt="hi"))
 
     def test_spawn_failure_raises_agent_call_host_error(self) -> None:
         from agm.agent.runner import PreparedPromptRun
@@ -680,7 +680,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             with pytest.raises(AgentCallHostError) as exc_info:
-                factory_fn(AgentRequest(agent="prompt", prompt="hi"))
+                factory_fn(AgentRequest(agent="ask", prompt="hi"))
         assert exc_info.value.cause == "spawn_failure"
 
     def test_timeout_raises_agent_call_host_error(self) -> None:
@@ -708,7 +708,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             with pytest.raises(AgentCallHostError) as exc_info:
-                factory_fn(AgentRequest(agent="prompt", prompt="hi"))
+                factory_fn(AgentRequest(agent="ask", prompt="hi"))
         assert exc_info.value.cause == "timeout"
 
     def test_nonzero_exit_raises_agent_call_host_error(self) -> None:
@@ -736,7 +736,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             with pytest.raises(AgentCallHostError) as exc_info:
-                factory_fn(AgentRequest(agent="prompt", prompt="hi"))
+                factory_fn(AgentRequest(agent="ask", prompt="hi"))
         assert exc_info.value.cause == "nonzero_exit"
         assert exc_info.value.exit_code == 2
 
@@ -775,7 +775,7 @@ class TestStderrTail:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             try:
-                factory_fn(AgentRequest(agent="prompt", prompt="hi"))
+                factory_fn(AgentRequest(agent="ask", prompt="hi"))
             except AgentCallHostError as e:
                 return e.stderr_tail
         return ""
@@ -824,7 +824,7 @@ class TestRetryFeedbackValidationErrors:
             timed_out=False, spawn_error=None
         )
         req = AgentRequest(
-            agent="prompt",
+            agent="ask",
             prompt="Do X.",
             attempt=1,
             previous_invalid_output="bad",
@@ -906,7 +906,7 @@ class TestRunnerMessageComposition:
         )
 
         req = AgentRequest(
-            agent="prompt",
+            agent="ask",
             prompt=prompt,
             attempt=attempt,
             previous_invalid_output=previous_invalid_output,
@@ -1035,7 +1035,7 @@ class TestAgentCallErrorViaRuntime:
         rt = WorkflowRuntime(
             default_agent=self._make_failing_default_agent(cause="nonzero_exit")
         )
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
@@ -1045,7 +1045,7 @@ class TestAgentCallErrorViaRuntime:
 
         program = (
             "try\n"
-            "  let x = prompt \"hi\"\n"
+            "  let x = ask \"hi\"\n"
             "catch AgentCallError as e =>\n"
             "  print e.cause\n"
         )
@@ -1063,7 +1063,7 @@ class TestAgentCallErrorViaRuntime:
 
         program = (
             "try\n"
-            "  let x = prompt \"hi\"\n"
+            "  let x = ask \"hi\"\n"
             "catch AgentCallError as e =>\n"
             "  print e.cause\n"
         )
@@ -1080,7 +1080,7 @@ class TestAgentCallErrorViaRuntime:
         from agm.agl import WorkflowRuntime
 
         rt = WorkflowRuntime(default_agent=lambda req: "")
-        result = rt.run('let x = prompt "say nothing"')
+        result = rt.run('let x = ask "say nothing"')
         assert result.ok is True
         from agm.agl.eval.values import TextValue
 
@@ -1100,7 +1100,7 @@ class TestAgentCallErrorViaRuntime:
         from agm.agl import WorkflowRuntime
 
         rt = WorkflowRuntime(default_agent=counting_agent)
-        rt.run('let x = prompt[on_parse_error: retry[3]] "hi"')
+        rt.run('let x = ask[on_parse_error: retry[3]] "hi"')
         # Must only be called once — transport failures are not retried
         assert call_count[0] == 1
 
@@ -1258,7 +1258,7 @@ class TestCliRunnerIntegration:
 
         agl_file = tmp_path / "prog.agl"
         # Print the agent response directly
-        agl_file.write_text('let x = prompt "Say something"\nprint x\n')
+        agl_file.write_text('let x = ask "Say something"\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -1280,7 +1280,7 @@ class TestCliRunnerIntegration:
         _install_nonzero_runner(tmp_path / "bin", env)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = prompt "hi"\nprint x\n')
+        agl_file.write_text('let x = ask "hi"\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -1304,7 +1304,7 @@ class TestCliRunnerIntegration:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "try\n"
-            "  let x = prompt \"hi\"\n"
+            "  let x = ask \"hi\"\n"
             "catch AgentCallError as e =>\n"
             "  print e.cause\n"
         )
@@ -1329,7 +1329,7 @@ class TestCliRunnerIntegration:
         _install_fake_runner(tmp_path / "bin", env)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = prompt "hi"\nprint x\n')
+        agl_file.write_text('let x = ask "hi"\nprint x\n')
 
         result = self._run_agm_exec(
             [str(agl_file), "--runner", "fake-runner", "--no-log"],
@@ -1375,7 +1375,7 @@ class TestCliRunnerIntegration:
         env["PATH"] = str(bin_dir) + ":" + env["PATH"]
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = prompt "hi"\nprint x\n')
+        agl_file.write_text('let x = ask "hi"\nprint x\n')
 
         result = self._run_agm_exec(
             [str(agl_file), "--runner", "enoexec-runner", "--no-log"],

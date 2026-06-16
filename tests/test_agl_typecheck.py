@@ -231,7 +231,7 @@ class TestAcceptance:
         assert r.resolved.program is not None
 
     def test_untyped_agent_call_defaults_to_text(self) -> None:
-        r = parse_resolve_check('let x = prompt "Q"')
+        r = parse_resolve_check('let x = ask "Q"')
         from agm.agl.syntax.nodes import LetDecl
 
         stmt = r.resolved.program.body[0]
@@ -242,7 +242,7 @@ class TestAcceptance:
         assert spec.codec_name == "text"
 
     def test_typed_agent_call_uses_annotation(self) -> None:
-        r = parse_resolve_check('let x: text = prompt "Q"')
+        r = parse_resolve_check('let x: text = ask "Q"')
         from agm.agl.syntax.nodes import LetDecl
 
         stmt = r.resolved.program.body[0]
@@ -256,11 +256,11 @@ class TestAcceptance:
         assert r.resolved.program is not None
 
     def test_renderer_default_ok(self) -> None:
-        r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x}"')
+        r = parse_resolve_check('let x = "v"\nlet q = ask "Hi ${x}"')
         assert r.resolved.program is not None
 
     def test_renderer_raw_ok(self) -> None:
-        r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x as raw}"')
+        r = parse_resolve_check('let x = "v"\nlet q = ask "Hi ${x as raw}"')
         assert r.resolved.program is not None
 
     def test_exec_call_text_default(self) -> None:
@@ -307,7 +307,7 @@ class TestRendererKinds:
         # ``xs`` is a list typechecks.
         caps = caps_with_renderer_kinds("listonly", frozenset({"list"}))
         r = parse_resolve_check(
-            'let xs: list[text] = ["a"]\nlet q = prompt "${xs as listonly}"',
+            'let xs: list[text] = ["a"]\nlet q = ask "${xs as listonly}"',
             capabilities=caps,
         )
         assert r.resolved.program is not None
@@ -316,7 +316,7 @@ class TestRendererKinds:
         # The same renderer rejects a ``text`` operand (unsupported kind).
         caps = caps_with_renderer_kinds("listonly", frozenset({"list"}))
         err = reject_type(
-            'let x = "v"\nlet q = prompt "${x as listonly}"',
+            'let x = "v"\nlet q = ask "${x as listonly}"',
             capabilities=caps,
         )
         line, msg = diag(err)
@@ -328,7 +328,7 @@ class TestRendererKinds:
         caps = caps_with_renderer_kinds("anything", None)
         r = parse_resolve_check(
             'let x = "v"\nlet xs: list[text] = ["a"]\n'
-            'let q = prompt "${x as anything} ${xs as anything}"',
+            'let q = ask "${x as anything} ${xs as anything}"',
             capabilities=caps,
         )
         assert r.resolved.program is not None
@@ -338,9 +338,9 @@ class TestRendererKinds:
         # type-agnostic), so json/raw/bullets accept a text operand as before.
         r = parse_resolve_check(
             'let x = "v"\n'
-            'let a = prompt "${x as raw}"\n'
-            'let b = prompt "${x as json}"\n'
-            'let c = prompt "${x as bullets}"'
+            'let a = ask "${x as raw}"\n'
+            'let b = ask "${x as json}"\n'
+            'let c = ask "${x as bullets}"'
         )
         assert r.resolved.program is not None
 
@@ -348,11 +348,11 @@ class TestRendererKinds:
         # A renderer supporting {text, int} accepts both but rejects a list.
         caps = caps_with_renderer_kinds("scalars", frozenset({"text", "int"}))
         ok = parse_resolve_check(
-            'let n = 1\nlet q = prompt "${n as scalars}"', capabilities=caps
+            'let n = 1\nlet q = ask "${n as scalars}"', capabilities=caps
         )
         assert ok.resolved.program is not None
         err = reject_type(
-            'let xs: list[int] = [1]\nlet q = prompt "${xs as scalars}"',
+            'let xs: list[int] = [1]\nlet q = ask "${xs as scalars}"',
             capabilities=caps,
         )
         _, msg = diag(err)
@@ -366,7 +366,7 @@ class TestRendererKinds:
 
 class TestContractSpecs:
     def test_text_target_text_codec(self) -> None:
-        r = parse_resolve_check('let x = prompt "Q"')
+        r = parse_resolve_check('let x = ask "Q"')
         from agm.agl.syntax.nodes import LetDecl
 
         stmt = r.resolved.program.body[0]
@@ -390,7 +390,7 @@ class TestContractSpecs:
         assert spec.strict_json is None
 
     def test_set_target_type_propagated(self) -> None:
-        r = parse_resolve_check('var x: text = "a"\nset x = prompt "Q"')
+        r = parse_resolve_check('var x: text = "a"\nset x = ask "Q"')
 
         set_stmt = r.resolved.program.body[1]
         assert isinstance(set_stmt, SetStmt)
@@ -399,11 +399,11 @@ class TestContractSpecs:
         assert isinstance(spec.target_type, TextType)
 
     def test_record_annotation_selects_json_codec(self) -> None:
-        """§6 expected-type propagation: let r: Review = prompt derives json codec."""
+        """§6 expected-type propagation: let r: Review = ask derives json codec."""
         from agm.agl.syntax.nodes import LetDecl
         from agm.agl.typecheck.types import RecordType
 
-        src = "record Review\n  score: int\n  comment: text\nlet r: Review = prompt \"Q\"\n"
+        src = "record Review\n  score: int\n  comment: text\nlet r: Review = ask \"Q\"\n"
         r = parse_resolve_check(src, capabilities=caps_with_json_codec())
         stmt = r.resolved.program.body[1]
         assert isinstance(stmt, LetDecl)
@@ -414,11 +414,11 @@ class TestContractSpecs:
         assert spec.target_type.name == "Review"
 
     def test_list_annotation_selects_json_codec(self) -> None:
-        """§6 expected-type propagation: let xs: list[int] = prompt derives json codec."""
+        """§6 expected-type propagation: let xs: list[int] = ask derives json codec."""
         from agm.agl.syntax.nodes import LetDecl
         from agm.agl.typecheck.types import ListType
 
-        src = "let xs: list[int] = prompt \"Q\"\n"
+        src = "let xs: list[int] = ask \"Q\"\n"
         r = parse_resolve_check(src, capabilities=caps_with_json_codec())
         stmt = r.resolved.program.body[0]
         assert isinstance(stmt, LetDecl)
@@ -434,7 +434,7 @@ class TestContractSpecs:
         src = (
             "record Point\n  x: int\n  y: int\n"
             "var p: Point = Point(x: 0, y: 0)\n"
-            "set p = prompt \"Q\"\n"
+            "set p = ask \"Q\"\n"
         )
         r = parse_resolve_check(src, capabilities=caps_with_json_codec())
         set_stmt = r.resolved.program.body[2]
@@ -669,22 +669,22 @@ class TestAgentCapabilities:
         r = parse_resolve_check('let x = my_agent "Q"', capabilities=caps)
         assert r.resolved.program is not None
 
-    def test_prompt_rejected_without_default_or_fallback(self) -> None:
-        # F1a: a ``prompt`` call needs a default agent. With ``has_default_agent``
+    def test_ask_rejected_without_default_or_fallback(self) -> None:
+        # F1a: an ``ask`` call needs a default agent. With ``has_default_agent``
         # False, it is a static error at the call's span.
         caps = caps_no_fallback()  # has_default_agent=False
-        err = reject_type('let x = prompt "Q"', caps)
+        err = reject_type('let x = ask "Q"', caps)
         assert "default agent" in str(err).lower()
 
-    def test_prompt_ok_with_default_agent(self) -> None:
-        # A configured default agent makes ``prompt`` valid.
+    def test_ask_ok_with_default_agent(self) -> None:
+        # A configured default agent makes ``ask`` valid.
         caps = HostCapabilities(
             agent_names=frozenset(),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
             renderer_names=frozenset({"default", "raw"}),
         )
-        r = parse_resolve_check('let x = prompt "Q"', capabilities=caps)
+        r = parse_resolve_check('let x = ask "Q"', capabilities=caps)
         assert r.resolved.program is not None
 
     def test_exec_rejected_without_shell_exec_support(self) -> None:
@@ -711,7 +711,7 @@ class TestCodecCapabilities:
     def test_non_text_target_no_json_codec(self) -> None:
         # Targeting int with only the text codec is a static error in M1.
         # matches the spirit of tests/agl/rejections/type/*.agl codec checks
-        err = reject_type('let n: int = prompt "Q"')
+        err = reject_type('let n: int = ask "Q"')
         line, msg = diag(err)
         assert line == 1
         # Error should mention codec or the type.
@@ -719,7 +719,7 @@ class TestCodecCapabilities:
 
     def test_strict_json_on_text_codec(self) -> None:
         # matches tests/agl/rejections/type/strict_json_on_text_codec.agl
-        err = reject_type('let x = prompt[strict_json: true] "Question."')
+        err = reject_type('let x = ask[strict_json: true] "Question."')
         line, msg = diag(err)
         assert line == 1
         assert "strict_json" in msg
@@ -727,13 +727,13 @@ class TestCodecCapabilities:
     def test_non_text_target_with_json_codec_ok(self) -> None:
         # With the JSON codec, non-text targets are fine.
         caps = caps_with_json_codec()
-        r = parse_resolve_check('let n: int = prompt "Q"', capabilities=caps)
+        r = parse_resolve_check('let n: int = ask "Q"', capabilities=caps)
         assert r.resolved.program is not None
 
     def test_strict_json_with_json_codec_ok(self) -> None:
         caps = caps_with_json_codec()
         r = parse_resolve_check(
-            'let x: json = prompt[strict_json: true] "Question."',
+            'let x: json = ask[strict_json: true] "Question."',
             capabilities=caps,
         )
         from agm.agl.syntax.nodes import LetDecl
@@ -754,7 +754,7 @@ class TestFormatOption:
     def test_format_json_on_record_target_ok(self) -> None:
         """Explicit format: json with a record target selects the json codec."""
         caps = caps_with_json_codec()
-        src = 'record P\n  n: int\nlet x: P = prompt[format: json] "Q"\n'
+        src = 'record P\n  n: int\nlet x: P = ask[format: json] "Q"\n'
         r = parse_resolve_check(src, capabilities=caps)
         stmt = r.resolved.program.body[1]
         assert isinstance(stmt, LetDecl)
@@ -766,7 +766,7 @@ class TestFormatOption:
         """format: json on an int target is valid (json codec supports int)."""
         caps = caps_with_json_codec()
         r = parse_resolve_check(
-            'let n: int = prompt[format: json] "Q"',
+            'let n: int = ask[format: json] "Q"',
             capabilities=caps,
         )
         stmt = r.resolved.program.body[0]
@@ -778,7 +778,7 @@ class TestFormatOption:
     def test_format_unknown_codec_error(self) -> None:
         """An unknown codec name in format: is a static error."""
         caps = caps_with_json_codec()
-        err = reject_type('let x = prompt[format: nope] "Q"', capabilities=caps)
+        err = reject_type('let x = ask[format: nope] "Q"', capabilities=caps)
         line, msg = diag(err)
         assert line == 1
         assert "nope" in msg
@@ -786,7 +786,7 @@ class TestFormatOption:
     def test_format_json_on_text_target_error(self) -> None:
         """format: json on a text target is invalid (json codec doesn't support text)."""
         caps = caps_with_json_codec()
-        err = reject_type('let x: text = prompt[format: json] "Q"', capabilities=caps)
+        err = reject_type('let x: text = ask[format: json] "Q"', capabilities=caps)
         line, msg = diag(err)
         assert line == 1
         assert "json" in msg
@@ -794,7 +794,7 @@ class TestFormatOption:
     def test_format_overrides_auto_codec_selection(self) -> None:
         """Explicit format: json on text target overrides auto-selection and must error."""
         caps = caps_with_json_codec()
-        err = reject_type('let x = prompt[format: json] "Q"', capabilities=caps)
+        err = reject_type('let x = ask[format: json] "Q"', capabilities=caps)
         # text target + json codec → error (json doesn't handle text)
         assert isinstance(err, AglTypeError)
 
@@ -807,18 +807,18 @@ class TestFormatOption:
 class TestRendererErrors:
     def test_unknown_renderer(self) -> None:
         err = reject_type(
-            'let x = "v"\nlet q = prompt "Hi ${x as unknown_renderer}"'
+            'let x = "v"\nlet q = ask "Hi ${x as unknown_renderer}"'
         )
         line, msg = diag(err)
         assert "unknown_renderer" in msg
 
     def test_known_renderer_raw_ok(self) -> None:
-        r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x as raw}"')
+        r = parse_resolve_check('let x = "v"\nlet q = ask "Hi ${x as raw}"')
         assert r.resolved.program is not None
 
     def test_known_renderer_default_fallback_ok(self) -> None:
         # No explicit renderer specified (default).
-        r = parse_resolve_check('let x = "v"\nlet q = prompt "Hi ${x}"')
+        r = parse_resolve_check('let x = "v"\nlet q = ask "Hi ${x}"')
         assert r.resolved.program is not None
 
     def test_mixed_kind_dict_literal_in_interpolation_is_json(self) -> None:
@@ -992,7 +992,7 @@ class TestParsePolicyNoOpWarnings:
     def test_on_parse_error_on_text_target_warns(self) -> None:
         # ``blank`` is untyped → defaults to a text target; a text target never
         # fails parsing, so the on_parse_error policy is a no-op (design §7.10).
-        checked = accept_type('let blank = prompt[on_parse_error: retry[1]] "Hi"\n')
+        checked = accept_type('let blank = ask[on_parse_error: retry[1]] "Hi"\n')
         warns = _warnings(checked)
         assert len(warns) == 1
         line, msg, severity = warns[0]
@@ -1001,13 +1001,13 @@ class TestParsePolicyNoOpWarnings:
         assert "text" in msg
 
     def test_text_target_without_parse_policy_no_warning(self) -> None:
-        checked = accept_type('let blank = prompt "Hi"\n')
+        checked = accept_type('let blank = ask "Hi"\n')
         assert _warnings(checked) == []
 
     def test_typed_target_with_parse_policy_no_warning(self) -> None:
         # A non-text (int) target legitimately uses the parse policy — no warning.
         checked = accept_type(
-            'let n: int = prompt[on_parse_error: retry[1]] "Number"\n',
+            'let n: int = ask[on_parse_error: retry[1]] "Number"\n',
             caps_with_json_codec(),
         )
         assert _warnings(checked) == []
@@ -1386,7 +1386,7 @@ class TestWarnings:
     def test_warnings_on_complex_program(self) -> None:
         r = parse_resolve_check(
             "input spec\n"
-            'let x = prompt "Process ${spec}"\n'
+            'let x = ask "Process ${spec}"\n'
             "print x\n"
         )
         assert isinstance(r.warnings, tuple)
@@ -2875,9 +2875,9 @@ class TestTemplateInterpolationExpected:
     def test_agent_call_inside_template_gets_text_contract(self) -> None:
         """An agent call inside ``${...}`` must default to a *text* contract,
         not a json contract.  The enclosing template provides no json context."""
-        # AgL source: let x = "prefix ${prompt "summarize"}"
+        # AgL source: let x = "prefix ${ask "summarize"}"
         # Inner agent call has no annotation → target_type must be text.
-        src = 'let x = "prefix ${prompt "summarize"}"\n'
+        src = 'let x = "prefix ${ask "summarize"}"\n'
         r = accept_type(src)
         # Find the AgentCall node inside the template interpolation.
         from agm.agl.syntax.nodes import LetDecl, Template
@@ -3040,8 +3040,8 @@ class TestTemplateInterpolationConfinement:
     # --- AgentCall inside list/dict literal in template ---
 
     def test_agent_call_in_list_inside_template_gets_text_contract(self) -> None:
-        """``${[prompt "x"]}`` — inner agent call must default to text, not json."""
-        src = 'let t = "${[prompt "x"]}"\n'
+        """``${[ask "x"]}`` — inner agent call must default to text, not json."""
+        src = 'let t = "${[ask "x"]}"\n'
         r = accept_type(src, capabilities=caps_with_json_codec())
         from agm.agl.syntax.nodes import LetDecl, ListLit, Template
 
@@ -3061,8 +3061,8 @@ class TestTemplateInterpolationConfinement:
         assert spec.codec_name == "text"
 
     def test_agent_call_in_dict_inside_template_gets_text_contract(self) -> None:
-        """``${{\"k\": prompt \"x\"}}`` — inner agent call must default to text."""
-        src = 'let t = "${ {k: prompt "x"} }"\n'
+        """``${{\"k\": ask \"x\"}}`` — inner agent call must default to text."""
+        src = 'let t = "${ {k: ask "x"} }"\n'
         r = accept_type(src, capabilities=caps_with_json_codec())
         from agm.agl.syntax.nodes import LetDecl, Template
 
@@ -3084,9 +3084,9 @@ class TestTemplateInterpolationConfinement:
     # --- Genuine annotation keeps json contract ---
 
     def test_genuine_json_annotation_keeps_json_contract(self) -> None:
-        """``let x: json = [prompt "y"]`` — genuine annotation, agent call must
+        """``let x: json = [ask "y"]`` — genuine annotation, agent call must
         get json target (unchanged by the template fix)."""
-        src = 'let x: json = [prompt "y"]\n'
+        src = 'let x: json = [ask "y"]\n'
         r = accept_type(src, capabilities=caps_with_json_codec())
         from agm.agl.syntax.nodes import LetDecl, ListLit
 
@@ -3158,10 +3158,10 @@ class TestTemplateInterpolationConfinement:
         assert r.resolved.program is not None
 
     def test_agent_call_nested_two_levels_gets_text_contract(self) -> None:
-        """``${ {a: {b: prompt "x"}} }`` — the confinement must hold at any
+        """``${ {a: {b: ask "x"}} }`` — the confinement must hold at any
         nesting depth: the agent call two containers deep still defaults to a
         text contract."""
-        src = 'let t = "${ {a: {b: prompt "x"}} }"\n'
+        src = 'let t = "${ {a: {b: ask "x"}} }"\n'
         r = accept_type(src, capabilities=caps_with_json_codec())
         from agm.agl.syntax.nodes import DictLit, LetDecl, Template
 

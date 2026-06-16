@@ -364,7 +364,7 @@ class ReplSession:
 
         In the REPL, host registration both declares and backs an agent, so the
         authoritative set of host-registered names (``capabilities.agent_names``,
-        which excludes the ``prompt``/``exec`` built-ins) is ambient, unioned with
+        which excludes the ``ask``/``exec`` built-ins) is ambient, unioned with
         agents declared by ``agent X`` statements in prior promoted entries.
         """
         return host_env.capabilities.agent_names | self._declared_agents
@@ -781,13 +781,13 @@ class ReplSession:
     def agents(self) -> list[str]:
         """Return the names of available agents.
 
-        Registered named agents plus ``"prompt"`` when a default agent is
+        Registered named agents plus ``"ask"`` when a default agent is
         configured.
         """
         host_env = self._runtime.host_environment()
         names = sorted(host_env.registry.agent_names)
         if self._has_default_agent:
-            names.append("prompt")
+            names.append("ask")
         return names
 
     def inputs(self) -> list[tuple[str, "Type", "Value | None"]]:

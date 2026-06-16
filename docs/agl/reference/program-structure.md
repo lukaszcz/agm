@@ -48,7 +48,7 @@ most usefully a bare agent call or `exec` executed for effect:
 
 ```agl
 exec "make build"
-prompt "Log a status update."
+ask "Log a status update."
 ```
 
 A bare equality at statement level that looks like an assignment is rejected
@@ -167,7 +167,7 @@ Examples:
 
 ```agl
 # Inline do body: closed statements separated by ';', sealed by 'until'.
-do[5] let s: Status = prompt "Do X."; print s until s is Complete
+do[5] let s: Status = ask "Do X."; print s until s is Complete
 
 # Inline do body ending in an open statement (legal: 'until' seals it).
 do[5] let r: Review = reviewer "Review ${a}"; case r of | Fail(i) => set a = impl "Fix ${i}" | Pass => pass until r is Pass

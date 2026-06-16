@@ -14,10 +14,10 @@ let item = Item(name: "bolt", qty: 7)
 let items = ["alpha", "beta"]
 let pick: Pick = One(item: item)
 
-let a = prompt "Hello ${who}, qty ${item.qty}, sum ${1 + 2 * 3}."
-let b = prompt "${who}${item.qty}"
-let c = prompt "data: ${ {kind: "demo", tags: items} }"
-let d = prompt """
+let a = ask "Hello ${who}, qty ${item.qty}, sum ${1 + 2 * 3}."
+let b = ask "${who}${item.qty}"
+let c = ask "data: ${ {kind: "demo", tags: items} }"
+let d = ask """
 Report for ${who}:
 ${item}
 ${pick}

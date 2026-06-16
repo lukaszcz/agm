@@ -90,11 +90,11 @@ class TestKeywordsAndIdentifiers:
         types = [t for t, _ in result]
         assert types == ["VAR_NAME", "VAR_NAME"]
 
-    def test_prompt_is_var_name_not_keyword(self) -> None:
-        # prompt/exec are contextual keywords — lex as VAR_NAME
-        result = tok("prompt exec")
+    def test_ask_is_var_name_not_keyword(self) -> None:
+        # ask/exec are contextual keywords — lex as VAR_NAME
+        result = tok("ask exec")
         assert result == [
-            ("VAR_NAME", "prompt"),
+            ("VAR_NAME", "ask"),
             ("VAR_NAME", "exec"),
         ]
 

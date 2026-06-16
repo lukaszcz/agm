@@ -168,7 +168,7 @@ class TestTypeOf:
         agent = CountingAgent("RESULT")
         s = ReplSession(default_agent=agent)
         # type_of an agent-calling expression must NOT dispatch.
-        assert s.type_of('prompt """ask"""') == repr(TextType())
+        assert s.type_of('ask """ask"""') == repr(TextType())
         assert agent.calls == 0
 
     def test_type_of_rejects_non_expression(self) -> None:
@@ -252,7 +252,7 @@ class TestExactlyOnce:
     def test_agent_fires_exactly_once(self) -> None:
         agent = CountingAgent("the-answer")
         s = ReplSession(default_agent=agent)
-        r1 = s.eval_entry('let g = prompt """say something"""')
+        r1 = s.eval_entry('let g = ask """say something"""')
         assert r1.ok
         assert agent.calls == 1
         # Referencing the stored binding in a LATER entry must NOT re-invoke.
@@ -264,9 +264,9 @@ class TestExactlyOnce:
     def test_distinct_agent_responses_across_entries(self) -> None:
         agent = CountingAgent("first", "second", "third")
         s = ReplSession(default_agent=agent)
-        s.eval_entry('let a = prompt """q1"""')
-        s.eval_entry('let b = prompt """q2"""')
-        s.eval_entry('let c = prompt """q3"""')
+        s.eval_entry('let a = ask """q1"""')
+        s.eval_entry('let b = ask """q2"""')
+        s.eval_entry('let c = ask """q3"""')
         vals = {n: _text(v) for n, _t, v in s.bindings()}
         assert vals == {"a": "first", "b": "second", "c": "third"}
         assert agent.calls == 3
@@ -463,7 +463,7 @@ class TestLoadFile:
     def test_load_file_agent_runs_once(self, tmp_path: Path) -> None:
         agent = CountingAgent("loaded")
         f = tmp_path / "p.agl"
-        f.write_text('let g = prompt """hi"""\n')
+        f.write_text('let g = ask """hi"""\n')
         s = ReplSession(default_agent=agent)
         s.load_file(f)
         assert agent.calls == 1
@@ -637,7 +637,7 @@ class TestCheckOnly:
     def test_check_only_types_expression_without_eval(self) -> None:
         agent = CountingAgent("nope")
         s = ReplSession(default_agent=agent)
-        r = s.eval_entry('prompt """ask"""', check_only=True)
+        r = s.eval_entry('ask """ask"""', check_only=True)
         assert r.ok
         assert r.kind == "expression"
         assert isinstance(r.value_type, TextType)
@@ -686,13 +686,13 @@ class TestCheckOnly:
 
 
 class TestRegistrationAndAgents:
-    def test_agents_lists_named_and_prompt(self) -> None:
+    def test_agents_lists_named_and_ask(self) -> None:
         s = ReplSession(default_agent=CountingAgent("x"))
         s.register_agent("alpha", CountingAgent("a"))
         s.register_agent("beta", CountingAgent("b"))
-        assert s.agents() == ["alpha", "beta", "prompt"]
+        assert s.agents() == ["alpha", "beta", "ask"]
 
-    def test_agents_without_default_excludes_prompt(self) -> None:
+    def test_agents_without_default_excludes_ask(self) -> None:
         s = ReplSession()
         s.register_agent("only", CountingAgent("x"))
         assert s.agents() == ["only"]
@@ -700,7 +700,7 @@ class TestRegistrationAndAgents:
     def test_register_agent_reserved_name_rejected(self) -> None:
         s = ReplSession()
         with pytest.raises(ValueError):
-            s.register_agent("prompt", CountingAgent("x"))
+            s.register_agent("ask", CountingAgent("x"))
 
     def test_register_duplicate_agent_rejected(self) -> None:
         s = ReplSession()
@@ -753,7 +753,7 @@ class TestContractError:
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
         s = ReplSession(default_agent=CountingAgent("ok"))
-        r = s.eval_entry('let x = prompt """hi"""')
+        r = s.eval_entry('let x = ask """hi"""')
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
         # Atomic: nothing promoted.
@@ -778,7 +778,7 @@ class TestEntryResultShape:
 class _CancellingAgent:
     """A fake ``AgentFn`` that raises ``AgentCancelled`` on dispatch."""
 
-    def __init__(self, callee: str = "prompt", reason: str = "declined") -> None:
+    def __init__(self, callee: str = "ask", reason: str = "declined") -> None:
         self._callee = callee
         self._reason = reason
         self.calls = 0
@@ -804,7 +804,7 @@ class _InterruptAgent:
 class TestAgentCancellation:
     def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
         s = ReplSession(default_agent=_CancellingAgent())
-        r = s.eval_entry('let g = prompt """do it"""')
+        r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
         assert r.error is None
         assert r.diagnostics
@@ -814,7 +814,7 @@ class TestAgentCancellation:
         s = ReplSession(default_agent=_CancellingAgent())
         s.eval_entry("let keep = 7")
         before = _snapshot(s)
-        r = s.eval_entry('let g = prompt """do it"""')
+        r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
         # Atomic: the failed entry promoted nothing.
         assert _snapshot(s) == before
@@ -824,7 +824,7 @@ class TestAgentCancellation:
         s = ReplSession(default_agent=_InterruptAgent())
         s.eval_entry("let x = 1")
         before = _snapshot(s)
-        r = s.eval_entry('let g = prompt """slow"""')
+        r = s.eval_entry('let g = ask """slow"""')
         assert not r.ok
         assert r.error is None
         assert _snapshot(s) == before
@@ -834,7 +834,7 @@ class TestAgentCancellation:
         # back — the entry is atomic.
         s = ReplSession(default_agent=_CancellingAgent())
         s.eval_entry("var v = 1")
-        r = s.eval_entry('do\n  set v = 2\n  let g = prompt """x"""')
+        r = s.eval_entry('do\n  set v = 2\n  let g = ask """x"""')
         assert not r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["v"] == 1  # the set was rolled back
@@ -848,7 +848,7 @@ class TestAgentCancellation:
 class TestTraceLogging:
     def test_no_trace_path_writes_nothing(self, tmp_path: Path) -> None:
         s = ReplSession(default_agent=CountingAgent("ok"))
-        r = s.eval_entry('let g = prompt """hi"""')
+        r = s.eval_entry('let g = ask """hi"""')
         assert r.ok
         assert r.trace_path is None
 
@@ -857,7 +857,7 @@ class TestTraceLogging:
 
         trace = tmp_path / "repl.log"
         s = ReplSession(default_agent=CountingAgent("reply"), trace_path=trace)
-        r = s.eval_entry('let g = prompt """ask"""')
+        r = s.eval_entry('let g = ask """ask"""')
         assert r.ok
         assert r.trace_path == trace
         assert trace.exists()
@@ -872,8 +872,8 @@ class TestTraceLogging:
 
         trace = tmp_path / "repl.log"
         s = ReplSession(default_agent=CountingAgent("a", "b"), trace_path=trace)
-        s.eval_entry('let x = prompt """one"""')
-        s.eval_entry('let y = prompt """two"""')
+        s.eval_entry('let x = ask """one"""')
+        s.eval_entry('let y = ask """two"""')
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
         run_ids = {rec["run_id"] for rec in records}
         # Per-entry TraceStore → a fresh run_id per entry, all in one file.
@@ -882,7 +882,7 @@ class TestTraceLogging:
     def test_check_only_writes_no_trace(self, tmp_path: Path) -> None:
         trace = tmp_path / "repl.log"
         s = ReplSession(default_agent=CountingAgent("ok"), trace_path=trace)
-        r = s.eval_entry('let g = prompt """hi"""', check_only=True)
+        r = s.eval_entry('let g = ask """hi"""', check_only=True)
         assert r.ok
         assert r.trace_path is None
         assert not trace.exists()
@@ -892,7 +892,7 @@ class TestTraceLogging:
 
         trace = tmp_path / "repl.log"
         s = ReplSession(default_agent=_CancellingAgent(), trace_path=trace)
-        r = s.eval_entry('let g = prompt """x"""')
+        r = s.eval_entry('let g = ask """x"""')
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
         run_end = [rec for rec in records if rec["kind"] == "run_end"]

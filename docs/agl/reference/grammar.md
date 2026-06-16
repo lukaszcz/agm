@@ -199,7 +199,7 @@ named_arg             ::= VAR_NAME ":" expr
 
 ```ebnf
 agent_call   ::= VAR_NAME call_options? template
-                 (* VAR_NAME includes the contextual names prompt and exec *)
+                 (* VAR_NAME includes the contextual names ask and exec *)
 
 call_options ::= "[" call_option ("," call_option)* ","? "]"
 call_option  ::= "format" ":" format_name

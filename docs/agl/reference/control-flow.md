@@ -79,14 +79,14 @@ The only loop in AgL is a **bounded, post-test** loop. The bound is part of
 
 ```agl
 do[5]
-  let status: Status = prompt[on_parse_error: retry[2]] "Do X."
+  let status: Status = ask[on_parse_error: retry[2]] "Do X."
 until status is Complete
 ```
 
 Inline:
 
 ```agl
-do[5] let status: Status = prompt "Do X." until status is Complete
+do[5] let status: Status = ask "Do X." until status is Complete
 ```
 
 Semantics:

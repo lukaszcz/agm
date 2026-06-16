@@ -581,7 +581,7 @@ class Interpreter:
 
         # Determine the agent name for dispatch.
         if call_kind is None or call_kind == CallKind.default_agent:
-            agent_name = "prompt"
+            agent_name = "ask"
         else:
             agent_name = expr.agent
 

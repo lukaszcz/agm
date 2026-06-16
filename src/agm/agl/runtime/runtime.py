@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.types import Type as AglType
 
 # Reserved agent names: cannot be registered by callers.
-_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"prompt", "exec"})
+_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec"})
 
 # The full v1 vocabulary of semantic type *kinds* (matches ``Type.kind`` for
 # every member of the ``Type`` union in ``agm.agl.typecheck.types``).  Used to
@@ -85,7 +85,7 @@ class HostEnvironment:
 class CallSiteInfo:
     """Static summary of one agent-call or exec site (--dry-run inventory).
 
-    ``callee``        Agent or executor name (``"prompt"``, ``"exec"``, or a
+    ``callee``        Agent or executor name (``"ask"``, ``"exec"``, or a
                       registered agent name).
     ``target_type``   The target type name (e.g. ``"text"``, ``"Review"``).
     ``codec_name``    Selected codec (``"text"`` or ``"json"``).
@@ -271,7 +271,7 @@ class WorkflowRuntime:
         JSON value with surrounding whitespace is accepted).  The default
         ``False`` enables lenient JSON recovery (design §2.8, Q3).
     default_agent : callable or None
-        The callable used for the built-in ``prompt`` agent.  ``None`` means
+        The callable used for the built-in ``ask`` agent.  ``None`` means
         no default agent is configured (only explicitly registered agents will
         be available).
     shell_exec_timeout : float or None
@@ -307,7 +307,7 @@ class WorkflowRuntime:
     def register_agent(self, name: str, fn: AgentFn) -> None:
         """Register a named agent callable.
 
-        Raises ``ValueError`` if ``name`` is a reserved name (``prompt`` or
+        Raises ``ValueError`` if ``name`` is a reserved name (``ask`` or
         ``exec``) or if an agent with that name has already been registered.
         """
         if name in _RESERVED_AGENT_NAMES:

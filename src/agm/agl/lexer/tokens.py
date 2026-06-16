@@ -17,7 +17,7 @@ Keywords:
     Reserved words that are always keywords.
 
 Contextual keywords:
-    ``prompt`` and ``exec`` are NOT reserved; they lex as plain VAR_NAME tokens.
+    ``ask`` and ``exec`` are NOT reserved; they lex as plain VAR_NAME tokens.
     The scope pass gives them their built-in meaning.
 
 Identifiers:

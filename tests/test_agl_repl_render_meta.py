@@ -429,13 +429,13 @@ class TestAgents:
         assert outcome.text is not None
         assert "mode: confirm" in outcome.text
 
-    def test_agents_lists_registered_and_default_prompt(self) -> None:
+    def test_agents_lists_registered_and_default_ask(self) -> None:
         s = ReplSession(default_agent=_CountingAgent("x"))
         s.register_agent("reviewer", _CountingAgent("r"))
         outcome = meta_mod.dispatch_meta(":agents", _session_ctx(s))
         assert outcome.text is not None
         assert "reviewer" in outcome.text
-        assert "prompt" in outcome.text
+        assert "ask" in outcome.text
 
     def test_agents_reports_current_mode(self) -> None:
         mode = AgentMode(mode="auto")
@@ -544,7 +544,7 @@ class TestLoad:
 
     def test_load_agent_call_fires_exactly_once(self, tmp_path: Path) -> None:
         src = tmp_path / "agent.agl"
-        src.write_text('let r = prompt """do it"""\n')
+        src.write_text('let r = ask """do it"""\n')
         agent = _CountingAgent("done")
         s = ReplSession(default_agent=agent)
         meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))

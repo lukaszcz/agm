@@ -114,7 +114,7 @@ a runner-backed factory, then executes via `run_prepared(prepared)` (no second
 parse). The factory command is chosen by precedence (highest to
 lowest): config `[exec.agents.<name>]`, the source runner hint, `--runner`,
 `[exec] runner`, `[loop] runner`, built-in `claude -p`. The default runner is
-always the floor, so every declared agent resolves and also backs `prompt`.
+always the floor, so every declared agent resolves and also backs `ask`.
 Runner strings (config or source hint) share the `%%` / `%{PROMPT_FILE}`
 prompt-file placeholder handling.
 

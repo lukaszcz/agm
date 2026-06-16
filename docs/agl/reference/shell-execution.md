@@ -12,7 +12,7 @@ let data: json = exec[on_parse_error: abort] "cat ${path}"
 exec "make build"
 ```
 
-Like `prompt`, `exec` is a contextual keyword
+Like `ask`, `exec` is a contextual keyword
 ([Lexical structure](lexical-structure.md)): in call position it denotes the
 built-in shell executor; it cannot be declared with `let`/`var`/`input` or
 declared as an agent name; it remains legal as a field name. A host may

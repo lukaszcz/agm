@@ -3,20 +3,20 @@
     {
       "name": "plain_name",
       "inputs": {"who": "Ada"},
-      "agents": {"prompt": ["r1", "r2", "r3", "r4"]},
+      "agents": {"ask": ["r1", "r2", "r3", "r4"]},
       "expect": {
         "stdout": "r1\nr2\nr3\nr4\n",
-        "calls": {"prompt": 4},
+        "calls": {"ask": 4},
         "prompts": [
-          {"agent": "prompt", "call": 0, "contains": ["Ada", "qty 7,", "sum 7."]},
-          {"agent": "prompt", "call": 1, "contains": ["Ada"]},
+          {"agent": "ask", "call": 0, "contains": ["Ada", "qty 7,", "sum 7."]},
+          {"agent": "ask", "call": 1, "contains": ["Ada"]},
           {
-            "agent": "prompt",
+            "agent": "ask",
             "call": 2,
             "contains": ["data: ", "\"kind\"", "\"demo\"", "\"tags\"", "\"alpha\"", "\"beta\""]
           },
           {
-            "agent": "prompt",
+            "agent": "ask",
             "call": 3,
             "contains": [
               "Report for ",
@@ -34,13 +34,13 @@
     {
       "name": "name_with_template_syntax_is_not_reinterpolated",
       "inputs": {"who": "Eve ${exploit} \"quoted\""},
-      "agents": {"prompt": ["w", "x", "y", "z"]},
+      "agents": {"ask": ["w", "x", "y", "z"]},
       "expect": {
         "stdout": "w\nx\ny\nz\n",
-        "calls": {"prompt": 4},
+        "calls": {"ask": 4},
         "prompts": [
           {
-            "agent": "prompt",
+            "agent": "ask",
             "call": 0,
             "contains": ["Eve ${exploit} \"quoted\"", "qty 7,", "sum 7."]
           }

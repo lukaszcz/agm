@@ -482,53 +482,53 @@ class TestPrintStmt:
 
 class TestAgentCall:
     def test_agent_call_no_options(self) -> None:
-        stmt = _parse_one('prompt "hello"')
+        stmt = _parse_one('ask "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
-        assert call.agent == "prompt"
+        assert call.agent == "ask"
         assert isinstance(call.options, CallOptions)
         assert call.options.format is None
         assert call.options.strict_json is None
         assert call.options.parse_policy is None
 
     def test_agent_call_format_json(self) -> None:
-        stmt = _parse_one('prompt[format: json] "hello"')
+        stmt = _parse_one('ask[format: json] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
         assert call.options.format == "json"
 
     def test_agent_call_format_text(self) -> None:
-        stmt = _parse_one('prompt[format: text] "hello"')
+        stmt = _parse_one('ask[format: text] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
         assert call.options.format == "text"
 
     def test_agent_call_strict_json_true(self) -> None:
-        stmt = _parse_one('prompt[strict_json: true] "hello"')
+        stmt = _parse_one('ask[strict_json: true] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
         assert call.options.strict_json is True
 
     def test_agent_call_strict_json_false(self) -> None:
-        stmt = _parse_one('prompt[strict_json: false] "hello"')
+        stmt = _parse_one('ask[strict_json: false] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
         assert call.options.strict_json is False
 
     def test_agent_call_on_parse_error_abort(self) -> None:
-        stmt = _parse_one('prompt[on_parse_error: abort] "hello"')
+        stmt = _parse_one('ask[on_parse_error: abort] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
         assert isinstance(call.options.parse_policy, AbortPolicy)
 
     def test_agent_call_on_parse_error_retry(self) -> None:
-        stmt = _parse_one('prompt[on_parse_error: retry[3]] "hello"')
+        stmt = _parse_one('ask[on_parse_error: retry[3]] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -536,7 +536,7 @@ class TestAgentCall:
         assert call.options.parse_policy.extra == 3
 
     def test_agent_call_multiple_options(self) -> None:
-        stmt = _parse_one('prompt[format: json, strict_json: true] "hello"')
+        stmt = _parse_one('ask[format: json, strict_json: true] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -544,14 +544,14 @@ class TestAgentCall:
         assert call.options.strict_json is True
 
     def test_agent_call_trailing_comma_in_options(self) -> None:
-        stmt = _parse_one('prompt[format: json,] "hello"')
+        stmt = _parse_one('ask[format: json,] "hello"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
         assert call.options.format == "json"
 
     def test_duplicate_format_option_rejected(self) -> None:
-        src = 'prompt[format: json, format: text] "hello"'
+        src = 'ask[format: json, format: text] "hello"'
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(src)
         err = exc_info.value
@@ -563,7 +563,7 @@ class TestAgentCall:
         assert span.start_col == dup_col
 
     def test_duplicate_strict_json_option_rejected(self) -> None:
-        src = 'prompt[strict_json: true, strict_json: false] "hello"'
+        src = 'ask[strict_json: true, strict_json: false] "hello"'
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(src)
         err = exc_info.value
@@ -572,7 +572,7 @@ class TestAgentCall:
         assert err.source_span.start_col == dup_col
 
     def test_duplicate_on_parse_error_option_rejected(self) -> None:
-        src = 'prompt[on_parse_error: abort, on_parse_error: retry[2]] "hello"'
+        src = 'ask[on_parse_error: abort, on_parse_error: retry[2]] "hello"'
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(src)
         err = exc_info.value
@@ -583,7 +583,7 @@ class TestAgentCall:
     def test_distinct_options_twin_parses(self) -> None:
         # Accept-twin: distinct option keys parse fine even with three options.
         stmt = _parse_one(
-            'prompt[format: json, strict_json: true, on_parse_error: abort] "hi"'
+            'ask[format: json, strict_json: true, on_parse_error: abort] "hi"'
         )
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
@@ -600,7 +600,7 @@ class TestAgentCall:
 
 class TestTemplate:
     def test_plain_text(self) -> None:
-        stmt = _parse_one('prompt "hello world"')
+        stmt = _parse_one('ask "hello world"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -611,7 +611,7 @@ class TestTemplate:
         assert any(s.text == "hello world" for s in text_segs)
 
     def test_single_interpolation(self) -> None:
-        stmt = _parse_one('prompt "hello ${x}"')
+        stmt = _parse_one('ask "hello ${x}"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -623,7 +623,7 @@ class TestTemplate:
         assert interps[0].render is None
 
     def test_interp_with_renderer(self) -> None:
-        stmt = _parse_one('prompt "hello ${x as raw}"')
+        stmt = _parse_one('ask "hello ${x as raw}"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -633,7 +633,7 @@ class TestTemplate:
         assert interps[0].render == "raw"
 
     def test_multiple_interpolations(self) -> None:
-        stmt = _parse_one('prompt "hello ${x} and ${y as raw}"')
+        stmt = _parse_one('ask "hello ${x} and ${y as raw}"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -644,7 +644,7 @@ class TestTemplate:
         assert interps[1].render == "raw"
 
     def test_template_text_segment_content(self) -> None:
-        stmt = _parse_one('prompt "hello ${x} world"')
+        stmt = _parse_one('ask "hello ${x} world"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -657,7 +657,7 @@ class TestTemplate:
         # "${a}${b}" yields exactly two InterpSegments and no TextSegments:
         # empty fragments between/around interps carry no information and are
         # normalized away.
-        stmt = _parse_one('prompt "${a}${b}"')
+        stmt = _parse_one('ask "${a}${b}"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -674,7 +674,7 @@ class TestTemplate:
     def test_leading_text_then_interp(self) -> None:
         # "x${a}" yields Text("x") followed by an InterpSegment; no empty
         # trailing TextSegment.
-        stmt = _parse_one('prompt "x${a}"')
+        stmt = _parse_one('ask "x${a}"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -686,7 +686,7 @@ class TestTemplate:
 
     def test_no_empty_text_segments_in_any_template(self) -> None:
         # Invariant: a template never contains an empty TextSegment.
-        stmt = _parse_one('prompt "${a} mid ${b}"')
+        stmt = _parse_one('ask "${a} mid ${b}"')
         assert isinstance(stmt, ExprStmt)
         call = stmt.expr
         assert isinstance(call, AgentCall)
@@ -700,7 +700,7 @@ class TestTemplate:
         stmt = prog.body[0]
         assert isinstance(stmt, LetDecl)
         # And a template using that var
-        prog2 = parse_program('prompt "${x}"')
+        prog2 = parse_program('ask "${x}"')
         stmt2 = prog2.body[0]
         assert isinstance(stmt2, ExprStmt)
 
@@ -811,7 +811,7 @@ class TestErrorCases:
 
     def test_unterminated_template_raises_agl_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
-            parse_program('prompt "unterminated')
+            parse_program('ask "unterminated')
 
     @pytest.mark.parametrize(
         "garbage",
@@ -825,19 +825,19 @@ class TestErrorCases:
 
     def test_wrong_format_option_raises_agl_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
-            parse_program('prompt[format: true] "hello"')
+            parse_program('ask[format: true] "hello"')
 
     def test_wrong_strict_json_option_raises_agl_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
-            parse_program('prompt[strict_json: json] "hello"')
+            parse_program('ask[strict_json: json] "hello"')
 
     def test_wrong_retry_name_raises_agl_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
-            parse_program('prompt[on_parse_error: loop[3]] "hello"')
+            parse_program('ask[on_parse_error: loop[3]] "hello"')
 
     def test_unknown_option_key_raises_agl_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
-            parse_program('prompt[unknown_key: true] "hello"')
+            parse_program('ask[unknown_key: true] "hello"')
 
 
 # ---------------------------------------------------------------------------
@@ -867,7 +867,7 @@ class TestNodeIds:
         return ids
 
     def test_node_ids_are_unique(self) -> None:
-        prog = parse_program('let x = 42; prompt "hello ${x as raw}"')
+        prog = parse_program('let x = 42; ask "hello ${x as raw}"')
         ids = self._collect_ids(prog)
         assert len(ids) == len(set(ids)), f"Duplicate node IDs found: {ids}"
 
@@ -904,7 +904,7 @@ class TestTypeAnnotationEdgeCases:
     def test_on_parse_error_bad_policy_raises_agl_syntax_error(self) -> None:
         """on_parse_error with non-abort/retry name raises AglSyntaxError."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program('prompt[on_parse_error: foo] "hello"')
+            parse_program('ask[on_parse_error: foo] "hello"')
         assert "on_parse_error expects" in str(exc_info.value)
 
     def test_dict_with_text_key_accepted(self) -> None:
@@ -2739,7 +2739,7 @@ class TestDesignExamples:
     def test_design_3_1_one_liner(self) -> None:
         """Design §3.1 inline form."""
         src = (
-            'do[5] let status: Status = prompt[on_parse_error: retry[2]] "Do X."'
+            'do[5] let status: Status = ask[on_parse_error: retry[2]] "Do X."'
             " until status is Complete"
         )
         stmt = _parse_one(src)

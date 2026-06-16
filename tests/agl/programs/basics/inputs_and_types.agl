@@ -10,5 +10,5 @@ print rounds
 print ratio
 print flag
 print meta
-let summary = prompt "Summarize ${topic} in ${rounds} rounds (ratio ${ratio}, flag ${flag})."
+let summary = ask "Summarize ${topic} in ${rounds} rounds (ratio ${ratio}, flag ${flag})."
 print summary

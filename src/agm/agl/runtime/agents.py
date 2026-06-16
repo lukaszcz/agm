@@ -4,8 +4,8 @@
 ``WorkflowRuntime``.  It distinguishes:
 
 - **Named agents**: registered with ``register_agent(name, fn)``.
-- **Default agent** (``prompt``): registered via the ``default_agent``
-  constructor kwarg; handles the built-in ``prompt`` contextual keyword.  It
+- **Default agent** (``ask``): registered via the ``default_agent``
+  constructor kwarg; handles the built-in ``ask`` contextual keyword.  It
   also backs any *declared* named agent that has no dedicated registration:
   scope guarantees every named call is declared, so the default agent is the
   documented backing for a declared name, not an implicit resolver of arbitrary
@@ -105,7 +105,7 @@ class AgentRegistry:
     named:
         Pre-validated mapping from agent name → callable.
     default_agent:
-        The callable for the built-in ``prompt`` keyword (or ``None`` if
+        The callable for the built-in ``ask`` keyword (or ``None`` if
         no default agent is configured).
     """
 
@@ -120,7 +120,7 @@ class AgentRegistry:
 
     @property
     def has_default_agent(self) -> bool:
-        """True when a default agent backs the built-in ``prompt`` keyword."""
+        """True when a default agent backs the built-in ``ask`` keyword."""
         return self._default is not None
 
     @property
@@ -148,7 +148,7 @@ class AgentRegistry:
         """
         fn: AgentFn | None = self._named.get(name)
         if fn is None:
-            # ``prompt`` and any declared named agent without a dedicated
+            # ``ask`` and any declared named agent without a dedicated
             # registration both fall back to the default agent when configured.
             if self._default is not None:
                 fn = self._default

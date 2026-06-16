@@ -36,7 +36,7 @@ is a static binding error. The host does *not* contribute names and there is
 **no implicit fallback** that makes arbitrary names resolve. Two names need
 no declaration:
 
-- **The default agent** backs the contextual keyword `prompt`.
+- **The default agent** backs the contextual keyword `ask`.
 - **`exec`** denotes the shell executor ([Shell execution](shell-execution.md)).
 
 The host's role is to **supply a backing** — the actual agent that runs — for
@@ -55,8 +55,8 @@ executes:
 - a declared agent for which the host provides neither a dedicated backing
   nor a default agent to fall back on (*declared but unbacked*).
 
-A `prompt` call requires a default agent to be configured, or it is a static
-error. The names `prompt` and `exec` can never be declared as agents.
+An `ask` call requires a default agent to be configured, or it is a static
+error. The names `ask` and `exec` can never be declared as agents.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends

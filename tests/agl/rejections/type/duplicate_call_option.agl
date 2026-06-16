@@ -1,1 +1,1 @@
-let x: json = prompt[strict_json: true, strict_json: true] "Question."
+let x: json = ask[strict_json: true, strict_json: true] "Question."

@@ -55,8 +55,8 @@ Field notes:
 - `agents` — per-agent response queues, consumed in call order **across all call
   sites** of that agent. A list is a strict queue (a call past its end fails the
   test); the object form allows `repeat_last` for loop-exhaustion scenarios. The key
-  `prompt` scripts the built-in default agent (passed as the runtime's
-  `default_agent`, since `prompt` cannot be registered by name).
+  `ask` scripts the built-in default agent (passed as the runtime's
+  `default_agent`, since `ask` cannot be registered by name).
 - `runtime` — optional `WorkflowRuntime` constructor overrides
   (`default_loop_limit`, `default_strict_json`).
 - `expect.calls` — exact number of calls per listed agent (retries count as calls).

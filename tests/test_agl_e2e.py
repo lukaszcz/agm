@@ -15,8 +15,8 @@ Public contract exercised here (notes/PLAN_DSL.md §9, notes/dsl_design.md §7.6
     runtime = WorkflowRuntime(
         default_loop_limit=5,       # `do` bound default (design §2.11)
         default_strict_json=False,  # lenient JSON recovery is the default (design §2.8)
-        default_agent=fn,           # the built-in `prompt` agent (a host callable;
-                                    # `prompt` cannot be registered by name)
+        default_agent=fn,           # the built-in `ask` agent (a host callable;
+                                    # `ask` cannot be registered by name)
     )
     runtime.register_agent(name, fn)   # fn(request) -> str; request.prompt is the
                                        # rendered user prompt (design §7.5)
@@ -101,11 +101,11 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
         kwargs["default_loop_limit"] = runtime_cfg["default_loop_limit"]
     if "default_strict_json" in runtime_cfg:
         kwargs["default_strict_json"] = runtime_cfg["default_strict_json"]
-    if "prompt" in agents:
-        kwargs["default_agent"] = agents["prompt"]
+    if "ask" in agents:
+        kwargs["default_agent"] = agents["ask"]
     runtime = WorkflowRuntime(**kwargs)
     for name, agent in agents.items():
-        if name != "prompt":
+        if name != "ask":
             runtime.register_agent(name, agent)
     result = runtime.run(source, inputs=scenario.get("inputs", {}))
     return result, agents

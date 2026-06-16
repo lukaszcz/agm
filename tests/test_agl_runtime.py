@@ -2,7 +2,7 @@
 
 Covers:
 - WorkflowRuntime constructor with default kwargs
-- register_agent: duplicate rejection, reserved-name rejection (prompt, exec)
+- register_agent: duplicate rejection, reserved-name rejection (ask, exec)
 - run: full pipeline now active; valid programs succeed; static errors fail
 - Diagnostic has .message (str) and .line (int)
 - RunResult has .ok (bool), .diagnostics (list), .error (None for pre-exec failures)
@@ -73,14 +73,14 @@ class TestRegisterAgent:
         with pytest.raises(ValueError, match="my_agent"):
             rt.register_agent("my_agent", my_agent)
 
-    def test_register_reserved_name_prompt_raises(self) -> None:
+    def test_register_reserved_name_ask_raises(self) -> None:
         rt = WorkflowRuntime()
 
         def my_agent(request: object) -> str:
             return "response"
 
-        with pytest.raises(ValueError, match="prompt"):
-            rt.register_agent("prompt", my_agent)
+        with pytest.raises(ValueError, match="ask"):
+            rt.register_agent("ask", my_agent)
 
     def test_register_reserved_name_exec_raises(self) -> None:
         rt = WorkflowRuntime()
@@ -155,15 +155,15 @@ class TestRunBehavior:
 class TestFallbackAgent:
     """Default-agent backing behavior for capability checking."""
 
-    def test_no_default_agent_prompt_call_static_error(self) -> None:
+    def test_no_default_agent_ask_call_static_error(self) -> None:
         rt = WorkflowRuntime()  # no default_agent
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is False
         assert result.error is None  # static, not runtime
 
-    def test_with_default_agent_prompt_call_succeeds(self) -> None:
+    def test_with_default_agent_ask_call_succeeds(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is True
 
     def test_named_agent_registered_accepted(self) -> None:
@@ -233,7 +233,7 @@ class TestInputValidationRuntime:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run("input x\nlet y = prompt \"Hi\"", inputs={})
+        rt.run("input x\nlet y = ask \"Hi\"", inputs={})
         assert calls == []
 
     def test_int_input_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -276,7 +276,7 @@ class TestEmptyResponse:
 
     def test_empty_string_response_is_valid_text(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "")
-        result = rt.run('let x = prompt "Say nothing."')
+        result = rt.run('let x = ask "Say nothing."')
         assert result.ok is True
         from agm.agl.eval.values import TextValue
 
@@ -294,7 +294,7 @@ class TestAgentRequest:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('let x = prompt "Hello world"')
+        rt.run('let x = ask "Hello world"')
         assert received[0].prompt == "Hello world"
 
     def test_request_agent_name_for_default(self) -> None:
@@ -305,8 +305,8 @@ class TestAgentRequest:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('let x = prompt "Hi"')
-        assert received[0].agent == "prompt"
+        rt.run('let x = ask "Hi"')
+        assert received[0].agent == "ask"
 
     def test_request_agent_name_for_named(self) -> None:
         received: list[AgentRequest] = []
@@ -364,7 +364,7 @@ class TestUncaughtAgentCallErrorSpan:
             raise AglRaise(exc_val, span=existing)
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let a = 1\nlet x = prompt "hi"')
+        result = rt.run('let a = 1\nlet x = ask "hi"')
         assert result.ok is False
         assert result.error is not None
         # The agent's own span (line 99) is kept, not replaced by the call site.
@@ -372,8 +372,8 @@ class TestUncaughtAgentCallErrorSpan:
 
     def test_uncaught_agent_call_error_reports_call_line(self) -> None:
         rt = self._failing_runtime()
-        # The ``prompt`` call is on line 2.
-        result = rt.run('let a = 1\nlet x = prompt "hi"')
+        # The ``ask`` call is on line 2.
+        result = rt.run('let a = 1\nlet x = ask "hi"')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
@@ -392,7 +392,7 @@ class TestUncaughtAgentCallErrorSpan:
         from agm.commands.exec import run as exec_run
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let a = 1\nlet x = prompt "hi"\n')
+        agl_file.write_text('let a = 1\nlet x = ask "hi"\n')
 
         def failing_agent(req: object) -> str:
             raise AgentCallHostError(
@@ -553,7 +553,7 @@ class TestTokenConstants:
         assert "record" in KEYWORDS
         assert "enum" in KEYWORDS
         # contextual keywords NOT in KEYWORDS
-        assert "prompt" not in KEYWORDS
+        assert "ask" not in KEYWORDS
         assert "exec" not in KEYWORDS
 
     def test_operators_defined(self) -> None:
@@ -655,21 +655,21 @@ class TestWorkflowRuntimeProperties:
 
 
 class TestNoDefaultAgent:
-    """F1a/F1b: a ``prompt`` call needs a default (or fallback) agent."""
+    """F1a/F1b: an ``ask`` call needs a default (or fallback) agent."""
 
-    def test_prompt_without_default_agent_is_static_error(self) -> None:
+    def test_ask_without_default_agent_is_static_error(self) -> None:
         rt = WorkflowRuntime()  # no default agent configured
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is False
         assert result.error is None  # static (pre-execution), not an AgL exception
         assert any("default agent" in d.message.lower() for d in result.diagnostics)
 
-    def test_prompt_with_default_agent_runs(self) -> None:
+    def test_ask_with_default_agent_runs(self) -> None:
         def agent(request: object) -> str:
             return "answer"
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is True
         assert result.error is None
 
@@ -700,7 +700,7 @@ class TestDryRunCheckOnly:
             return "should not be called"
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let x = prompt "hi"', check_only=True)
+        result = rt.run('let x = ask "hi"', check_only=True)
         assert result.ok is True
         # The agent must never be invoked during a dry run.
         assert calls == []
@@ -799,7 +799,7 @@ class TestWarningsThreadedOnFailurePaths:
 
 
 class TestAgentRegistryDispatch:
-    """F17: dispatch resolves named agents, prompt, and the default fallback."""
+    """F17: dispatch resolves named agents, ask, and the default fallback."""
 
     def test_dispatch_named_agent(self) -> None:
         from agm.agl.runtime import AgentRequest
@@ -812,7 +812,7 @@ class TestAgentRegistryDispatch:
         resp = registry.dispatch("reviewer", AgentRequest(agent="reviewer", prompt="hi"))
         assert resp.content == "named:hi"
 
-    def test_dispatch_prompt_and_unknown_fall_back_to_default(self) -> None:
+    def test_dispatch_ask_and_unknown_fall_back_to_default(self) -> None:
         from agm.agl.runtime import AgentRequest
         from agm.agl.runtime.agents import AgentRegistry
 
@@ -820,9 +820,9 @@ class TestAgentRegistryDispatch:
             return f"default:{req.agent}"
 
         registry = AgentRegistry(named={}, default_agent=default)
-        # Both ``prompt`` and an unregistered named agent route to the default.
-        assert registry.dispatch("prompt", AgentRequest(agent="prompt", prompt="q")).content == (
-            "default:prompt"
+        # Both ``ask`` and an unregistered named agent route to the default.
+        assert registry.dispatch("ask", AgentRequest(agent="ask", prompt="q")).content == (
+            "default:ask"
         )
         assert registry.dispatch("other", AgentRequest(agent="other", prompt="q")).content == (
             "default:other"
@@ -872,7 +872,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         tc, jc = TextCodec(), JsonCodec()
         assert tc.name == "text"
         assert jc.name == "json"
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is True
 
     def test_default_runtime_has_builtin_renderer_names(self) -> None:
@@ -926,7 +926,7 @@ class TestCapabilitiesBuiltFromRegistrations:
 
     def test_registered_renderer_makes_interpolation_typecheck(self) -> None:
         """``${x as fancy}`` typechecks ONLY when ``fancy`` is registered (F4)."""
-        src = 'input x\nlet y = prompt "see ${x as fancy}"'
+        src = 'input x\nlet y = ask "see ${x as fancy}"'
 
         # Without registration: the renderer is unknown → static type error.
         rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
@@ -944,7 +944,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         """An ``as <name>`` for an unregistered renderer is rejected (F4)."""
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         result = rt.run(
-            'input x\nlet y = prompt "${x as nope}"', inputs={"x": "hi"}
+            'input x\nlet y = ask "${x as nope}"', inputs={"x": "hi"}
         )
         assert result.ok is False
         assert any("nope" in d.message for d in result.diagnostics)
@@ -961,7 +961,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         assert isinstance(RENDERER_NAMES, frozenset)
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         # ``json`` is a built-in renderer → accepted with no registration.
-        result = rt.run('input x\nlet y = prompt "${x as json}"', inputs={"x": "hi"})
+        result = rt.run('input x\nlet y = ask "${x as json}"', inputs={"x": "hi"})
         assert result.ok is True
 
 
@@ -1494,7 +1494,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 
@@ -1512,7 +1512,7 @@ class TestRuntimeErrorPaths:
             )
 
         rt = WorkflowRuntime(default_agent=bad_agent)
-        result = rt.run('let x = prompt "hi"')
+        result = rt.run('let x = ask "hi"')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "Abort"
@@ -1630,7 +1630,7 @@ class TestRuntimeErrorPaths:
                 "message": TextValue("failed"),
                 "trace_id": TextValue(""),
                 "raw": TextValue("abc"),
-                "agent": TextValue("prompt"),
+                "agent": TextValue("ask"),
                 "attempts": IntValue(1),
                 "target_type": TextValue("text"),
                 "decimal_val": DecimalValue(decimal.Decimal("1.5")),
@@ -1791,7 +1791,7 @@ class TestRegisteredRendererInvoked:
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_renderer("myrender", my_render)
         result = rt.run(
-            'input x\nlet y = prompt "see: ${x as myrender}"',
+            'input x\nlet y = ask "see: ${x as myrender}"',
             inputs={"x": "ignored-by-custom-renderer"},
         )
         assert result.ok is True
@@ -1820,7 +1820,7 @@ class TestRegisteredRendererInvoked:
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_renderer("tag", my_render)
         result = rt.run(
-            'input x\nlet y = prompt "${x as tag}"', inputs={"x": "payload"}
+            'input x\nlet y = ask "${x as tag}"', inputs={"x": "payload"}
         )
         assert result.ok is True
         assert seen and seen[0][1] == "x"
@@ -1837,7 +1837,7 @@ class TestRegisteredRendererInvoked:
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_renderer("unused", lambda v, n: "NOPE")
         result = rt.run(
-            'input x\nlet y = prompt "${x}"', inputs={"x": "hello"}
+            'input x\nlet y = ask "${x}"', inputs={"x": "hello"}
         )
         assert result.ok is True
         # Default text rendering is boundary-marked; the custom renderer is NOT

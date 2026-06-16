@@ -174,7 +174,7 @@ class Template:
 
 @dataclass(frozen=True, slots=True)
 class AgentCall:
-    """An agent invocation: ``prompt[options] template``."""
+    """An agent invocation: ``ask[options] template``."""
 
     agent: str
     options: CallOptions

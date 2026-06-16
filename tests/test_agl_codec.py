@@ -2288,7 +2288,7 @@ class TestRegisterCodec:
     def test_custom_codec_make_contract_and_parse_exercised_in_pipeline(self) -> None:
         """F3 (M3b): a custom codec selected via ``format:`` is genuinely used.
 
-        The codec is chosen with ``prompt[format: tagcodec]`` on a ``text``
+        The codec is chosen with ``ask[format: tagcodec]`` on a ``text``
         target.  Both its ``make_contract`` (observable via the format
         instructions threaded into the agent request) and its ``parse``
         (observable as a distinctive prefix on the resulting binding) are
@@ -2339,7 +2339,7 @@ class TestRegisterCodec:
 
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_codec(TagCodec())
-        result = rt.run('let y: text = prompt[format: tagcodec] "Q"')
+        result = rt.run('let y: text = ask[format: tagcodec] "Q"')
         assert result.ok is True
         # parse() ran: the binding carries the codec's distinctive prefix.
         assert result.bindings["y"] == TextValue("PARSED::hello")
@@ -2372,7 +2372,7 @@ class TestRegisterRenderer:
 
     def test_custom_renderer_typechecks_only_when_registered(self) -> None:
         """A custom renderer is usable in interpolation only after registration (F4)."""
-        src = 'input x\nlet y = prompt "${x as myrenderer}"'
+        src = 'input x\nlet y = ask "${x as myrenderer}"'
 
         rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
         unreg = rt_unreg.run(src, inputs={"x": "hi"})
@@ -2396,7 +2396,7 @@ class TestRegisterRenderer:
             "listonly", listonly, supported_types=frozenset({"list"})
         )
         ok = rt_ok.run(
-            'let xs: list[text] = ["a"]\nlet q = prompt "${xs as listonly}"'
+            'let xs: list[text] = ["a"]\nlet q = ask "${xs as listonly}"'
         )
         assert ok.ok is True
 
@@ -2405,7 +2405,7 @@ class TestRegisterRenderer:
         rt_bad.register_renderer(
             "listonly", listonly, supported_types=frozenset({"list"})
         )
-        bad = rt_bad.run('let x = "v"\nlet q = prompt "${x as listonly}"')
+        bad = rt_bad.run('let x = "v"\nlet q = ask "${x as listonly}"')
         assert bad.ok is False
         assert any("listonly" in d.message for d in bad.diagnostics)
 
@@ -2434,7 +2434,7 @@ class TestRegisterRenderer:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
 
-        src = 'let x: text = prompt[format: altcodec] "Q"'
+        src = 'let x: text = ask[format: altcodec] "Q"'
 
         rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
         unreg = rt_unreg.run(src)

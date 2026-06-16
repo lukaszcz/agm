@@ -60,7 +60,7 @@ class CallSiteRecord:
         The ``AgentCall`` node id; keys into ``contract_specs`` (codec / target
         type) and into the host's materialized-contract table (schema presence).
     ``callee``
-        The agent or executor name (``"prompt"``, ``"exec"``, or a registered
+        The agent or executor name (``"ask"``, ``"exec"``, or a registered
         agent name).
     ``parse_policy``
         ``"abort"`` / ``"retry[N]"`` / ``"default"`` (when the call set no

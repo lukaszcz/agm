@@ -58,7 +58,7 @@ class CallKind(enum.Enum):
     ``agent``
         A named custom agent (registered with the host runtime).
     ``default_agent``
-        The ``prompt`` contextual keyword → the runtime's default agent.
+        The ``ask`` contextual keyword → the runtime's default agent.
     ``shell_exec``
         The ``exec`` contextual keyword → shell execution.
     """

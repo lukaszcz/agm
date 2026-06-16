@@ -416,7 +416,7 @@ Options:
   JSON), then validates it strictly against the schema. The recovered (normalized) value is
   traced alongside the raw output.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
-- `--runner COMMAND`: Override the default agent runner command (backs `prompt` and any
+- `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
   declared agent without its own command). See the runner precedence below.
 - `--log-file PATH`: Write a structured JSONL trace log to PATH (default: auto-generated under
   `.agent-files/`).
@@ -432,7 +432,7 @@ Options:
   ```
 
   Each entry shows the 1-based source line and column (`N:C`), the callee name
-  (`prompt`, `exec`, or a
+  (`ask`, `exec`, or a
   registered agent name), the target type, the selected codec (`text` or `json`), and
   optionally whether a JSON Schema is attached (`schema: yes`) and the effective
   parse-failure policy (`abort` or `retry[N]`).  When no agent calls are present, no
@@ -442,7 +442,7 @@ Agents and runner precedence:
 
 - Named agents must be **declared in the program source** with `agent NAME`, optionally
   carrying a runner hint as `agent NAME = "runner"`. Calling an undeclared name is a static
-  binding error (exit 1). The contextual `prompt` (default agent) and `exec` (shell) are
+  binding error (exit 1). The contextual `ask` (default agent) and `exec` (shell) are
   built in and need no declaration.
 - For each declared agent, `agm exec` resolves the command that runs it by the following
   precedence (highest to lowest):

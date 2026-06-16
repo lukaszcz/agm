@@ -61,7 +61,7 @@ Static rules, all checked before execution:
    binder kind — a `let` binding, an `input` binding, a catch binder, or a
    pattern binding.
 4. Reading a name that is not visible in the current scope chain is an error.
-5. The contextual keywords `prompt` and `exec` cannot be used as binding or
+5. The contextual keywords `ask` and `exec` cannot be used as binding or
    input names.
 
 ## Typing of bindings
@@ -73,7 +73,7 @@ Static rules, all checked before execution:
   initializer. **Untyped agent-call and `exec` results default to `text`**:
 
   ```agl
-  let x = prompt "A"        # x: text
+  let x = ask "A"           # x: text
   ```
 
 - Empty list/dictionary literals cannot be inferred and require an
@@ -154,8 +154,8 @@ Rules:
    binding — both may coexist, the call form selecting the agent and a
    reference selecting the value.
 3. Declaring the same agent name twice is a static error.
-4. The contextual keywords `prompt` and `exec` are built in and cannot be
-   declared as agents; `agent prompt` and `agent exec` are static errors.
+4. The contextual keywords `ask` and `exec` are built in and cannot be
+   declared as agents; `agent ask` and `agent exec` are static errors.
 5. **Calling an undeclared name is a static binding error.** This is what ties
    a call to a declaration ([Agent calls](agent-calls.md)).
 6. A declared agent that is never called is reported as a non-fatal
@@ -183,11 +183,11 @@ let x = "outer"
 
 if condition =>
   let x = "inner"          # shadows outer x
-  prompt "Uses ${x}"       # inner
+  ask "Uses ${x}"          # inner
 | else =>
   pass
 
-prompt "Uses ${x}"         # outer
+ask "Uses ${x}"            # outer
 ```
 
 Inner scopes may **shadow** outer bindings with a new `let` or `var`.
@@ -233,8 +233,8 @@ branch or handler body:
 
 ```agl
 case review of
-  | Fail(issues) => prompt "${issues}"
+  | Fail(issues) => ask "${issues}"
   | Pass => pass
 
-prompt "${issues}"   # static error: 'issues' is not defined
+ask "${issues}"   # static error: 'issues' is not defined
 ```

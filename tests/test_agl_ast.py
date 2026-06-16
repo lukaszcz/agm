@@ -359,8 +359,8 @@ class TestExpressions:
         opts = CallOptions(
             format=None, strict_json=None, parse_policy=None, span=self._s(), node_id=2
         )
-        node = AgentCall(agent="prompt", options=opts, template=tmpl, span=self._s(), node_id=1)
-        assert node.agent == "prompt"
+        node = AgentCall(agent="ask", options=opts, template=tmpl, span=self._s(), node_id=1)
+        assert node.agent == "ask"
 
     def test_constructor(self) -> None:
         arg = NamedArg(
@@ -822,7 +822,7 @@ class TestVisitorWalk:
             node_id=407,
         )
         agent_call = AgentCall(
-            agent="prompt", options=call_opts_full, template=template, span=s, node_id=408
+            agent="ask", options=call_opts_full, template=template, span=s, node_id=408
         )
 
         binary_op = BinaryOp(op=BinOp.ADD, left=int_lit, right=int_lit, span=s, node_id=409)
@@ -913,7 +913,7 @@ class TestVisitorWalk:
 
         # AgentCall with parse_policy=None to exercise the None branch in walk(CallOptions)
         agent_call_no_policy = AgentCall(
-            agent="prompt",
+            agent="ask",
             options=call_opts_none,
             template=Template(segments=(), span=s, node_id=650),
             span=s,

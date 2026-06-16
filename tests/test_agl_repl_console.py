@@ -426,7 +426,7 @@ class TestDryRun:
         agent = _CountingAgent("should-not-be-used")
         session = ReplSession(default_agent=agent)
         output = drive(
-            'let g: text = prompt """say something"""\r\x04',
+            'let g: text = ask """say something"""\r\x04',
             session=session,
             check_only=True,
         )
@@ -576,7 +576,7 @@ class TestConfirmFlowThroughLoop:
     def test_confirmed_call_dispatches_and_echoes(self) -> None:
         session, underlying = _confirming_session("y", reply="hello-world")
         assert isinstance(underlying, _CountingAgent)
-        output = drive('let g = prompt """ask"""\r\x04', session=session)
+        output = drive('let g = ask """ask"""\r\x04', session=session)
         assert underlying.calls == 1
         assert "hello-world" in output
         assert any(n == "g" for n, _t, _v in session.bindings())
@@ -587,7 +587,7 @@ class TestConfirmFlowThroughLoop:
         # Decline the agent call, then run a plain entry to prove the REPL keeps
         # looping after the abort.
         output = drive(
-            'let g = prompt """ask"""\rlet ok = 1\r\x04', session=session
+            'let g = ask """ask"""\rlet ok = 1\r\x04', session=session
         )
         assert underlying.calls == 0
         assert "cancelled" in output.lower()

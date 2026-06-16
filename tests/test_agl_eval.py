@@ -68,8 +68,8 @@ def run_with_agents(
     inputs: dict[str, object] | None = None,
 ) -> RunResult:
     """Build a WorkflowRuntime, register agents, and run *source*."""
-    default = agents.get("prompt")
-    others = {k: v for k, v in agents.items() if k != "prompt"}
+    default = agents.get("ask")
+    others = {k: v for k, v in agents.items() if k != "ask"}
     rt = WorkflowRuntime(default_agent=default)
     for name, fn in others.items():
         rt.register_agent(name, fn)
@@ -737,11 +737,11 @@ class TestPrintRendering:
 
 
 class TestAgentCalls:
-    def test_prompt_call_binds_response(self) -> None:
+    def test_ask_call_binds_response(self) -> None:
         def agent(req: AgentRequest) -> str:
             return "response text"
 
-        result = run_with_default_agent('let x = prompt "Hello"', agent)
+        result = run_with_default_agent('let x = ask "Hello"', agent)
         assert result.ok
         from agm.agl.eval.values import TextValue
 
@@ -766,7 +766,7 @@ class TestAgentCalls:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let name = "world"\nlet x = prompt "Hello ${name as raw}"', agent)
+        run_with_default_agent('let name = "world"\nlet x = ask "Hello ${name as raw}"', agent)
         assert len(prompts) == 1
         assert prompts[0] == "Hello world"
 
@@ -777,7 +777,7 @@ class TestAgentCalls:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let artifact = "content"\nlet x = prompt "see ${artifact}"', agent)
+        run_with_default_agent('let artifact = "content"\nlet x = ask "see ${artifact}"', agent)
         assert len(prompts) == 1
         assert "<dsl-value" in prompts[0]
         assert "content" in prompts[0]
@@ -800,7 +800,7 @@ class TestAgentCalls:
         def agent(req: AgentRequest) -> str:
             return ""
 
-        result = run_with_default_agent('let x = prompt "Say nothing."', agent)
+        result = run_with_default_agent('let x = ask "Say nothing."', agent)
         assert result.ok
         from agm.agl.eval.values import TextValue
 
@@ -808,7 +808,7 @@ class TestAgentCalls:
 
     def test_no_default_agent_without_registration_fails_statically(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run('let x = prompt "Hi"')
+        result = rt.run('let x = ask "Hi"')
         # No default agent, no fallback → static capability error
         assert result.ok is False
         assert result.error is None
@@ -819,7 +819,7 @@ class TestAgentCalls:
         def agent(req: AgentRequest) -> AgentResponse:
             return AgentResponse(content="from object")
 
-        result = run_with_default_agent('let x = prompt "Hi"', agent)
+        result = run_with_default_agent('let x = ask "Hi"', agent)
         assert result.ok
         from agm.agl.eval.values import TextValue
 
@@ -832,7 +832,7 @@ class TestAgentCalls:
             calls.append(req.prompt)
             return "ok"
 
-        result = run_with_default_agent('prompt "Note something."', agent)
+        result = run_with_default_agent('ask "Note something."', agent)
         assert result.ok
         assert len(calls) == 1
 
@@ -901,7 +901,7 @@ class TestInputValidation:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('input name\nlet x = prompt "Hi ${name as raw}"', inputs={})
+        rt.run('input name\nlet x = ask "Hi ${name as raw}"', inputs={})
         assert calls == []
 
     def test_input_used_in_template(self) -> None:
@@ -912,7 +912,7 @@ class TestInputValidation:
             return "ok"
 
         run_with_default_agent(
-            'input name\nlet x = prompt "Hello ${name as raw}"',
+            'input name\nlet x = ask "Hello ${name as raw}"',
             agent,
             inputs={"name": "Alice"},
         )
@@ -939,7 +939,7 @@ class TestBoundaryRendering:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let artifact = "hello"\nlet x = prompt "see ${artifact}"', agent)
+        run_with_default_agent('let artifact = "hello"\nlet x = ask "see ${artifact}"', agent)
         assert '<dsl-value name="artifact" type="text">' in prompts[0]
         assert "hello" in prompts[0]
         assert "</dsl-value>" in prompts[0]
@@ -951,7 +951,7 @@ class TestBoundaryRendering:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let s = "raw content"\nlet x = prompt "${s as raw}"', agent)
+        run_with_default_agent('let s = "raw content"\nlet x = ask "${s as raw}"', agent)
         assert prompts[0] == "raw content"
         assert "<dsl-value" not in prompts[0]
 
@@ -962,7 +962,7 @@ class TestBoundaryRendering:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let n = 5\nlet x = prompt "n=${n}"', agent)
+        run_with_default_agent('let n = 5\nlet x = ask "n=${n}"', agent)
         assert "5" in prompts[0]
         assert "<dsl-value" not in prompts[0]
 
@@ -973,7 +973,7 @@ class TestBoundaryRendering:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let b = true\nlet x = prompt "b=${b}"', agent)
+        run_with_default_agent('let b = true\nlet x = ask "b=${b}"', agent)
         assert "true" in prompts[0]
         assert "<dsl-value" not in prompts[0]
 
@@ -985,7 +985,7 @@ class TestBoundaryRendering:
             return "ok"
 
         run_with_default_agent(
-            'let my_artifact = "content"\nlet x = prompt "${my_artifact}"', agent
+            'let my_artifact = "content"\nlet x = ask "${my_artifact}"', agent
         )
         assert 'name="my_artifact"' in prompts[0]
 
@@ -996,7 +996,7 @@ class TestBoundaryRendering:
             prompts.append(req.prompt)
             return "ok"
 
-        run_with_default_agent('let j: json = null\nlet x = prompt "data: ${j}"', agent)
+        run_with_default_agent('let j: json = null\nlet x = ask "data: ${j}"', agent)
         assert "<dsl-value" in prompts[0]
         assert "null" in prompts[0]
 
@@ -1015,7 +1015,7 @@ class TestBoundaryRendering:
 
         # ``e.message`` is a FieldAccess, not a VarRef — exercises the
         # ``var_name = None`` branch in ``_eval_template``.
-        source = 'let x = prompt "saw ${e.message}"'
+        source = 'let x = ask "saw ${e.message}"'
         run_with_default_agent(
             "record Err\n  message: text\n"
             'let e = Err(message: "oops")\n' + source,
@@ -1041,18 +1041,18 @@ class TestAgentRequest:
             received.append(req)
             return "ok"
 
-        run_with_default_agent('let x = prompt "Hello world"', agent)
+        run_with_default_agent('let x = ask "Hello world"', agent)
         assert received[0].prompt == "Hello world"
 
-    def test_request_has_agent_name_prompt(self) -> None:
+    def test_request_has_agent_name_ask(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
-        run_with_default_agent('let x = prompt "Hi"', agent)
-        assert received[0].agent == "prompt"
+        run_with_default_agent('let x = ask "Hi"', agent)
+        assert received[0].agent == "ask"
 
     def test_request_has_agent_name_custom(self) -> None:
         received: list[AgentRequest] = []
@@ -1099,7 +1099,7 @@ class TestVarSet:
         def agent(req: AgentRequest) -> str:
             return "from agent"
 
-        result = run_with_default_agent('var x: text = prompt "Get value"', agent)
+        result = run_with_default_agent('var x: text = ask "Get value"', agent)
         assert result.ok
         from agm.agl.eval.values import TextValue
 
@@ -1113,7 +1113,7 @@ class TestVarSet:
             return "v2"
 
         result = run_with_default_agent(
-            'var x: text = prompt "First"\nset x = prompt "Second"', agent
+            'var x: text = ask "First"\nset x = ask "Second"', agent
         )
         assert result.ok
         assert len(calls) == 2
@@ -1158,7 +1158,7 @@ class TestMultipleAgentCalls:
             return r
 
         result = run_with_default_agent(
-            'let a = prompt "First"\nlet b = prompt "Second"', agent
+            'let a = ask "First"\nlet b = ask "Second"', agent
         )
         assert result.ok
         from agm.agl.eval.values import TextValue
@@ -1176,7 +1176,7 @@ class TestMultipleAgentCalls:
             return "second-output"
 
         result = run_with_default_agent(
-            'let a = prompt "First"\nlet b = prompt "Use ${a as raw}"', agent
+            'let a = ask "First"\nlet b = ask "Use ${a as raw}"', agent
         )
         assert result.ok
         assert "first-output" in calls[1]
@@ -1194,8 +1194,8 @@ class TestMultipleAgentCalls:
             return "impl-response"
 
         result = run_with_agents(
-            'agent impl\nlet a = prompt "Hello"\nlet b = impl "Build"',
-            {"prompt": default_agent, "impl": impl},
+            'agent impl\nlet a = ask "Hello"\nlet b = impl "Build"',
+            {"ask": default_agent, "impl": impl},
         )
         assert result.ok
         assert len(default_calls) == 1
@@ -2639,7 +2639,7 @@ class TestRuntimeContractError:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let x = prompt "Hi"')
+        result = rt.run('let x = ask "Hi"')
         assert result.ok is False
         assert result.error is None
         assert any("bad codec" in d.message for d in result.diagnostics)
@@ -3274,7 +3274,7 @@ class TestAgentCallEdgeCases:
         """With no contract registered for a call node, a TextCodec fallback is used.
 
         Driven through the interpreter's public ``execute`` entry on a real
-        parsed program (``let x = prompt "hi"``) with an empty contract map, so
+        parsed program (``let x = ask "hi"``) with an empty contract map, so
         the defensive fallback path materializes the contract.
         """
         from agm.agl.capabilities import HostCapabilities
@@ -3286,7 +3286,7 @@ class TestAgentCallEdgeCases:
         from agm.agl.scope import resolve
         from agm.agl.typecheck import check
 
-        program = parse_program('let x = prompt "hi"')
+        program = parse_program('let x = ask "hi"')
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
@@ -3331,7 +3331,7 @@ class TestAgentCallEdgeCases:
         from agm.agl.typecheck import check
         from agm.agl.typecheck.types import TextType, Type
 
-        program = parse_program('let x = prompt "hi"')
+        program = parse_program('let x = ask "hi"')
         resolved = resolve(program)
         caps = HostCapabilities(
             agent_names=frozenset(),
@@ -3391,7 +3391,7 @@ class TestAgentCallEdgeCases:
         """A retry-policy call whose codec always fails raises AgentParseError.
 
         Driven through the interpreter's public ``execute`` entry on a real
-        parsed program (``let x = prompt[on_parse_error: retry[1]] "hi"``).  In
+        parsed program (``let x = ask[on_parse_error: retry[1]] "hi"``).  In
         M1 only the JSON codec (M2) can fail, so this exercises the path with a
         public, host-supplied failing codec injected via the contract map.
         """
@@ -3408,7 +3408,7 @@ class TestAgentCallEdgeCases:
         from agm.agl.typecheck import check
         from agm.agl.typecheck.types import TextType
 
-        source = 'let x = prompt[on_parse_error: retry[1]] "hi"'
+        source = 'let x = ask[on_parse_error: retry[1]] "hi"'
         program = parse_program(source)
         resolved = resolve(program)
         caps = HostCapabilities(
@@ -3484,7 +3484,7 @@ class TestAgentCallEdgeCases:
         raw_response = '```json\n{"bad": 1}\n```'
         recovered = '{"bad": 1}'
 
-        source = 'let x = prompt[on_parse_error: abort] "hi"'
+        source = 'let x = ask[on_parse_error: abort] "hi"'
         checked = check(
             resolve(parse_program(source)),
             HostCapabilities(
@@ -4229,7 +4229,7 @@ class TestRetryFeedbackComposition:
             requests.append(req)
             return "raw-output-1"
 
-        source = 'let x = prompt[on_parse_error: retry[1]] "Initial."'
+        source = 'let x = ask[on_parse_error: retry[1]] "Initial."'
         interp, _, _ = self._build_retry_interpreter(source, agent)
 
         with pytest.raises(AglRaise):
@@ -4252,7 +4252,7 @@ class TestRetryFeedbackComposition:
             requests.append(req)
             return responses[req.attempt]
 
-        source = 'let x = prompt[on_parse_error: retry[1]] "Retry prompt."'
+        source = 'let x = ask[on_parse_error: retry[1]] "Retry prompt."'
         interp, _, _ = self._build_retry_interpreter(source, agent)
 
         with pytest.raises(AglRaise):
@@ -4280,7 +4280,7 @@ class TestRetryFeedbackComposition:
             seen_prompts.append(req.prompt)
             return "bad"
 
-        source = 'let x = prompt[on_parse_error: retry[2]] "The original prompt."'
+        source = 'let x = ask[on_parse_error: retry[2]] "The original prompt."'
         interp, _, _ = self._build_retry_interpreter(source, agent)
 
         with pytest.raises(AglRaise):
@@ -4301,7 +4301,7 @@ class TestRetryFeedbackComposition:
             attempt_numbers.append(req.attempt)
             return "bad"
 
-        source = 'let x = prompt[on_parse_error: retry[2]] "Hi."'
+        source = 'let x = ask[on_parse_error: retry[2]] "Hi."'
         interp, _, _ = self._build_retry_interpreter(source, agent)
 
         with pytest.raises(AglRaise):
@@ -4321,7 +4321,7 @@ class TestRetryFeedbackComposition:
             received.append(req.previous_invalid_output)
             return raw_outputs[req.attempt]
 
-        source = 'let x = prompt[on_parse_error: retry[2]] "Hi."'
+        source = 'let x = ask[on_parse_error: retry[2]] "Hi."'
         interp, _, _ = self._build_retry_interpreter(source, agent)
 
         with pytest.raises(AglRaise):
@@ -4336,7 +4336,7 @@ class TestRetryFeedbackComposition:
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import IntValue
 
-        source = 'let x = prompt[on_parse_error: retry[2]] "Hi."'
+        source = 'let x = ask[on_parse_error: retry[2]] "Hi."'
         interp, _, _ = self._build_retry_interpreter(source, lambda req: "bad")
 
         with pytest.raises(AglRaise) as exc_info:
@@ -4358,7 +4358,7 @@ class TestRetryFeedbackComposition:
             call_count[0] += 1
             return "bad"
 
-        source = 'let x = prompt[on_parse_error: abort] "Hi."'
+        source = 'let x = ask[on_parse_error: abort] "Hi."'
         interp, _, _ = self._build_retry_interpreter(source, agent)
 
         with pytest.raises(AglRaise) as exc_info:

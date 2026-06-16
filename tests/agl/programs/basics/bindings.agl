@@ -17,5 +17,5 @@ var total: int = count + 1
 set total = total * 2
 print total
 
-prompt "Note ${greeting} ${exact} ${okay}"
+ask "Note ${greeting} ${exact} ${okay}"
 print "done"

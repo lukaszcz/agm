@@ -768,7 +768,7 @@ class TestExecCommandM1:
             exec_command.run(args)
         assert exc_info.value.code == 1
 
-    def test_prompt_program_dispatches_to_runner_backed_agent(
+    def test_ask_program_dispatches_to_runner_backed_agent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """M5a: ``agm exec`` always wires a runner-backed default agent; prompt
@@ -779,7 +779,7 @@ class TestExecCommandM1:
         from agm.commands.args import ExecArgs
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = prompt "hi"\n')
+        agl_file.write_text('let x = ask "hi"\n')
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1129,7 +1129,7 @@ def _exec_args_with_fallback_runtime(
 class TestDryRunInventory:
     """M2: --dry-run prints the §10.1 static call-site inventory."""
 
-    def test_dry_run_inventory_prompt_call(
+    def test_dry_run_inventory_ask_call(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
@@ -1141,18 +1141,18 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = prompt "Hello"\n')
+        agl_file.write_text('let x = ask "Hello"\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
         captured = capsys.readouterr()
         # Should print the call-sites inventory header and one entry.
         assert "call-sites" in captured.out
-        assert "prompt" in captured.out
+        assert "ask" in captured.out
         assert "text" in captured.out
         # The entry surfaces both the source line and column as "line N:C:"
-        # (F7: the captured call-site column is not dead).  `prompt` starts at
-        # column 9 of `let x = prompt "Hello"`.
+        # (F7: the captured call-site column is not dead).  `ask` starts at
+        # column 9 of `let x = ask "Hello"`.
         assert "line 1:9:" in captured.out
 
     def test_dry_run_inventory_named_agent(
@@ -1186,7 +1186,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = prompt[on_parse_error: abort] "Hello"\n')
+        agl_file.write_text('let x = ask[on_parse_error: abort] "Hello"\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1270,7 +1270,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(exec_command, "WorkflowRuntime", SpyRuntime)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = prompt "Hi"\n')
+        agl_file.write_text('let x = ask "Hi"\n')
 
         assert exec_command.run(_exec_args(agl_file)) is None
         assert agent_calls == []
@@ -2030,15 +2030,15 @@ class TestExecAgentPrecedence:
         # And the fallback form must NOT appear.
         assert "arg=@/" not in result.stdout
 
-    def test_bare_agent_and_prompt_both_resolve_via_default(self, tmp_path: Path) -> None:
-        """A bare declared agent and built-in ``prompt`` both resolve via the default runner."""
+    def test_bare_agent_and_ask_both_resolve_via_default(self, tmp_path: Path) -> None:
+        """A bare declared agent and built-in ``ask`` both resolve via the default runner."""
         env = self._base_env()
         _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "agent impl\n"
-            'let a = prompt "first"\n'
+            'let a = ask "first"\n'
             'let b = impl "second"\n'
             "print a\n"
             "print b\n"

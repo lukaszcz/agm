@@ -79,7 +79,7 @@ class AgentRequest:
     """The request object passed to a host-registered agent callable.
 
     ``agent``
-        The agent name as it appears in the AgL source: ``"prompt"`` for the
+        The agent name as it appears in the AgL source: ``"ask"`` for the
         built-in default agent, or the registered name for named agents.
     ``prompt``
         The fully rendered user-authored prompt template.  Interpolated

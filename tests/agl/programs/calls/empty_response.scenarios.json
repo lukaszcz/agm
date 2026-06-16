@@ -2,18 +2,18 @@
   "scenarios": [
     {
       "name": "empty_text_is_valid",
-      "agents": {"prompt": [""], "prompter": ["7"]},
+      "agents": {"ask": [""], "prompter": ["7"]},
       "expect": {
         "stdout": "\nafter\n7\n",
-        "calls": {"prompt": 1, "prompter": 1}
+        "calls": {"ask": 1, "prompter": 1}
       }
     },
     {
       "name": "empty_typed_response_fails_parse",
-      "agents": {"prompt": ["quiet"], "prompter": [""]},
+      "agents": {"ask": ["quiet"], "prompter": [""]},
       "expect": {
         "stdout": "quiet\nafter\n",
-        "calls": {"prompt": 1, "prompter": 1},
+        "calls": {"ask": 1, "prompter": 1},
         "raises": {"type": "AgentParseError", "fields": {"agent": "prompter", "attempts": 1}}
       }
     }

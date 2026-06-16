@@ -13,7 +13,7 @@ Design
   scope pass — an undeclared named agent is a scope binding error.  The runtime
   cross-checks ``agent_names`` against the source-declared set.
 - ``has_default_agent``: when ``True`` the host has a default agent that backs
-  the built-in ``prompt`` keyword.  When ``False`` a ``prompt`` call is a static
+  the built-in ``ask`` keyword.  When ``False`` an ``ask`` call is a static
   error.
 - ``codec_kinds``: mapping from codec name → frozenset of semantic type-kind
   strings the codec supports.  Built-in codecs: ``"text"`` (supports
@@ -42,13 +42,13 @@ class HostCapabilities:
     Parameters
     ----------
     agent_names:
-        Names of agents the host can *back* (does not include ``"prompt"``
+        Names of agents the host can *back* (does not include ``"ask"``
         or ``"exec"`` — those are built-ins handled separately).  This is the
         set of host-supplied backings, not the set of valid names: scope owns
         name validity (an undeclared named agent is a binding error).
     has_default_agent:
-        When ``True``, a default agent backs the built-in ``prompt`` keyword.
-        When ``False``, a ``prompt`` call is a static error.
+        When ``True``, a default agent backs the built-in ``ask`` keyword.
+        When ``False``, an ``ask`` call is a static error.
     supports_shell_exec:
         When ``True``, the host can execute ``exec`` (shell) calls.  When
         ``False``, any ``exec`` call site is a static error.  ``WorkflowRuntime``

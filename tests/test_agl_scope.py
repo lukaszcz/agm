@@ -10,7 +10,7 @@ Tests deliberately do *not* pin internal implementation details.
 Note on M1 parser scope
 ------------------------
 The M1 parser supports: let/var/set/input/pass/print/agent-calls (including
-prompt/exec) and string templates with interpolation.  Constructs added in
+ask/exec) and string templates with interpolation.  Constructs added in
 later milestones (record/enum/type-alias, if/case/do/try) are *not* yet
 parseable; tests for those are deferred.  Tests that need those constructs
 are marked with ``pytest.mark.skip`` until the parser is extended.
@@ -99,9 +99,9 @@ class TestAcceptance:
         r = parse_and_resolve("input spec\nlet x = spec")
         assert r.program is not None
 
-    def test_agent_call_prompt(self) -> None:
+    def test_agent_call_ask(self) -> None:
         from agm.agl.syntax.nodes import LetDecl
-        r = parse_and_resolve('let x = prompt "Hi"')
+        r = parse_and_resolve('let x = ask "Hi"')
         let_stmt = r.program.body[0]
         assert isinstance(let_stmt, LetDecl)
         call_id = let_stmt.value.node_id
@@ -143,7 +143,7 @@ class TestAcceptance:
         assert r.program is not None
 
     def test_agent_call_in_print(self) -> None:
-        r = parse_and_resolve('print prompt "Q"')
+        r = parse_and_resolve('print ask "Q"')
         assert r.program is not None
 
     def test_let_then_var_set(self) -> None:
@@ -288,7 +288,7 @@ class TestUndefinedRead:
         assert "ghost" in msg
 
     def test_undefined_in_agent_template(self) -> None:
-        err = reject_scope('let x = prompt "Hi ${ghost}"')
+        err = reject_scope('let x = ask "Hi ${ghost}"')
         line, msg = diag(err)
         assert line == 1
         assert "ghost" in msg
@@ -300,12 +300,12 @@ class TestUndefinedRead:
 
 
 class TestReservedNames:
-    def test_reserve_prompt_let(self) -> None:
-        # matches tests/agl/rejections/scope/reserve_prompt.agl
-        err = reject_scope('let prompt = "not allowed"')
+    def test_reserve_ask_let(self) -> None:
+        # matches tests/agl/rejections/scope/reserve_ask.agl
+        err = reject_scope('let ask = "not allowed"')
         line, msg = diag(err)
         assert line == 1
-        assert "prompt" in msg
+        assert "ask" in msg
 
     def test_reserve_exec_var(self) -> None:
         # matches tests/agl/rejections/scope/reserve_exec.agl
@@ -314,11 +314,11 @@ class TestReservedNames:
         assert line == 1
         assert "exec" in msg
 
-    def test_reserve_prompt_input(self) -> None:
-        err = reject_scope("input prompt")
+    def test_reserve_ask_input(self) -> None:
+        err = reject_scope("input ask")
         line, msg = diag(err)
         assert line == 1
-        assert "prompt" in msg
+        assert "ask" in msg
 
     def test_reserve_exec_input(self) -> None:
         err = reject_scope("input exec")
@@ -414,8 +414,8 @@ class TestScopeEscape:
 
 
 class TestCallKinds:
-    def test_prompt_is_default_agent(self) -> None:
-        r = parse_and_resolve('let x = prompt "Q"')
+    def test_ask_is_default_agent(self) -> None:
+        r = parse_and_resolve('let x = ask "Q"')
         from agm.agl.syntax.nodes import AgentCall, LetDecl
 
         stmt = r.program.body[0]
@@ -442,7 +442,7 @@ class TestCallKinds:
         assert r.call_kinds[stmt.value.node_id] == CallKind.agent
 
     def test_exec_in_template_prompt(self) -> None:
-        r = parse_and_resolve('input spec\nlet x = prompt "Here: ${spec}"')
+        r = parse_and_resolve('input spec\nlet x = ask "Here: ${spec}"')
         from agm.agl.syntax.nodes import AgentCall, LetDecl
 
         stmt = r.program.body[1]
@@ -490,7 +490,7 @@ class TestResolution:
         assert not ref.mutable
 
     def test_interp_varref_resolved(self) -> None:
-        r = parse_and_resolve('input name\nlet q = prompt "Hello ${name}"')
+        r = parse_and_resolve('input name\nlet q = ask "Hello ${name}"')
         from agm.agl.syntax.nodes import AgentCall, InterpSegment, LetDecl, Template, VarRef
 
         stmt = r.program.body[1]
@@ -1368,12 +1368,12 @@ class TestDuplicatePatternBindings:
 
 
 # ---------------------------------------------------------------------------
-# Task 3: prompt/exec reserved as pattern-variable and catch-binder names
+# Task 3: ask/exec reserved as pattern-variable and catch-binder names
 # ---------------------------------------------------------------------------
 
 
 class TestReservedNamesInPatternAndCatch:
-    """Task 3: prompt/exec are reserved; extend check to pattern binders and catch binders."""
+    """Task 3: ask/exec are reserved; extend check to pattern binders and catch binders."""
 
     # --- catch binder ---
 
@@ -1389,16 +1389,16 @@ class TestReservedNamesInPatternAndCatch:
         assert "exec" in msg
         assert "reserved" in msg.lower() or "contextual" in msg.lower()
 
-    def test_prompt_as_catch_binder_rejected(self) -> None:
+    def test_ask_as_catch_binder_rejected(self) -> None:
         err = reject_scope(
             "try\n"
             "  pass\n"
-            "catch _ as prompt =>\n"
+            "catch _ as ask =>\n"
             "  pass\n"
         )
         line, msg = diag(err)
         assert line == 3
-        assert "prompt" in msg
+        assert "ask" in msg
         assert "reserved" in msg.lower() or "contextual" in msg.lower()
 
     def test_normal_catch_binder_accepted(self) -> None:
@@ -1412,12 +1412,12 @@ class TestReservedNamesInPatternAndCatch:
 
     # --- pattern variable ---
 
-    def test_prompt_as_var_pattern_rejected(self) -> None:
-        # case x of | prompt => pass
+    def test_ask_as_var_pattern_rejected(self) -> None:
+        # case x of | ask => pass
         from agm.agl.syntax.nodes import CaseStmt, CaseStmtBranch, VarPattern
 
         let_x = _make_let("x", _make_intlit(1))
-        pv = VarPattern(name="prompt", span=_sp(3), node_id=_nid())
+        pv = VarPattern(name="ask", span=_sp(3), node_id=_nid())
         branch = CaseStmtBranch(
             pattern=pv, body=(_make_pass(),), span=_sp(3), node_id=_nid()
         )
@@ -1426,7 +1426,7 @@ class TestReservedNamesInPatternAndCatch:
         )
         err = reject_program(let_x, case_stmt)
         msg = err.to_diagnostic().message
-        assert "prompt" in msg
+        assert "ask" in msg
         assert "reserved" in msg.lower() or "contextual" in msg.lower()
 
     def test_exec_as_var_pattern_rejected(self) -> None:
@@ -1617,11 +1617,11 @@ class TestAgentDeclarations:
         assert "dup" in msg
         assert "already declared" in msg.lower()
 
-    def test_declare_prompt_rejected(self) -> None:
+    def test_declare_ask_rejected(self) -> None:
         # matches tests/agl/rejections/scope/agent_reserved_name.agl
-        err = reject_scope("agent prompt")
+        err = reject_scope("agent ask")
         _, msg = diag(err)
-        assert "prompt" in msg
+        assert "ask" in msg
         assert "built-in" in msg.lower()
 
     def test_declare_exec_rejected(self) -> None:
@@ -1653,10 +1653,10 @@ class TestAgentDeclarations:
         assert "unused" in warning.message
         assert warning.line == 1
 
-    def test_prompt_needs_no_declaration(self) -> None:
+    def test_ask_needs_no_declaration(self) -> None:
         from agm.agl.syntax.nodes import AgentCall, LetDecl
 
-        r = parse_and_resolve('let x = prompt "Q"')
+        r = parse_and_resolve('let x = ask "Q"')
         stmt = r.program.body[0]
         assert isinstance(stmt, LetDecl)
         assert isinstance(stmt.value, AgentCall)
@@ -1704,7 +1704,7 @@ class TestAmbientAgentsHelper:
         prog = parse_program(
             'let a = reviewer "R"\n'
             'let b = impl "I"\n'
-            'let c = prompt "P"\n'
+            'let c = ask "P"\n'
             'let d = exec "ls"\n'
         )
         assert ambient_agents_for(prog) == frozenset({"reviewer", "impl"})
@@ -1712,7 +1712,7 @@ class TestAmbientAgentsHelper:
     def test_empty_when_no_named_calls(self) -> None:
         from tests._agl_helpers import ambient_agents_for
 
-        prog = parse_program('let a = prompt "P"')
+        prog = parse_program('let a = ask "P"')
         assert ambient_agents_for(prog) == frozenset()
 
     def test_helper_output_resolves_without_declarations(self) -> None:

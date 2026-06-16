@@ -141,7 +141,7 @@ def _handle_agents(arg: str, ctx: MetaContext) -> MetaOutcome:
         lines.append("Available agents:")
         lines.extend(f"  {name}" for name in names)
     else:
-        lines.append("No agents available (only the default 'prompt' agent, if configured).")
+        lines.append("No agents available (only the default 'ask' agent, if configured).")
     lines.append(f"Agent-call mode: {ctx.agent_mode.mode}")
     return MetaOutcome(text="\n".join(lines))
 

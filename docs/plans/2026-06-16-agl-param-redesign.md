@@ -275,6 +275,15 @@ This is the substantive behavioral change: `param` is no longer a static no-op.
   must occur as the interpreter reaches each `ParamDecl` (in order), not in a single
   pre-pass. `ProgramDecl` is a runtime no-op.
 - Keep `convert_input` (`runtime.py:976-1095`) as-is for external values.
+- **Dry-run interaction (decision).** A default expression may contain effects
+  (agent/exec calls, O5/D4), so it is subject to the same `--dry-run` side-effect-free
+  contract as any other expression: under dry-run, default expressions are **not**
+  evaluated for their effects — they go through the existing dry-run evaluation path
+  exactly like a `let` initializer (no special-casing). The **pre-execution required
+  check** (no-default param missing from CLI+config ⇒ exit 1) still runs under
+  dry-run, since it is static and effect-free. Supplied (CLI/config) values still
+  convert and bind normally. Add a dry-run test (§11) asserting an effectful default
+  does not fire.
 
 ## 7. CLI design (`agm exec`)
 
@@ -413,7 +422,8 @@ machinery (as `loop` already does) rather than injecting dynamic Click options:
   in declaration order and only when unsupplied; required (no-default) missing from
   both CLI and config errors pre-execution (exit 1); default referencing an earlier
   param computes correctly; default with an effect (e.g. agent/exec call) fires only
-  when unsupplied.
+  when unsupplied; under `--dry-run` an effectful default does **not** fire while the
+  required-param pre-execution check still applies.
 - **Exec CLI (integration):** `--<name>` assigns; bool `--flag/--no-flag`; structured
   type via JSON string; unknown/misspelled `--param` errors; reserved-name collision
   errors; `--input` removed (errors as unknown option); multi-scenario coverage

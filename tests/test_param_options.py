@@ -340,3 +340,142 @@ class TestRenderParamHelpSection:
         params = (_make_param("x", TextType()),)
         section = render_param_help_section(params)
         assert section.startswith("Program parameters:")
+
+
+# ---------------------------------------------------------------------------
+# resolve_param_values (M5)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveParamValues:
+    """Unit tests for ``resolve_param_values`` — merging config + CLI values."""
+
+    def test_cli_wins_over_config(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, warnings = resolve_param_values(
+            {"msg"},
+            {"msg": "from_config"},
+            {"msg": "from_cli"},
+        )
+        assert external == {"msg": "from_cli"}
+        assert warnings == []
+
+    def test_config_used_when_no_cli_value(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, warnings = resolve_param_values(
+            {"msg"},
+            {"msg": "from_config"},
+            {},
+        )
+        assert external == {"msg": "from_config"}
+        assert warnings == []
+
+    def test_cli_only_no_config(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, warnings = resolve_param_values(
+            {"msg"},
+            {},
+            {"msg": "from_cli"},
+        )
+        assert external == {"msg": "from_cli"}
+        assert warnings == []
+
+    def test_empty_both_returns_empty(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, warnings = resolve_param_values(frozenset({"msg"}), {}, {})
+        assert external == {}
+        assert warnings == []
+
+    def test_undeclared_config_key_warns_and_excluded(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, warnings = resolve_param_values(
+            {"msg"},
+            {"msg": "hi", "typo_key": "oops"},
+            {},
+        )
+        # Only declared key is in result.
+        assert external == {"msg": "hi"}
+        assert "typo_key" not in external
+        # Warning emitted for the undeclared key.
+        assert len(warnings) == 1
+        assert "typo_key" in warnings[0]
+
+    def test_multiple_undeclared_keys_each_warn(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, warnings = resolve_param_values(
+            frozenset(),
+            {"a": 1, "b": 2},
+            {},
+        )
+        assert external == {}
+        assert len(warnings) == 2
+        assert any("a" in w for w in warnings)
+        assert any("b" in w for w in warnings)
+
+    def test_program_name_in_warning_message(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        _, warnings = resolve_param_values(
+            frozenset(),
+            {"bad_key": "x"},
+            {},
+            program_name="my_workflow",
+        )
+        assert len(warnings) == 1
+        assert "my_workflow" in warnings[0]
+        assert "bad_key" in warnings[0]
+
+    def test_program_name_none_still_warns(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        _, warnings = resolve_param_values(
+            frozenset(),
+            {"bad_key": "x"},
+            {},
+            program_name=None,
+        )
+        assert len(warnings) == 1
+        assert "bad_key" in warnings[0]
+
+    def test_native_bool_preserved(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, _ = resolve_param_values({"flag"}, {"flag": True}, {})
+        assert external["flag"] is True
+        assert isinstance(external["flag"], bool)
+
+    def test_native_int_preserved(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, _ = resolve_param_values({"count"}, {"count": 42}, {})
+        assert external["count"] == 42
+        assert isinstance(external["count"], int)
+
+    def test_cli_overrides_config_all_declared(self) -> None:
+        """CLI overrides config; declared-only passthrough for multiple params."""
+        from agm.commands.param_options import resolve_param_values
+
+        config = {"a": "config_a", "b": "config_b", "c": "config_c"}
+        cli = {"b": "cli_b"}
+        external, warnings = resolve_param_values({"a", "b", "c"}, config, cli)
+        assert external["a"] == "config_a"
+        assert external["b"] == "cli_b"  # CLI wins
+        assert external["c"] == "config_c"
+        assert warnings == []
+
+    def test_frozenset_accepted(self) -> None:
+        from agm.commands.param_options import resolve_param_values
+
+        external, warnings = resolve_param_values(
+            frozenset({"msg"}),
+            {"msg": "hello"},
+            {},
+        )
+        assert external == {"msg": "hello"}
+        assert warnings == []

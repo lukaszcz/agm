@@ -43,9 +43,13 @@ from agm.agl import WorkflowRuntime
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.commands.agent_io import default_agent_runner
 from agm.commands.args import ExecArgs
-from agm.commands.param_options import check_param_collisions, parse_param_tokens
+from agm.commands.param_options import (
+    check_param_collisions,
+    parse_param_tokens,
+    resolve_param_values,
+)
 from agm.config.context import current_config_context
-from agm.config.general import load_exec_config
+from agm.config.general import load_exec_config, load_params_config
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log
@@ -172,7 +176,17 @@ def run(args: ExecArgs) -> None:
     for diag in discovery.warnings:
         print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
 
-    cli_params: dict[str, object] = {}
+    # ----------------------------------------------------------------
+    # Resolve param values from config + CLI (D2), ONLY when the front-end
+    # and typecheck both succeeded.  When ``discovery.checked is None`` the
+    # param set is unknown (parse/scope/typecheck failed), so we skip the
+    # whole param layer — no config lookup, no collision/token validation, no
+    # undeclared-key warnings — and hand the prepared program straight to
+    # run_prepared, which resurfaces the captured diagnostic (exit 1).  Doing
+    # otherwise would spew misleading "undeclared config key" warnings that
+    # mask the real parse/type error.
+    # ----------------------------------------------------------------
+    external_inputs: dict[str, object] = {}
     checked = discovery.checked  # None when front-end or typecheck failed
 
     if checked is not None:
@@ -190,13 +204,44 @@ def run(args: ExecArgs) -> None:
         except ValueError as exc:
             exit_with_usage_error(["exec"], f"error: {exc}")
 
+        # Resolve the program key for [params.<key>] config lookup (D2).
+        # Priority: declared ``program NAME`` > .agl file stem > None (inline
+        # -c with no program decl has no config table).
+        if discovery.program_name is not None:
+            param_config_key: str | None = discovery.program_name
+        elif args.file is not None:
+            param_config_key = Path(args.file).stem
+        else:
+            param_config_key = None
+
+        if param_config_key is not None:
+            config_param_values = load_params_config(
+                param_config_key,
+                home=ctx.home,
+                proj_dir=ctx.proj_dir,
+                cwd=ctx.cwd,
+            )
+        else:
+            config_param_values = {}
+
+        # Merge config and CLI values (CLI wins; undeclared config keys warn).
+        declared_names = {p.name for p in discovery.params}
+        external_inputs, config_warnings = resolve_param_values(
+            declared_names,
+            config_param_values,
+            cli_params,
+            program_name=param_config_key,
+        )
+        for msg in config_warnings:
+            print(msg, file=sys.stderr)
+
     # ``run_prepared`` accepts a ``Mapping[str, object]``.  Reuse the
     # ``PreparedProgram`` from above — no second parse/scope of the source.
     # Pass ``checked`` to skip a redundant typecheck inside run_prepared
     # (it already ran during discover_params when checked is not None).
     result = runtime.run_prepared(
         prepared,
-        inputs=cli_params,
+        inputs=external_inputs,
         check_only=dry_run.enabled(),
         log_file=log_file,
         checked=checked,

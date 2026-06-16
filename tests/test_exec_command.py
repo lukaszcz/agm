@@ -2288,3 +2288,391 @@ class TestExecHelpFlag:
         assert result.exit_code == 0
         # Base help still rendered despite unexpected runtime error.
         assert "exec" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# M5: [params.<program>] config integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_config_home(tmp_path: Path, toml: str) -> Path:
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(toml)
+    return home
+
+
+def _exec_args_for_config(agl_file: Path) -> ExecArgs:
+    """ExecArgs for a file with no param tokens and no logging."""
+    return ExecArgs(
+        file=str(agl_file),
+        param_tokens=[],
+        strict_json=None,
+        max_iters=None,
+        runner=None,
+        no_log=True,
+        log_file=None,
+    )
+
+
+class TestExecParamConfigWiring:
+    """M5: [params.<program>] config integration with agm exec."""
+
+    def test_file_stem_keying_supplies_param_from_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When program has no ``program NAME`` decl, the .agl file stem keys the config."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(
+            tmp_path, "[params.myflow]\ngreeting = \"world\"\n"
+        )
+        agl_file = tmp_path / "myflow.agl"
+        agl_file.write_text("param greeting: text\nprint greeting\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        assert capsys.readouterr().out == "world\n"
+
+    def test_program_name_decl_keying_overrides_file_stem(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Declared ``program NAME`` takes precedence over the file stem for config key."""
+        from agm.config.context import ConfigContext
+
+        # Config uses the declared program name, NOT the file stem.
+        home = _make_config_home(
+            tmp_path,
+            "[params.declared_name]\ngreeting = \"from_config\"\n"
+            "[params.filestem]\ngreeting = \"wrong\"\n",
+        )
+        agl_file = tmp_path / "filestem.agl"
+        agl_file.write_text("program declared_name\nparam greeting: text\nprint greeting\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        assert capsys.readouterr().out == "from_config\n"
+
+    def test_cli_overrides_config_value(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """CLI option overrides the config value (CLI > config > default)."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, "[params.prog]\ngreeting = \"config_value\"\n")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param greeting: text\nprint greeting\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=["--greeting", "cli_value"],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert capsys.readouterr().out == "cli_value\n"
+
+    def test_config_value_suppresses_default_expression(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Config presence suppresses the param's default expression."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, "[params.prog]\ngreeting = \"config_val\"\n")
+        agl_file = tmp_path / "prog.agl"
+        # param has a default, but config should win.
+        agl_file.write_text('param greeting: text = "default_val"\nprint greeting\n')
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        assert capsys.readouterr().out == "config_val\n"
+
+    def test_inline_command_no_config_table(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Inline ``-c`` with no ``program`` decl has no config table; params via CLI only."""
+        from agm.config.context import ConfigContext
+
+        # Even if config has a [params.*] entry, inline -c with no program decl ignores it.
+        home = _make_config_home(tmp_path, "[params.anything]\ngreeting = \"should_not_apply\"\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        args = ExecArgs(
+            file=None,
+            command="param greeting: text\nprint greeting\n",
+            param_tokens=["--greeting", "cli_only"],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert capsys.readouterr().out == "cli_only\n"
+
+    def test_inline_command_with_program_decl_uses_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Inline ``-c`` WITH ``program NAME`` still resolves config by the declared name."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(
+            tmp_path, "[params.inline_prog]\ngreeting = \"from_inline_config\"\n"
+        )
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        args = ExecArgs(
+            file=None,
+            command="program inline_prog\nparam greeting: text\nprint greeting\n",
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert capsys.readouterr().out == "from_inline_config\n"
+
+    def test_undeclared_config_key_warns_but_program_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An undeclared config key emits a warning to stderr but does not stop execution."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(
+            tmp_path,
+            "[params.prog]\ngreeting = \"hi\"\ntypo_key = \"oops\"\n",
+        )
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param greeting: text\nprint greeting\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "hi\n"
+        # Warning mentions the undeclared key and is non-fatal.
+        assert "typo_key" in captured.err
+        assert "warning" in captured.err.lower()
+
+    def test_native_bool_config_value_reaches_program(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """TOML native bool reaches the program correctly (not stringified)."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, "[params.prog]\nflag = true\n")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "param flag: bool\n"
+            "case flag of\n"
+            '  | true => print "yes"\n'
+            '  | false => print "no"\n'
+        )
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        assert capsys.readouterr().out == "yes\n"
+
+    def test_native_int_config_value_reaches_program(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """TOML native int reaches the program correctly."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, "[params.prog]\ncount = 7\n")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param count: int\nprint count\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        assert capsys.readouterr().out == "7\n"
+
+    def test_toml_array_config_value_for_list_param(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A TOML array reaches a list param correctly (printed as JSON array)."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, '[params.prog]\ntags = ["alpha", "beta"]\n')
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param tags: list[text]\nprint tags\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        out = capsys.readouterr().out
+        assert "alpha" in out
+        assert "beta" in out
+
+    def test_json_string_config_value_for_list_param(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A JSON string config value also reaches a list param correctly."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, '[params.prog]\ntags = \'["x","y"]\'\n')
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param tags: list[text]\nprint tags\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        out = capsys.readouterr().out
+        assert "x" in out
+        assert "y" in out
+
+    def test_decimal_as_toml_string_reaches_program(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Decimal param value as a quoted TOML string is coerced correctly."""
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, '[params.prog]\nratio = "1.5"\n')
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param ratio: decimal\nprint ratio\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        assert capsys.readouterr().out == "1.5\n"
+
+    def test_decimal_as_bare_toml_float_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A bare TOML float for a decimal param is a clean pre-exec error (no binary float)."""
+        from agm.config.context import ConfigContext
+
+        # 0.75 is a TOML float → Python float, which convert_input rejects
+        # (AgL forbids binary floats); the user must quote it as "0.75".
+        home = _make_config_home(tmp_path, "[params.prog]\nratio = 0.75\n")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param ratio: decimal\nprint ratio\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_for_config(agl_file))
+        assert exc_info.value.code == 1
+        assert "ratio" in capsys.readouterr().err
+
+    def test_typecheck_failure_with_config_table_no_spurious_warnings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A type-error program does not emit config undeclared-key warnings.
+
+        When typecheck fails the param set is unknown, so the config layer is
+        skipped entirely and only the real type-error diagnostic surfaces.
+        """
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(
+            tmp_path, '[params.prog]\ngreeting = "hi"\nother = "x"\n'
+        )
+        agl_file = tmp_path / "prog.agl"
+        # Type error: int param bound a text default → typecheck fails.
+        agl_file.write_text('param greeting: int = "not an int"\nprint greeting\n')
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_for_config(agl_file))
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        # No misleading "undeclared config key" noise masking the real error.
+        assert "other" not in err
+        assert "is not a declared param" not in err
+
+    def test_no_config_table_missing_required_param_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No config table + no CLI value for a required param still exits 1."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        home.mkdir()
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param msg: text\nprint msg\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_for_config(agl_file))
+        assert exc_info.value.code == 1

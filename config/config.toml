@@ -21,3 +21,20 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 #
 # [exec.agents]                 # per-agent runner commands (highest precedence)
 # reviewer = "claude -p"
+
+# [params.<program>] — default param values for an AgL program (agm exec).
+#
+# The table key is the name from the program's ``program NAME`` declaration, or
+# the .agl file stem when no ``program`` declaration is present.  CLI options
+# (e.g. ``--topic``) override config values; config values suppress the param's
+# default expression.  Inline ``-c`` programs with no ``program`` declaration
+# have no config table.
+#
+# [params.review_workflow]
+# topic    = "security"         # text param — verbatim string
+# verbose  = true               # bool param — native TOML bool
+# max_iter = 3                  # int param  — native TOML integer
+# tags     = ["bug", "audit"]   # list param — TOML array (or a JSON string)
+# ratio    = "0.75"             # decimal param — MUST be a quoted string;
+#                               #   a bare TOML float (0.75) is rejected because
+#                               #   AgL forbids binary floating-point values.

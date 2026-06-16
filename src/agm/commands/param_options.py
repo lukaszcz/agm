@@ -4,9 +4,15 @@ Each ``param`` declaration in a program becomes a ``--<name>`` option on
 ``agm exec``.  Bool params use ``--name/--no-name`` flag form.  This module
 provides pure, unit-testable functions used by both the exec command and the
 help/completion machinery.
+
+It also provides ``resolve_param_values`` for merging config-file values with
+CLI values (CLI wins) and detecting undeclared config keys.  This helper is
+reusable by M6 (REPL config resolution).
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 from agm.agl.runtime.runtime import ParamDeclInfo
 from agm.agl.typecheck.types import BoolType
@@ -169,3 +175,48 @@ def render_param_help_section(params: tuple[ParamDeclInfo, ...]) -> str:
         req_str = "(required)" if not p.has_default else "(optional, has default)"
         lines.append(f"  {flag_str}  {req_str}")
     return "\n".join(lines) + "\n"
+
+
+def resolve_param_values(
+    declared_names: set[str] | frozenset[str],
+    config_values: Mapping[str, object],
+    cli_values: Mapping[str, object],
+    *,
+    program_name: str | None = None,
+) -> tuple[dict[str, object], list[str]]:
+    """Merge config and CLI param values, with CLI taking precedence.
+
+    Precedence: CLI > config.  Config keys that are not declared as params
+    produce warning messages (non-fatal, O4) and are excluded from the result.
+    CLI values are assumed to be all-declared (unknown CLI options are a hard
+    error, handled upstream in M4).
+
+    Args:
+        declared_names: The set of param names declared in the program.
+        config_values: Raw TOML-native values from ``[params.<program>]`` config.
+        cli_values: Values parsed from CLI ``--param`` tokens.
+        program_name: The program name used for the config table key, used in
+            warning messages.  When ``None``, the table name is omitted.
+
+    Returns:
+        A ``(external_dict, warning_messages)`` tuple where:
+        - ``external_dict`` maps declared param names to their resolved values
+          (config values for declared params, overridden by CLI values).
+        - ``warning_messages`` lists human-readable warnings for each config key
+          that is not declared as a param.
+    """
+    warnings: list[str] = []
+    # Start from config values that ARE declared, warn on undeclared.
+    external: dict[str, object] = {}
+    table_ref = f"[params.{program_name}]" if program_name is not None else "[params.*]"
+    for key, value in config_values.items():
+        if key in declared_names:
+            external[key] = value
+        else:
+            warnings.append(
+                f"warning: config key '{key}' in {table_ref} is not a declared param "
+                f"and will be ignored"
+            )
+    # CLI values override config values (CLI wins).
+    external.update(cli_values)
+    return external, warnings

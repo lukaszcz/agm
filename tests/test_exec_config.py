@@ -1,4 +1,4 @@
-"""Tests for ExecConfig and load_exec_config (M0)."""
+"""Tests for ExecConfig and load_exec_config (M0); load_params_config (M5)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.config.general import ExecConfig, load_exec_config
+from agm.config.general import ExecConfig, load_exec_config, load_params_config
 
 
 class TestExecConfig:
@@ -206,3 +206,113 @@ class TestLoadExecConfig:
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert "good" in cfg.agents
         assert "bad" not in cfg.agents
+
+
+# ---------------------------------------------------------------------------
+# load_params_config (M5)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadParamsConfig:
+    """Tests for ``load_params_config`` — loading ``[params.<program>]`` tables."""
+
+    def _home(self, tmp_path: Path, *, toml: str = "") -> Path:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        if toml:
+            (home / ".agm" / "config.toml").write_text(toml)
+        return home
+
+    def test_missing_params_section_returns_empty_dict(self, tmp_path: Path) -> None:
+        home = self._home(tmp_path, toml="[exec]\nrunner = 'claude'\n")
+        result = load_params_config("my_prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result == {}
+
+    def test_missing_program_table_returns_empty_dict(self, tmp_path: Path) -> None:
+        home = self._home(tmp_path, toml="[params.other_prog]\nfoo = 'bar'\n")
+        result = load_params_config("my_prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result == {}
+
+    def test_program_table_returned_as_toml_native_values(self, tmp_path: Path) -> None:
+        home = self._home(
+            tmp_path,
+            toml=(
+                "[params.my_prog]\n"
+                'greeting = "hello"\n'
+                "count = 3\n"
+                "enabled = true\n"
+                'tags = ["a", "b"]\n'
+            ),
+        )
+        result = load_params_config("my_prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result == {
+            "greeting": "hello",
+            "count": 3,
+            "enabled": True,
+            "tags": ["a", "b"],
+        }
+
+    def test_bool_native_not_stringified(self, tmp_path: Path) -> None:
+        """bool values must stay native bool, not str(True)='True'."""
+        home = self._home(tmp_path, toml="[params.prog]\nflag = true\n")
+        result = load_params_config("prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result["flag"] is True
+        assert isinstance(result["flag"], bool)
+
+    def test_decimal_as_string_preserved(self, tmp_path: Path) -> None:
+        """Decimal param values must be quoted strings in config (TOML native float rejected)."""
+        home = self._home(tmp_path, toml='[params.prog]\nratio = "3.14"\n')
+        result = load_params_config("prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result["ratio"] == "3.14"
+        assert isinstance(result["ratio"], str)
+
+    def test_no_config_file_returns_empty_dict(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        result = load_params_config("prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result == {}
+
+    def test_project_config_overrides_home(self, tmp_path: Path) -> None:
+        """Later layers (project config) override earlier layers (home config)."""
+        home = self._home(tmp_path, toml="[params.prog]\nname = 'from_home'\nextra = 'kept'\n")
+        proj_dir = tmp_path / "proj"
+        (proj_dir / "config").mkdir(parents=True)
+        (proj_dir / "config" / "config.toml").write_text(
+            "[params.prog]\nname = 'from_proj'\n"
+        )
+        result = load_params_config("prog", home=home, proj_dir=proj_dir, cwd=tmp_path)
+        assert result["name"] == "from_proj"
+        # Key only in home config is preserved (deep merge).
+        assert result["extra"] == "kept"
+
+    def test_cwd_config_overrides_project(self, tmp_path: Path) -> None:
+        """cwd/.agm/config.toml is the highest-precedence layer."""
+        home = self._home(tmp_path, toml="[params.prog]\nname = 'home'\n")
+        cwd_agm = tmp_path / ".agm"
+        cwd_agm.mkdir()
+        (cwd_agm / "config.toml").write_text("[params.prog]\nname = 'cwd'\n")
+        result = load_params_config("prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result["name"] == "cwd"
+
+    def test_different_program_names_do_not_interfere(self, tmp_path: Path) -> None:
+        home = self._home(
+            tmp_path,
+            toml="[params.prog_a]\nfoo = 'a'\n\n[params.prog_b]\nfoo = 'b'\n",
+        )
+        assert load_params_config("prog_a", home=home, proj_dir=None, cwd=tmp_path) == {
+            "foo": "a"
+        }
+        assert load_params_config("prog_b", home=home, proj_dir=None, cwd=tmp_path) == {
+            "foo": "b"
+        }
+
+    def test_int_value_native(self, tmp_path: Path) -> None:
+        home = self._home(tmp_path, toml="[params.prog]\ncount = 42\n")
+        result = load_params_config("prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result["count"] == 42
+        assert isinstance(result["count"], int)
+
+    def test_list_value_native(self, tmp_path: Path) -> None:
+        home = self._home(tmp_path, toml='[params.prog]\ntags = ["x", "y"]\n')
+        result = load_params_config("prog", home=home, proj_dir=None, cwd=tmp_path)
+        assert result["tags"] == ["x", "y"]

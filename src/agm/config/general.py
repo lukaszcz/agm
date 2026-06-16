@@ -598,4 +598,35 @@ def load_refine_config(
         extra_revise_prompt=_optional_str(table, "extra_revise_prompt"),
         extra_revise_prompt_file=_optional_str(table, "extra_revise_prompt_file"),
         save_review=_optional_bool(table, "save_review", default=True),
-    )  
+    )
+
+
+def load_params_config(
+    program_name: str,
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+) -> dict[str, object]:
+    """Return the ``[params.<program_name>]`` table from the merged config.
+
+    Loads the merged config across all config-file layers (home → project → cwd)
+    and returns the ``[params.<program_name>]`` sub-table as a dict of TOML-native
+    values.  Returns an empty dict when the table is absent.
+
+    Values are returned as-is (TOML-native Python objects) so that
+    ``convert_input`` in the runtime can coerce them to AgL types.  In
+    particular, ``bool`` values must NOT be stringified (``str(True)`` → ``"True"``
+    which the bool coercion path rejects).
+
+    Note for decimal params: TOML has no decimal type; a TOML float (e.g.
+    ``3.14``) is a Python ``float`` and AgL rejects binary floats.  Decimal param
+    values in config must be written as TOML strings (e.g. ``ratio = "3.14"``);
+    ``convert_input`` will parse them correctly via ``json.loads(parse_float=Decimal)``.
+    """
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    params_section = toml_dict(merged.get("params"))
+    program_table = params_section.get(program_name)
+    if isinstance(program_table, dict):
+        return dict(program_table)
+    return {}

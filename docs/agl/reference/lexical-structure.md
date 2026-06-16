@@ -57,11 +57,11 @@ A semicolon `;` also separates statements on one line; see
 
 ## Keywords
 
-The following 28 words are **reserved** and can never be used as variable or
+The following 29 words are **reserved** and can never be used as variable or
 agent names:
 
 ```text
-record enum type input agent let var set do until if else case of
+record enum type param program agent let var set do until if else case of
 try catch raise as pass print and or not is in true false null
 ```
 
@@ -69,7 +69,7 @@ Reserved words are also rejected as field names, with one exception: `agent`
 remains legal as a **field name** (record/enum field definitions, named
 constructor arguments, dict shorthand keys, and field access) so that the
 built-in exception fields `AgentCallError.agent` and `AgentParseError.agent`
-stay usable. It still cannot be used as a variable, input, pattern/`catch`
+stay usable. It still cannot be used as a variable, param, pattern/`catch`
 binder, or agent name.
 
 Two further names are **contextual keywords**, not reserved:
@@ -79,7 +79,7 @@ Two further names are **contextual keywords**, not reserved:
 - `exec` — in call position it denotes the built-in shell executor
   ([Shell execution](shell-execution.md)).
 
-`ask` and `exec` may not be declared with `let`, `var`, or `input`, may
+`ask` and `exec` may not be declared with `let`, `var`, or `param`, may
 not be bound by patterns or `catch` binders, and may not be declared as
 agent names — but they remain legal as record/enum **field names**:
 `Continue(ask: text)` is a valid variant declaration. To destructure such
@@ -98,7 +98,7 @@ Identifiers are ASCII:
 | Token | Pattern | Used for |
 | ----- | ------- | -------- |
 | `TYPE_NAME` | `[A-Z][A-Za-z0-9_]*` | Record, enum, alias, and exception type names; enum variant constructors |
-| `VAR_NAME` | `[a-z_][A-Za-z0-9_]*` | Variables, fields, inputs, agent names, call options, renderers |
+| `VAR_NAME` | `[a-z_][A-Za-z0-9_]*` | Variables, fields, params, agent names, call options, renderers |
 
 Capitalization is significant: a name starting with an uppercase letter is a
 type/constructor name; anything else is a value-level name.

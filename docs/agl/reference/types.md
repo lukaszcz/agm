@@ -169,7 +169,7 @@ Before any value checking, the following are rejected as static errors:
    ([Exceptions](exceptions.md)).
 2. Duplicate record fields, duplicate enum variants, or duplicate fields
    within one variant.
-3. References to unknown types in records, enums, aliases, or `input`
+3. References to unknown types in records, enums, aliases, or `param`
    declarations.
 4. Cyclic aliases (`type A = B` with `type B = A`).
 5. Directly or indirectly **recursive records or enums** — including

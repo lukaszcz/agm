@@ -46,7 +46,7 @@ keyword has token type `"let"`); the `KW_*` constants in `tokens.py` are
 readable aliases.  When the Lark parser receives the token stream the custom
 `AglLexer.lex()` method uppercases keyword types (e.g. `"let"` → `"LET"`).
 
-`record` `enum` `type` `input` `agent` `let` `var` `set` `do` `until` `if`
+`record` `enum` `type` `param` `program` `agent` `let` `var` `set` `do` `until` `if`
 `else` `case` `of` `try` `catch` `raise` `as` `pass` `print` `and` `or` `not`
 `is` `in` `true` `false` `null`
 
@@ -55,7 +55,28 @@ as a *field name* — record/enum field definitions, named constructor arguments
 dict shorthand keys, and postfix field access — via the `field_name`
 nonterminal (`field_name: VAR_NAME | AGENT`).  This keeps built-in exception
 fields such as `AgentCallError.agent` usable.  It cannot be used as a variable
-binder (`let`/`var`/`set`/`input`/patterns/catch).
+binder (`let`/`var`/`set`/`param`/patterns/catch).
+
+The `param` keyword leads a root-level declaration production.  Both the type
+annotation and the default expression are optional; the default may reference
+earlier `param` binders:
+
+```
+param_decl: "param" VAR_NAME type_ann? (EQ expr)?
+```
+
+`param` binders are root-level only and immutable (not rebindable with `set`).
+The declaration is executable: at evaluation time the runtime resolves a value
+from an external source (CLI option, config `[params.<program>]`) or evaluates
+the default expression; a `param` with no default and no external value is a
+pre-execution error.
+
+The `program` keyword names the program for external-value keying and is
+root-level only, at most once:
+
+```
+program_decl: "program" VAR_NAME
+```
 
 The `agent` keyword leads a root-level declaration production:
 

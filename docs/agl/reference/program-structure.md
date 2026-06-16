@@ -21,10 +21,16 @@ restricted to the root:
   program-wide before anything else is checked, so their order relative to
   each other and to value statements does not matter; forward references are
   fine ([Types](types.md)).
-- **Input declarations** (`input`) — see
+- **Program name declaration** (`program`) — an optional, at-most-once
+  declaration that names the program. A second `program` declaration is a
+  static error. Introduces no binding; see
+  [Bindings and scope](bindings-and-scope.md).
+- **Param declarations** (`param`) — declare the externally-supplied
+  parameters the program accepts. Each param enters the root scope as an
+  immutable binding; optional params carry a default expression. See
   [Bindings and scope](bindings-and-scope.md).
 - **Agent declarations** (`agent`) — the names of the agents the program may
-  call. Like inputs, they may appear only at the root; a declaration nested in
+  call. Like params, they may appear only at the root; a declaration nested in
   a block is a static error. See
   [Bindings and scope](bindings-and-scope.md).
 
@@ -32,7 +38,8 @@ restricted to the root:
 
 ```ebnf
 stmt ::= record_def | enum_def | type_alias        (root only)
-       | input_decl                                (root only)
+       | program_decl                              (root only; at most once)
+       | param_decl                                (root only)
        | agent_decl                                (root only)
        | let_decl | var_decl | set_stmt
        | do_until
@@ -109,8 +116,8 @@ Statements are classified by how they end:
 
 - **Closed statements** — self-contained; safe anywhere inline and may be
   followed by `;`: `let`, `var`, `set`, `pass`, `raise`, `print`, expression
-  statements, type, input, and agent declarations, and `do … until` (which is
-  right-delimited by its `until` clause).
+  statements, type, param, program, and agent declarations, and `do … until`
+  (which is right-delimited by its `until` clause).
 - **Open statements** — extend open-endedly to the right: `if`, `case`, and
   `try`. Inline, an open statement is valid only as the **last** element of a
   `do` body (where the loop's `until` seals it).

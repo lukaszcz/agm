@@ -381,8 +381,8 @@ Sandbox settings resolution:
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] (FILE \| -c COMMAND)` | Execute an AgL workflow program |
-| `agm repl [--input KEY=VALUE]... [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 ### `agm exec (FILE | -c COMMAND)`
 
@@ -391,10 +391,9 @@ program text given with `-c`/`--command`. The AgL language is documented in the
 [AgL language reference](agl/reference/index.md).
 
 ```text
-agm exec [--input KEY=VALUE]... [--strict-json|--no-strict-json]
-         [--max-iters N] [--runner COMMAND]
+agm exec [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
          [--log-file PATH|--no-log]
-         (FILE | -c COMMAND)
+         (FILE | -c COMMAND) [--PARAM VALUE]...
 ```
 
 `FILE` and `-c`/`--command` are mutually exclusive, and exactly one of them is required.
@@ -403,12 +402,18 @@ Options:
 
 - `-c COMMAND`, `--command COMMAND`: Execute the AgL program given as `COMMAND` directly,
   instead of reading the program from `FILE`.
-- `--input KEY=VALUE`: Provide a host input value (repeatable). Values for `text`-declared
-  inputs are taken verbatim; for every other declared type (`int`/`decimal`/`bool`/`json`
-  and the structured `list`/`dict`/`record`/`enum` types) the value must be **exactly one
-  bare JSON value**, parsed strictly (no fence stripping or repair) and validated against the
-  declared type's schema. A missing or undeclared input, or one that fails to parse/validate,
-  is a host invocation error reported before any agent runs.
+- `--NAME VALUE` (per-`param` options): Each `param NAME` declaration in the program
+  generates a corresponding `--NAME` CLI option. Type-specific forms:
+  - **`text`**: value taken verbatim.
+  - **`int`** / **`decimal`**: value parsed as the corresponding numeric type.
+  - **`bool`**: flag form `--NAME` / `--no-NAME` (no value argument).
+  - **`json`**, **`list`**, **`dict`**, **`record`**, **`enum`**: value must be a JSON string
+    (e.g. `--tags '["a","b"]'`); parsed and validated against the declared schema.
+  - An unknown/misspelled `--param` flag is a **hard usage error** (exit 1).
+  - A `param NAME` whose flag would collide with a built-in option (e.g. `param max_iters`)
+    is a **build-time error** telling you to rename the param.
+  - Run `agm exec FILE --help` to list the discovered `--param` options alongside the
+    standard flags.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences, prose, or
   repair). Overridable per call site with the `strict_json` call option.
 - `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers exactly
@@ -421,7 +426,7 @@ Options:
 - `--log-file PATH`: Write a structured JSONL trace log to PATH (default: auto-generated under
   `.agent-files/`).
 - `--no-log`: Disable trace logging entirely.
-- `--dry-run`: Run the full static pipeline, input validation, and contract
+- `--dry-run`: Run the full static pipeline and contract
   materialization, then stop before executing any statement (static errors exit 1; a clean
   check exits 0 with no program output).  When the check succeeds and one or more agent-call
   or `exec` sites exist, the static call-site inventory is printed to stdout:
@@ -467,13 +472,13 @@ Exit codes:
 | Code | Meaning |
 |------|---------|
 | `0` | The workflow completed successfully |
-| `1` | Pre-execution failure: unreadable file, static lex/parse/scope/typecheck diagnostics, host configuration error, or input validation failure |
+| `1` | Pre-execution failure: unreadable file, static lex/parse/scope/typecheck diagnostics, host configuration error, missing required param, or param conversion failure |
 | `2` | The workflow executed but ended with an uncaught AgL exception |
 
 Diagnostics and warnings:
 
 - Error-severity diagnostics (static lex/parse/scope/typecheck errors, host
-  configuration errors, input validation failures) and uncaught AgL exceptions
+  configuration errors, missing required params, param conversion failures) and uncaught AgL exceptions
   are printed to stderr and determine the exit code per the table above.
 - Advisory **warnings** (for example a non-exhaustive `case` over an enum that
   omits some variants) are a separate channel. They are printed to stderr with a
@@ -500,6 +505,25 @@ reviewer = "claude -p"      # per-agent runner commands; the name must be
 settings. The name `agents` is reserved for the structural `[exec.agents]` map
 and is never treated as a per-command override.
 
+Param config (`[params.<program>]` section in `config.toml`):
+
+```toml
+[params.my_workflow]
+name = "Alice"
+max_retries = 3
+tags = '["a", "b"]'   # structured types must be a JSON string
+                      # decimal values must also be quoted TOML strings
+```
+
+- **Keying**: the `<program>` key is the value of the program's `program NAME` declaration
+  (if present), otherwise the `.agl` file stem (e.g. `workflow` for `workflow.agl`).
+  Inline `-c` programs with no `program` declaration have no config table.
+- **Precedence**: CLI `--NAME` option > `[params.<program>]` config value > the param's
+  default expression (`param x: T = e`). A param with no default and no external value
+  (CLI or config) is a **missing required param** error (exit 1) before any agent runs.
+- An undeclared key in a `[params.<program>]` table is a **non-fatal warning** (the program
+  still runs).
+
 ### `agm repl`
 
 Start an interactive read-eval-print loop (REPL) for AgL. Unlike `agm exec`,
@@ -509,9 +533,8 @@ against an environment that accumulates bindings, types, and declarations across
 entries, so earlier results stay available and agent calls fire exactly once.
 
 ```text
-agm repl [--input KEY=VALUE]... [--strict-json|--no-strict-json]
-         [--max-iters N] [--runner COMMAND] [--auto-agents]
-         [--quiet] [--log-file PATH|--no-log]
+agm repl [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
+         [--auto-agents] [--quiet] [--log-file PATH|--no-log]
 ```
 
 The REPL reuses the `[exec]` configuration (runner, per-agent commands, default
@@ -535,12 +558,12 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 |---------|--------|
 | `:help` | List the available meta-commands |
 | `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
-| `:reset` | Clear the whole session (bindings, types, declarations, inputs) |
+| `:reset` | Clear the whole session (bindings, types, declarations, params) |
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:agents` | List available agents and report the current agent-call mode |
-| `:inputs` | List declared inputs and their current values |
-| `:set name=value` | Supply a host input value; `:set echo on\|off` toggles echoing |
+| `:inputs` | List declared params with their resolved values |
+| `:set echo on\|off` | Toggle echoing of entry results |
 | `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
 | `:load FILE` | Run an `.agl` file's statements into the session, one per entry |
 | `:save FILE` | Write the accumulated session source to a file |
@@ -561,13 +584,22 @@ Agent-call confirmation:
 - `agm exec`-style `exec` shell calls are **not** gated in this version; only
   agent calls are confirmed.
 
+Param resolution in the REPL:
+
+There is no CLI param seeding in `agm repl`. When a `param NAME: T` declaration is entered,
+it resolves eagerly in the following order:
+
+1. `[params.<program>]` config table — active only when a `program NAME` declaration has been
+   made in the session (the `program` decl is **session-global** and can only be set once).
+   The `<program>` key matches the declared program name.
+2. The param's default expression (`param x: T = e`), evaluated at declaration time.
+3. If neither config nor a default is available, a **missing required param** error is
+   reported inline (the declaration is rejected, not the whole session).
+
+Use `:inputs` to inspect all currently declared params and their resolved values.
+
 Options:
 
-- `--input KEY=VALUE`: Pre-seed a host input value (repeatable). The value is
-  applied when the matching `input name: T` is declared in the session (or
-  immediately if it is already declared); a value that fails conversion leaves
-  the input unset rather than erroring. Inputs can also be set interactively with
-  `:set name=value`.
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent
   output (lenient recovery is the default), as for `agm exec`.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
@@ -596,7 +628,7 @@ are reported inline and never exit the process):
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a malformed `--input KEY=VALUE`, an invalid `[exec]` configuration or `--runner` command, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: an invalid `[exec]` configuration or `--runner` command, or an unwritable `--log-file` — reported before the prompt appears |
 
 Once the loop is running, a static or runtime error in an entry is printed and
 the prompt returns; it never changes the exit code.
@@ -614,8 +646,8 @@ agl> :bindings
 greeting : text = hello
 agl> :quit
 
-# Fire agent calls without confirming each one, pre-seeding an input.
-agm repl --auto-agents --input topic=haskell
+# Fire agent calls without confirming each one (params come from config/defaults).
+agm repl --auto-agents
 
 # Explore types only — no agent or exec calls fire, nothing is persisted.
 agm repl --dry-run

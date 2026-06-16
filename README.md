@@ -315,7 +315,7 @@ resolved from `[exec.agents]` (per-agent), the source runner hint, `--runner`, `
 
 ```bash
 agm exec workflow.agl
-agm exec --input name=Alice --max-iters 10 workflow.agl
+agm exec --name Alice --max-iters 10 workflow.agl   # --<param> per declared param
 agm exec -c 'print "hello"'       # run inline program text instead of a file
 agm exec --dry-run workflow.agl   # static check only — no agent calls
 ```
@@ -333,9 +333,9 @@ them immediately. Multiline editing, syntax highlighting, tab-completion, and hi
 built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
 
 ```bash
-agm repl                                    # launch; type :help for commands, :quit to exit
-agm repl --auto-agents --input topic=haskell  # no per-call confirmation, pre-seed an input
-agl> let n = 21 * 2                          # bindings persist across entries → "n : int = 42"
+agm repl                        # launch; type :help for commands, :quit to exit
+agm repl --auto-agents          # no per-call confirmation; params from config/defaults
+agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 
 See `agm help repl` and [docs/commands.md](docs/commands.md) for the full reference, and the

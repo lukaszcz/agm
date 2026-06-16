@@ -15,7 +15,7 @@ call_options ::= "[" call_option ("," call_option)* ","? "]"
 agent reviewer
 agent planner
 
-ask "Summarize ${input}"
+ask "Summarize ${content}"
 reviewer "Review this artifact:\n${artifact}"
 reviewer[on_parse_error: retry[2]] "Review this artifact:\n${artifact}"
 planner[format: json, on_parse_error: abort] "Plan the work."

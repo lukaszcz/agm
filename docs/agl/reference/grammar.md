@@ -25,7 +25,8 @@ stmt        ::= closed_stmt | open_stmt
 closed_stmt ::= record_def
               | enum_def
               | type_alias
-              | input_decl
+              | program_decl              (* root only; at most once *)
+              | param_decl               (* root only *)
               | agent_decl
               | let_decl
               | var_decl
@@ -79,7 +80,9 @@ field_inline    ::= VAR_NAME ":" type_expr
 
 type_alias      ::= "type" TYPE_NAME "=" type_expr
 
-input_decl      ::= "input" VAR_NAME (":" type_expr)?
+program_decl    ::= "program" VAR_NAME
+
+param_decl      ::= "param" VAR_NAME (":" type_expr)? ("=" expr)?
 
 agent_decl      ::= "agent" VAR_NAME ("=" STRING)?
 ```

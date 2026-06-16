@@ -3,7 +3,7 @@
 [← Index](index.md)
 
 An AgL program does not run in a vacuum: a **host** embeds the language,
-supplies the agents, provides input values, executes shell commands, and
+supplies the agents, provides external param values, executes shell commands, and
 records the trace. This chapter specifies the contract between a program and
 its host — what a program may assume, and which knobs are host-configurable.
 
@@ -15,8 +15,8 @@ A conforming host processes a program in this order:
 2. **Name resolution** — scope errors abort here.
 3. **Type checking** against the host's *capability catalog* — type errors
    abort here; warnings are collected.
-4. **Input validation** — provided inputs are checked against the program's
-   `input` declarations.
+4. **Param validation** — externally provided values are checked against the
+   program's `param` declarations.
 5. **Contract materialization** — every agent-call and `exec` site's output
    contract (codec, schema, format instructions) is built.
 6. **Execution.**
@@ -85,22 +85,26 @@ codec/type or renderer/type combination is a static error, not a runtime
 surprise. A registered renderer that declares no kind restriction accepts
 every type, like the built-ins.
 
-## Inputs
+## Params
 
-Host inputs are declared in the program with `input`
-([Bindings and scope](bindings-and-scope.md)) and provided by the host as
-named values at run start. Validation happens after type checking and
-**before any statement executes**:
+Program parameters are declared with `param`
+([Bindings and scope](bindings-and-scope.md)) and may be supplied by the
+host as named external values at run start. Validation happens after type
+checking and **before any statement executes**:
 
-- a declared input that was not provided,
-- a provided input that was not declared, and
-- a value that fails its declared type
+- a required param (no default) for which no external value is provided,
+- an external value supplied for a name that is not a declared param, and
+- an external value that fails its declared type
 
 are each **host invocation errors** — reported like static failures, not
-catchable in-language. `text` inputs are taken verbatim; every other type is
-parsed from its JSON representation **strictly** (host-supplied values are
-not chatty agent output, so no lenient recovery applies) and validated
-against the declared type.
+catchable in-language. Optional params whose external value is absent have
+their default expression evaluated at that point in declaration order before
+execution begins.
+
+`text` params take their external value verbatim. A param of any other type
+is parsed from its JSON representation **strictly** (externally supplied
+values are not chatty agent output, so no lenient recovery applies) and
+validated against the declared type.
 
 ## Host-configurable defaults
 
@@ -139,7 +143,7 @@ A run ends in one of three ways:
 
 1. **Success** — all statements executed; the host can observe the final
    root-scope bindings.
-2. **Pre-execution failure** — a static error, input-validation error, or
+2. **Pre-execution failure** — a static error, param-validation error, or
    host configuration error; nothing was executed.
 3. **Uncaught exception** — the program started and an exception reached the
    top. The host reports the exception's type name, fields, and the source

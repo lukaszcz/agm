@@ -27,7 +27,8 @@ language whose core ideas are:
 A taste of the language:
 
 ```agl
-input spec: text
+program review_workflow
+param spec: text
 
 enum Review
   | Pass
@@ -54,7 +55,7 @@ until review is Pass
 print artifact
 ```
 
-The same workflow as a one-liner (assuming `Review` and the input `spec`
+The same workflow as a one-liner (assuming `Review` and the param `spec`
 are declared):
 
 ```agl
@@ -68,7 +69,7 @@ var artifact: text = impl "Implement ${spec}"; do[5] let review: Review = review
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, identifiers, tokens, operator precedence |
 | [Program structure](program-structure.md) | Programs, statements, blocks, inline forms, the bar-safe rules |
 | [Types](types.md) | Built-in types, `record`/`enum`/`type` declarations, assignability and coercion |
-| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `set`, `input`, lexical scoping, shadowing |
+| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `set`, `param`, `program`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, field access, operators, `case` expressions, type inference |
 | [Pattern matching](pattern-matching.md) | Patterns, matching semantics, exhaustiveness |
 | [Control flow](control-flow.md) | `if`, `case` statements, `do … until` loops |
@@ -76,7 +77,7 @@ var artifact: text = impl "Implement ${spec}"; do[5] let review: Review = review
 | [Agent calls](agent-calls.md) | Calling agents, call options, output contracts, the JSON wire format, parse policies and retries |
 | [Shell execution](shell-execution.md) | The `exec` built-in, shell-safe interpolation, `ExecError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
-| [Host environment](host-environment.md) | Agents, inputs, host defaults, capability checking, tracing |
+| [Host environment](host-environment.md) | Agents, params, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |
 
 ## Notation
@@ -88,8 +89,8 @@ strings are literal tokens. Token names in `UPPER_CASE` refer to the lexical
 tokens defined in [Lexical structure](lexical-structure.md).
 
 Throughout the reference, "the host" refers to the runtime environment that
-embeds AgL: it backs the program's declared agents, supplies program inputs,
-executes shell commands, and records traces. Behavior marked *host-configurable* has a
+embeds AgL: it backs the program's declared agents, supplies external param
+values, executes shell commands, and records traces. Behavior marked *host-configurable* has a
 documented portable default that hosts may override; everything else is fixed
 by the language.
 
@@ -106,6 +107,6 @@ AgL distinguishes three failure layers:
    `AgentParseError` or `MaxIterationsExceeded`. Uncaught exceptions terminate
    the program. See [Exceptions](exceptions.md).
 
-Invalid host input (a missing or ill-typed program input) is a **host
+An invalid or missing required param value supplied by the host is a **host
 invocation error**: it is reported before anything runs and is not catchable
 in-language. See [Host environment](host-environment.md).

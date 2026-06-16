@@ -58,19 +58,39 @@ taken before eval, since `set` only updates an existing binding's value and neve
 changes the value scope's key set). Only genuinely external effects already issued
 during evaluation (agent calls, `exec` shell commands) are irreversible.
 
-**param / program (M6):** `param` declarations resolve **eagerly** at evaluation
-time — no deferred "unset" state. Resolution order: `[params.<program>]` config
-value (if a `program` decl is active) > default expression > pre-eval error. A
-`program NAME` decl is session-global, set once; entering the same name is a
-no-op, a different name rejects. Config values are converted via `convert_input`
-in a pre-eval check; a conversion failure rejects the entry cleanly (no eval,
-no agent calls). Atomic rollback covers `program` + `param` promotions: a
-failing entry restores the prior program name and config table. A
-`params_config_loader: Callable[[str], dict[str, object]]` is injected at
-construction (the `agm repl` command supplies a closure over the config context;
-tests supply fakes). `EchoInterpreter` no longer overrides `_exec_param`; it
-inherits the base implementation which uses the pre-converted `param_values`
-dict passed via constructor.
+**param / program:** `param` declarations are **executable**: `Interpreter._exec_param`
+resolves each one in declaration order at evaluation time (no deferred "unset"
+state). Resolution precedence: external value (CLI option / `[params.<program>]`
+config) > default expression > pre-execution error for required params. The
+`program NAME` declaration names the program for config keying — if absent, the
+`.agl` file stem is used instead. `WorkflowRuntime.discover_params(prepared)`
+runs typecheck on an already-`prepare`d program and returns a `ParamDiscovery`
+(program name + typed `ParamDeclInfo` tuples), giving callers the full param
+inventory before execution. External values are converted via `convert_input`
+before execution; a conversion failure is a pre-execution error (no eval, no
+agent calls).
+
+**agm exec param wiring** (`agm.commands.exec`, helpers in
+`agm.commands.param_options`): after `prepare(source)`, `discover_params` is
+called once; each declared `param` becomes a first-class CLI option via
+`parse_param_tokens` / `resolve_param_values` (bool params use `--name/--no-name`
+flag pairs; `check_param_collisions` rejects any name that clashes with a
+built-in exec flag). Config values are loaded by `load_params_config` (keyed
+by `[params.<program>]`). The resolved, type-checked program flows into
+`run_prepared` — the source is never parsed or typechecked again. `--input
+KEY=VALUE` was removed; all param supply is through per-param options and config.
+
+**REPL param / program (M6):** In the incremental REPL session, `param`
+declarations resolve eagerly at evaluation time — same precedence as above. A
+`program NAME` decl is session-global: re-entering the same name is a no-op, a
+different name rejects. Config values are converted via `convert_input` in a
+pre-eval check; a conversion failure rejects the entry cleanly. Atomic rollback
+covers `program` + `param` promotions: a failing entry restores the prior program
+name and config table. A `params_config_loader: Callable[[str], dict[str, object]]`
+is injected at construction (the `agm repl` command supplies a closure over the
+config context; tests supply fakes). `EchoInterpreter` inherits the base
+`_exec_param` implementation which uses the pre-converted `param_values` dict
+passed via constructor.
 
 The session shares the host-environment assembly, input conversion, and
 exception→`RunError` mapping with `WorkflowRuntime` via public helpers in
@@ -118,10 +138,12 @@ A declared agent backed only by the default agent is fine; a declared-but-
 uncalled agent is a non-fatal scope warning.
 
 `agm exec` (`agm.commands.exec`) wires the backings: it calls `prepare(source)`
-once, reads `PreparedProgram.declared_agents`, registers each declared name with
-a runner-backed factory, then executes via `run_prepared(prepared)` (no second
-parse). The factory command is chosen by precedence (highest to
-lowest): config `[exec.agents.<name>]`, the source runner hint, `--runner`,
+once, then `discover_params(prepared)` to obtain the typed param inventory (used
+to build per-param CLI options before execution — see *agm exec param wiring*
+above), reads `PreparedProgram.declared_agents`, registers each declared name
+with a runner-backed factory, then executes via `run_prepared(prepared)` (no
+second parse or typecheck). The factory command is chosen by precedence (highest
+to lowest): config `[exec.agents.<name>]`, the source runner hint, `--runner`,
 `[exec] runner`, `[loop] runner`, built-in `claude -p`. The default runner is
 always the floor, so every declared agent resolves and also backs `ask`.
 Runner strings (config or source hint) share the `%%` / `%{PROMPT_FILE}`

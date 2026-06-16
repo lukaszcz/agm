@@ -501,8 +501,8 @@ _HELP_TEXTS: dict[str, str] = {
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\
-        agm repl [--input KEY=VALUE]... [--strict-json|--no-strict-json]
-                 [--max-iters N] [--runner COMMAND] [--auto-agents]
+        agm repl [--strict-json|--no-strict-json] [--max-iters N]
+                 [--runner COMMAND] [--auto-agents]
                  [--quiet] [--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -512,8 +512,13 @@ _HELP_TEXTS: dict[str, str] = {
         session reuses the [exec] configuration (runner, per-agent commands,
         loop limit, JSON strictness, timeout).
 
+        Params (``param NAME: T`` declarations) resolve eagerly when entered:
+        from the [params.<program>] config table (when a ``program NAME``
+        declaration is active in the session), then from the param's default
+        expression.  There is no CLI param seeding.  Use ``:inputs`` to list
+        declared params and their resolved values.
+
         Options:
-          --input KEY=VALUE     Pre-seed a host input value (repeatable).
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
           --max-iters N         Override the default do-loop iteration limit.
@@ -533,8 +538,8 @@ _HELP_TEXTS: dict[str, str] = {
 
         Exit codes:
           0  The session ended normally (:quit / :exit / Ctrl-D).
-          1  Pre-loop setup failure: malformed --input, invalid [exec] config or
-             --runner, or an unwritable --log-file (reported before the prompt).
+          1  Pre-loop setup failure: invalid [exec] config, --runner command,
+             or an unwritable --log-file (reported before the prompt appears).
     """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]

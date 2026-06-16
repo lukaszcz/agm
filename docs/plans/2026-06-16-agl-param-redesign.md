@@ -302,10 +302,18 @@ machinery (as `loop` already does) rather than injecting dynamic Click options:
 > repo's custom help renderer; the manual route is more consistent with `loop`.
 
 ### 7.2 Help & completion
-- **Help:** extend the custom help renderer (`parser.py`,
-  `print_help_for_command_path`) so `agm exec FILE --help` (and `-c …`) prepares the
-  program and lists the discovered `--param` options (name, type, required/default).
-  With no FILE, only base options are shown. Reuse the same single-`prepare` discovery.
+- **Help:** `agm exec FILE --help` must list the discovered `--param` options (name,
+  type, required/default); with no FILE, only base options are shown. Reuse the same
+  single typed-discovery (§6.7).
+  - **Wiring caveat:** the generic help path is insufficient on its own. The shared
+    `--help` callback (`cli.py:_print_context_help`) and `print_help_for_command_path`
+    receive only the **command path** — not `FILE`, `-c`, or `ctx.args` — so they
+    cannot discover params. So exec needs help handling that has access to the argv:
+    either give `exec_cmd` its own eager `--help` (a callback that reads the already
+    parsed `FILE`/`-c`/`ctx.args`, runs discovery, and renders base + param options
+    before the generic callback exits), or extend `print_help_for_command_path` to
+    accept the optional discovered-param list and have `exec_cmd` feed it. Plain base
+    options still render via the existing path when no FILE/`-c` is present.
 - **Completion (`completion.py`):** add an exec completer that locates `FILE` in the
   current argv, prepares it, and offers the `--param` option names (alongside the
   existing `complete_agl_file`).

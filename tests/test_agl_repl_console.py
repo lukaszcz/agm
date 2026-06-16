@@ -302,6 +302,23 @@ class TestLexer:
         styles = {style for style, _text in fragments}
         assert "class:agl.string" in styles
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            'x = "hi"',
+            "x = 'hi'",
+            'ask "q"',
+            'x = "a" + "b"',
+            'x = ""',
+        ],
+    )
+    def test_closed_string_is_not_duplicated(self, line: str) -> None:
+        # Regression: the closing quote of a string used to be covered by both
+        # the STRING_FRAGMENT and TEMPLATE_END spans, so the highlighter rendered
+        # it twice. The styled fragments must reconstruct the line exactly.
+        fragments = AglPromptLexer().lex_document(Document(line))(0)
+        assert "".join(text for _style, text in fragments) == line
+
     def test_out_of_range_line_does_not_crash(self) -> None:
         lexer = AglPromptLexer()
         getter = lexer.lex_document(Document("let x = 1"))

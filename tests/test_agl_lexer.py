@@ -1257,6 +1257,28 @@ class TestTripleTemplatePositions:
         ]
         assert starts == sorted(starts)
 
+    def test_single_template_fragment_does_not_overlap_closing_quote(self) -> None:
+        # Regression: STRING_FRAGMENT's end_pos used to span the closing quote
+        # (it was emitted after consuming the quote), overlapping TEMPLATE_END
+        # and duplicating the quote in span consumers like the REPL highlighter.
+        for source in ('x = "hi"', "x = 'hi'", 'f("a" + "b")'):
+            spanned = [
+                t
+                for t in tokenize(source)
+                if t.start_pos is not None
+                and t.end_pos is not None
+                and t.end_pos > t.start_pos
+            ]
+            ends = sorted(spanned, key=lambda t: t.start_pos)
+            for prev, nxt in zip(ends, ends[1:]):
+                assert prev.end_pos <= nxt.start_pos, (
+                    f"overlap in {source!r}: {prev.type} {prev.value!r} "
+                    f"[{prev.start_pos},{prev.end_pos}) overlaps "
+                    f"{nxt.type} {nxt.value!r} [{nxt.start_pos},{nxt.end_pos})"
+                )
+            frag = next(t for t in tokenize(source) if t.type == "STRING_FRAGMENT")
+            assert frag.end_pos == frag.start_pos + len(frag.value)
+
     def test_layout_tokens_have_positions(self) -> None:
         # _NEWLINE/_INDENT/_DEDENT must all carry concrete positions.
         source = "a\n  b\nc"

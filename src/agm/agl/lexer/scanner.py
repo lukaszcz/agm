@@ -406,8 +406,10 @@ class _Scanner:
                 raise LexError("Unterminated string literal", span=span)
             ch = self._peek()
             if ch == quote:
-                # End of template
-                self._advance()
+                # End of template. Emit the literal fragment *before* consuming
+                # the closing quote so its end_pos stops at the quote instead of
+                # spanning it; an overlap would otherwise duplicate the quote in
+                # span consumers such as the REPL syntax highlighter.
                 yield self._make_token(
                     STRING_FRAGMENT,
                     "".join(buf),
@@ -415,8 +417,10 @@ class _Scanner:
                     frag_start_line,
                     frag_start_col,
                 )
+                quote_pos, quote_line, quote_col = self._pos, self._line, self._col
+                self._advance()
                 yield self._make_token(
-                    TEMPLATE_END, quote, self._pos - 1, self._line, self._col - 1
+                    TEMPLATE_END, quote, quote_pos, quote_line, quote_col
                 )
                 return
             if ch == "\n":

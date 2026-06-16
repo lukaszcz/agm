@@ -2635,3 +2635,93 @@ class TestExecParamConfigWiring:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_for_config(agl_file))
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# UX fix: program param option placed before FILE gives a clear usage error
+# ---------------------------------------------------------------------------
+
+
+class TestExecParamOptionBeforeFile:
+    """When a program --param option is placed BEFORE the FILE argument, Click's
+    ignore_unknown_options mis-binds the option token to the FILE positional.
+    The exec command must detect this and emit a clear usage error (exit 1)
+    that mentions the offending token and the required ordering, instead of the
+    cryptic OS 'cannot read --name: No such file or directory' message.
+    """
+
+    def test_param_before_file_exits_1(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """A program param option before FILE causes a usage error (exit 1)."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("param name\nprint name\n")
+
+        result = invoke(runner, ["exec", "--name", "Alice", str(agl_file)])
+        assert result.exit_code == 1
+        # exec.run must NOT be reached; the CLI layer rejects before dispatching.
+        assert recorded_runs == []
+
+    def test_param_before_file_mentions_offending_token(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """The error message mentions the offending option token."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("param name\nprint name\n")
+
+        result = invoke(runner, ["exec", "--name", "Alice", str(agl_file)])
+        assert "--name" in result.output
+
+    def test_param_before_file_mentions_ordering(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """The error message refers to the required FILE-first ordering."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("param name\nprint name\n")
+
+        result = invoke(runner, ["exec", "--name", "Alice", str(agl_file)])
+        # Must NOT produce the old 'cannot read' OS-level error.
+        assert "cannot read" not in result.output
+        # Must hint that param options belong after FILE.
+        assert "FILE" in result.output or "after" in result.output
+
+    def test_param_after_file_still_works(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """Normal usage (param AFTER FILE) still reaches exec.run unimpeded."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("param name\nprint name\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--name", "Alice"])
+        assert result.exit_code == 0
+        assert len(recorded_runs) == 1
+        args = recorded_runs[0]
+        assert "--name" in getattr(args, "param_tokens")
+        assert "Alice" in getattr(args, "param_tokens")
+
+    def test_builtin_option_before_file_still_works(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        """Built-in options (e.g. --max-iters) before FILE continue to work."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = invoke(runner, ["exec", "--max-iters", "3", str(agl_file)])
+        assert result.exit_code == 0
+        assert len(recorded_runs) == 1
+        args = recorded_runs[0]
+        assert getattr(args, "max_iters") == 3
+
+    def test_inline_command_form_no_file_unaffected(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        """-c/--command inline form without extra param tokens is not affected by the guard."""
+        # The guard only triggers when file starts with '--' and command is None.
+        # With -c set and no FILE, file is None, so the guard is never reached.
+        result = invoke(runner, ["exec", "-c", 'print "hi"'])
+        assert result.exit_code == 0
+        assert len(recorded_runs) == 1
+        # exec.run is reached; the clear guard path (file starts with '--') is NOT triggered.
+        args = recorded_runs[0]
+        assert getattr(args, "file") is None
+        assert getattr(args, "command") is not None

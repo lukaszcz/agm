@@ -899,6 +899,18 @@ def exec_cmd(
         effective_file = None if file in ("--help", "-h") else file
         _exec_print_help(file=effective_file, command=command)
     del _dry_run
+    # Under ``ignore_unknown_options``, Click binds the first unrecognised token to the
+    # positional FILE argument.  When a program ``--param`` option is placed BEFORE the
+    # FILE argument, Click assigns that option token to ``file`` instead of a real path.
+    # Detect this mis-binding early and replace the cryptic "cannot read --name" OS error
+    # with a clear, actionable usage error.  ``--help``/``-h`` are already handled above;
+    # only the program-param case (``--`` prefix, command absent) reaches here.
+    if file is not None and file.startswith("--") and command is None:
+        exit_with_usage_error(
+            ["exec"],
+            f"error: program parameter options must come after the FILE argument"
+            f" (got option '{file}' where a FILE was expected)",
+        )
     if command is not None and file is not None:
         exit_with_usage_error(
             ["exec"], "error: argument FILE not allowed with -c/--command"

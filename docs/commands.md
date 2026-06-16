@@ -409,6 +409,9 @@ Options:
   - **`bool`**: flag form `--NAME` / `--no-NAME` (no value argument).
   - **`json`**, **`list`**, **`dict`**, **`record`**, **`enum`**: value must be a JSON string
     (e.g. `--tags '["a","b"]'`); parsed and validated against the declared schema.
+  - Program `--<param>` options **must be given after the FILE argument**; built-in options
+    (`--strict-json`, `--max-iters`, etc.) may appear before or after `FILE`.  Placing a
+    program param option before `FILE` is a usage error (exit 1).
   - An unknown/misspelled `--param` flag is a **hard usage error** (exit 1).
   - A `param NAME` whose flag would collide with a built-in option (e.g. `param max_iters`)
     is a **build-time error** telling you to rename the param.

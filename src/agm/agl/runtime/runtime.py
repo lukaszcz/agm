@@ -1140,9 +1140,9 @@ def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
         codec = JsonCodec()
         # Precompute schema once (CARRY-IN 2: avoids re-derivation inside parse).
         schema = derive_schema(type_obj)
-        # Host-supplied --input values are not chatty agent output: they must be
-        # exactly one bare JSON value (F7).  Strict parsing avoids json-repair
-        # silently "fixing" user typos.
+        # Host-supplied param values (CLI option / config) are not chatty agent
+        # output: they must be exactly one bare JSON value (F7).  Strict parsing
+        # avoids json-repair silently "fixing" user typos.
         result = codec.parse(json_str, type_obj, strict_json=True, schema=schema)
         if not result.ok or result.value is None:
             raise ValueError(

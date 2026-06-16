@@ -64,12 +64,23 @@ the owner's selection. Alternatives are recorded for rationale.
 
 ### D1 — CLI parsing strategy
 - **A. Eager pre-parse → first-class options (Chosen).** Parse the program up
-  front to discover params, so each `--param` is real: appears in `--help`,
+  front to discover params, so each `--param` behaves as real: appears in `--help`,
   tab-completes, rejects unknown options. *Pro:* best UX, typo-safe. *Con:* parse
   must run before/with option resolution.
 - B. Loose pass-through (`ignore_unknown_options`, parse leftovers). *Pro:*
   simplest. *Con:* no `--help`/completion, silent typos.
 - C. Hybrid (loose now, help later). *Con:* deferred UX, two code shapes.
+
+> **"First-class" means behaviour, not Click registration.** §7.1 still uses
+> `_RUN_CONTEXT_SETTINGS` (extra-args pass-through) + a manual leftover parse rather
+> than dynamically injected `click.Option`s. This is **not** option B: B's defining
+> con is that unknown options pass silently and there is no help/completion. Option A
+> as implemented re-supplies all three properties explicitly — the leftover validator
+> (§7.1 step 2) hard-rejects unknown/misspelled `--param`, and §7.2 wires the custom
+> help renderer and completer from the same discovery. We choose the manual route
+> over native dynamic options because dynamic `click.Option` injection fights Typer
+> and the repo's custom help renderer (see the §7.1 alternative note); the manual
+> route is consistent with `loop` and still delivers A's UX contract.
 
 > Cost note: on the **execution** path this adds **zero** extra front-end work — `agm
 > exec` already calls `WorkflowRuntime.prepare(source)` once (`exec.py:121`) and

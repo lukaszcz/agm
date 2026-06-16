@@ -68,6 +68,7 @@ from agm.agl.syntax.nodes import (
     DoUntil,
     EnumDef,
     IfBranch,
+    IfExprBranch,
     IfStmt,
     InputDecl,
     InterpSegment,
@@ -650,6 +651,7 @@ class _Resolver:
             Constructor,
             DictLit,
             FieldAccess,
+            IfExpr,
             IsTest,
             ListLit,
             UnaryNeg,
@@ -671,6 +673,9 @@ class _Resolver:
             self._resolve_expr(expr.subject)
             for branch in expr.branches:
                 self._resolve_case_expr_branch(branch)
+        elif isinstance(expr, IfExpr):
+            for if_branch in expr.branches:
+                self._resolve_if_expr_branch(if_branch)
         elif isinstance(expr, Constructor):
             for arg in expr.args:
                 self._resolve_expr(arg.value)
@@ -720,6 +725,21 @@ class _Resolver:
     def _resolve_case_expr_branch(self, branch: CaseExprBranch) -> None:
         with self._child_scope(branch.node_id) as child:
             self._bind_pattern_vars(branch.pattern, child)
+            self._resolve_expr(branch.body)
+
+    def _resolve_if_expr_branch(self, branch: IfExprBranch) -> None:
+        """Resolve names in a single ``IfExprBranch``.
+
+        Mirrors ``_resolve_if_branch`` (stmt form) and
+        ``_resolve_case_expr_branch`` (case expr form): resolve the non-``else``
+        condition in the current scope, then resolve the branch body inside a
+        fresh child scope.
+        """
+        from agm.agl.syntax.nodes import ElseSentinel
+
+        if not isinstance(branch.cond, ElseSentinel):
+            self._resolve_expr(branch.cond)
+        with self._child_scope(branch.node_id):
             self._resolve_expr(branch.body)
 
 

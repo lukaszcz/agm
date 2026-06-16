@@ -52,6 +52,8 @@ from agm.agl.syntax.nodes import (
     FieldAccess,
     FieldDef,
     IfBranch,
+    IfExpr,
+    IfExprBranch,
     IfStmt,
     InputDecl,
     InterpSegment,
@@ -172,6 +174,8 @@ class Visitor:
     def visit_IsTest(self, node: IsTest) -> None: ...
     def visit_CaseExprBranch(self, node: CaseExprBranch) -> None: ...
     def visit_CaseExpr(self, node: CaseExpr) -> None: ...
+    def visit_IfExprBranch(self, node: IfExprBranch) -> None: ...
+    def visit_IfExpr(self, node: IfExpr) -> None: ...
     def visit_WildcardPattern(self, node: WildcardPattern) -> None: ...
     def visit_LiteralPattern(self, node: LiteralPattern) -> None: ...
     def visit_VarPattern(self, node: VarPattern) -> None: ...
@@ -244,6 +248,8 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         IsTest,
         CaseExprBranch,
         CaseExpr,
+        IfExprBranch,
+        IfExpr,
         WildcardPattern,
         LiteralPattern,
         VarPattern,
@@ -404,8 +410,16 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, CaseExpr):
         walk(node.subject, callback)
-        for branch in node.branches:
-            walk(branch, callback)
+        for case_expr_branch in node.branches:
+            walk(case_expr_branch, callback)
+
+    elif isinstance(node, IfExprBranch):
+        walk(node.cond, callback)
+        walk(node.body, callback)
+
+    elif isinstance(node, IfExpr):
+        for if_expr_branch in node.branches:
+            walk(if_expr_branch, callback)
 
     # --- Patterns ---
     elif isinstance(node, WildcardPattern):

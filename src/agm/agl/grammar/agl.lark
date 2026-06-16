@@ -230,7 +230,7 @@ do_tail: if_stmt | case_stmt | try_stmt
 // if_stmt (open_stmt)
 // ---------------------------------------------------------------------------
 
-if_stmt: "if" if_branch (PIPE if_branch)*
+if_stmt: "if" PIPE? if_branch (PIPE if_branch)*
 
 if_branch: bar_expr ARROW branch_body     -> if_cond_branch
          | "else" ARROW branch_body       -> if_else_branch
@@ -275,14 +275,21 @@ suite: _INDENT block_stmts _DEDENT
 // Expressions
 // ---------------------------------------------------------------------------
 
-// ?expr — general form; admits bare case_expr.
-?expr: case_expr | or_expr
+// ?expr — general form; admits bare case_expr and if_expr.
+?expr: case_expr | if_expr | or_expr
 
 // case_expr: "case" expr "of" ("|" case_expr_branch)+
 // Arm RHS is bar_expr (bar-safe by construction).
 case_expr: "case" expr "of" (PIPE case_expr_branch)+
 
 case_expr_branch: pattern ARROW bar_expr
+
+// if_expr: "if" PIPE? if_expr_branch ("|" if_expr_branch)*
+// Arm RHS is bar_expr (bar-safe by construction).
+if_expr: "if" PIPE? if_expr_branch (PIPE if_expr_branch)*
+
+if_expr_branch: bar_expr ARROW bar_expr   -> if_expr_cond_branch
+              | "else" ARROW bar_expr      -> if_expr_else_branch
 
 // ?bar_expr — bar-safe alias for or_expr.
 // A case_expr in a bar-safe position must be parenthesized (re-enters via

@@ -55,6 +55,8 @@ from agm.agl.syntax import (
     FieldAccess,
     FieldDef,
     IfBranch,
+    IfExpr,
+    IfExprBranch,
     IfStmt,
     InputDecl,
     InterpSegment,
@@ -3188,13 +3190,13 @@ class TestInlineCompoundDiagnostics:
         )
         assert err.source_span.start_line == 6
 
-    def test_if_in_expression_position_suite_guidance(self) -> None:
-        """``if`` where an expression is expected → suite guidance (no expr form)."""
-        err = self._error("let x = if true => 1 | else => 2")
-        assert str(err) == (
-            "`if` is not allowed inline here; "
-            "write it as an indented block instead."
-        )
+    def test_if_in_expression_position_now_valid(self) -> None:
+        """``if`` in an expression position is now valid (if_expr form)."""
+        # Since if_expr was added, `let x = if cond => 1 | else => 2` parses
+        # as a LetDecl whose value is an IfExpr — not a syntax error.
+        stmt = _parse_one("let x = if true => 1 | else => 2")
+        assert isinstance(stmt, LetDecl)
+        assert isinstance(stmt.value, IfExpr)
 
     def test_try_in_expression_position_suite_guidance(self) -> None:
         """``try`` where an expression is expected → suite guidance (no expr form)."""
@@ -3318,3 +3320,217 @@ class TestIsIncompleteSource:
     )
     def test_complete_or_erroring_sources(self, source: str) -> None:
         assert is_incomplete_source(source) is False
+
+
+# ---------------------------------------------------------------------------
+# if_stmt optional leading pipe
+# ---------------------------------------------------------------------------
+
+
+class TestIfStmtLeadingPipe:
+    def test_leading_pipe_two_branches_same_as_no_pipe(self) -> None:
+        """if | A => B | else => C parses to same IfStmt as if A => B | else => C."""
+        src_pipe = "if | true => pass | else => pass"
+        src_no_pipe = "if true => pass | else => pass"
+        stmt_pipe = _parse_one(src_pipe)
+        stmt_no_pipe = _parse_one(src_no_pipe)
+        assert isinstance(stmt_pipe, IfStmt)
+        assert isinstance(stmt_no_pipe, IfStmt)
+        # Structural equality ignores span/node_id (compare=False)
+        assert stmt_pipe == stmt_no_pipe
+
+    def test_leading_pipe_single_branch(self) -> None:
+        """Single-branch if with leading pipe: if | A => B."""
+        src = "if | x => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 1
+        assert isinstance(stmt.branches[0].cond, VarRef)
+
+    def test_leading_pipe_three_branches(self) -> None:
+        """Three-branch if with leading pipe."""
+        src = "if | a => pass | b => pass | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 3
+        assert stmt.branches[2].cond is ELSE
+
+    def test_leading_pipe_multiline(self) -> None:
+        """Leading pipe on its own line (layout continuation)."""
+        src = "if\n| cond => pass\n| else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        assert len(stmt.branches) == 2
+        assert stmt.branches[1].cond is ELSE
+
+    def test_else_not_last_with_leading_pipe_rejected(self) -> None:
+        """else-not-last is a syntax error even with leading pipe."""
+        src = "let k = 1\nif | else => pass\n| k = 1 => pass"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        assert "else" in str(exc_info.value).lower()
+
+
+# ---------------------------------------------------------------------------
+# if_expr
+# ---------------------------------------------------------------------------
+
+
+class TestIfExpr:
+    def test_if_expr_in_let_binding(self) -> None:
+        """let x = if A => 1 | else => 2 produces LetDecl with IfExpr."""
+        src = "let x = if a => 1 | else => 2"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        ie = stmt.value
+        assert isinstance(ie, IfExpr)
+        assert len(ie.branches) == 2
+        b0, b1 = ie.branches
+        assert isinstance(b0, IfExprBranch)
+        assert isinstance(b0.cond, VarRef)
+        assert b0.cond.name == "a"
+        assert isinstance(b0.body, IntLit)
+        assert b0.body.value == 1
+        assert isinstance(b1, IfExprBranch)
+        assert b1.cond is ELSE
+        assert isinstance(b1.body, IntLit)
+        assert b1.body.value == 2
+
+    def test_if_expr_with_leading_pipe(self) -> None:
+        """print (if | A => 1 | else => 2) uses parenthesized if_expr."""
+        src = "print (if | a => 1 | else => 2)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, PrintStmt)
+        ie = stmt.value
+        assert isinstance(ie, IfExpr)
+        assert len(ie.branches) == 2
+
+    def test_bare_if_expr_in_print(self) -> None:
+        """bare print if A => 1 | else => 2 is legal (print takes general expr)."""
+        src = "print if a => 1 | else => 2"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, PrintStmt)
+        assert isinstance(stmt.value, IfExpr)
+
+    def test_if_expr_nested_in_list(self) -> None:
+        """if_expr nested inside a list literal."""
+        src = "let xs = [if a => 1 | else => 2, 3]"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        lst = stmt.value
+        assert isinstance(lst, ListLit)
+        assert isinstance(lst.elements[0], IfExpr)
+
+    def test_if_expr_nested_in_interpolation(self) -> None:
+        """if_expr nested inside a template interpolation."""
+        src = 'let s = "${if a => 1 | else => 2}"'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        tmpl = stmt.value
+        assert isinstance(tmpl, Template)
+        seg = tmpl.segments[0]
+        assert isinstance(seg, InterpSegment)
+        assert isinstance(seg.expr, IfExpr)
+
+    def test_if_expr_nested_in_dict(self) -> None:
+        """if_expr nested as a dict value."""
+        src = 'let d = {"k": if a => 1 | else => 2}'
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        dct = stmt.value
+        assert isinstance(dct, DictLit)
+        assert len(dct.entries) == 1
+        entry = dct.entries[0]
+        ie = entry.value
+        assert isinstance(ie, IfExpr)
+        assert len(ie.branches) == 2
+        b0, b1 = ie.branches
+        assert isinstance(b0, IfExprBranch)
+        assert isinstance(b0.cond, VarRef)
+        assert b0.cond.name == "a"
+        assert isinstance(b0.body, IntLit)
+        assert b0.body.value == 1
+        assert isinstance(b1, IfExprBranch)
+        assert b1.cond is ELSE
+        assert isinstance(b1.body, IntLit)
+        assert b1.body.value == 2
+
+    def test_if_expr_in_bar_safe_condition_requires_parens(self) -> None:
+        """Unparenthesized if_expr as an if condition (bar-safe) is a syntax error."""
+        # An if_expr used as the condition of an if_stmt branch body is bar-safe.
+        # The condition itself is bar_expr which does NOT admit if_expr.
+        src = "if if a => true | else => false => pass"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_if_expr_parenthesized_in_bar_safe_position_ok(self) -> None:
+        """Parenthesized if_expr as condition of if_stmt is accepted."""
+        src = "if (if a => true | else => false) => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        cond = stmt.branches[0].cond
+        assert isinstance(cond, IfExpr)
+
+    def test_if_expr_in_branch_body_requires_parens(self) -> None:
+        """Unparenthesized if_expr as a branch body (bar-safe) is a syntax error."""
+        src = "if ok => if a => 1 | else => 2"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_if_expr_parenthesized_in_branch_body_ok(self) -> None:
+        """Parenthesized if_expr in a branch body is accepted."""
+        src = "if ok => let x = (if a => 1 | else => 2) | else => pass"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, IfStmt)
+        b0 = stmt.branches[0]
+        inner = b0.body[0]
+        assert isinstance(inner, LetDecl)
+        assert isinstance(inner.value, IfExpr)
+
+    def test_if_expr_else_not_last_rejected(self) -> None:
+        """else-not-last in if_expr is a syntax error."""
+        src = "let x = if else => 1 | a => 2"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(src)
+        assert "else" in str(exc_info.value).lower()
+
+    def test_if_expr_with_leading_pipe_branches(self) -> None:
+        """if_expr with leading pipe: let x = if | a => 1 | else => 2."""
+        src = "let x = if | a => 1 | else => 2"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        ie = stmt.value
+        assert isinstance(ie, IfExpr)
+        assert len(ie.branches) == 2
+
+    def test_if_expr_ast_structure(self) -> None:
+        """Transformer produces correct IfExpr/IfExprBranch AST shape."""
+        src = "let x = if cond => 10 | else => 20"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, LetDecl)
+        ie = stmt.value
+        assert isinstance(ie, IfExpr)
+        assert len(ie.branches) == 2
+        cond_branch, else_branch = ie.branches
+        assert isinstance(cond_branch, IfExprBranch)
+        assert isinstance(cond_branch.cond, VarRef)
+        assert cond_branch.cond.name == "cond"
+        assert isinstance(cond_branch.body, IntLit)
+        assert cond_branch.body.value == 10
+        assert isinstance(else_branch, IfExprBranch)
+        assert else_branch.cond is ELSE
+        assert isinstance(else_branch.body, IntLit)
+        assert else_branch.body.value == 20
+
+    def test_if_expr_in_until_condition_requires_parens(self) -> None:
+        """Unparenthesized if_expr after 'until' is a syntax error (bar-safe)."""
+        src = "do pass until if a => true | else => false"
+        with pytest.raises(AglSyntaxError):
+            parse_program(src)
+
+    def test_if_expr_parenthesized_after_until_ok(self) -> None:
+        """Parenthesized if_expr after 'until' is accepted."""
+        src = "do pass until (if a => true | else => false)"
+        stmt = _parse_one(src)
+        assert isinstance(stmt, DoUntil)
+        assert isinstance(stmt.condition, IfExpr)

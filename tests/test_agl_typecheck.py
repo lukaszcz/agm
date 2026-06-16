@@ -3453,3 +3453,79 @@ class TestSeedEnvSeam:
         assert isinstance(bt, RecordType) and bt.name == "R"
 
 
+# ---------------------------------------------------------------------------
+# if-expression type-checking (IfExpr)
+# ---------------------------------------------------------------------------
+
+
+class TestIfExprTypecheck:
+    """Type-checking rules for ``IfExpr`` (if … => expr | else => expr)."""
+
+    def test_if_expr_no_else_rejected(self) -> None:
+        """An if-expression without an else branch must be rejected."""
+        err = reject_type("let b = true\nlet x = if b => 1\n")
+        assert "else" in err.to_diagnostic().message
+
+    def test_if_expr_non_bool_condition_rejected(self) -> None:
+        """A non-bool condition in an if-expression must be rejected."""
+        err = reject_type("let x = if 1 => 2 | else => 3\n")
+        assert "'if' condition" in err.to_diagnostic().message
+        assert "bool" in err.to_diagnostic().message
+
+    def test_if_expr_branch_type_mismatch_rejected(self) -> None:
+        """Branches with incompatible types must be rejected."""
+        err = reject_type('let b = true\nlet x = if b => 1 | else => "text"\n')
+        assert "incompatible" in err.to_diagnostic().message
+
+    def test_if_expr_int_decimal_widens_to_decimal(self) -> None:
+        """int and decimal branches must widen to decimal."""
+        r = accept_type("let b = true\nlet x = if b => 1 | else => 2.0\n")
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        from agm.agl.syntax.nodes import IfExpr
+
+        assert isinstance(decl.value, IfExpr)
+        assert r.node_types[decl.value.node_id] == DecimalType()
+
+    def test_if_expr_decimal_int_widens_to_decimal(self) -> None:
+        """decimal first, then int — result is still decimal (regression guard)."""
+        r = accept_type("let b = true\nlet x = if b => 2.0 | else => 1\n")
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        from agm.agl.syntax.nodes import IfExpr
+
+        assert isinstance(decl.value, IfExpr)
+        assert r.node_types[decl.value.node_id] == DecimalType()
+
+    def test_if_expr_same_type_branches_accepted(self) -> None:
+        """Two int branches — result is int."""
+        r = accept_type("let b = true\nlet x = if b => 1 | else => 2\n")
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        from agm.agl.syntax.nodes import IfExpr
+
+        assert isinstance(decl.value, IfExpr)
+        assert r.node_types[decl.value.node_id] == IntType()
+
+    def test_if_expr_bool_condition_accepted(self) -> None:
+        """A bool condition in an if-expression must be accepted."""
+        r = accept_type("let b = true\nlet x = if b => 1 | else => 2\n")
+        assert r.resolved.program is not None
+
+    def test_if_expr_annotation_widening_boundary(self) -> None:
+        """Widening to decimal materialises at the binding boundary.
+
+        ``let x: decimal = if b => 1 | else => 2`` — branches are int, the
+        if-expression's own type is int, but the binding annotation forces
+        widening via coercion at the boundary.
+        """
+        r = accept_type("let b = true\nlet x: decimal = if b => 1 | else => 2\n")
+        decl = r.resolved.program.body[1]
+        assert isinstance(decl, LetDecl)
+        from agm.agl.syntax.nodes import IfExpr
+
+        assert isinstance(decl.value, IfExpr)
+        # The if-expression's own node type is int (branches are int).
+        assert r.node_types[decl.value.node_id] == IntType()
+
+

@@ -52,7 +52,7 @@ from agm.config.general import load_exec_config, parse_timeout
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
 from agm.core.fs import read_text_arg
-from agm.core.log import prepare_trace_log, resolve_log_decision
+from agm.core.log import prepare_trace_log_from_layers
 
 _T = TypeVar("_T")
 
@@ -138,7 +138,8 @@ def run(args: ExecArgs) -> None:
     if dry_run.enabled():
         log_file = None
     else:
-        log_decision = resolve_log_decision(
+        log_file = prepare_trace_log_from_layers(
+            command_name="exec",
             cli_no_log=args.no_log,
             cli_log=args.log,
             cli_log_file=args.log_file,
@@ -146,11 +147,6 @@ def run(args: ExecArgs) -> None:
             pragma_log_file=pragma_log_file if isinstance(pragma_log_file, str) else None,
             config_log=config.log,
             config_log_file=config.log_file,
-        )
-        log_file = prepare_trace_log(
-            command_name="exec",
-            enabled=log_decision.enabled,
-            log_file=log_decision.explicit_path,
         )
 
     # ----------------------------------------------------------------

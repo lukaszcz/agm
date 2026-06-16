@@ -154,6 +154,16 @@ def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> Non
     exit_with_usage_error(command_path, f"error: the following arguments are required: {joined}")
 
 
+def _check_log_flags_exclusive(
+    command: str, *, no_log: bool, log: bool, log_file: str | None
+) -> None:
+    """Reject combinations of the mutually exclusive trace-logging flags."""
+    if sum([no_log, log, log_file is not None]) > 1:
+        exit_with_usage_error(
+            [command], "error: --log, --no-log, and --log-file are mutually exclusive"
+        )
+
+
 def _require_value(
     value: str | Path | None,
     *,
@@ -874,11 +884,7 @@ def exec_cmd(
         exit_with_usage_error(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
         )
-    log_flags = sum([no_log, log, log_file is not None])
-    if log_flags > 1:
-        exit_with_usage_error(
-            ["exec"], "error: --log, --no-log, and --log-file are mutually exclusive"
-        )
+    _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
     exec_command.run(
         ExecArgs(
             file=file,
@@ -951,11 +957,7 @@ def repl_cmd(
 ) -> None:
     del _help
     del _dry_run
-    log_flags = sum([no_log, log, log_file is not None])
-    if log_flags > 1:
-        exit_with_usage_error(
-            ["repl"], "error: --log, --no-log, and --log-file are mutually exclusive"
-        )
+    _check_log_flags_exclusive("repl", no_log=no_log, log=log, log_file=log_file)
     repl_command.run(
         ReplArgs(
             inputs=list(inputs) if inputs is not None else [],

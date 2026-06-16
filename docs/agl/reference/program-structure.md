@@ -131,7 +131,8 @@ print review
 A *suite* is an indented block containing any statements:
 
 ```agl
-if review is Fail =>
+if
+| review is Fail =>
   set artifact = impl "Fix ${review}"
   print "fixed"
 | else =>
@@ -162,9 +163,9 @@ Statements are classified by how they end:
   expression*.
 
 A **bar-safe expression** is any expression other than an unparenthesized
-`case` expression. In a bar-safe position a `case` expression must be wrapped
-in parentheses; everywhere else (statement level, suites, inside parentheses)
-it stays bare.
+`case` or `if` expression. In a bar-safe position a `case` or `if` expression
+must be wrapped in parentheses; everywhere else (statement level, suites,
+inside parentheses) it stays bare.
 
 The bodies, normatively:
 
@@ -186,13 +187,13 @@ catch_body   ::= suite
 
 **Bar-safe positions** — places whose next token may legally be `|` — are:
 inline `if`/`case` branch bodies, inline `catch` bodies, `if` conditions,
-`until` conditions, and `case`-expression branch results.
+`until` conditions, and `case`-expression and `if`-expression branch results.
 
 Consequences, stated as rules:
 
 1. An inline `if`/`case` branch body is a single bar-safe statement or a
    `try`; nesting another `if` or `case` on the same line requires a suite.
-2. An unparenthesized `case` expression is rejected in every bar-safe
+2. An unparenthesized `case` or `if` expression is rejected in every bar-safe
    position — including after every `until`. Parenthesize it or use a suite.
 3. An inline `catch` body is a single bar-safe statement; a handler
    containing `if`/`case`/`try` requires a suite.

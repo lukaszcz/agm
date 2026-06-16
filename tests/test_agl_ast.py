@@ -59,6 +59,8 @@ from agm.agl.syntax import (
     FieldAccess,
     FieldDef,
     IfBranch,
+    IfExpr,
+    IfExprBranch,
     IfStmt,
     InputDecl,
     InterpSegment,
@@ -845,6 +847,11 @@ class TestVisitorWalk:
         case_expr_branch = CaseExprBranch(pattern=wildcard_pat, body=null_lit, span=s, node_id=505)
         case_expr = CaseExpr(subject=var_ref, branches=(case_expr_branch,), span=s, node_id=506)
 
+        # IfExpr with a cond branch and else branch
+        if_expr_cond_branch = IfExprBranch(cond=bool_lit, body=int_lit, span=s, node_id=507)
+        if_expr_else_branch = IfExprBranch(cond=ELSE, body=null_lit, span=s, node_id=508)
+        if_expr = IfExpr(branches=(if_expr_cond_branch, if_expr_else_branch), span=s, node_id=509)
+
         # CallOptions with no policy (abort_policy embedded separately via ExprStmt)
         call_opts_none = CallOptions(
             format=None, strict_json=None, parse_policy=None, span=s, node_id=510
@@ -920,6 +927,7 @@ class TestVisitorWalk:
             node_id=651,
         )
         expr_stmt_no_policy = ExprStmt(expr=agent_call_no_policy, span=s, node_id=652)
+        expr_stmt_ie = ExprStmt(expr=if_expr, span=s, node_id=653)
 
         body = (
             record_def, enum_def, type_alias, input_decl,
@@ -928,6 +936,7 @@ class TestVisitorWalk:
             expr_stmt_agent, expr_stmt_fa, expr_stmt_bin, expr_stmt_not,
             expr_stmt_neg, expr_stmt_is, expr_stmt_ce, expr_stmt_dl,
             expr_stmt_ll, expr_stmt_dec, expr_stmt_abort, expr_stmt_no_policy,
+            expr_stmt_ie,
             do_until, if_stmt, case_stmt, try_catch, raise_stmt,
         )
 
@@ -999,6 +1008,7 @@ class TestVisitorWalk:
         expr_kinds = {
             VarRef, FieldAccess, AgentCall, Constructor, NamedArg,
             BinaryOp, UnaryNot, UnaryNeg, IsTest, CaseExpr, CaseExprBranch,
+            IfExpr, IfExprBranch,
             IntLit, DecimalLit, BoolLit, NullLit, StringLit, ListLit, DictLit,
             DictEntry, Template, TextSegment, InterpSegment,
         }

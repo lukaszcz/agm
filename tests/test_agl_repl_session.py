@@ -1065,6 +1065,67 @@ class TestSnapshotOptimisation:
 
 
 # ---------------------------------------------------------------------------
+# if-expression in the REPL
+# ---------------------------------------------------------------------------
+
+
+class TestIfExpr:
+    def test_parenthesized_if_expr_echoes_value(self) -> None:
+        # A parenthesized if-expression at the prompt wraps into an ExprStmt,
+        # so _classify returns "expression" and the evaluated value is echoed.
+        s = ReplSession()
+        r = s.eval_entry("(if true => 1 | else => 2)")
+        assert r.ok
+        assert r.kind == "expression"
+        assert r.value is not None
+        assert _int(r.value) == 1
+
+    def test_parenthesized_if_expr_else_branch_taken(self) -> None:
+        # Verify the else branch is taken when the condition is false.
+        s = ReplSession()
+        r = s.eval_entry("(if false => 1 | else => 2)")
+        assert r.ok
+        assert r.kind == "expression"
+        assert r.value is not None
+        assert _int(r.value) == 2
+
+    def test_parenthesized_if_expr_leading_pipe_echoes_value(self) -> None:
+        # The leading-pipe form inside parens also works as an expression echo.
+        s = ReplSession()
+        r = s.eval_entry("(if | true => 10 | else => 20)")
+        assert r.ok
+        assert r.kind == "expression"
+        assert r.value is not None
+        assert _int(r.value) == 10
+
+    def test_bare_if_stmt_classified_as_statement(self) -> None:
+        # A bare if-statement at the prompt reduces to IfStmt (not ExprStmt),
+        # so _classify returns "statement" — no value is echoed.
+        # This mirrors the existing bare-case-statement behaviour.
+        s = ReplSession()
+        s.eval_entry("var x = 0")
+        r = s.eval_entry("if true =>\n    set x = 42\n| else =>\n    set x = 0")
+        assert r.ok
+        assert r.kind == "statement"
+        assert r.value is None
+        # The side effect was applied.
+        vals = {n: _int(v) for n, _t, v in s.bindings()}
+        assert vals["x"] == 42
+
+    def test_if_expr_in_let_binding_echoes_value(self) -> None:
+        # An if-expression used in a let binding produces a binding echo with
+        # the correct value and type.
+        s = ReplSession()
+        r = s.eval_entry("let result = if true => 7 | else => 3")
+        assert r.ok
+        assert r.kind == "binding"
+        assert r.name == "result"
+        assert r.value is not None
+        assert _int(r.value) == 7
+        assert isinstance(r.value_type, IntType)
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

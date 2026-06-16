@@ -1308,14 +1308,38 @@ class AstBuilder(Transformer):
 
     def if_stmt(self, meta: Meta, args: _Args) -> syntax.IfStmt:
         branches = tuple(a for a in args if isinstance(a, syntax.IfBranch))
-        # Validate: else must be last
-        for i, b in enumerate(branches):
-            if b.cond is ELSE and i < len(branches) - 1:
-                raise AglSyntaxError(
-                    "'else' branch must be the last branch in an if statement.",
-                    span=b.span,
-                )
+        _validate_else_last(branches, construct="statement")
         return syntax.IfStmt(
+            branches=branches,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # M3: if_expr
+    # ------------------------------------------------------------------
+
+    def if_expr_cond_branch(self, meta: Meta, args: _Args) -> syntax.IfExprBranch:
+        # Grammar: bar_expr ARROW bar_expr
+        # After transformation: [Expr, Expr] (ARROW token is filtered)
+        cond = cast(syntax.Expr, args[0])
+        body = _find_expr(args[1:])
+        return syntax.IfExprBranch(
+            cond=cond, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def if_expr_else_branch(self, meta: Meta, args: _Args) -> syntax.IfExprBranch:
+        # Grammar: "else" ARROW bar_expr
+        body = _find_expr(args)
+        return syntax.IfExprBranch(
+            cond=ELSE, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def if_expr(self, meta: Meta, args: _Args) -> syntax.IfExpr:
+        branches = tuple(a for a in args if isinstance(a, syntax.IfExprBranch))
+        _validate_else_last(branches, construct="expression")
+        return syntax.IfExpr(
             branches=branches,
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
@@ -1760,6 +1784,25 @@ def _find_branch_body(args: _Args) -> tuple[syntax.Stmt, ...]:
     stmts = next((a for a in args if isinstance(a, tuple)), None)
     assert stmts is not None, "_find_branch_body: no tuple found in args"
     return cast(tuple[syntax.Stmt, ...], stmts)
+
+
+def _validate_else_last(
+    branches: tuple[syntax.IfBranch | syntax.IfExprBranch, ...],
+    *,
+    construct: str,
+) -> None:
+    """Raise AglSyntaxError if an else branch is not the last in *branches*.
+
+    Works for both ``IfBranch`` (statement) and ``IfExprBranch`` (expression)
+    since both have ``.cond`` and ``.span``.  *construct* is ``"statement"`` or
+    ``"expression"`` — used in the error message so it reads naturally.
+    """
+    for i, b in enumerate(branches):
+        if b.cond is ELSE and i < len(branches) - 1:
+            raise AglSyntaxError(
+                f"'else' branch must be the last branch in an if {construct}.",
+                span=b.span,
+            )
 
 
 # ---------------------------------------------------------------------------

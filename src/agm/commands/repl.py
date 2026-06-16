@@ -35,7 +35,7 @@ from agm.config.context import current_config_context
 from agm.config.general import load_exec_config
 from agm.core import dry_run
 from agm.core.cli_helpers import parse_inputs
-from agm.core.log import prepare_trace_log, resolve_log_decision
+from agm.core.log import prepare_trace_log_from_layers
 
 
 def run(args: ReplArgs) -> None:
@@ -118,24 +118,18 @@ def _resolve_trace_path(
 ) -> Path | None:
     """Resolve + validate the JSONL trace path, or ``None`` (dry-run / disabled).
 
-    Mirrors ``agm exec`` via the shared :func:`prepare_trace_log`: ``--dry-run``
-    writes no trace; otherwise the path is resolved and validated up front so an
-    unwritable ``--log-file`` exits 1 BEFORE the loop starts rather than crashing
-    mid-session.  Pragma inputs are None for now (Part A; wired in Milestone 3).
+    Mirrors ``agm exec`` via the shared :func:`prepare_trace_log_from_layers`:
+    ``--dry-run`` writes no trace; otherwise the path is resolved and validated
+    up front so an unwritable ``--log-file`` exits 1 BEFORE the loop starts
+    rather than crashing mid-session.
     """
     if dry_run.enabled():
         return None
-    log_decision = resolve_log_decision(
+    return prepare_trace_log_from_layers(
+        command_name="repl",
         cli_no_log=args.no_log,
         cli_log=args.log,
         cli_log_file=args.log_file,
-        pragma_log=None,
-        pragma_log_file=None,
         config_log=config_log,
         config_log_file=config_log_file,
-    )
-    return prepare_trace_log(
-        command_name="repl",
-        enabled=log_decision.enabled,
-        log_file=log_decision.explicit_path,
     )

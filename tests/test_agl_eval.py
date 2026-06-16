@@ -21,6 +21,7 @@ import pytest
 
 from agm.agl import WorkflowRuntime
 from agm.agl.eval.scope import Scope
+from agm.agl.eval.values import DecimalValue, IntValue
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.runtime import RunResult
@@ -197,6 +198,18 @@ def _case_expr(subject: Expr, *branches: ast.CaseExprBranch) -> ast.CaseExpr:
 
 def _case_expr_branch(pattern: Pattern, body: Expr) -> ast.CaseExprBranch:
     return ast.CaseExprBranch(pattern=pattern, body=body, span=_sp(), node_id=_nid())
+
+
+def _if_expr(*branches: ast.IfExprBranch) -> ast.IfExpr:
+    return ast.IfExpr(branches=tuple(branches), span=_sp(), node_id=_nid())
+
+
+def _if_expr_branch(cond: Expr, body: Expr) -> ast.IfExprBranch:
+    return ast.IfExprBranch(cond=cond, body=body, span=_sp(), node_id=_nid())
+
+
+def _if_expr_else(body: Expr) -> ast.IfExprBranch:
+    return ast.IfExprBranch(cond=ast.ELSE, body=body, span=_sp(), node_id=_nid())
 
 
 # --- pattern builders ------------------------------------------------------
@@ -5024,3 +5037,124 @@ class TestScopeRedefinition:
         assert b.mutable is False
         # No duplicate binding lingers — exactly one entry for the name.
         assert list(scope.bindings) == ["x"]
+
+
+# ---------------------------------------------------------------------------
+# IfExpr evaluation
+# ---------------------------------------------------------------------------
+
+
+class TestIfExprEval:
+    """Evaluator tests for the ``if``-expression (``IfExpr`` AST node).
+
+    The type checker has already proven that every ``if``-expression has an
+    ``else`` branch and all conditions are ``bool``, so the interpreter can
+    trust those invariants and just evaluate branches left-to-right.
+    """
+
+    # --- via source (WorkflowRuntime.run) ---
+
+    def test_if_expr_true_cond_returns_first_branch(self) -> None:
+        """``if true => 1 | else => 2`` returns 1."""
+        result = run("let x = if true => 1 | else => 2")
+        assert result.ok is True
+        assert result.bindings["x"] == IntValue(1)
+
+    def test_if_expr_false_cond_falls_through_to_else(self) -> None:
+        """When the first cond is false the else branch is taken."""
+        result = run("var c = false\nlet x = if c => 1 | else => 2")
+        assert result.ok is True
+        assert result.bindings["x"] == IntValue(2)
+
+    def test_if_expr_first_true_cond_wins_over_later_true_conds(self) -> None:
+        """With multiple conditions, the first true branch is returned."""
+        result = run(
+            "var a = false\n"
+            "var b = true\n"
+            "var c = true\n"
+            "let x = if a => 10 | b => 20 | c => 30 | else => 99"
+        )
+        assert result.ok is True
+        assert result.bindings["x"] == IntValue(20)
+
+    def test_if_expr_else_branch_taken_when_no_cond_holds(self) -> None:
+        """All false conditions → else branch value is returned."""
+        result = run(
+            "var a = false\n"
+            "var b = false\n"
+            "let x = if a => 1 | b => 2 | else => 99"
+        )
+        assert result.ok is True
+        assert result.bindings["x"] == IntValue(99)
+
+    def test_if_expr_body_can_reference_outer_binding(self) -> None:
+        """Branch body has access to outer scope bindings."""
+        result = run("let outer = 42\nlet x = if true => outer | else => 0")
+        assert result.ok is True
+        assert result.bindings["x"] == IntValue(42)
+
+    def test_if_expr_in_print_position(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """``if``-expression works in bare ``print`` position."""
+        result = run("print if true => 7 | else => 0")
+        assert result.ok is True
+        out = capsys.readouterr().out
+        assert "7" in out
+
+    def test_if_expr_in_parenthesized_print_position(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``if``-expression works in parenthesized ``print (...)`` position."""
+        result = run("print (if true => 7 | else => 0)")
+        assert result.ok is True
+        out = capsys.readouterr().out
+        assert "7" in out
+
+    def test_if_expr_widening_at_binding_boundary(self) -> None:
+        """int→decimal widening materializes at the binding boundary, not inside the if-expr.
+
+        ``let x: decimal = if c => 1 | else => 2`` stores a DecimalValue even
+        though both branches are int literals, mirroring how case_expr results
+        widen at the surrounding boundary.
+        """
+        import decimal as dec
+
+        result = run("var c = true\nlet x: decimal = if c => 1 | else => 2")
+        assert result.ok is True
+        assert result.bindings["x"] == DecimalValue(dec.Decimal(1))
+
+    def test_if_expr_in_var_rhs(self) -> None:
+        """``if``-expression works in a ``var`` RHS binding."""
+        result = run("var x = if false => 10 | else => 20")
+        assert result.ok is True
+        assert result.bindings["x"] == IntValue(20)
+
+    # --- via AST builder (for branch-scope isolation) ---
+
+    def test_if_expr_returns_chosen_branch_value(self) -> None:
+        """The evaluated value equals the body of the branch whose condition is true."""
+        # let x = if true => 1 | else => 2
+        expr = _if_expr(
+            _if_expr_branch(_bool(True), _int(1)),
+            _if_expr_else(_int(2)),
+        )
+        value = _eval_value(expr)
+        assert value == IntValue(1)
+
+    def test_if_expr_else_path_via_ast(self) -> None:
+        """AST-level: false cond causes else branch to be evaluated."""
+        expr = _if_expr(
+            _if_expr_branch(_bool(False), _int(1)),
+            _if_expr_else(_int(99)),
+        )
+        assert _eval_value(expr) == IntValue(99)
+
+    def test_if_expr_cond_evaluated_in_outer_scope(self) -> None:
+        """Conditions are evaluated in the outer scope (can see outer vars)."""
+        # var flag = true
+        # let r = if flag => 10 | else => 20
+        body = (
+            _var("flag", _bool(True), type_ann=_ty("bool")),
+            _let("r", _if_expr(_if_expr_branch(_ref("flag"), _int(10)), _if_expr_else(_int(20)))),
+        )
+        scope = _execute(body)
+        assert scope.snapshot()["r"] == IntValue(10)

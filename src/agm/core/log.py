@@ -103,6 +103,43 @@ def resolve_log_decision(
     return LogDecision(enabled=resolved_enabled, explicit_path=resolved_path)
 
 
+def prepare_trace_log_from_layers(
+    *,
+    command_name: str,
+    cli_no_log: bool,
+    cli_log: bool,
+    cli_log_file: str | None,
+    config_log: bool,
+    config_log_file: str | None,
+    pragma_log: bool | None = None,
+    pragma_log_file: str | None = None,
+) -> Path | None:
+    """Resolve the CLI/pragma/config logging decision and prepare the trace file.
+
+    Combines :func:`resolve_log_decision` with :func:`prepare_trace_log` so the
+    two commands that support the full ``--log``/``--no-log``/``--log-file`` +
+    config precedence chain (``agm exec`` and ``agm repl``) share one call site.
+    ``agm exec`` forwards the ``log``/``log_file`` config pragmas via
+    ``pragma_log``/``pragma_log_file``; ``agm repl`` rejects pragmas and leaves
+    them at their ``None`` defaults.  Callers handle the ``--dry-run``
+    short-circuit before calling.
+    """
+    decision = resolve_log_decision(
+        cli_no_log=cli_no_log,
+        cli_log=cli_log,
+        cli_log_file=cli_log_file,
+        pragma_log=pragma_log,
+        pragma_log_file=pragma_log_file,
+        config_log=config_log,
+        config_log_file=config_log_file,
+    )
+    return prepare_trace_log(
+        command_name=command_name,
+        enabled=decision.enabled,
+        log_file=decision.explicit_path,
+    )
+
+
 def resolve_log_file(
     *,
     command_name: str,

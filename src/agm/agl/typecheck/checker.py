@@ -66,6 +66,7 @@ from agm.agl.syntax.nodes import (
     ExprStmt,
     FieldAccess,
     FieldDef,
+    IfExpr,
     IfStmt,
     InputDecl,
     InterpSegment,
@@ -589,6 +590,8 @@ class _Checker:
             return self._check_is_test(expr)
         if isinstance(expr, CaseExpr):
             return self._check_case_expr(expr, expected=expected)
+        if isinstance(expr, IfExpr):
+            return self._check_if_expr(expr, expected=expected)
         if isinstance(expr, FieldAccess):
             return self._check_field_access(expr)
         if isinstance(expr, Constructor):
@@ -1085,6 +1088,40 @@ class _Checker:
                 span=span,
             )
 
+    # --- shared branch-type unification ---
+
+    def _unify_branch_types(
+        self,
+        branch_types: list[Type],
+        span: SourceSpan,
+        construct: str,
+    ) -> Type:
+        """Unify a non-empty list of branch-body types with int→decimal widening only.
+
+        ``construct`` is the human-readable name used in the error message
+        (e.g. ``"Case expression"`` or ``"If expression"``).  All types in
+        ``branch_types`` must be compatible; any pair that is not ``int``/``decimal``
+        (in either order) is rejected with an ``AglTypeError``.
+
+        Precondition: ``branch_types`` is non-empty (callers must guard on that).
+        """
+        result_type = branch_types[0]
+        for bt in branch_types[1:]:
+            if bt == result_type:
+                continue
+            # int + decimal (in either order) → widen to decimal.
+            if isinstance(result_type, IntType) and isinstance(bt, DecimalType):
+                result_type = DecimalType()
+            elif isinstance(result_type, DecimalType) and isinstance(bt, IntType):
+                pass  # already decimal; no change needed
+            else:
+                raise AglTypeError(
+                    f"{construct} branches have incompatible types: "
+                    f"'{result_type!r}' and '{bt!r}'.",
+                    span=span,
+                )
+        return result_type
+
     # --- case expression ---
 
     def _check_case_expr(self, node: CaseExpr, *, expected: Type | None) -> Type:
@@ -1101,25 +1138,33 @@ class _Checker:
         if not branch_types:
             return expected if expected is not None else TextType()
 
-        # All branches must have the same type after int→decimal widening
-        # (design §11.8: "there are no other coercions to a common type").
-        # Only int↔decimal widening is allowed; every other pair is rejected.
-        result_type = branch_types[0]
-        for bt in branch_types[1:]:
-            if bt == result_type:
-                continue
-            # int + decimal (in either order) → widen to decimal.
-            if isinstance(result_type, IntType) and isinstance(bt, DecimalType):
-                result_type = DecimalType()
-            elif isinstance(result_type, DecimalType) and isinstance(bt, IntType):
-                pass  # already decimal; no change needed
-            else:
-                raise AglTypeError(
-                    f"Case expression branches have incompatible types: "
-                    f"'{result_type!r}' and '{bt!r}'.",
-                    span=node.span,
-                )
-        return result_type
+        return self._unify_branch_types(branch_types, node.span, "Case expression")
+
+    # --- if expression ---
+
+    def _check_if_expr(self, node: IfExpr, *, expected: Type | None) -> Type:
+        """Type-check an ``IfExpr`` (if … => expr | else => expr).
+
+        Rules (design decisions §1 and §4):
+        - Each non-``else`` condition must be ``bool``.
+        - An ``else`` branch is required (makes the expression total).
+        - All branch-body types must unify via int→decimal widening only.
+        """
+        has_else = any(isinstance(b.cond, ElseSentinel) for b in node.branches)
+        if not has_else:
+            raise AglTypeError(
+                "an `if` used as an expression must have an `else` branch",
+                span=node.span,
+            )
+        branch_types: list[Type] = []
+        for branch in node.branches:
+            if not isinstance(branch.cond, ElseSentinel):
+                cond_type = self._check_expr(branch.cond, expected=None)
+                self._require_bool_condition(cond_type, branch.cond.span, "if")
+            bt = self._check_expr(branch.body, expected=expected)
+            branch_types.append(bt)
+        # branch_types is always non-empty (if_expr has ≥1 branch and else is present).
+        return self._unify_branch_types(branch_types, node.span, "If expression")
 
     # --- Field access ---
 

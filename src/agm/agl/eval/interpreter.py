@@ -281,9 +281,13 @@ class Interpreter:
         print(rendered)
         self._trace.print_stmt(rendered=rendered, span=stmt.span)
 
-    def _walk_template(self, expr: Template, scope: Scope) -> str:
-        """Walk *expr*'s segments, concatenate text segments verbatim, and
-        render interpolation segments with uniform ``render_value`` rendering.
+    def _eval_template(self, expr: Template, scope: Scope) -> str:
+        """Evaluate *expr* to a string: text segments verbatim, interpolation
+        segments rendered with uniform ``render_value`` rendering.
+
+        Used for every template context — ``prompt`` agent calls, ``exec`` shell
+        commands (no shell quoting is applied; design §4.12, §11.13), and bare
+        template expressions — since interpolation is now context-independent.
         """
         from agm.agl.runtime.render import render_value
 
@@ -432,7 +436,7 @@ class Interpreter:
             return self._eval_field_access(expr, scope)
         # Compound expressions (templates, calls, operators, …).
         if isinstance(expr, Template):
-            return self._eval_template(expr, scope)
+            return TextValue(self._eval_template(expr, scope))
         if isinstance(expr, AgentCall):
             return self._eval_agent_call(expr, scope)
         if isinstance(expr, Constructor):
@@ -501,10 +505,6 @@ class Interpreter:
             f"Field access on non-record/exception: {type(obj).__name__}"
         )
 
-    def _eval_template(self, expr: Template, scope: Scope) -> TextValue:
-        """Evaluate a template by rendering each segment and concatenating."""
-        return TextValue(self._walk_template(expr, scope))
-
     def _eval_agent_call(self, expr: AgentCall, scope: Scope) -> Value:
         """Dispatch an agent call and return the typed result."""
         from agm.agl.scope.symbols import CallKind
@@ -567,7 +567,7 @@ class Interpreter:
         from agm.agl.runtime.request import AgentRequest
 
         # Render the template once (re-used on retries per design).
-        prompt_text = self._eval_template(expr.template, scope).value
+        prompt_text = self._eval_template(expr.template, scope)
         call_span = expr.span
 
         def acquire(
@@ -748,14 +748,6 @@ class Interpreter:
             span=raise_span,  # F7: thread raise-site span for §12.6 source location
         )
 
-    def _eval_template_for_shell(self, expr: Template, scope: Scope) -> str:
-        """Render a template for use as a shell command (design §4.12, §11.13).
-
-        Each interpolated segment is rendered with uniform ``render_value``
-        rendering and inserted verbatim — no shell quoting is applied.
-        """
-        return self._walk_template(expr, scope)
-
     def _exec_shell_exec(self, expr: AgentCall, scope: Scope) -> Value:
         """Execute an ``exec`` shell call and return the typed result (§11.13).
 
@@ -773,7 +765,7 @@ class Interpreter:
         """
         from agm.core.process import run_capture_result
 
-        command = self._eval_template_for_shell(expr.template, scope)
+        command = self._eval_template(expr.template, scope)
 
         exec_span = expr.span
 
@@ -894,8 +886,8 @@ class Interpreter:
 
     def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:
         """Evaluate a record, enum-variant, or exception constructor."""
-        # Evaluate arguments.  Template expressions are handled by ``_eval_expr``
-        # (console rendering, no ``<dsl-value>`` boundary tags).
+        # Evaluate arguments.  Template expressions are handled uniformly by
+        # ``_eval_expr`` (no ``<dsl-value>`` boundary tags).
         arg_values: dict[str, Value] = {}
         for arg in expr.args:
             arg_values[arg.name] = self._eval_expr(arg.value, scope)

@@ -4707,7 +4707,7 @@ class TestExecParseErrorTraceLinkage:
 
 
 class TestShellExecTemplateInterpolation:
-    """Tests for _eval_template_for_shell interpolation path in the interpreter."""
+    """Tests for the exec shell-template interpolation path in the interpreter."""
 
     def test_exec_with_interpolated_value(self) -> None:
         """An interpolated value in exec template is inserted verbatim."""

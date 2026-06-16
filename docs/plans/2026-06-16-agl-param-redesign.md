@@ -365,9 +365,20 @@ machinery (as `loop` already does) rather than injecting dynamic Click options:
 
 - Remove `--input` and the `preset_input` loop (`repl.py:43-48,98-100`); drop
   `ReplArgs.inputs`.
-- Param resolution in a session: default expression and/or `[params.<name>]` config
-  when a `program` decl is entered; otherwise required params with no default raise
-  the standard missing-param error. (Interactive prompting is a non-goal / follow-up.)
+- Param resolution in a session, made explicit (the REPL evaluates decls
+  incrementally, so ordering matters):
+  - A `param` decl resolves **at the point it is entered**: if a `[params.<name>]`
+    config value exists it is used, else the default expression is evaluated, else (no
+    default) the standard missing-param error is raised at that decl.
+  - **`program` is session-global and resolved once.** The active program name (and
+    thus which `[params.<name>]` table applies) is set when a `program` decl is
+    entered. A param declared **before** any `program` decl resolves with **no config
+    table** (defaults/error only) — config does not retroactively apply to params
+    already bound. Re-entering a different `program` name is an error in a session
+    that already has one (mirrors the source-level at-most-once rule, D2/§6.5);
+    `reset` clears it along with the rest of session state.
+  - This replaces the old pending-input model entirely: there is no deferred/pending
+    param buffer — each decl resolves eagerly in order.
 - Confirm `ReplSession.preset_input` and related plumbing are removed or left unused
   per the above.
 

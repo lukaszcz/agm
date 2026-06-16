@@ -456,6 +456,9 @@ Maintain 100% coverage of `src/`. Do not assert exact help text.
   `host-environment.md`, `lexical-structure.md` (keyword list), `grammar.md`,
   `types.md`, `index.md` — replace `input` with `param`, document defaults and the
   `program` declaration (language-only, no implementation references).
+- `docs/agl-grammar.md`: update the keyword list and replace the `input` decl with
+  `param` (incl. defaults) and the new `program` decl — it currently documents
+  `input` and the keyword set, so it would otherwise go stale.
 - `docs/arch/agl.md`: note `param` decls are now executable (default-expr evaluation
   in declaration order) and the CLI param-option/eager-prepare flow.
 - `docs/commands.md` + `agm exec`/`agm repl` help texts: per-param options, config

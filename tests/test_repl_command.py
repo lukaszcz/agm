@@ -66,7 +66,7 @@ class TestReplArgsParsing:
         assert getattr(args, "strict_json") is None
         assert getattr(args, "max_iters") is None
         assert getattr(args, "runner") is None
-        assert getattr(args, "auto_agents") is False
+        assert getattr(args, "confirm_agents") is False
         assert getattr(args, "quiet") is False
         assert getattr(args, "no_log") is False
         assert getattr(args, "log_file") is None
@@ -102,11 +102,11 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--runner", "claude -p"]).exit_code == 0
         assert getattr(recorded_runs[0], "runner") == "claude -p"
 
-    def test_auto_agents_flag(
+    def test_confirm_agents_flag(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        assert invoke(runner, ["repl", "--auto-agents"]).exit_code == 0
-        assert getattr(recorded_runs[0], "auto_agents") is True
+        assert invoke(runner, ["repl", "--confirm-agents"]).exit_code == 0
+        assert getattr(recorded_runs[0], "confirm_agents") is True
 
     def test_quiet_flag(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -191,7 +191,7 @@ def _args(
     strict_json: bool | None = None,
     max_iters: int | None = None,
     runner: str | None = "echo agent",
-    auto_agents: bool = False,
+    confirm_agents: bool = False,
     quiet: bool = False,
     no_log: bool = False,
     log_file: str | None = None,
@@ -201,7 +201,7 @@ def _args(
         strict_json=strict_json,
         max_iters=max_iters,
         runner=runner,
-        auto_agents=auto_agents,
+        confirm_agents=confirm_agents,
         quiet=quiet,
         no_log=no_log,
         log_file=log_file,
@@ -220,7 +220,7 @@ class TestReplRun:
             strict_json=None,
             max_iters=None,
             runner="echo agent",
-            auto_agents=False,
+            confirm_agents=False,
             quiet=False,
             no_log=False,
             log_file=None,
@@ -250,7 +250,7 @@ class TestReplRun:
             strict_json=None,
             max_iters=None,
             runner="echo agent",
-            auto_agents=False,
+            confirm_agents=False,
             quiet=False,
             no_log=False,
             log_file=None,
@@ -269,7 +269,7 @@ class TestReplRun:
             strict_json=None,
             max_iters=None,
             runner="echo agent",
-            auto_agents=False,
+            confirm_agents=False,
             quiet=True,
             no_log=False,
             log_file=None,
@@ -288,7 +288,7 @@ class TestReplRun:
             strict_json=None,
             max_iters=None,
             runner='broken "quote',  # unbalanced quote → split_command raises
-            auto_agents=False,
+            confirm_agents=False,
             quiet=False,
             no_log=False,
             log_file=None,
@@ -314,7 +314,7 @@ class TestReplRun:
             strict_json=None,
             max_iters=None,
             runner=None,
-            auto_agents=False,
+            confirm_agents=False,
             quiet=False,
             no_log=False,
             log_file=None,
@@ -331,7 +331,7 @@ class TestReplRun:
 
 
 class TestReplAgentMode:
-    def test_default_mode_is_confirm(
+    def test_default_mode_is_auto(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -343,21 +343,21 @@ class TestReplAgentMode:
         from agm.agl.repl.agentmode import AgentMode
 
         assert isinstance(mode, AgentMode)
-        assert mode.mode == "confirm"
+        assert mode.mode == "auto"
 
-    def test_auto_agents_starts_in_auto(
+    def test_confirm_agents_starts_in_confirm(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(auto_agents=True))
+        repl_command.run(_args(confirm_agents=True))
         mode = fake_console[0]["agent_mode"]
         from agm.agl.repl.agentmode import AgentMode
 
         assert isinstance(mode, AgentMode)
-        assert mode.mode == "auto"
+        assert mode.mode == "confirm"
 
 
 class TestReplParamsConfigLoader:

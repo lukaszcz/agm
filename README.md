@@ -330,13 +330,13 @@ documented in the [AgL language reference](docs/agl/reference/index.md).
 Start an interactive read-eval-print loop for AgL. The REPL keeps a persistent session:
 each entry is parsed, type-checked, and evaluated once against an environment that
 accumulates bindings, types, and declarations, so earlier results stay available and agent
-calls fire exactly once. By default it confirms each live agent call; `--auto-agents` fires
-them immediately. Multiline editing, syntax highlighting, tab-completion, and history are
+calls fire exactly once. By default it fires agent calls immediately; `--confirm-agents`
+asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
 built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
 
 ```bash
 agm repl                        # launch; type :help for commands, :quit to exit
-agm repl --auto-agents          # no per-call confirmation; params from config/defaults
+agm repl --confirm-agents       # confirm each agent call; params from config/defaults
 agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 

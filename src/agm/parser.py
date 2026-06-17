@@ -508,7 +508,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json]
-                 [--max-iters N] [--runner COMMAND] [--auto-agents]
+                 [--max-iters N] [--runner COMMAND] [--confirm-agents]
                  [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -532,8 +532,8 @@ _HELP_TEXTS: dict[str, str] = {
           --no-strict-json      Use lenient JSON recovery (default).
           --max-iters N         Override the default do-loop iteration limit.
           --runner COMMAND      Override the default agent runner command.
-          --auto-agents         Fire agent calls without confirming each one
-                                (default: confirm each live agent call).
+          --confirm-agents     Confirm each agent call before dispatching it
+                                (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write a JSONL trace log to PATH.

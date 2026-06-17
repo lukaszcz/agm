@@ -225,7 +225,7 @@ class ReplArgs:
     strict_json: bool | None
     max_iters: int | None
     runner: str | None
-    auto_agents: bool
+    confirm_agents: bool
     quiet: bool
     no_log: bool
     log_file: str | None

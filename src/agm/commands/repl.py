@@ -12,7 +12,7 @@ does, builds a runner-backed agent wrapped in a confirming wrapper, constructs a
 :mod:`agm.agl.repl`.
 
 Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
-default, ``auto`` under ``--auto-agents``) is passed to BOTH the confirming
+default, ``auto``; ``confirm`` under ``--confirm-agents``) is passed to BOTH the confirming
 wrapper and the console, so the ``:agent`` meta-command, an ``always`` answer,
 and the wrapper all stay in sync.  Trace logging (``--log-file`` / ``--no-log``)
 and param config loading are wired from the same config stack as ``agm exec``.
@@ -67,8 +67,8 @@ def run(args: ReplArgs) -> None:
 
     # ONE shared agent-mode holder: passed to BOTH the confirming wrapper and the
     # console, so ``:agent``/``always`` and the wrapper observe the same mode.
-    # ``--auto-agents`` starts in ``auto``; otherwise confirm-each-call (decision 2).
-    agent_mode = AgentMode(mode="auto" if args.auto_agents else "confirm")
+    # ``--confirm-agents`` starts in ``confirm``; otherwise auto (decision 2).
+    agent_mode = AgentMode(mode="confirm" if args.confirm_agents else "auto")
 
     # Importing the console pulls in prompt_toolkit; defer it so non-interactive
     # code paths never pay for the terminal dependency.

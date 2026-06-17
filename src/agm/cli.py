@@ -972,10 +972,10 @@ def repl_cmd(
         "--runner",
         help="Override the default agent runner command.",
     ),
-    auto_agents: bool = typer.Option(
+    confirm_agents: bool = typer.Option(
         False,
-        "--auto-agents",
-        help="Fire agent calls without confirming each one.",
+        "--confirm-agents",
+        help="Confirm each agent call before dispatching it.",
     ),
     quiet: bool = typer.Option(
         False,
@@ -1013,7 +1013,7 @@ def repl_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             runner=runner,
-            auto_agents=auto_agents,
+            confirm_agents=confirm_agents,
             quiet=quiet,
             no_log=no_log,
             log_file=log_file,

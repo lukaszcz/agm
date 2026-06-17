@@ -382,7 +382,7 @@ Sandbox settings resolution:
 | Command | Description |
 |---------|-------------|
 | `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
-| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 ### `agm exec (FILE | -c COMMAND)`
 
@@ -542,7 +542,7 @@ entries, so earlier results stay available and agent calls fire exactly once.
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-iters N] [--runner COMMAND] [--auto-agents]
+         [--max-iters N] [--runner COMMAND] [--confirm-agents]
          [--quiet] [--log|--log-file PATH|--no-log]
 ```
 
@@ -583,13 +583,14 @@ bindings roll back atomically) but keeps the REPL running.
 
 Agent-call confirmation:
 
-- By default the REPL is in **confirm** mode: before every live agent call it
-  shows the callee and the rendered prompt (truncated, with a `[v]iew` option to
-  print the full text) and asks `[Y]es / [n]o / [a]lways`. `yes` runs the call,
-  `no` aborts the entry (rolling its bindings back), and `always` switches the
-  session to auto mode for the rest of the session.
-- `--auto-agents` (or `:agent auto`) starts/switches to **auto** mode, firing
-  agent calls immediately without prompting, matching `agm exec`.
+- By default the REPL is in **auto** mode: agent calls fire immediately
+  without prompting, matching `agm exec`.
+- `--confirm-agents` (or `:agent confirm`) starts/switches to **confirm**
+  mode: before every live agent call it shows the callee and the rendered
+  prompt (truncated, with a `[v]iew` option to print the full text) and asks
+  `[Y]es / [n]o / [a]lways`. `yes` runs the call, `no` aborts the entry
+  (rolling its bindings back), and `always` switches the session to auto mode
+  for the rest of the session.
 - `agm exec`-style `exec` shell calls are **not** gated in this version; only
   agent calls are confirmed.
 
@@ -599,8 +600,9 @@ Options:
   output (lenient recovery is the default), as for `agm exec`.
 - `--max-iters N`: Override the default `do`-loop iteration limit.
 - `--runner COMMAND`: Override the default agent runner command.
-- `--auto-agents`: Start in auto mode, firing agent calls without confirming
-  each one (the default is confirm-each-call; see *Agent-call confirmation*).
+- `--confirm-agents`: Start in confirm mode, asking before each agent call
+  (the default is auto, firing agent calls without confirming; see *Agent-call
+  confirmation*).
 - `--quiet`: Suppress the automatic echoing of entry results.
 - `--log`: Enable trace logging with an auto-generated timestamped path under `.agent-files/`.
   Trace logging is **off by default** for the REPL; use `--log`, `--log-file`, or
@@ -647,8 +649,8 @@ agl> :bindings
 greeting : text = hello
 agl> :quit
 
-# Fire agent calls without confirming each one.
-agm repl --auto-agents
+# Confirm each agent call before dispatching it.
+agm repl --confirm-agents
 
 # Explore types only — no agent or exec calls fire, nothing is persisted.
 agm repl --dry-run

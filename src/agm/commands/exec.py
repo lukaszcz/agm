@@ -250,12 +250,15 @@ def run(args: ExecArgs) -> None:
         checked=checked,
     )
 
+    printed_warnings = {(diag.line, diag.message, diag.severity) for diag in discovery.warnings}
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.
     # Warnings carry a ``warning:`` prefix to disambiguate them from error
     # diagnostics on the shared stderr channel (F8).
     for diag in result.warnings:
-        print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
+        warning_key = (diag.line, diag.message, diag.severity)
+        if warning_key not in printed_warnings:
+            print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
 
     if result.ok:
         # Print the static call-site inventory when running under --dry-run.

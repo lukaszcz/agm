@@ -487,6 +487,7 @@ class TestExecCommandEdgePaths:
         assert "warning:" in captured.err
         assert "Non-exhaustive" in captured.err
         assert "Fail" in captured.err
+        assert captured.err.count("warning:") == 1
 
 
 class TestExecExitCodeMapping:
@@ -2204,6 +2205,17 @@ class TestExecHelpFlag:
         assert result.exit_code == 0
         assert "--msg" in result.output
 
+    def test_help_with_ask_program_shows_params(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Param discovery for help uses exec-capable agent availability."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('param topic: text\nlet answer = ask "About ${topic as raw}"\n')
+
+        result = invoke(runner, ["exec", str(agl_file), "--help"])
+        assert result.exit_code == 0
+        assert "--topic" in result.output
+
     def test_help_syntax_error_degrades(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
@@ -2727,6 +2739,17 @@ class TestExecParamOptionBeforeFile:
         args = recorded_runs[0]
         assert getattr(args, "file") is None
         assert getattr(args, "command") is not None
+
+    def test_inline_command_param_option_reaches_exec_args(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        """``agm exec -c SOURCE --param value`` passes the param through."""
+        result = invoke(runner, ["exec", "-c", "param msg\nprint msg", "--msg", "hello"])
+        assert result.exit_code == 0
+        assert len(recorded_runs) == 1
+        args = recorded_runs[0]
+        assert getattr(args, "file") is None
+        assert getattr(args, "param_tokens") == ["--msg", "hello"]
 
 
 class TestExecLoadsMergedConfigOnce:

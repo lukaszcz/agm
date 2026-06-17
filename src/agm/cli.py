@@ -907,10 +907,15 @@ def exec_cmd(
             "error: program parameter options must come after the FILE argument"
             f" (got option '{file}' where a FILE was expected)",
         )
+    param_tokens = list(ctx.args)
     if command is not None and file is not None:
-        exit_with_usage_error(
-            ["exec"], "error: argument FILE not allowed with -c/--command"
-        )
+        if file.startswith("--"):
+            param_tokens.insert(0, file)
+            file = None
+        else:
+            exit_with_usage_error(
+                ["exec"], "error: argument FILE not allowed with -c/--command"
+            )
     if command is None and file is None:
         exit_with_usage_error(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
@@ -923,7 +928,7 @@ def exec_cmd(
         ExecArgs(
             file=file,
             command=command,
-            param_tokens=list(ctx.args),
+            param_tokens=param_tokens,
             strict_json=strict_json,
             max_iters=max_iters,
             runner=runner,

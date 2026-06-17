@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from agm.agl.runtime.request import AgentResponse
 from agm.agl.runtime.runtime import ParamDeclInfo
 from agm.agl.typecheck.types import BoolType
 
@@ -55,7 +56,9 @@ def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
         from agm.agl import WorkflowRuntime
 
         prepared = WorkflowRuntime.prepare(source)
-        discovery = WorkflowRuntime().discover_params(prepared)
+        discovery = WorkflowRuntime(
+            default_agent=lambda request: AgentResponse(content="")
+        ).discover_params(prepared)
         return discovery.params
     except (Exception, SystemExit):
         return ()

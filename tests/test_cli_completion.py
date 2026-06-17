@@ -1405,6 +1405,14 @@ class TestExecCommandShellComplete:
         # Built-in exec options are still offered alongside param options.
         assert "--runner" in result
 
+    def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
+        """Completion discovers params for normal exec programs using ``ask``."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('param topic: text\nlet answer = ask "About ${topic as raw}"\n')
+
+        result = self._complete(["exec", str(agl_file)], "--")
+        assert "--topic" in result
+
     def test_bool_param_offers_no_prefix_via_shell_complete(self, tmp_path: Path) -> None:
         """Bool params offer both ``--name`` and ``--no-name`` through shell_complete."""
         agl_file = tmp_path / "prog.agl"

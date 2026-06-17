@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from agm.agl import AglError, SourceSpan, WorkflowRuntime
+from agm.agl.diagnostics import format_diagnostic, format_diagnostic_location
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.runtime import Diagnostic, RunResult
 
@@ -435,6 +436,15 @@ class TestDiagnosticType:
         d = Diagnostic(message="some error", line=3)
         assert d.message == "some error"
         assert d.line == 3
+        assert d.column is None
+
+    def test_diagnostic_can_carry_character_range(self) -> None:
+        d = Diagnostic(message="some error", line=3, column=5, end_line=3, end_column=9)
+        assert d.column == 5
+        assert d.end_line == 3
+        assert d.end_column == 9
+        assert format_diagnostic_location(d) == "line 3:5-8"
+        assert format_diagnostic(d) == "line 3:5-8: some error"
 
     def test_diagnostic_defaults_to_error_severity(self) -> None:
         d = Diagnostic(message="some error", line=3)
@@ -499,6 +509,9 @@ class TestAglError:
         err = AglError("type error", span=span)
         diag = err.to_diagnostic()
         assert diag.line == 5
+        assert diag.column == 3
+        assert diag.end_line == 5
+        assert diag.end_column == 12
         assert "type error" in diag.message
 
     def test_agl_error_span_attribute(self) -> None:

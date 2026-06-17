@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from agm.agl.diagnostics import format_diagnostic
+
 if TYPE_CHECKING:
     from agm.agl.eval.values import Value
     from agm.agl.repl.session import EntryResult
@@ -57,7 +59,7 @@ def render_entry_result(
     # Warnings are advisory and always surfaced, on success or failure, ahead of
     # any error so the most actionable line (the error) is printed last.
     for diag in result.warnings:
-        lines.append(f"warning: line {diag.line}: {diag.message}")
+        lines.append(f"warning: {format_diagnostic(diag)}")
 
     if not result.ok:
         lines.extend(_render_failure(result))
@@ -80,7 +82,7 @@ def _render_failure(result: "EntryResult") -> list[str]:
     """
     if result.error is not None:
         return [result.error.to_message()]
-    return [f"line {diag.line}: {diag.message}" for diag in result.diagnostics]
+    return [format_diagnostic(diag) for diag in result.diagnostics]
 
 
 def _render_check_only(result: "EntryResult") -> str | None:

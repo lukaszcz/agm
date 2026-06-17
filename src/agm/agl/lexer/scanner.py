@@ -236,6 +236,9 @@ class _Scanner:
                     " use spaces for indentation"
                 ),
                 line=self._line,
+                column=col,
+                end_line=self._line,
+                end_column=col + 1,
                 severity="warning",
             )
         )

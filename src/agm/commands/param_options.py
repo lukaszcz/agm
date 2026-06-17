@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from agm.agl.diagnostics import Diagnostic, format_diagnostic
 from agm.agl.runtime.request import AgentResponse
 from agm.agl.runtime.runtime import ParamDeclInfo
 from agm.agl.typecheck.types import BoolType
@@ -72,6 +73,20 @@ def _normalize_flag(flag: str) -> str:
 _NORMALIZED_RESERVED: frozenset[str] = frozenset(_normalize_flag(f) for f in RESERVED_FLAGS)
 
 
+def _format_param_collision(param: ParamDeclInfo, flag: str) -> str:
+    """Return a formatted diagnostic for a param flag collision."""
+    return format_diagnostic(
+        Diagnostic(
+            message=(
+                f"param '{param.name}' generates flag '{flag}' which collides "
+                "with a built-in exec option; rename the param."
+            ),
+            line=param.line,
+            column=param.col,
+        )
+    )
+
+
 def check_param_collisions(params: tuple[ParamDeclInfo, ...]) -> list[str]:
     """Check for collisions between param-generated flags and reserved built-in flags.
 
@@ -84,18 +99,12 @@ def check_param_collisions(params: tuple[ParamDeclInfo, ...]) -> list[str]:
         flag = param_flag(param.name)
         norm_flag = _normalize_flag(flag)
         if flag in RESERVED_FLAGS or norm_flag in _NORMALIZED_RESERVED:
-            errors.append(
-                f"line {param.line}: param '{param.name}' generates flag '{flag}' "
-                f"which collides with a built-in exec option; rename the param."
-            )
+            errors.append(_format_param_collision(param, flag))
         if isinstance(param.type, BoolType):
             no_flag = negative_param_flag(param.name)
             norm_no_flag = _normalize_flag(no_flag)
             if no_flag in RESERVED_FLAGS or norm_no_flag in _NORMALIZED_RESERVED:
-                errors.append(
-                    f"line {param.line}: param '{param.name}' generates flag '{no_flag}' "
-                    f"which collides with a built-in exec option; rename the param."
-                )
+                errors.append(_format_param_collision(param, no_flag))
     return errors
 
 

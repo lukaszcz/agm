@@ -16,12 +16,12 @@ Usage::
         ...
     else:
         for d in result.diagnostics:
-            print(f"line {d.line}: {d.message}")
+            print(format_diagnostic(d))
 """
 
 from __future__ import annotations
 
-from agm.agl.diagnostics import AglError, Diagnostic, SourceSpan
+from agm.agl.diagnostics import AglError, Diagnostic, SourceSpan, format_diagnostic
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.runtime import (
     AgentDeclInfo,
@@ -38,6 +38,7 @@ __all__ = [
     "AglError",
     "CallSiteInfo",
     "Diagnostic",
+    "format_diagnostic",
     "PreparedProgram",
     "RunError",
     "RunResult",

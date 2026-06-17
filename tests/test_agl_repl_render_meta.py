@@ -149,17 +149,25 @@ class TestRenderEntryResult:
         result = _result(
             kind="statement",
             ok=True,
-            warnings=[Diagnostic(message="watch out", line=2)],
+            warnings=[
+                Diagnostic(
+                    message="watch out",
+                    line=2,
+                    column=5,
+                    end_line=2,
+                    end_column=10,
+                )
+            ],
         )
         rendered = render_mod.render_entry_result(result, echo=False)
-        assert rendered == "warning: line 2: watch out"
+        assert rendered == "warning: line 2:5-9: watch out"
 
     def test_pre_execution_diagnostics(self) -> None:
         result = _result(
             ok=False,
-            diagnostics=[Diagnostic(message="boom", line=1)],
+            diagnostics=[Diagnostic(message="boom", line=1, column=4)],
         )
-        assert render_mod.render_entry_result(result, echo=True) == "line 1: boom"
+        assert render_mod.render_entry_result(result, echo=True) == "line 1:4: boom"
 
     def test_runtime_error_with_location(self) -> None:
         result = _result(
@@ -193,11 +201,11 @@ class TestRenderEntryResult:
     def test_warning_then_error(self) -> None:
         result = _result(
             ok=False,
-            warnings=[Diagnostic(message="w", line=1)],
-            diagnostics=[Diagnostic(message="e", line=2)],
+            warnings=[Diagnostic(message="w", line=1, column=1)],
+            diagnostics=[Diagnostic(message="e", line=2, column=3)],
         )
         rendered = render_mod.render_entry_result(result, echo=True)
-        assert rendered == "warning: line 1: w\nline 2: e"
+        assert rendered == "warning: line 1:1: w\nline 2:3: e"
 
 
 # ---------------------------------------------------------------------------

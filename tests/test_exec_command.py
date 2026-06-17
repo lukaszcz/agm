@@ -640,7 +640,14 @@ class TestExecCommandWarnings:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        warning = Diagnostic(message="case is non-exhaustive", line=7, severity="warning")
+        warning = Diagnostic(
+            message="case is non-exhaustive",
+            line=7,
+            column=3,
+            end_line=7,
+            end_column=8,
+            severity="warning",
+        )
 
         def fake_run(
             self: WorkflowRuntime,
@@ -660,7 +667,7 @@ class TestExecCommandWarnings:
         assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
         # F8: warnings carry a ``warning:`` prefix on stderr.
-        assert "warning: line 7: case is non-exhaustive" in captured.err
+        assert "warning: line 7:3-7: case is non-exhaustive" in captured.err
 
     def test_error_diagnostic_still_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -674,6 +681,7 @@ class TestExecCommandWarnings:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "undefined_name" in captured.err
+        assert "line 1:9-22:" in captured.err
 
     def test_warning_and_error_together_exits_1_and_prints_both(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -685,8 +693,21 @@ class TestExecCommandWarnings:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        warning = Diagnostic(message="unused binding", line=2, severity="warning")
-        error = Diagnostic(message="unknown name", line=5)
+        warning = Diagnostic(
+            message="unused binding",
+            line=2,
+            column=1,
+            end_line=2,
+            end_column=4,
+            severity="warning",
+        )
+        error = Diagnostic(
+            message="unknown name",
+            line=5,
+            column=9,
+            end_line=5,
+            end_column=13,
+        )
 
         def fake_run(
             self: WorkflowRuntime,
@@ -709,9 +730,9 @@ class TestExecCommandWarnings:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         # F8: the warning carries a ``warning:`` prefix; the error does not.
-        assert "warning: line 2: unused binding" in captured.err
-        assert "line 5: unknown name" in captured.err
-        assert "warning: line 5: unknown name" not in captured.err
+        assert "warning: line 2:1-3: unused binding" in captured.err
+        assert "line 5:9-12: unknown name" in captured.err
+        assert "warning: line 5:9-12: unknown name" not in captured.err
 
 
 class TestExecParsesSourceOnce:

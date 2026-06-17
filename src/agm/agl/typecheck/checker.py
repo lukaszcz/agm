@@ -970,6 +970,9 @@ class _Checker:
                             "result never fails parsing, so the policy can never fire."
                         ),
                         line=node.span.start_line,
+                        column=node.span.start_col,
+                        end_line=node.span.end_line,
+                        end_column=node.span.end_col,
                         severity="warning",
                     )
                 )
@@ -1757,6 +1760,9 @@ class _Checker:
                     f"MatchError at runtime."
                 ),
                 line=span.start_line,
+                column=span.start_col,
+                end_line=span.end_line,
+                end_column=span.end_col,
                 severity="warning",
             )
         )

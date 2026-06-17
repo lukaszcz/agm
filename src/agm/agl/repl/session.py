@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.scope.symbols import ScopeNode
     from agm.agl.syntax.nodes import Program
+    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
     from agm.agl.typecheck.types import Type
 
@@ -444,12 +445,12 @@ class ReplSession:
 
         for item in program.body.items:
             if isinstance(item, ConfigPragma):
-                return Diagnostic(
-                    message=(
+                return diagnostic_from_span(
+                    (
                         "config pragmas are not supported in the REPL; "
                         "set options via CLI flags or the config file"
                     ),
-                    line=item.span.start_line,
+                    item.span,
                 )
         return None
 
@@ -488,8 +489,8 @@ class ReplSession:
         from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.syntax.nodes import ParamDecl, ProgramDecl
 
-        def reject(message: str, line: int) -> EntryResult:
-            return self._fail([Diagnostic(message=message, line=line)], warnings)
+        def reject(message: str, span: "SourceSpan") -> EntryResult:
+            return self._fail([diagnostic_from_span(message, span)], warnings)
 
         param_values: dict[str, Value] = {}
         entry_program_name: str | None = None
@@ -502,7 +503,7 @@ class ReplSession:
                         reject(
                             f"Program name already set to {self._program_name!r}; "
                             f"cannot redeclare as {item.name!r}. Use :reset first.",
-                            item.span.start_line,
+                            item.span,
                         ),
                         {},
                         None,
@@ -528,7 +529,7 @@ class ReplSession:
                         return (
                             reject(
                                 f"Config value for param {item.name!r} is invalid: {exc}",
-                                item.span.start_line,
+                                item.span,
                             ),
                             {},
                             None,
@@ -545,7 +546,7 @@ class ReplSession:
                         reject(
                             f"Missing required param {item.name!r}: provide it"
                             f"{prog_hint} or a default expression.",
-                            item.span.start_line,
+                            item.span,
                         ),
                         {},
                         None,

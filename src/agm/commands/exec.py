@@ -44,6 +44,7 @@ from typing import TypeVar
 
 from agm.agent.runner import split_command
 from agm.agl import WorkflowRuntime
+from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.agl.syntax.nodes import PragmaValue
 from agm.commands.agent_io import default_agent_runner
@@ -234,7 +235,7 @@ def run(args: ExecArgs) -> None:
 
     discovery = runtime.discover_params(prepared)
     for diag in discovery.warnings:
-        print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
+        print(f"warning: {format_diagnostic(diag)}", file=sys.stderr)
 
     external_params: dict[str, object] = {}
     checked = discovery.checked
@@ -285,11 +286,28 @@ def run(args: ExecArgs) -> None:
     # ``result.diagnostics`` holds only error-severity pre-execution failures.
     # Warnings carry a ``warning:`` prefix to disambiguate them from error
     # diagnostics on the shared stderr channel (F8).
-    printed_warnings = {(diag.line, diag.message, diag.severity) for diag in discovery.warnings}
+    printed_warnings = {
+        (
+            diag.line,
+            diag.column,
+            diag.end_line,
+            diag.end_column,
+            diag.message,
+            diag.severity,
+        )
+        for diag in discovery.warnings
+    }
     for diag in result.warnings:
-        warning_key = (diag.line, diag.message, diag.severity)
+        warning_key = (
+            diag.line,
+            diag.column,
+            diag.end_line,
+            diag.end_column,
+            diag.message,
+            diag.severity,
+        )
         if warning_key not in printed_warnings:
-            print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
+            print(f"warning: {format_diagnostic(diag)}", file=sys.stderr)
 
     if result.ok:
         # Print the static call-site inventory when running under --dry-run.
@@ -310,7 +328,7 @@ def run(args: ExecArgs) -> None:
     # Pre-execution failure: print error diagnostics and exit 1.
     if result.error is None:
         for diag in result.diagnostics:
-            print(f"line {diag.line}: {diag.message}", file=sys.stderr)
+            print(format_diagnostic(diag), file=sys.stderr)
         raise SystemExit(1)
 
     # Uncaught AgL exception: print and exit 2 (design §12.6: include source

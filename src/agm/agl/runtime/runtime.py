@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.runtime.agents import AgentFn
 
 if TYPE_CHECKING:
@@ -657,9 +657,9 @@ class WorkflowRuntime:
                 declared_params[item.name] = param_type
                 if item.default is None and item.name not in param_values:
                     param_errors.append(
-                        Diagnostic(
-                            message=f"Missing required param: {item.name!r}",
-                            line=item.span.start_line,
+                        diagnostic_from_span(
+                            f"Missing required param: {item.name!r}",
+                            item.span,
                         )
                     )
 
@@ -711,7 +711,7 @@ class WorkflowRuntime:
                     typed_val = convert_param_value(item.name, raw_val, param_type_obj)
                 except ValueError as exc:
                     param_bind_errors.append(
-                        Diagnostic(message=str(exc), line=item.span.start_line)
+                        diagnostic_from_span(str(exc), item.span)
                     )
                     continue
                 converted_params[item.name] = typed_val
@@ -907,6 +907,9 @@ def _reconcile_agents(
                         "default agent."
                     ),
                     line=declared_agents[name].span.start_line,
+                    column=declared_agents[name].span.start_col,
+                    end_line=declared_agents[name].span.end_line,
+                    end_column=declared_agents[name].span.end_col,
                 )
             )
 

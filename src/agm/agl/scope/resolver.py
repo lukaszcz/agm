@@ -411,6 +411,9 @@ class _Resolver:
                     Diagnostic(
                         message=f"agent '{name}' is declared but never called.",
                         line=decl.span.start_line,
+                        column=decl.span.start_col,
+                        end_line=decl.span.end_line,
+                        end_column=decl.span.end_col,
                         severity="warning",
                     )
                 )

@@ -7,7 +7,7 @@ exactly once and are never replayed, because each entry executes ONLY its own
 statements — references to earlier bindings read stored runtime ``Value``s.
 
 The driver reproduces ``WorkflowRuntime.run``'s pipeline incrementally, reusing
-the shared host-environment assembly, input conversion, and exception-mapping
+the shared host-environment assembly, param conversion, and exception-mapping
 helpers from :mod:`agm.agl.runtime.runtime` (no duplication).  Promotion into
 the session is **atomic**: a runtime raise discards ALL of the entry's in-session
 effects — both new ``let``/``var`` bindings and any ``set`` mutation of a PRIOR
@@ -15,15 +15,6 @@ session binding is rolled back (the prior binding's value is snapshotted before
 evaluation and restored on error).  The only effects that survive a failed entry
 are genuinely EXTERNAL ones already issued during evaluation (an agent call or an
 ``exec`` shell command), which are inherently irreversible.
-
-**param / program semantics (M6)**
-
-``param`` declarations are resolved EAGERLY at evaluation time (not lazily via
-``:set``).  The resolution order is: config ``[params.<program>]`` value (if a
-``program`` decl is active) > default expression > "missing required param"
-pre-eval error.  A ``program NAME`` decl is session-global, set once.  These
-together replace the old unset-input lifecycle (``set_input`` / ``preset_input``
-/ ``_check_unset_inputs``).
 
 This module is intentionally UI-free — it returns plain ``EntryResult`` data;
 rendering, meta-commands, and the prompt_toolkit console are later milestones.
@@ -44,7 +35,6 @@ if TYPE_CHECKING:
     from agm.agl.eval.values import Value
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.runtime.render import RendererFn
     from agm.agl.runtime.runtime import HostEnvironment, RunError
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.scope.symbols import ScopeNode
@@ -62,41 +52,46 @@ _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 def _set_targets_in_program(program: "Program") -> frozenset[str]:
     """Return the set of variable names targeted by ``set`` statements in *program*.
 
-    Recursively walks all statements in the program, including nested bodies
+    Recursively walks all items in the program block, including nested bodies
     inside ``do``/``if``/``case``/``try`` blocks.  Used by
     ``_evaluate_and_promote`` to determine which session bindings need to be
     snapshotted before evaluation (only those names can be mutated in-place by
     a ``set``).
     """
     from agm.agl.syntax.nodes import (
-        CaseStmt,
-        DoUntil,
-        IfStmt,
+        Block,
+        Case,
+        Do,
+        If,
+        Item,
         SetStmt,
-        TryCatch,
+        Try,
     )
-    from agm.agl.syntax.nodes import Stmt as StmtType
 
     targets: set[str] = set()
 
-    def _walk(stmts: "tuple[StmtType, ...]") -> None:
-        for stmt in stmts:
-            if isinstance(stmt, SetStmt):
-                targets.add(stmt.target)
-            elif isinstance(stmt, DoUntil):
-                _walk(stmt.body)
-            elif isinstance(stmt, IfStmt):
-                for if_branch in stmt.branches:
-                    _walk(if_branch.body)
-            elif isinstance(stmt, CaseStmt):
-                for case_branch in stmt.branches:
-                    _walk(case_branch.body)
-            elif isinstance(stmt, TryCatch):
-                _walk(stmt.body)
-                for handler in stmt.handlers:
-                    _walk(handler.body)
+    def _walk_item(item: Item) -> None:
+        if isinstance(item, SetStmt):
+            targets.add(item.target)
+        elif isinstance(item, Block):
+            for sub in item.items:
+                _walk_item(sub)
+        elif isinstance(item, Do):
+            _walk_item(item.body)
+            _walk_item(item.condition)
+        elif isinstance(item, If):
+            for if_branch in item.branches:
+                _walk_item(if_branch.body)
+        elif isinstance(item, Case):
+            for case_branch in item.branches:
+                _walk_item(case_branch.body)
+        elif isinstance(item, Try):
+            _walk_item(item.body)
+            for handler in item.handlers:
+                _walk_item(handler.body)
 
-    _walk(program.body)
+    for item in program.body.items:
+        _walk_item(item)
     return frozenset(targets)
 
 
@@ -121,7 +116,7 @@ def has_runnable_statements(text: str) -> bool:
 
     try:
         return any(token.type not in _TRIVIAL_TOKENS for token in tokenize(text))
-    except Exception:
+    except Exception:  # defensive: lexer errors are treated as runnable
         return True
 
 
@@ -135,10 +130,11 @@ class EntryResult:
     """Outcome of evaluating one REPL entry (pure data, no styled strings).
 
     ``kind``
-        Classified by the entry's LAST statement: ``ExprStmt`` → ``"expression"``
+        Classified by the entry's LAST item: a bare ``Expr`` → ``"expression"``
         (``value``/``value_type`` set); ``let``/``var`` → ``"binding"``
         (``name``/``value_type``/``value``); ``record``/``enum``/``type``/
-        ``param`` → ``"declaration"``; everything else → ``"statement"``.
+        ``param``/``def``/``agent`` → ``"declaration"``; ``set`` or side-
+        effecting expr (``print``, etc.) → ``"statement"``.
     ``name``
         The bound/declared name, when meaningful (binding / declaration).
     ``value``
@@ -147,8 +143,8 @@ class EntryResult:
     ``value_type``
         The static type of the echoed value; ``None`` when not applicable.
     ``diagnostics``
-        Pre-execution error diagnostics (parse/scope/typecheck/contract/param).
-        Empty on success.
+        Pre-execution error diagnostics (parse/scope/typecheck/contract/unset
+        param).  Empty on success.
     ``warnings``
         Advisory warnings from the type checker (e.g. non-exhaustive ``case``),
         surfaced on every non-parse/scope path.
@@ -183,21 +179,15 @@ class ReplSession:
     """Persistent incremental AgL evaluation session (UI-free core).
 
     Constructor parameters mirror ``WorkflowRuntime`` so a host can wire the same
-    agent backing.  Registration (``register_agent``/``register_codec``/
-    ``register_renderer``) is delegated to an internal ``WorkflowRuntime`` so the
-    reserved-name / duplicate validation and host-environment assembly are shared
-    rather than duplicated.
+    agent backing.  Registration (``register_agent``/``register_codec``) is
+    delegated to an internal ``WorkflowRuntime`` so the reserved-name / duplicate
+    validation and host-environment assembly are shared rather than duplicated.
 
     Each entry is promoted into the session **atomically**: if evaluation raises,
     the entry has NO in-session effect — new ``let``/``var`` bindings are discarded
     AND any ``set`` mutation of a prior session binding is rolled back to its
     pre-entry value.  Only external side effects already issued during evaluation
     (agent calls, ``exec`` shell commands) are irreversible.
-
-    **param / program (M6):** ``param`` declarations resolve eagerly at eval time.
-    A ``params_config_loader`` callable (optional) is invoked when a ``program``
-    decl is first entered to load ``[params.<name>]`` config values; later
-    ``param`` decls use config-value (if present) > default-expression > error.
     """
 
     def __init__(
@@ -224,9 +214,6 @@ class ReplSession:
         # The COMMAND validates/creates the path up front; the session assumes it
         # is writable but the no-op store tolerates failure (it disables itself).
         self._trace_path = trace_path
-
-        # Optional loader for [params.<program_name>] config table.  When not
-        # None, called once when a ``program NAME`` decl is first entered.
         self._params_config_loader = params_config_loader
 
         # Internal runtime owns the registrations + host-environment assembly.
@@ -241,20 +228,17 @@ class ReplSession:
         # Persistent session environment.
         self._session_scope: ScopeNode = ScopeNode(node_id=-1, parent=None)
         self._type_env: TypeEnvironment = TypeEnvironment()
+        # Ambient agents injected by the scope pass carry a synthetic decl_node_id
+        # of -1 (no real AST declaration).  Pre-register AgentType() for this
+        # sentinel so the checker can resolve their binding type when they appear
+        # as call callees or in expressions.  This is seeded into every entry's
+        # fresh TypeEnvironment via seed_from, so it is always available.
+        self._type_env.set_binding_type(-1, self._make_agent_type())
         self._value_scope: Scope = Scope(parent=None)
         self._next_node_id: int = 0
-
-        # Active program name (set once per session by a ``program NAME`` decl).
         self._program_name: str | None = None
-        # Active config table loaded from [params.<program_name>] on program decl.
         self._active_config: dict[str, object] = {}
-
-        # Declared params registry: name → declared Type.  Populated on
-        # successful promotion; used by ``declared_params()`` and ``:inputs``.
-        # Params are fully resolved bindings (they appear in ``_value_scope``),
-        # so the value is always available via the scope lookup.
-        self._declared_params: dict[str, "Type"] = {}
-
+        self._declared_params: dict[str, Type] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
         # Agents declared by SOURCE ``agent X`` statements in prior promoted
@@ -264,6 +248,13 @@ class ReplSession:
         # Declarations from a failed/rolled-back entry never land here (merged
         # only on successful promotion).
         self._declared_agents: set[str] = set()
+
+    @staticmethod
+    def _make_agent_type() -> "Type":
+        """Return an ``AgentType`` instance (deferred import, used at init and reset)."""
+        from agm.agl.typecheck.types import AgentType
+
+        return AgentType()
 
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)
@@ -276,16 +267,6 @@ class ReplSession:
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``WorkflowRuntime`` validation)."""
         self._runtime.register_codec(codec)
-
-    def register_renderer(
-        self,
-        name: str,
-        fn: "RendererFn",
-        *,
-        supported_types: "frozenset[str] | None" = None,
-    ) -> None:
-        """Register a custom renderer (shares ``WorkflowRuntime`` validation)."""
-        self._runtime.register_renderer(name, fn, supported_types=supported_types)
 
     # ------------------------------------------------------------------
     # Core evaluation
@@ -318,13 +299,33 @@ class ReplSession:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
 
+        # [1b] Reject config pragmas: they are an exec/program feature and cannot
+        # be applied to a live REPL session (session settings come from CLI flags
+        # or config files, not source pragmas).  Check here — after parse, before
+        # resolve — so no session state is mutated.
+        pragma_diag = self._check_no_config_pragmas(program)
+        if pragma_diag is not None:
+            return self._fail([pragma_diag], tab_warnings)
+
+        # [1c] REPL trailing-binder synthesis: in v2, a block ending in a
+        # ``let``/``var`` is a static error (the binder needs a continuation
+        # expression).  In the REPL, the continuation is the NEXT entry — so a
+        # standalone ``let x = 1`` entry is semantically valid.  Synthesize a
+        # ``UnitLit`` continuation appended to the pipeline program so the
+        # checker accepts it; the original ``program`` is kept for classification,
+        # echo, and promotion (which care about what the user actually typed).
+        orig_program = program
+        pipeline_program, next_start_id = self._repl_wrap_trailing_binder(
+            program, next_start_id
+        )
+
         # [2] Resolve against the session scope (refs fall through; new decls
         # shadow).  resolve does NOT mutate the parent scope.  Host-registered
         # agents and prior cross-entry ``agent`` declarations are ambient, so a
         # call to them needs no in-entry declaration.
         try:
             resolved = resolve(
-                program,
+                pipeline_program,
                 parent_scope=self._session_scope,
                 ambient_agents=self._ambient_agents(host_env),
             )
@@ -348,25 +349,17 @@ class ReplSession:
             *checked.warnings,
         ]
 
-        # [4] check_only: type-only dry run — no eval, no promotion, no pre-eval
-        # side-effects.  Must come before _pre_eval_param_check so a dry-run
-        # entry with ``program foo`` / ``param x`` never mutates session state
-        # or invokes the params_config_loader.
+        # [4] check_only: type-only dry run — no eval, no promotion.
         if check_only:
-            return self._build_check_only_result(program, checked, warnings)
+            return self._build_check_only_result(orig_program, checked, warnings)
 
-        # [5] Pre-eval checks for param and program declarations (replaces old
-        # _check_unset_inputs).  These checks run before any evaluation so no
-        # agent calls fire on rejection.  _pre_eval_param_check is side-effect-
-        # free: it only COMPUTES the entry's effective values and validates —
-        # session-global state is committed only in _promote (the success path).
-        pre_eval_diag, entry_param_values, entry_program_name, entry_active_config = (
-            self._pre_eval_param_check(program, checked, warnings)
+        pre_eval_result, param_values, entry_program_name, entry_active_config = (
+            self._pre_eval_param_check(orig_program, checked, warnings)
         )
-        if pre_eval_diag is not None:
-            return pre_eval_diag
+        if pre_eval_result is not None:
+            return pre_eval_result
 
-        # [6] Materialize output contracts for this entry.
+        # [5] Materialize output contracts for this entry.
         from agm.agl.runtime.contract import materialize_contract
 
         contracts: dict[int, object] = {}
@@ -382,13 +375,13 @@ class ReplSession:
         # [7] Evaluate ONLY this entry's statements in a fresh child value scope.
         return self._evaluate_and_promote(
             text=text,
-            program=program,
+            orig_program=orig_program,
             checked=checked,
             contracts=contracts,
             host_env=host_env,
             warnings=warnings,
             next_start_id=next_start_id,
-            param_values=entry_param_values,
+            param_values=param_values,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
         )
@@ -396,6 +389,69 @@ class ReplSession:
     # ------------------------------------------------------------------
     # eval_entry helpers
     # ------------------------------------------------------------------
+
+    def _repl_wrap_trailing_binder(
+        self, program: "Program", next_start_id: int
+    ) -> "tuple[Program, int]":
+        """Append a synthetic ``UnitLit`` when the entry ends with a trailing binder.
+
+        In v2, the type checker rejects a block whose last item is a ``let`` or
+        ``var`` declaration (the binder needs a continuation expression).  In the
+        REPL, the continuation is the NEXT entry — so standalone ``let x = 1``
+        entries must be valid.
+
+        When the last item is a ``LetDecl`` or ``VarDecl``, this helper builds a
+        new ``Program`` (and ``Block``) with an appended synthetic ``UnitLit``
+        (node id ``next_start_id``), making the block checker-acceptable.
+        The synthetic node id is consumed, so ``next_start_id + 1`` is returned.
+
+        The ORIGINAL program is preserved for classification, echo data, and
+        promotion (they care about what the user typed, not the pipeline artifact).
+        If the last item is NOT a trailing binder, the program is returned
+        unchanged and ``next_start_id`` is not advanced.
+        """
+        from agm.agl.syntax.nodes import Block, LetDecl, Program, UnitLit, VarDecl
+
+        items = program.body.items
+        if not items or not isinstance(items[-1], (LetDecl, VarDecl)):
+            return program, next_start_id
+
+        # Append a UnitLit continuation — harmless to evaluate, satisfies the
+        # checker's "last item must be an expression" invariant.
+        synthetic = UnitLit(span=program.body.span, node_id=next_start_id)
+        new_block = Block(
+            items=(*items, synthetic),
+            span=program.body.span,
+            node_id=program.body.node_id,
+        )
+        new_program = Program(
+            body=new_block,
+            span=program.span,
+            node_id=program.node_id,
+        )
+        return new_program, next_start_id + 1
+
+    def _check_no_config_pragmas(self, program: "Program") -> Diagnostic | None:
+        """Return a diagnostic if the entry contains a ``config`` pragma.
+
+        Config pragmas are an exec/program feature: they set options for a batch
+        ``agm exec`` run and cannot be applied to a live REPL session, whose
+        settings come from CLI flags and config files.  Entering a pragma line
+        is rejected with a clear message; the entry has no effect on session
+        state.
+        """
+        from agm.agl.syntax.nodes import ConfigPragma
+
+        for item in program.body.items:
+            if isinstance(item, ConfigPragma):
+                return Diagnostic(
+                    message=(
+                        "config pragmas are not supported in the REPL; "
+                        "set options via CLI flags or the config file"
+                    ),
+                    line=item.span.start_line,
+                )
+        return None
 
     def _ambient_agents(self, host_env: "HostEnvironment") -> frozenset[str]:
         """Agent names valid WITHOUT an in-entry ``agent`` declaration.
@@ -427,109 +483,74 @@ class ReplSession:
         program: "Program",
         checked: "CheckedProgram",
         warnings: list[Diagnostic],
-    ) -> "tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]":
-        """Pre-eval checks for ``program`` and ``param`` declarations.
-
-        Scans top-level statements in the entry for:
-        1. ``ProgramDecl``: validates at-most-once constraint, computes effective config.
-        2. ``ParamDecl``: checks required params are satisfiable (config or default);
-           converts config values to typed Values.
-
-        This method is **side-effect-free** on session state: it only COMPUTES the
-        entry's effective values and validates — it never mutates ``self._program_name``,
-        ``self._active_config``, or ``self._declared_params``.  Session-global state is
-        committed ONLY in ``_promote`` (the success path), so every reject/abort path
-        (pre-eval validation error, contract failure, runtime raise, cancellation) leaves
-        session state untouched.
-
-        Returns a tuple of:
-        - ``EntryResult | None``: a failure result if any check fails, else ``None``.
-        - ``dict[str, Value]``: converted config values for params that have a
-          config entry (passed to EchoInterpreter as ``param_values``).
-        - ``str | None``: the entry's effective program name — a newly-declared
-          ``program NAME`` in this entry, else ``None`` (session name unchanged).
-        - ``dict[str, object]``: the entry's effective active config — loaded from the
-          loader when the entry introduces a new program, else the current session config.
-
-        Within-entry ordering is preserved: a ``program foo`` followed by ``param x``
-        in ONE entry means ``x`` sees ``foo``'s config.  This is handled by updating
-        the LOCAL ``effective_config`` variable before processing ``param`` decls.
-        """
-        from agm.agl.runtime.runtime import convert_input
+    ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]:
+        """Validate and convert config-backed params without mutating session state."""
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.syntax.nodes import ParamDecl, ProgramDecl
 
-        def _reject(
-            message: str, line: int
-        ) -> "tuple[EntryResult, dict[str, Value], None, dict[str, object]]":
-            # Every reject path leaves session state untouched: no param values,
-            # no new program name, current session config preserved.
-            return (
-                self._fail([Diagnostic(message=message, line=line)], warnings),
-                {},
-                None,
-                self._active_config,
-            )
+        def reject(message: str, line: int) -> EntryResult:
+            return self._fail([Diagnostic(message=message, line=line)], warnings)
 
         param_values: dict[str, Value] = {}
-        # Local effective values — no mutation of self.* here.
         entry_program_name: str | None = None
-        effective_config: dict[str, object] = self._active_config
+        effective_config = self._active_config
 
-        for stmt in program.body:
-            if isinstance(stmt, ProgramDecl):
-                new_name = stmt.name
-                if self._program_name is not None and self._program_name != new_name:
-                    # Different program name: reject — no session mutation needed.
-                    return _reject(
-                        f"Program name already set to {self._program_name!r}; "
-                        f"cannot redeclare as {new_name!r} in the same session. "
-                        f"Use :reset to start a new session.",
-                        stmt.span.start_line,
+        for item in program.body.items:
+            if isinstance(item, ProgramDecl):
+                if self._program_name is not None and self._program_name != item.name:
+                    return (
+                        reject(
+                            f"Program name already set to {self._program_name!r}; "
+                            f"cannot redeclare as {item.name!r}. Use :reset first.",
+                            item.span.start_line,
+                        ),
+                        {},
+                        None,
+                        self._active_config,
                     )
                 if self._program_name is None:
-                    # First program decl: record the new name and load config into
-                    # local — do NOT touch self._program_name or self._active_config.
-                    entry_program_name = new_name
-                    if self._params_config_loader is not None:
-                        effective_config = self._params_config_loader(new_name)
-                    else:
-                        effective_config = {}
-                # Same name re-entered → no-op (already set, no config reload).
-
-            elif isinstance(stmt, ParamDecl):
-                name = stmt.name
-                raw_config = effective_config.get(name)
+                    entry_program_name = item.name
+                    effective_config = (
+                        self._params_config_loader(item.name)
+                        if self._params_config_loader is not None
+                        else {}
+                    )
+            elif isinstance(item, ParamDecl):
+                raw_config = effective_config.get(item.name)
                 if raw_config is not None:
-                    # Config value present: convert it now (pre-eval).
-                    declared_type = checked.type_env.get_binding_type(stmt.node_id)
+                    declared_type = checked.type_env.get_binding_type(item.node_id)
                     assert declared_type is not None
                     try:
-                        param_values[name] = convert_input(name, raw_config, declared_type)
-                    except (ValueError, TypeError) as exc:
-                        # Conversion failure: reject the entry cleanly — no rollback
-                        # needed because self.* was never mutated.
-                        return _reject(
-                            f"Config value for param {name!r} is invalid: {exc}",
-                            stmt.span.start_line,
+                        param_values[item.name] = convert_param_value(
+                            item.name, raw_config, declared_type
                         )
-                elif stmt.default is None:
-                    # Required param with no config value and no default → reject.
-                    # Use the entry's effective program name for the hint (Fix 3):
-                    # entry_program_name covers the case where program was declared
-                    # in THIS entry; fall back to self._program_name for a prior
-                    # session-level declaration.
+                    except (TypeError, ValueError) as exc:
+                        return (
+                            reject(
+                                f"Config value for param {item.name!r} is invalid: {exc}",
+                                item.span.start_line,
+                            ),
+                            {},
+                            None,
+                            self._active_config,
+                        )
+                elif item.default is None:
                     effective_program_name = entry_program_name or self._program_name
                     prog_hint = (
                         f" via [params.{effective_program_name}] config"
                         if effective_program_name is not None
                         else ""
                     )
-                    return _reject(
-                        f"Missing required param {name!r}: provide it"
-                        f"{prog_hint} or a default expression.",
-                        stmt.span.start_line,
+                    return (
+                        reject(
+                            f"Missing required param {item.name!r}: provide it"
+                            f"{prog_hint} or a default expression.",
+                            item.span.start_line,
+                        ),
+                        {},
+                        None,
+                        self._active_config,
                     )
-                # else: has a default → interpreter evaluates it; not in param_values.
 
         return None, param_values, entry_program_name, effective_config
 
@@ -561,17 +582,24 @@ class ReplSession:
         self,
         *,
         text: str,
-        program: "Program",
+        orig_program: "Program",
         checked: "CheckedProgram",
         contracts: dict[int, object],
         host_env: "HostEnvironment",
         warnings: list[Diagnostic],
         next_start_id: int,
-        param_values: "dict[str, Value]",
+        param_values: dict[str, Value],
         entry_program_name: str | None,
-        entry_active_config: "dict[str, object]",
+        entry_active_config: dict[str, object],
     ) -> EntryResult:
-        """Execute the entry in a child scope; promote on success, discard on error."""
+        """Execute the entry in a child scope; promote on success, discard on error.
+
+        ``orig_program`` is the program as the user typed it (before any
+        trailing-binder synthesis); ``checked.resolved.program`` is the pipeline
+        program (potentially with a synthetic UnitLit appended).  Classification,
+        echo data, and promotion use ``orig_program`` so the user-visible outcome
+        is accurate.
+        """
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.scope import Scope
         from agm.agl.repl.agents import AgentCancelled
@@ -579,7 +607,7 @@ class ReplSession:
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.runtime.runtime import exception_value_to_run_error
         from agm.agl.runtime.trace import TraceStore
-        from agm.agl.syntax.nodes import ExprStmt
+        from agm.agl.syntax.nodes import Binder, Declaration
 
         typed_contracts: dict[int, OutputContract] = {
             nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
@@ -602,8 +630,8 @@ class ReplSession:
         # Optimisation: entries with no ``set`` targeting a prior session binding
         # need no snapshot at all (new let/var bindings live in the child scope
         # and are simply discarded on abort).  We collect targeted names
-        # statically from the checked program before evaluation.
-        set_targets = _set_targets_in_program(program)
+        # statically from the original program before evaluation.
+        set_targets = _set_targets_in_program(orig_program)
         value_snapshot: dict[str, Value] = {
             name: binding.value
             for name, binding in self._value_scope.bindings.items()
@@ -616,12 +644,19 @@ class ReplSession:
         trace = TraceStore(path=self._trace_path)
         trace.run_start()
 
+        # The pipeline program (checked.resolved.program) may have a synthetic
+        # UnitLit appended for trailing-binder entries; the interpreter runs on
+        # that.  Echo capture uses the pipeline program's last item — for a bare
+        # expression entry both the original and pipeline programs agree on the
+        # last item; for a trailing-binder entry the pipeline's last item is the
+        # synthetic UnitLit, but since _classify uses orig_program and returns
+        # "binding", _echo_data ignores captured and reads from the value scope.
+        pipeline_items = checked.resolved.program.body.items
         interp = EchoInterpreter(
             checked=checked,
             registry=host_env.registry,
             contracts=typed_contracts,
             type_env=checked.type_env,
-            renderers=host_env.renderers,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             source=text,
@@ -630,8 +665,13 @@ class ReplSession:
             param_values=param_values,
         )
         # Echo the value of a trailing bare expression (captured during exec).
-        if program.body and isinstance(program.body[-1], ExprStmt):
-            interp.echo_node_id = program.body[-1].node_id
+        # In v2, a bare Expr (not a Binder or Declaration) is the trailing item.
+        last_pipeline_item = pipeline_items[-1] if pipeline_items else None
+        if last_pipeline_item is not None and not isinstance(
+            last_pipeline_item, (Binder, Declaration)
+        ):
+            # It's an Expr — set the echo node id to capture it during execution.
+            interp.echo_node_id = last_pipeline_item.node_id
 
         try:
             interp.execute(child_scope)
@@ -643,20 +683,14 @@ class ReplSession:
                 trace_id=str(error.fields.get("trace_id", "")),
                 span=exc.span,
             )
-            return self._abort(
-                program,
-                warnings,
-                trace,
-                value_snapshot,
-                error=error,
-            )
+            return self._abort(orig_program, warnings, trace, value_snapshot, error=error)
         except (AgentCancelled, KeyboardInterrupt):
             # A declined confirmation or a Ctrl-C during a live agent call aborts
             # the entry atomically.  The cancellation is a host signal, not an
             # in-language raise, so it surfaces as a diagnostic rather than a
             # mapped AgL exception.
             return self._abort(
-                program,
+                orig_program,
                 warnings,
                 trace,
                 value_snapshot,
@@ -671,15 +705,15 @@ class ReplSession:
         # Success — promote atomically, then compute the echo data.
         self._promote(
             text=text,
-            program=program,
+            program=orig_program,
             checked=checked,
             child_scope=child_scope,
             next_start_id=next_start_id,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
         )
-        kind, name = self._classify(program)
-        value, value_type = self._echo_data(program, checked, captured)
+        kind, name = self._classify(orig_program)
+        value, value_type = self._echo_data(orig_program, checked, captured)
         return EntryResult(
             kind=kind,
             name=name,
@@ -697,7 +731,7 @@ class ReplSession:
         program: "Program",
         warnings: list[Diagnostic],
         trace: "TraceStore",
-        value_snapshot: "dict[str, Value]",
+        value_snapshot: dict[str, "Value"],
         *,
         error: "RunError | None" = None,
         diagnostics: list[Diagnostic] | None = None,
@@ -709,11 +743,6 @@ class ReplSession:
         scope, and return a failed result differing only in whether the failure
         carries an ``error`` (a mapped AgL raise) or ``diagnostics`` (a
         host-signalled cancellation).
-
-        No program-name/config rollback is needed here because
-        ``_pre_eval_param_check`` is now side-effect-free: session-global state
-        (``_program_name``, ``_active_config``) is committed ONLY in ``_promote``
-        on the success path, so abort paths automatically leave it untouched.
         """
         trace.run_end(ok=False)
         self._rollback(value_snapshot)
@@ -730,7 +759,7 @@ class ReplSession:
             trace_path=self._trace_path,
         )
 
-    def _rollback(self, value_snapshot: "dict[str, Value]") -> None:
+    def _rollback(self, value_snapshot: dict[str, "Value"]) -> None:
         """Roll the persistent value scope back to *value_snapshot* (atomic abort).
 
         Shared by the ``AglRaise`` and cancellation paths.  Discarding the entry's
@@ -754,15 +783,9 @@ class ReplSession:
         child_scope: "Scope",
         next_start_id: int,
         entry_program_name: str | None,
-        entry_active_config: "dict[str, object]",
+        entry_active_config: dict[str, object],
     ) -> None:
-        """Merge the entry's new state into the persistent session (atomic).
-
-        This is the ONLY place that commits session-global state from the entry:
-        ``_program_name`` and ``_active_config`` are written here (not in
-        ``_pre_eval_param_check``), so every reject/abort path leaves them
-        untouched.
-        """
+        """Merge the entry's new state into the persistent session (atomic)."""
         from agm.agl.syntax.nodes import ParamDecl
 
         # Symbols: merge the entry root scope's bindings (overwrite/shadow).
@@ -779,20 +802,18 @@ class ReplSession:
         self._type_env.seed_from(checked.type_env)
 
         # Runtime values: copy the child scope's top frame into the session scope.
+        # This includes closures (FuncDef) and AgentValues installed by the
+        # interpreter's pre-pass in the child scope.
         for vname, binding in child_scope.bindings.items():
             self._value_scope.bindings[vname] = binding
 
-        # Declared params: register any ParamDecl that was successfully resolved
-        # (the child scope now holds the bound value).  Update the declared_params
-        # registry so :inputs can list them.
-        for stmt in program.body:
-            if isinstance(stmt, ParamDecl):
-                input_type = checked.type_env.get_binding_type(stmt.node_id)
-                assert input_type is not None
-                self._declared_params[stmt.name] = input_type
+        # Declared params: register successful ParamDecl entries.
+        for item in program.body.items:
+            if isinstance(item, ParamDecl):
+                param_type = checked.type_env.get_binding_type(item.node_id)
+                assert param_type is not None
+                self._declared_params[item.name] = param_type
 
-        # Commit program name and config: done HERE (not in _pre_eval_param_check)
-        # so that every reject/abort path sees session state untouched.
         if entry_program_name is not None:
             self._program_name = entry_program_name
             self._active_config = entry_active_config
@@ -800,44 +821,58 @@ class ReplSession:
         self._source_log.append(text)
         self._next_node_id = next_start_id
 
-    def _classify(self, program: "Program") -> "tuple[EntryKind, str | None]":
-        """Classify the entry by its last statement; return (kind, name)."""
+    def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
+        """Classify the entry by its last item; return (kind, name)."""
         from agm.agl.syntax.nodes import (
+            AgentDecl,
+            Binder,
+            Declaration,
             EnumDef,
-            ExprStmt,
+            FuncDef,
             LetDecl,
             ParamDecl,
             ProgramDecl,
             RecordDef,
+            SetStmt,
             TypeAlias,
             VarDecl,
         )
 
-        # A parsed program always has at least one statement (empty/comment-only
-        # input fails parsing earlier).
-        last = program.body[-1]
-        if isinstance(last, ExprStmt):
+        # A parsed program always has at least one item (empty/comment-only
+        # source fails parsing earlier).
+        last = program.body.items[-1]
+        # Bare expression (not a binder or declaration) → "expression"
+        if not isinstance(last, (Binder, Declaration)):
             return "expression", None
         if isinstance(last, (LetDecl, VarDecl)):
             return "binding", last.name
-        if isinstance(last, (RecordDef, EnumDef, TypeAlias, ParamDecl, ProgramDecl)):
+        if isinstance(
+            last,
+            (RecordDef, EnumDef, TypeAlias, ParamDecl, ProgramDecl, FuncDef, AgentDecl),
+        ):
             return "declaration", last.name
-        return "statement", None
+        # SetStmt → "statement"
+        if isinstance(last, SetStmt):
+            return "statement", None
+        # Remaining Declaration kinds (ConfigPragma is rejected earlier, but handle
+        # defensively).
+        return "statement", None  # pragma: no cover
 
     def _echo_data(
         self, program: "Program", checked: "CheckedProgram", captured: "Value | None"
-    ) -> "tuple[Value | None, Type | None]":
+    ) -> tuple["Value | None", "Type | None"]:
         """Compute the echoed (value, value_type) from the promoted state.
 
         *captured* is the value of a trailing bare expression recorded during
-        execution (``None`` when the last statement is not an ``ExprStmt``).
+        execution (``None`` when the last item is not a bare expression).
         """
-        from agm.agl.syntax.nodes import ExprStmt, LetDecl, VarDecl
+        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
 
-        # A parsed program always has at least one statement.
-        last = program.body[-1]
+        # A parsed program always has at least one item.
+        last = program.body.items[-1]
         value_type = self._value_type_of_last(program, checked)
-        if isinstance(last, ExprStmt):
+        # Bare expression (not a binder or declaration) → echoed from captured
+        if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, (LetDecl, VarDecl)):
             binding = self._value_scope.lookup(last.name)
@@ -848,20 +883,22 @@ class ReplSession:
     def _value_type_of_last(
         self, program: "Program", checked: "CheckedProgram"
     ) -> "Type | None":
-        """Static type carried by the entry's last statement, or ``None``.
+        """Static type carried by the entry's last item, or ``None``.
 
         The checked type of the expression for a bare-expression entry, the
         declared binding type for a ``let``/``var``, ``None`` otherwise.  Shared
         by the check-only result builder and the success echo so the two agree
         on how an entry's type is derived.
         """
-        from agm.agl.syntax.nodes import ExprStmt, LetDecl, VarDecl
+        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
 
-        # A parsed program always has at least one statement (empty/comment-only
-        # input fails parsing earlier).
-        last = program.body[-1]
-        if isinstance(last, ExprStmt):
-            return checked.node_types.get(last.expr.node_id)
+        # A parsed program always has at least one item (empty/comment-only
+        # source fails parsing earlier).
+        last = program.body.items[-1]
+        # Bare expression → node type from checked side table
+        if not isinstance(last, (Binder, Declaration)):
+            # After narrowing: last is an Expr (not a Binder or Declaration).
+            return checked.node_types.get(last.node_id)
         if isinstance(last, (LetDecl, VarDecl)):
             return checked.type_env.get_binding_type(last.node_id)
         return None
@@ -880,7 +917,7 @@ class ReplSession:
         """
         from agm.agl.parser import parse_program_seeded
         from agm.agl.scope import resolve
-        from agm.agl.syntax.nodes import ExprStmt
+        from agm.agl.syntax.nodes import Binder, Declaration
         from agm.agl.typecheck import check
 
         host_env = self._runtime.host_environment()
@@ -888,19 +925,20 @@ class ReplSession:
         # counter, so seeding at ``_next_node_id`` is safe — all promoted ids are
         # strictly below it, making this parse's ids disjoint from the session's.
         program, _ = parse_program_seeded(text, start_id=self._next_node_id)
-        if len(program.body) != 1 or not isinstance(program.body[0], ExprStmt):
+        items = program.body.items
+        if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
                 "':type' expects a single expression, "
                 "not a binding, declaration, or statement."
             )
-        expr_stmt = program.body[0]
+        expr_item = items[0]
         resolved = resolve(
             program,
             parent_scope=self._session_scope,
             ambient_agents=self._ambient_agents(host_env),
         )
         checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
-        typ = checked.node_types.get(expr_stmt.expr.node_id)
+        typ = checked.node_types.get(expr_item.node_id)
         assert typ is not None
         return repr(typ)
 
@@ -908,17 +946,14 @@ class ReplSession:
     # Introspection
     # ------------------------------------------------------------------
 
-    def bindings(self) -> "list[tuple[str, Type, Value]]":
+    def bindings(self) -> list[tuple[str, "Type", "Value"]]:
         """Return promoted user bindings as (name, declared type, current value).
 
-        Includes param bindings (they are resolved eagerly and live in the value
-        scope like any other binding).
+        Includes params, which resolve eagerly and live in the value scope.
         """
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
             binding = self._value_scope.lookup(name)
-            # Every name promoted to _session_scope has a corresponding runtime
-            # value (let/var/param all bind eagerly); the lookup is always found.
             assert binding is not None
             typ = self._type_env.get_binding_type(ref.decl_node_id)
             # Every promoted let/var/param binding has a recorded type.
@@ -938,38 +973,29 @@ class ReplSession:
             names.append("ask")
         return names
 
-    def declared_params(self) -> "list[tuple[str, Type, Value]]":
-        """Return declared params as (name, type, resolved value).
-
-        All declared params are fully resolved bindings (the REPL resolves
-        eagerly); they all have a value in the value scope.  The registry
-        ``_declared_params`` is the authoritative ordering; the value is
-        looked up from the session value scope.
-        """
+    def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
+        """Return declared params as (name, type, resolved value)."""
         result: list[tuple[str, Type, Value]] = []
         for name, typ in self._declared_params.items():
             binding = self._value_scope.lookup(name)
-            # All promoted params are eagerly resolved and always have a value.
             assert binding is not None
             result.append((name, typ, binding.value))
         return result
 
     def program_name(self) -> str | None:
-        """Return the active program name, or ``None`` if not yet declared."""
+        """Return the active program name, if declared."""
         return self._program_name
 
-    # ------------------------------------------------------------------
-    # Mutation
-    # ------------------------------------------------------------------
-
     def reset(self) -> None:
-        """Clear ALL session state (symbols, types, values, params, program, source, ids)."""
+        """Clear ALL session state (symbols, types, values, params, source, ids)."""
         from agm.agl.eval.scope import Scope
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment
 
         self._session_scope = ScopeNode(node_id=-1, parent=None)
         self._type_env = TypeEnvironment()
+        # Re-seed the sentinel AgentType for ambient agents (see __init__).
+        self._type_env.set_binding_type(-1, self._make_agent_type())
         self._value_scope = Scope(parent=None)
         self._next_node_id = 0
         self._program_name = None
@@ -979,19 +1005,19 @@ class ReplSession:
         self._declared_agents = set()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
-        """Evaluate the contents of *path* INCREMENTALLY, one statement per entry.
+        """Evaluate the contents of *path* INCREMENTALLY, one item per entry.
 
-        Each top-level statement is fed to :meth:`eval_entry` in order, exactly as
+        Each top-level item is fed to :meth:`eval_entry` in order, exactly as
         if the user had typed it at the prompt.  This makes redefinition/shadowing
         work on load (within a single entry it would be a duplicate-declaration
         error) so a ``:save`` transcript reliably round-trips through ``:load``.
 
         The load halts at the FIRST non-``ok`` result (like running a script);
         the returned list holds the results collected so far, including the
-        failing one.  Statements that already succeeded remain promoted.
+        failing one.  Items that already succeeded remain promoted.
 
         A syntax error in the file yields a single failed ``EntryResult`` carrying
-        the parse diagnostic.  An empty or comment-only file has no statements to
+        the parse diagnostic.  An empty or comment-only file has no items to
         run and yields an empty list (a benign no-op).
         """
         from agm.agl._text import normalize_newlines
@@ -999,7 +1025,7 @@ class ReplSession:
         from agm.core.fs import read_text
 
         # Normalize newlines with the SAME helper the lexer/interpreter use so the
-        # statement-span char offsets align with the text we slice below.
+        # item-span char offsets align with the text we slice below.
         normalized = normalize_newlines(read_text(path))
 
         # A blank / comment-only file has nothing to run — load it as a no-op
@@ -1007,7 +1033,7 @@ class ReplSession:
         if not has_runnable_statements(normalized):
             return []
 
-        # Parse the whole file ONCE only to find top-level statement boundaries;
+        # Parse the whole file ONCE only to find top-level item boundaries;
         # this parse is never promoted (each slice is re-parsed by eval_entry with
         # the session's continuing node-id counter).  start_id=0 is fine here.
         try:
@@ -1016,12 +1042,12 @@ class ReplSession:
             return [self._fail([exc.to_diagnostic()], [])]
 
         results: list[EntryResult] = []
-        for stmt in program.body:
-            slice_text = normalized[stmt.span.start_offset : stmt.span.end_offset]
+        for item in program.body.items:
+            slice_text = normalized[item.span.start_offset : item.span.end_offset]
             result = self.eval_entry(slice_text)
             results.append(result)
             if not result.ok:
-                break  # halt on the first failing statement, like a script
+                break  # halt on the first failing item, like a script
         return results
 
     def dump_source(self) -> str:

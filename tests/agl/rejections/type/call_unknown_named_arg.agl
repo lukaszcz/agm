@@ -1,0 +1,2 @@
+def greet(name: text) -> text = "hi"
+greet(name: "Bob", extra: 1)

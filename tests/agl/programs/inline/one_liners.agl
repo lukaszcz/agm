@@ -6,13 +6,17 @@ enum Status
 
 agent stepper
 
-let a = "x"; let b = "y"; print a + b
+let a = "x"; let b = "y"; print(a + b)
 var n: int = 0
-do[5] set n = n + 1; let s: Status = stepper "Step ${n}." until s is Done
+var s: Status = More
+do[5] set n = n + 1; set s = ask("Step ${n}.", agent: stepper) until s is Done
 print n
-if n = 1 => print "single" | n = 2 => print "double" | else => print "many"
-case n of | 1 => pass | _ => print "case inline ${n}"
-do[2] print "tail"; if n > 0 => set n = n + 10 | else => pass until n > 5
+if | n = 1 => print "single" | n = 2 => print "double" | else => print "many"
+case n of | 1 => () | _ => print "case inline ${n}"
+do[2] print "tail"; set n = n + 10 until n > 5
 print n
-try let z: Status = stepper "Final check." catch AgentParseError as e => print "caught ${e.agent}"
+try
+  let z: Status = ask("Final check.", agent: stepper)
+  ()
+catch AgentParseError as e => print "caught ${e.agent}"
 print "end"

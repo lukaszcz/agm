@@ -1,4 +1,4 @@
 enum R
   | Pass
 let n = 1
-let b = n is Pass
+n is Pass

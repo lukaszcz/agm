@@ -381,8 +381,8 @@ Sandbox settings resolution:
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log-file PATH\|--no-log] (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
-| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--auto-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 ### `agm exec (FILE | -c COMMAND)`
 
@@ -391,8 +391,9 @@ program text given with `-c`/`--command`. The AgL language is documented in the
 [AgL language reference](agl/reference/index.md).
 
 ```text
-agm exec [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
-         [--log-file PATH|--no-log]
+agm exec [--strict-json|--no-strict-json]
+         [--max-iters N] [--runner COMMAND]
+         [--log|--log-file PATH|--no-log]
          (FILE | -c COMMAND) [--PARAM VALUE]...
 ```
 
@@ -402,23 +403,15 @@ Options:
 
 - `-c COMMAND`, `--command COMMAND`: Execute the AgL program given as `COMMAND` directly,
   instead of reading the program from `FILE`.
-- `--NAME VALUE` (per-`param` options): Each `param NAME` declaration in the program
-  generates a corresponding `--NAME` CLI option. Type-specific forms:
-  - **`text`**: value taken verbatim.
-  - **`int`** / **`decimal`**: value parsed as the corresponding numeric type.
-  - **`bool`**: flag form `--NAME` / `--no-NAME` (no value argument).
-  - **`json`**, **`list`**, **`dict`**, **`record`**, **`enum`**: value must be a JSON string
-    (e.g. `--tags '["a","b"]'`); parsed and validated against the declared schema.
-  - Program `--<param>` options **must be given after the FILE argument**; built-in options
-    (`--strict-json`, `--max-iters`, etc.) may appear before or after `FILE`.  Placing a
-    program param option before `FILE` is a usage error (exit 1).
-  - An unknown/misspelled `--param` flag is a **hard usage error** (exit 1).
-  - A `param NAME` whose flag would collide with a built-in option (e.g. `param max_iters`)
-    is a **build-time error** telling you to rename the param.
-  - Run `agm exec FILE --help` to list the discovered `--param` options alongside the
-    standard flags.
+- `--PARAM VALUE`: Provide a value for a `param` declaration. Each declared param
+  becomes a program-specific option; booleans use `--name` / `--no-name`.
+  Values for `text` params are taken verbatim; every other scalar or structured
+  type (`int`/`decimal`/`bool`/`json`/`list`/`dict`/`record`/`enum`) is parsed as
+  exactly one strict JSON value and validated against the declared type. Missing
+  required params or invalid values are reported before any agent runs. Run
+  `agm exec FILE --help` to show the discovered param options for that program.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences, prose, or
-  repair). Overridable per call site with the `strict_json` call option.
+  repair). Overridable per call site with the `strict_json:` named argument to `ask`.
 - `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers exactly
   one JSON value from chatty output (stripping fences/prose, repairing trivially malformed
   JSON), then validates it strictly against the schema. The recovered (normalized) value is
@@ -426,11 +419,15 @@ Options:
 - `--max-iters N`: Override the default `do`-loop iteration limit.
 - `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
   declared agent without its own command). See the runner precedence below.
-- `--log-file PATH`: Write a structured JSONL trace log to PATH (default: auto-generated under
-  `.agent-files/`).
-- `--no-log`: Disable trace logging entirely.
-- `--dry-run`: Run the full static pipeline and contract
-  materialization, then stop before executing any statement (static errors exit 1; a clean
+- `--log`: Enable trace logging with an auto-generated timestamped path under `.agent-files/`.
+  Trace logging is **off by default**; use `--log`, `--log-file`, a `config log = true` source
+  pragma, or `[exec] log = true` in `config.toml` to enable it.
+- `--log-file PATH`: Write a structured JSONL trace log to PATH.
+- `--no-log`: Disable trace logging entirely. Overrides a `config log = true` pragma or
+  `[exec] log = true` config setting.
+  `--log`, `--log-file`, and `--no-log` are mutually exclusive (at most one may be given).
+- `--dry-run`: Run the full static pipeline, param validation, and contract
+  materialization, then stop before evaluating any expression (static errors exit 1; a clean
   check exits 0 with no program output).  When the check succeeds and one or more agent-call
   or `exec` sites exist, the static call-site inventory is printed to stdout:
 
@@ -460,9 +457,10 @@ Agents and runner precedence:
   | 1 | `[exec.agents.<name>]` (config, per-agent) — backs a declared name, overriding any source hint |
   | 2 | the source `agent NAME = "…"` runner string |
   | 3 | `--runner COMMAND` (CLI flag) |
-  | 4 | `[exec] runner` (config) |
-  | 5 | `[loop] runner` (config) |
-  | 6 | `claude -p` (built-in default) |
+  | 4 | `config runner = "…"` source pragma (default runner for all agents) |
+  | 5 | `[exec] runner` (config) |
+  | 6 | `[loop] runner` (config) |
+  | 7 | `claude -p` (built-in default) |
 
   A `[exec.agents.<name>]` entry for a name the program never declares is a host
   configuration error. Because the default runner is always the floor (rung 6), every
@@ -475,13 +473,13 @@ Exit codes:
 | Code | Meaning |
 |------|---------|
 | `0` | The workflow completed successfully |
-| `1` | Pre-execution failure: unreadable file, static lex/parse/scope/typecheck diagnostics, host configuration error, missing required param, or param conversion failure |
+| `1` | Pre-execution failure: unreadable file, static lex/parse/scope/typecheck diagnostics, host configuration error, or param validation failure |
 | `2` | The workflow executed but ended with an uncaught AgL exception |
 
 Diagnostics and warnings:
 
 - Error-severity diagnostics (static lex/parse/scope/typecheck errors, host
-  configuration errors, missing required params, param conversion failures) and uncaught AgL exceptions
+  configuration errors, param validation failures) and uncaught AgL exceptions
   are printed to stderr and determine the exit code per the table above.
 - Advisory **warnings** (for example a non-exhaustive `case` over an enum that
   omits some variants) are a separate channel. They are printed to stderr with a
@@ -497,6 +495,8 @@ runner = "claude -p"        # default agent runner
 strict_json = false         # lenient JSON recovery is the default
 default_loop_limit = 5      # do[] default iteration bound
 timeout = "30m"             # idle timeout
+log = false                 # trace logging off by default; set true to enable
+# log_file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
 
 [exec.agents]
 reviewer = "claude -p"      # per-agent runner commands; the name must be
@@ -508,24 +508,29 @@ reviewer = "claude -p"      # per-agent runner commands; the name must be
 settings. The name `agents` is reserved for the structural `[exec.agents]` map
 and is never treated as a per-command override.
 
-Param config (`[params.<program>]` section in `config.toml`):
+#### Source-level config pragmas
 
-```toml
-[params.my_workflow]
-name = "Alice"
-max_retries = 3
-tags = '["a", "b"]'   # structured types must be a JSON string
-                      # decimal values must also be quoted TOML strings
+An AgL program may set exec options as **config pragmas** in the header (before any
+other item). Pragmas override config-file settings; CLI flags override pragmas.
+
+```agl
+config log = true             # enable trace logging for this program
+config log_file = "trace.log" # explicit trace path
+config strict_json = true     # require bare JSON from agents
+config max_iters = 10         # do[] iteration cap
+config runner = "claude -p"   # default agent runner
+config timeout = "30s"        # shell exec idle timeout
+param spec
+let result = ask "Process ${spec}"
+print result
 ```
 
-- **Keying**: the `<program>` key is the value of the program's `program NAME` declaration
-  (if present), otherwise the `.agl` file stem (e.g. `workflow` for `workflow.agl`).
-  Inline `-c` programs with no `program` declaration have no config table.
-- **Precedence**: CLI `--NAME` option > `[params.<program>]` config value > the param's
-  default expression (`param x: T = e`). A param with no default and no external value
-  (CLI or config) is a **missing required param** error (exit 1) before any agent runs.
-- An undeclared key in a `[params.<program>]` table is a **non-fatal warning** (the program
-  still runs).
+Precedence: **CLI > pragma > config file**. For example, `--no-log` overrides
+`config log = true`, and `config max_iters = 10` overrides `[exec] default_loop_limit = 5`.
+
+The REPL does **not** apply config pragmas entered at the prompt; entering a
+`config ...` line in the REPL is a static error. Set session options via CLI flags
+(`--log`, `--strict-json`, `--max-iters`, `--runner`) or `[exec]` config.
 
 ### `agm repl`
 
@@ -536,8 +541,9 @@ against an environment that accumulates bindings, types, and declarations across
 entries, so earlier results stay available and agent calls fire exactly once.
 
 ```text
-agm repl [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
-         [--auto-agents] [--quiet] [--log-file PATH|--no-log]
+agm repl [--strict-json|--no-strict-json]
+         [--max-iters N] [--runner COMMAND] [--auto-agents]
+         [--quiet] [--log|--log-file PATH|--no-log]
 ```
 
 The REPL reuses the `[exec]` configuration (runner, per-agent commands, default
@@ -565,10 +571,10 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:agents` | List available agents and report the current agent-call mode |
-| `:inputs` | List declared params with their resolved values |
-| `:set echo on\|off` | Toggle echoing of entry results |
+| `:params` | List declared params and their resolved values |
+| `:set echo on\|off` | Toggle result echoing |
 | `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
-| `:load FILE` | Run an `.agl` file's statements into the session, one per entry |
+| `:load FILE` | Run an `.agl` file's items into the session, one per entry |
 | `:save FILE` | Write the accumulated session source to a file |
 
 Press Ctrl-C to cancel the current entry without exiting. During a live agent
@@ -587,20 +593,6 @@ Agent-call confirmation:
 - `agm exec`-style `exec` shell calls are **not** gated in this version; only
   agent calls are confirmed.
 
-Param resolution in the REPL:
-
-There is no CLI param seeding in `agm repl`. When a `param NAME: T` declaration is entered,
-it resolves eagerly in the following order:
-
-1. `[params.<program>]` config table — active only when a `program NAME` declaration has been
-   made in the session (the `program` decl is **session-global** and can only be set once).
-   The `<program>` key matches the declared program name.
-2. The param's default expression (`param x: T = e`), evaluated at declaration time.
-3. If neither config nor a default is available, a **missing required param** error is
-   reported inline (the declaration is rejected, not the whole session).
-
-Use `:inputs` to inspect all currently declared params and their resolved values.
-
 Options:
 
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent
@@ -610,11 +602,13 @@ Options:
 - `--auto-agents`: Start in auto mode, firing agent calls without confirming
   each one (the default is confirm-each-call; see *Agent-call confirmation*).
 - `--quiet`: Suppress the automatic echoing of entry results.
+- `--log`: Enable trace logging with an auto-generated timestamped path under `.agent-files/`.
+  Trace logging is **off by default** for the REPL; use `--log`, `--log-file`, or
+  `[exec] log = true` in `config.toml` to enable it.
 - `--log-file PATH` / `--no-log`: Control trace logging. With `--log-file` each
   evaluated entry appends its JSONL trace records (one trace *run* per entry) to
-  PATH; without it a timestamped file is written under `.agent-files/`. `--no-log`
-  disables tracing. `--no-log` and `--log-file` are mutually exclusive, and
-  `--dry-run` writes no trace.
+  PATH. `--no-log` disables tracing. `--log`, `--log-file`, and `--no-log` are
+  mutually exclusive (at most one may be given), and `--dry-run` writes no trace.
 - `--dry-run`: Type-check only. Each entry runs the full static pipeline
   (parse / resolve / typecheck) but is **never evaluated**, so no agent or
   `exec` calls fire and no bindings are persisted. The inferred type is echoed
@@ -636,6 +630,10 @@ are reported inline and never exit the process):
 Once the loop is running, a static or runtime error in an entry is printed and
 the prompt returns; it never changes the exit code.
 
+**Config pragmas** (`config KEY = VALUE`) entered at the REPL prompt are rejected
+with a diagnostic: config pragmas are an `agm exec` / batch-program feature.
+Set REPL session options via CLI flags or `[exec]` config instead.
+
 Examples:
 
 ```bash
@@ -649,7 +647,7 @@ agl> :bindings
 greeting : text = hello
 agl> :quit
 
-# Fire agent calls without confirming each one (params come from config/defaults).
+# Fire agent calls without confirming each one.
 agm repl --auto-agents
 
 # Explore types only — no agent or exec calls fire, nothing is persisted.

@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "both_pass_first_round",
-      "inputs": {"spec": "a tool"},
+      "params": {"spec": "a tool"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["{\"$case\": \"Pass\"}"],
@@ -15,7 +15,7 @@
     },
     {
       "name": "correctness_fails_first_round",
-      "inputs": {"spec": "a tool"},
+      "params": {"spec": "a tool"},
       "agents": {
         "impl": ["v1", "v2"],
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"off by one\"]}", "{\"$case\": \"Pass\"}"],
@@ -35,7 +35,7 @@
     },
     {
       "name": "design_fails_first_round",
-      "inputs": {"spec": "a tool"},
+      "params": {"spec": "a tool"},
       "agents": {
         "impl": ["v1", "v2"],
         "reviewer": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}"],
@@ -51,7 +51,7 @@
     },
     {
       "name": "both_fail_then_both_pass",
-      "inputs": {"spec": "a tool"},
+      "params": {"spec": "a tool"},
       "agents": {
         "impl": ["v1", "v2"],
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"bug\"]}", "{\"$case\": \"Pass\"}"],
@@ -64,7 +64,7 @@
     },
     {
       "name": "never_both_pass",
-      "inputs": {"spec": "a tool"},
+      "params": {"spec": "a tool"},
       "agents": {
         "impl": {"responses": ["v1", "fix"], "repeat_last": true},
         "reviewer": {"responses": ["{\"$case\": \"Pass\"}"], "repeat_last": true},

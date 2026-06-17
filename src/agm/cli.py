@@ -154,6 +154,16 @@ def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> Non
     exit_with_usage_error(command_path, f"error: the following arguments are required: {joined}")
 
 
+def _check_log_flags_exclusive(
+    command: str, *, no_log: bool, log: bool, log_file: str | None
+) -> None:
+    """Reject combinations of the mutually exclusive trace-logging flags."""
+    if sum([no_log, log, log_file is not None]) > 1:
+        exit_with_usage_error(
+            [command], "error: --log, --no-log, and --log-file are mutually exclusive"
+        )
+
+
 def _require_value(
     value: str | Path | None,
     *,
@@ -872,13 +882,22 @@ def exec_cmd(
     log_file: str | None = typer.Option(
         None,
         "--log-file",
-        help="Write a structured JSONL trace log to PATH.",
+        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(
         False,
         "--no-log",
-        help="Disable trace logging.",
+        help="Disable trace logging (overrides a config pragma or [exec] log = true).",
+    ),
+    log: bool = typer.Option(
+        False,
+        "--log",
+        help=(
+            "Enable trace logging to an auto-named timestamped file under .agent-files/. "
+            "Trace logging is off by default; --log, --log-file, a source 'config log = true' "
+            "pragma, or [exec] log = true in config.toml opt in."
+        ),
     ),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -920,10 +939,7 @@ def exec_cmd(
         exit_with_usage_error(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
         )
-    if no_log and log_file is not None:
-        exit_with_usage_error(
-            ["exec"], "error: --no-log and --log-file are mutually exclusive"
-        )
+    _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
     exec_command.run(
         ExecArgs(
             file=file,
@@ -934,6 +950,7 @@ def exec_cmd(
             runner=runner,
             no_log=no_log,
             log_file=log_file,
+            log=log,
         )
     )
 
@@ -968,7 +985,7 @@ def repl_cmd(
     log_file: str | None = typer.Option(
         None,
         "--log-file",
-        help="Write a structured JSONL trace log to PATH.",
+        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
         autocompletion=completion.complete_path_argument,
     ),
     no_log: bool = typer.Option(
@@ -976,15 +993,21 @@ def repl_cmd(
         "--no-log",
         help="Disable trace logging.",
     ),
+    log: bool = typer.Option(
+        False,
+        "--log",
+        help=(
+            "Enable trace logging to an auto-named timestamped file under .agent-files/. "
+            "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
+            "config.toml opt in. Config pragmas are not applied in the REPL."
+        ),
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
     del _dry_run
-    if no_log and log_file is not None:
-        exit_with_usage_error(
-            ["repl"], "error: --no-log and --log-file are mutually exclusive"
-        )
+    _check_log_flags_exclusive("repl", no_log=no_log, log=log, log_file=log_file)
     repl_command.run(
         ReplArgs(
             strict_json=strict_json,
@@ -994,6 +1017,7 @@ def repl_cmd(
             quiet=quiet,
             no_log=no_log,
             log_file=log_file,
+            log=log,
         )
     )
 

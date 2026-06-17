@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "plain_name",
-      "inputs": {"who": "Ada"},
+      "params": {"who": "Ada"},
       "agents": {"ask": ["r1", "r2", "r3", "r4"]},
       "expect": {
         "stdout": "r1\nr2\nr3\nr4\n",
@@ -33,7 +33,7 @@
     },
     {
       "name": "name_with_template_syntax_is_not_reinterpolated",
-      "inputs": {"who": "Eve ${exploit} \"quoted\""},
+      "params": {"who": "Eve ${exploit} \"quoted\""},
       "agents": {"ask": ["w", "x", "y", "z"]},
       "expect": {
         "stdout": "w\nx\ny\nz\n",

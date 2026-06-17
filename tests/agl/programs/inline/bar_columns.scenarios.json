@@ -2,27 +2,27 @@
   "scenarios": [
     {
       "name": "k_one",
-      "inputs": {"k": 1},
+      "params": {"k": 1},
       "expect": {"stdout": "one\nsmall\npos one\n"}
     },
     {
       "name": "k_two",
-      "inputs": {"k": 2},
+      "params": {"k": 2},
       "expect": {"stdout": "two indented body\nsmall\npos many\n"}
     },
     {
       "name": "k_zero",
-      "inputs": {"k": 0},
+      "params": {"k": 0},
       "expect": {"stdout": "other\nzero\nnon-positive\n"}
     },
     {
       "name": "k_fifteen",
-      "inputs": {"k": 15},
+      "params": {"k": 15},
       "expect": {"stdout": "other\nbig\npos many\n"}
     },
     {
       "name": "k_negative",
-      "inputs": {"k": -1},
+      "params": {"k": -1},
       "expect": {"stdout": "other\nsmall\nnon-positive\n"}
     }
   ]

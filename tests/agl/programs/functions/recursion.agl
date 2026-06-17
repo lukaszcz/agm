@@ -1,0 +1,15 @@
+# Recursive user-defined functions: factorial (direct recursion) and
+# even/odd (mutual recursion).
+param n: int
+
+def fact(x: int) -> int =
+  if x <= 1 => 1 else => x * fact(x - 1)
+
+def is_even(x: int) -> bool =
+  if x = 0 => true else => is_odd(x - 1)
+
+def is_odd(x: int) -> bool =
+  if x = 0 => false else => is_even(x - 1)
+
+print(fact(n))
+print(is_even(n))

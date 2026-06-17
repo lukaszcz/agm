@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 3}}
+{"diagnostic": {"line": 3, "message_contains": ["Type mismatch", "json"]}}

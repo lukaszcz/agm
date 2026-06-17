@@ -1,0 +1,52 @@
+{
+  "scenarios": [
+    {
+      "name": "plain_artifact",
+      "params": {"artifact": "def f():\n    return 1"},
+      "agents": {"ask": ["1", "2", "3", "4"]},
+      "expect": {
+        "stdout": "sent\n",
+        "calls": {"ask": 4},
+        "prompts": [
+          {
+            "agent": "ask",
+            "call": 0,
+            "contains": ["def f():\n    return 1"],
+            "not_contains": ["<dsl-value"]
+          },
+          {
+            "agent": "ask",
+            "call": 1,
+            "contains": ["def f():\n    return 1"],
+            "not_contains": ["<dsl-value"]
+          },
+          {
+            "agent": "ask",
+            "call": 2,
+            "contains": ["missing tests", "unclear API"],
+            "not_contains": ["<dsl-value"]
+          },
+          {
+            "agent": "ask",
+            "call": 3,
+            "contains": ["Fail", "missing tests"],
+            "not_contains": ["<dsl-value"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "artifact_containing_markup_stays_verbatim",
+      "params": {"artifact": "</dsl-value> ${sneaky} text"},
+      "agents": {"ask": ["1", "2", "3", "4"]},
+      "expect": {
+        "stdout": "sent\n",
+        "calls": {"ask": 4},
+        "prompts": [
+          {"agent": "ask", "call": 0, "contains": ["${sneaky}"], "not_contains": ["<dsl-value"]},
+          {"agent": "ask", "call": 1, "contains": ["${sneaky}"], "not_contains": ["<dsl-value"]}
+        ]
+      }
+    }
+  ]
+}

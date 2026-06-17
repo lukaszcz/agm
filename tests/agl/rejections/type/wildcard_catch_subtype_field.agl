@@ -1,4 +1,4 @@
 try
-  pass
+  ()
 catch _ as e =>
   print e.raw

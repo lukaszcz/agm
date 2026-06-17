@@ -2,21 +2,21 @@
   "scenarios": [
     {
       "name": "positive_operands",
-      "inputs": {"a": 7, "b": 2, "scale": 1.5},
+      "params": {"a": 7, "b": 2, "scale": 1.5},
       "expect": {
         "stdout": "9\n5\n14\n3.5\n-7\n10.5\n0.3\n-22.5\n1000000000000000000000000000000\nn=x\n"
       }
     },
     {
       "name": "negative_and_zero_results",
-      "inputs": {"a": -3, "b": 3, "scale": 1.5},
+      "params": {"a": -3, "b": 3, "scale": 1.5},
       "expect": {
         "stdout": "0\n-6\n-9\n-1\n3\n-4.5\n0.3\n0\n1000000000000000000000000000000\nn=x\n"
       }
     },
     {
       "name": "division_by_zero",
-      "inputs": {"a": 7, "b": 0, "scale": 1.5},
+      "params": {"a": 7, "b": 0, "scale": 1.5},
       "expect": {
         "stdout": "",
         "raises": {"type": "ArithmeticError"}

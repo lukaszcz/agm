@@ -1,7 +1,7 @@
 """WorkflowRuntime — the public façade for the AgL host runtime.
 
 Drives the full ``parse → scope → typecheck → host-prep → eval`` pipeline:
-registers agents/codecs/renderers, validates host inputs, materializes output
+registers agents/codecs, validates host params, materializes output
 contracts, and executes the program (or stops after static checking for
 ``agm exec --dry-run``).  Structured outputs use the JSON codec with
 lenient-by-default recovery (design §2.8).
@@ -24,61 +24,37 @@ if TYPE_CHECKING:
     from agm.agl.eval.values import ExceptionValue, Value
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.runtime.render import RendererFn
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
-    from agm.agl.syntax.nodes import Program
+    from agm.agl.syntax.nodes import PragmaValue, Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.types import Type as AglType
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec"})
 
-# The full v1 vocabulary of semantic type *kinds* (matches ``Type.kind`` for
-# every member of the ``Type`` union in ``agm.agl.typecheck.types``).  Used to
-# validate a renderer's ``supported_types`` capability descriptor (F6, §9.1).
-ALL_TYPE_KINDS: frozenset[str] = frozenset(
-    {
-        "text",
-        "json",
-        "bool",
-        "int",
-        "decimal",
-        "list",
-        "dict",
-        "record",
-        "enum",
-        "exception",
-    }
-)
-
 
 @dataclass(frozen=True, slots=True)
 class HostEnvironment:
     """Assembled host-runtime environment shared by ``run`` and the REPL session.
 
-    Bundles the four pieces that both the whole-program runner
+    Bundles the three pieces that both the whole-program runner
     (``WorkflowRuntime.run``) and the incremental ``ReplSession`` need to build
-    identically from a set of agent/codec/renderer registrations:
+    identically from a set of agent/codec registrations:
 
     ``registry``
         The ``AgentRegistry`` (named agents + optional default agent).
     ``capabilities``
-        The ``HostCapabilities`` static catalog derived from the registry,
-        codecs, and renderers — consumed by the type checker.
+        The ``HostCapabilities`` static catalog derived from the registry and
+        codecs — consumed by the type checker.
     ``codecs``
         The merged ``name → OutputCodec`` table (built-ins + host extras),
         used for contract materialization.
-    ``renderers``
-        The merged ``name → RendererFn`` table (built-ins + host extras), the
-        authoritative interpolation-rendering source threaded into the
-        interpreter.
     """
 
     registry: "AgentRegistry"
     capabilities: "HostCapabilities"
     codecs: dict[str, "OutputCodec"]
-    renderers: dict[str, "RendererFn"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,11 +103,7 @@ class AgentDeclInfo:
 
 @dataclass(frozen=True, slots=True)
 class ParamDeclInfo:
-    """Static summary of one ``param`` declaration in a program.
-
-    Available after typecheck (``discover_params``).  The ``type`` is the
-    resolved/inferred AgL type (``TextType``, ``IntType``, etc.) per O5.
-    """
+    """Static summary of one ``param`` declaration in a program."""
 
     name: str
     type: "AglType"
@@ -144,11 +116,11 @@ class ParamDeclInfo:
 class ParamDiscovery:
     """Result of ``WorkflowRuntime.discover_params``."""
 
-    params: "tuple[ParamDeclInfo, ...]"
-    program_name: "str | None"
+    params: tuple[ParamDeclInfo, ...]
+    program_name: str | None
     checked: "CheckedProgramType | None"
-    diagnostics: "tuple[Diagnostic, ...]"
-    warnings: "tuple[Diagnostic, ...]"
+    diagnostics: tuple[Diagnostic, ...]
+    warnings: tuple[Diagnostic, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +170,19 @@ class PreparedProgram:
         return tuple(infos)
 
     @property
-    def program_name(self) -> "str | None":
+    def config_pragmas(self) -> "dict[str, PragmaValue]":
+        """The validated ``config`` pragmas declared in source.
+
+        Returns a mapping of key → value for each pragma collected by the scope
+        pass.  Empty when parse or scope failed (``resolved is None``), or when
+        the program declares no ``config`` pragmas.
+        """
+        if self.resolved is None:
+            return {}
+        return dict(self.resolved.config_pragmas)
+
+    @property
+    def program_name(self) -> str | None:
         """The declared program name, or ``None`` when undeclared."""
         if self.resolved is None:
             return None
@@ -255,13 +239,13 @@ class RunResult:
         uncaught AgL exception.  ``warnings`` never affect ``ok``.
     ``diagnostics``
         Pre-execution FAILURES only: error-severity items from
-        lex/parse/scope/typecheck/input-validation.  Each entry has a
+        lex/parse/scope/typecheck/param-validation.  Each entry has a
         ``.message`` (str) and a ``.line`` (int, 1-based).  Warnings are a
         SEPARATE channel and NEVER appear here; on a successful run this list is
         empty.
     ``warnings``
         Advisory warning-severity diagnostics (e.g. non-exhaustive ``case``)
-        surfaced on EVERY path — success, static failure, input-validation
+        surfaced on EVERY path — success, static failure, param-validation
         failure, and uncaught exception.  Same ``Diagnostic`` type as
         ``diagnostics`` but with ``.severity == "warning"``.  Reported to the
         user but never cause the run to fail (never affect ``ok``).
@@ -312,6 +296,10 @@ class WorkflowRuntime:
         §4.12, §11.13).  ``None`` means no timeout (the shell command may run
         indefinitely).  This is the ``[exec] timeout`` config value, threaded
         in from the CLI (plan §10.3).
+    default_call_depth_limit : int
+        Maximum call depth for recursive functions (design §D8).  Exceeding
+        this limit raises a ``RecursionError`` in the AgL program.  Default
+        is 256.
     """
 
     def __init__(
@@ -321,17 +309,16 @@ class WorkflowRuntime:
         default_strict_json: bool = False,
         default_agent: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
+        default_call_depth_limit: int = 256,
     ) -> None:
         self._default_loop_limit = default_loop_limit
         self._default_strict_json = default_strict_json
         self._default_agent = default_agent
         self._shell_exec_timeout = shell_exec_timeout
+        self._default_call_depth_limit = default_call_depth_limit
         self._agents: dict[str, AgentFn] = {}
-        # Extra codecs/renderers registered by the host (beyond the built-ins).
+        # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
-        self._extra_renderers: dict[str, "RendererFn"] = {}
-        # Per-renderer supported type kinds (``None`` → type-agnostic / all kinds).
-        self._extra_renderer_kinds: dict[str, frozenset[str] | None] = {}
         # Cached assembled environment: invariant between registrations, so the
         # REPL's per-entry ``host_environment()`` calls reuse one bundle.  Any
         # ``register_*`` invalidates it.
@@ -386,57 +373,6 @@ class WorkflowRuntime:
         self._extra_codecs[name] = codec
         self._host_env_cache = None
 
-    def register_renderer(
-        self,
-        name: str,
-        fn: "RendererFn",
-        *,
-        supported_types: "frozenset[str] | None" = None,
-    ) -> None:
-        """Register a custom renderer function (§2.12 / design §7.6, plan §9.1).
-
-        *name* is the ``as <name>`` identifier used in prompt interpolation
-        segments.  Built-in renderer names (``"default"``, ``"raw"``,
-        ``"json"``, ``"bullets"``) are reserved.  Duplicate names are
-        rejected.
-
-        *fn* must match the ``RendererFn`` signature:
-        ``Callable[[Value, str | None], str]``.
-
-        *supported_types* is the renderer's capability descriptor: a frozenset
-        of semantic type **kinds** (the same vocabulary as a codec's
-        ``supported_kinds`` — ``"text"``, ``"int"``, ``"list"``, ``"record"``,
-        …).  The type-checker rejects ``${x as <name>}`` when ``x``'s kind is
-        not in this set (F6, plan §9.1).  ``None`` (the default) means the
-        renderer is type-agnostic and accepts every kind, matching the built-in
-        renderers.
-
-        Raises ``ValueError`` for reserved or duplicate names, or for an
-        unknown type kind in *supported_types*.
-        """
-        from agm.agl.runtime.render import RENDERER_NAMES
-
-        if name in RENDERER_NAMES:
-            raise ValueError(
-                f"Cannot register renderer with reserved name {name!r}. "
-                f"Reserved renderer names: {sorted(RENDERER_NAMES)}"
-            )
-        if name in self._extra_renderers:
-            raise ValueError(
-                f"A renderer named {name!r} is already registered. "
-                "Duplicate renderer registrations are not allowed."
-            )
-        if supported_types is not None:
-            unknown = supported_types - ALL_TYPE_KINDS
-            if unknown:
-                raise ValueError(
-                    f"Renderer {name!r} declares unknown type kind(s) "
-                    f"{sorted(unknown)}. Valid kinds: {sorted(ALL_TYPE_KINDS)}."
-                )
-        self._extra_renderers[name] = fn
-        self._extra_renderer_kinds[name] = supported_types
-        self._host_env_cache = None
-
     def host_environment(self) -> HostEnvironment:
         """Assemble the shared host environment from this runtime's registrations.
 
@@ -455,8 +391,6 @@ class WorkflowRuntime:
             agents=self._agents,
             default_agent=self._default_agent,
             extra_codecs=self._extra_codecs,
-            extra_renderers=self._extra_renderers,
-            extra_renderer_kinds=self._extra_renderer_kinds,
         )
         return self._host_env_cache
 
@@ -533,13 +467,7 @@ class WorkflowRuntime:
         return WorkflowRuntime.prepare(source).declared_agents
 
     def discover_params(self, prepared: PreparedProgram) -> ParamDiscovery:
-        """Run typecheck-only discovery to enumerate typed ``param`` declarations.
-
-        Non-raising. On any failure (parse/scope already captured in ``prepared``,
-        or typecheck error), degrades to empty ``params`` and surfaces the error
-        in ``diagnostics`` so help/completion still renders with base options.
-        Uses ``_run_typecheck`` shared with ``run_prepared``.
-        """
+        """Typecheck-only discovery for typed ``param`` declarations."""
         from agm.agl.syntax.nodes import ParamDecl
 
         if prepared.resolved is None:
@@ -553,11 +481,7 @@ class WorkflowRuntime:
 
         capabilities = self.host_environment().capabilities
         checked, tc_diagnostics = _run_typecheck(prepared.resolved, capabilities)
-
         all_warnings = (*prepared.warnings, *(checked.warnings if checked is not None else ()))
-
-        # ``_run_typecheck`` returns diagnostics only when ``checked`` is None, so
-        # this single condition covers the typecheck-failure degrade path.
         if checked is None:
             return ParamDiscovery(
                 params=(),
@@ -569,21 +493,23 @@ class WorkflowRuntime:
 
         assert prepared.program is not None
         infos: list[ParamDeclInfo] = []
-        for stmt in prepared.program.body:
-            if isinstance(stmt, ParamDecl):
-                param_type = checked.type_env.get_binding_type(stmt.node_id)
+        for item in prepared.program.body.items:
+            if isinstance(item, ParamDecl):
+                param_type = checked.type_env.get_binding_type(item.node_id)
                 assert param_type is not None, (
-                    f"Param {stmt.name!r} has no recorded binding type; checker invariant violated."
+                    f"Param {item.name!r} has no recorded binding type; "
+                    "checker invariant violated."
                 )
-                infos.append(ParamDeclInfo(
-                    name=stmt.name,
-                    type=param_type,
-                    has_default=stmt.default is not None,
-                    line=stmt.span.start_line,
-                    col=stmt.span.start_col,
-                ))
-        infos.sort(key=lambda i: (i.line, i.col))
-
+                infos.append(
+                    ParamDeclInfo(
+                        name=item.name,
+                        type=param_type,
+                        has_default=item.default is not None,
+                        line=item.span.start_line,
+                        col=item.span.start_col,
+                    )
+                )
+        infos.sort(key=lambda info: (info.line, info.col))
         return ParamDiscovery(
             params=tuple(infos),
             program_name=prepared.program_name,
@@ -596,7 +522,7 @@ class WorkflowRuntime:
         self,
         source: str,
         *,
-        inputs: Mapping[str, object] | None = None,
+        param_values: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
     ) -> RunResult:
@@ -604,7 +530,7 @@ class WorkflowRuntime:
 
         Pipeline:
             parse → resolve → check (with HostCapabilities) →
-            validate inputs → materialize contracts → eval
+            validate params → materialize contracts → eval
 
         Convenience wrapper: ``run(source)`` is exactly
         ``run_prepared(prepare(source))``.  A host that needs the declared-agent
@@ -613,10 +539,10 @@ class WorkflowRuntime:
         once.
 
         When ``check_only`` is ``True`` (``agm exec --dry-run``) the runtime
-        runs the full static pipeline, input validation, and contract
+        runs the full static pipeline, param validation, and contract
         materialization, then STOPS before executing any statement: a clean
         program returns ``ok=True`` with no bindings and produces no program
-        output; static/input errors still return ``ok=False``.  On a clean
+        output; static/param errors still return ``ok=False``.  On a clean
         ``check_only`` run the §10.1 static call-site inventory is populated on
         ``RunResult.call_sites`` (printed by ``agm exec --dry-run``).
 
@@ -629,7 +555,7 @@ class WorkflowRuntime:
         """
         return self.run_prepared(
             self.prepare(source),
-            inputs=inputs,
+            param_values=param_values,
             check_only=check_only,
             log_file=log_file,
         )
@@ -638,7 +564,7 @@ class WorkflowRuntime:
         self,
         prepared: PreparedProgram,
         *,
-        inputs: Mapping[str, object] | None = None,
+        param_values: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
         checked: "CheckedProgramType | None" = None,
@@ -646,13 +572,13 @@ class WorkflowRuntime:
         """Execute an already parsed + scoped program (no re-parsing).
 
         Resumes the pipeline at type checking: reconcile agents → check →
-        validate inputs → materialize contracts → eval.  See :meth:`run` for the
+        validate params → materialize contracts → eval.  See :meth:`run` for the
         ``check_only`` / ``log_file`` semantics.  When *prepared* carries a
         captured parse/scope failure (``resolved is None``), its diagnostics are
         surfaced unchanged and nothing executes.
         """
-        if inputs is None:
-            inputs = {}
+        if param_values is None:
+            param_values = {}
 
         # Lex + scope warnings travel with the prepared program (present on
         # every return path, like typecheck warnings).
@@ -679,15 +605,13 @@ class WorkflowRuntime:
         host_env = self.host_environment()
         registry = host_env.registry
         capabilities = host_env.capabilities
-        all_codecs = host_env.codecs
-        all_renderers = host_env.renderers
 
         # ----------------------------------------------------------------
         # [2b] Source↔host agent reconciliation (plan §8, decisions 1 & 11)
         #
         # Enforce the source/host contract BEFORE execution (preferred over
         # waiting for typecheck — a broken contract should preempt execution).
-        # Reported on the same channel as input-validation / host-config
+        # Reported on the same channel as param-validation / host-config
         # errors: a non-empty diagnostics list ⇒ ok=False, nothing executes.
         # ----------------------------------------------------------------
         reconciliation_errors = _reconcile_agents(registry, resolved.declared_agents)
@@ -700,11 +624,8 @@ class WorkflowRuntime:
             )
 
         # ----------------------------------------------------------------
-        # [3] Type checking (reuse cached result from discover_params if provided)
+        # [3] Type checking
         # ----------------------------------------------------------------
-        # When the caller supplies a pre-checked program (e.g. from
-        # discover_params), reuse it so typecheck runs exactly once across
-        # discover + run.
         if checked is None:
             checked, tc_diagnostics = _run_typecheck(resolved, capabilities)
             if checked is None:
@@ -719,38 +640,33 @@ class WorkflowRuntime:
         warnings.extend(checked.warnings)
 
         # ----------------------------------------------------------------
-        # [4] Required-param check: params with no default and no supplied value
-        #     are a pre-execution error.  Undeclared extras in inputs are silently
-        #     ignored — the CLI layer hard-rejects unknown options; the runtime
-        #     treats the merged inputs dict as authoritative.
+        # [4] Validate required params and collect declared param types.
         # ----------------------------------------------------------------
         from agm.agl.syntax.nodes import ParamDecl
 
-        # Build declared param map (name → type) and flag missing required
-        # params (no default + not in inputs) in a single pass over the body.
         declared_params: dict[str, AglType] = {}
-        input_errors: list[Diagnostic] = []
-        for stmt in program.body:
-            if isinstance(stmt, ParamDecl):
-                param_type = checked.type_env.get_binding_type(stmt.node_id)
+        param_errors: list[Diagnostic] = []
+        for item in program.body.items:
+            if isinstance(item, ParamDecl):
+                param_type = checked.type_env.get_binding_type(item.node_id)
                 if param_type is None:
                     raise AssertionError(
-                        f"Param {stmt.name!r} has no recorded binding type; "
+                        f"Param {item.name!r} has no recorded binding type; "
                         "checker invariant violated."
                     )
-                declared_params[stmt.name] = param_type
-                if stmt.default is None and stmt.name not in inputs:
-                    input_errors.append(
+                declared_params[item.name] = param_type
+                if item.default is None and item.name not in param_values:
+                    param_errors.append(
                         Diagnostic(
-                            message=f"Missing required param: {stmt.name!r}",
-                            line=stmt.span.start_line,
+                            message=f"Missing required param: {item.name!r}",
+                            line=item.span.start_line,
                         )
                     )
 
-        if input_errors:
+        if param_errors:
             return RunResult(
                 ok=False,
-                diagnostics=input_errors,
+                diagnostics=param_errors,
                 error=None,
                 warnings=list(warnings),
             )
@@ -761,7 +677,7 @@ class WorkflowRuntime:
         from agm.agl.runtime.contract import materialize_contract
 
         # Reuse the merged codec map built for HostCapabilities above.
-        codecs = all_codecs
+        codecs = host_env.codecs
         contracts: dict[int, object] = {}
         contract_errors: list[Diagnostic] = []
 
@@ -782,36 +698,34 @@ class WorkflowRuntime:
             )
 
         # ----------------------------------------------------------------
-        # [5b] Convert supplied external param values.
-        #      For each declared param present in inputs: convert/validate.
-        #      Errors are pre-execution (effect-free); collect all, fail if any.
+        # [6] Convert supplied external param values.
         # ----------------------------------------------------------------
         converted_params: dict[str, Value] = {}
-        input_bind_errors: list[Diagnostic] = []
+        param_bind_errors: list[Diagnostic] = []
 
-        for stmt in program.body:
-            if isinstance(stmt, ParamDecl) and stmt.name in inputs:
-                raw_val = inputs[stmt.name]
-                input_type_obj = declared_params[stmt.name]
+        for item in program.body.items:
+            if isinstance(item, ParamDecl) and item.name in param_values:
+                raw_val = param_values[item.name]
+                param_type_obj = declared_params[item.name]
                 try:
-                    typed_val = convert_input(stmt.name, raw_val, input_type_obj)
+                    typed_val = convert_param_value(item.name, raw_val, param_type_obj)
                 except ValueError as exc:
-                    input_bind_errors.append(
-                        Diagnostic(message=str(exc), line=stmt.span.start_line)
+                    param_bind_errors.append(
+                        Diagnostic(message=str(exc), line=item.span.start_line)
                     )
                     continue
-                converted_params[stmt.name] = typed_val
+                converted_params[item.name] = typed_val
 
-        if input_bind_errors:
+        if param_bind_errors:
             return RunResult(
                 ok=False,
-                diagnostics=input_bind_errors,
+                diagnostics=param_bind_errors,
                 error=None,
                 warnings=list(warnings),
             )
 
         # ----------------------------------------------------------------
-        # [check_only] --dry-run stop: the full static pipeline, input
+        # [check_only] --dry-run stop: the full static pipeline, param
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement (no program output, no side effects).
         # Build the §10.1 static call-site inventory before returning.
@@ -852,18 +766,17 @@ class WorkflowRuntime:
         }
 
         root_scope = Scope(parent=None)
-
         interp = Interpreter(
             checked=checked,
             registry=registry,
             contracts=typed_contracts,
             type_env=checked.type_env,
-            renderers=all_renderers,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             source=source,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
+            max_call_depth=self._default_call_depth_limit,
             param_values=converted_params,
         )
 
@@ -922,6 +835,11 @@ class WorkflowRuntime:
         """Idle timeout in seconds for ``exec`` shell calls (``None`` = no timeout)."""
         return self._shell_exec_timeout
 
+    @property
+    def default_call_depth_limit(self) -> int:
+        """Maximum call depth for recursive functions."""
+        return self._default_call_depth_limit
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -932,16 +850,11 @@ def _run_typecheck(
     resolved: "ResolvedProgram",
     capabilities: "HostCapabilities",
 ) -> "tuple[CheckedProgramType | None, tuple[Diagnostic, ...]]":
-    """Run the typecheck pass, returning (checked, error_diagnostics).
-
-    On success: (CheckedProgram, ()). On failure: (None, (error_diag,)).
-    Non-raising — mirrors prepare()'s degrade contract.
-    """
+    """Run the typecheck pass without raising."""
     from agm.agl.typecheck import AglTypeError, check
 
     try:
-        checked = check(resolved, capabilities)
-        return checked, ()
+        return check(resolved, capabilities), ()
     except AglTypeError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
@@ -1005,21 +918,18 @@ def assemble_host_environment(
     agents: dict[str, AgentFn],
     default_agent: AgentFn | None,
     extra_codecs: dict[str, "OutputCodec"],
-    extra_renderers: dict[str, "RendererFn"],
-    extra_renderer_kinds: dict[str, frozenset[str] | None],
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
-    Builds the merged codec/renderer tables, the ``AgentRegistry``, and the
-    derived ``HostCapabilities`` exactly as ``WorkflowRuntime.run`` did inline.
+    Builds the merged codec table, the ``AgentRegistry``, and the derived
+    ``HostCapabilities`` exactly as ``WorkflowRuntime.run`` did inline.
     Used by BOTH ``run`` and ``ReplSession`` so the two share identical
-    agent/codec/renderer wiring (CARRY-IN 1: codec_kinds and renderer_names are
-    derived from the actual registries, not from duplicated constants).
+    agent/codec wiring (CARRY-IN 1: codec_kinds are derived from the actual
+    registries, not from duplicated constants).
     """
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import JsonCodec, TextCodec
-    from agm.agl.runtime.render import builtin_renderers
 
     text_codec = TextCodec()
     json_codec = JsonCodec()
@@ -1031,21 +941,6 @@ def assemble_host_environment(
         **extra_codecs,
     }
 
-    # Merge built-in renderers with any host-registered extras.  This single
-    # table is the authoritative source for BOTH the static capability
-    # descriptors (names + supported kinds) AND the interpolation rendering at
-    # eval time, so a registered renderer is actually invoked (F1, M3b).
-    all_renderers: dict[str, "RendererFn"] = {
-        **builtin_renderers(),
-        **extra_renderers,
-    }
-    # Built-in renderers are type-agnostic (``None`` → all kinds); custom
-    # renderers carry the kinds declared at registration (F6, plan §9.1).
-    renderer_kinds: dict[str, frozenset[str] | None] = {
-        name: None for name in builtin_renderers()
-    }
-    renderer_kinds.update(extra_renderer_kinds)
-
     registry = AgentRegistry(
         named=dict(agents),
         default_agent=default_agent,
@@ -1055,19 +950,16 @@ def assemble_host_environment(
         has_default_agent=registry.has_default_agent,
         supports_shell_exec=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},
-        renderer_names=frozenset(all_renderers),
-        renderer_kinds=renderer_kinds,
     )
     return HostEnvironment(
         registry=registry,
         capabilities=capabilities,
         codecs=all_codecs,
-        renderers=all_renderers,
     )
 
 
-def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
-    """Convert a raw host input value to the declared AgL type.
+def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
+    """Convert a raw host param value to the declared AgL type.
 
     Supported types:
     - ``text``: verbatim (the value must already be a ``str``).
@@ -1101,7 +993,7 @@ def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
     if isinstance(type_obj, TextType):
         if not isinstance(raw, str):
             raise ValueError(
-                f"Input {name!r}: expected a text value (str), got {type(raw).__name__}"
+                f"Param {name!r}: expected a text value (str), got {type(raw).__name__}"
             )
         return TextValue(raw)
 
@@ -1126,28 +1018,28 @@ def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
             json_str = dumps_exact(raw, indent=None)
         else:
             raise ValueError(
-                f"Input {name!r} has type {type_obj!r}; structured inputs must be "
+                f"Param {name!r} has type {type_obj!r}; structured params must be "
                 "provided as a JSON string or a JSON-compatible Python value "
                 f"(got {type(raw).__name__!r})."
             )
         codec = JsonCodec()
         # Precompute schema once (CARRY-IN 2: avoids re-derivation inside parse).
         schema = derive_schema(type_obj)
-        # Host-supplied param values (CLI option / config) are not chatty agent
-        # output: they must be exactly one bare JSON value (F7).  Strict parsing
-        # avoids json-repair silently "fixing" user typos.
+        # Host-supplied param values are not chatty agent output: they must be
+        # exactly one bare JSON value (F7).  Strict parsing avoids json-repair
+        # silently "fixing" user typos.
         result = codec.parse(json_str, type_obj, strict_json=True, schema=schema)
         if not result.ok or result.value is None:
             raise ValueError(
-                f"Input {name!r}: could not parse as {type_obj!r}; structured "
-                f"inputs must be exactly one valid JSON value: {result.error_msg}"
+                f"Param {name!r}: could not parse as {type_obj!r}; structured "
+                f"params must be exactly one valid JSON value: {result.error_msg}"
             )
         return result.value
 
     # Scalar non-text (int/decimal/bool/json): parse from JSON if given as string.
     if not isinstance(type_obj, (IntType, DecimalType, BoolType, JsonType)):
         raise ValueError(
-            f"Input {name!r} has unsupported type {type_obj!r}."
+            f"Param {name!r} has unsupported type {type_obj!r}."
         )
 
     value = raw
@@ -1156,7 +1048,7 @@ def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
             value = json.loads(value, parse_float=_decimal.Decimal)
         except json.JSONDecodeError as exc:
             raise ValueError(
-                f"Input {name!r}: could not parse as JSON: {exc}"
+                f"Param {name!r}: could not parse as JSON: {exc}"
             ) from exc
 
     if isinstance(type_obj, IntType):
@@ -1165,7 +1057,7 @@ def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
         if isinstance(value, _decimal.Decimal) and value == int(value):
             return IntValue(int(value))
         raise ValueError(
-            f"Input {name!r}: expected an integer, got {type(value).__name__} {value!r}"
+            f"Param {name!r}: expected an integer, got {type(value).__name__} {value!r}"
         )
 
     if isinstance(type_obj, DecimalType):
@@ -1174,14 +1066,14 @@ def convert_input(name: str, raw: object, type_obj: "AglType") -> "Value":
         if isinstance(value, int) and not isinstance(value, bool):
             return DecimalValue(_decimal.Decimal(value))
         raise ValueError(
-            f"Input {name!r}: expected a decimal, got {type(value).__name__} {value!r}"
+            f"Param {name!r}: expected a decimal, got {type(value).__name__} {value!r}"
         )
 
     if isinstance(type_obj, BoolType):
         if isinstance(value, bool):
             return BoolValue(value)
         raise ValueError(
-            f"Input {name!r}: expected a bool, got {type(value).__name__} {value!r}"
+            f"Param {name!r}: expected a bool, got {type(value).__name__} {value!r}"
         )
 
     # JsonType: accept any parsed JSON value.
@@ -1195,7 +1087,7 @@ def _is_json_shaped(obj: object) -> bool:
     ``decimal.Decimal``, ``str``, ``list`` (elements recursively JSON-shaped),
     and ``dict`` (str keys, values recursively JSON-shaped).
 
-    Used by :func:`convert_input` to detect non-JSON-shaped host objects
+    Used by :func:`convert_param_value` to detect non-JSON-shaped host objects
     (e.g. sets or custom classes) before attempting serialisation, so the
     caller can emit a clean diagnostic instead of a cryptic traceback.
     """

@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "dot_unknown_code_and_user",
-      "inputs": {"code": 9, "who": "mallory"},
+      "params": {"code": 9, "who": "mallory"},
       "agents": {"picker": ["{\"$case\": \"Dot\"}"]},
       "expect": {
         "stdout": "dot\nnested other\nother 9\nuntagged\nunknown\n",
@@ -11,7 +11,7 @@
     },
     {
       "name": "line_routes_nested_pattern",
-      "inputs": {"code": 1, "who": "alice"},
+      "params": {"code": 1, "who": "alice"},
       "agents": {"picker": ["{\"$case\": \"Line\", \"len\": 5}"]},
       "expect": {
         "stdout": "line 5\nnested line 5\none\nuntagged\nknown\n",
@@ -20,7 +20,7 @@
     },
     {
       "name": "box_multi_field_and_renamed_binding",
-      "inputs": {"code": 0, "who": "alice"},
+      "params": {"code": 0, "who": "alice"},
       "agents": {"picker": ["{\"$case\": \"Box\", \"w\": 2, \"h\": 3, \"label\": \"big\"}"]},
       "expect": {
         "stdout": "box 2x3 big\nnested other\nzero\ntagged big\nknown\n",

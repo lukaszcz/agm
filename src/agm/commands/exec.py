@@ -22,25 +22,30 @@ Flag notes:
       return exactly one bare JSON value; the default is lenient recovery
       (fence/prose stripping + trivial repair, then strict schema validation).
       A source-level ``strict_json`` call option overrides this default.
-    - ``--log-file PATH`` writes a structured JSONL trace under the given path.
-    - ``--no-log`` disables trace logging entirely.
+    - Trace logging is OFF by default.  ``--log`` enables it (auto-named path);
+      ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
+      of these three flags may be given (mutually exclusive).  A source-level
+      ``config log = true`` pragma or ``[exec] log = true`` in config also enables
+      logging; CLI flags override pragmas (CLI > pragma > config).
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
+    - Source ``config KEY = VALUE`` pragmas (header-only) override config-file
+      settings for ``strict_json``, ``max_iters``, ``runner``, ``timeout``,
+      ``log``, and ``log_file``.  CLI flags always take precedence.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
       materialization and never writes a trace (side-effect-free).
-    - Each ``param`` declaration in the source program becomes a ``--<name>``
-      option.  Bool params use the ``--name/--no-name`` flag form.  Collision
-      with built-in exec options is detected eagerly and reported before execution.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TypeVar
 
 from agm.agent.runner import split_command
 from agm.agl import WorkflowRuntime
 from agm.agl.runtime.agents import runner_backed_agent_factory
+from agm.agl.syntax.nodes import PragmaValue
 from agm.commands.agent_io import default_agent_runner
 from agm.commands.args import ExecArgs
 from agm.commands.param_options import (
@@ -50,14 +55,28 @@ from agm.commands.param_options import (
 )
 from agm.config.context import current_config_context
 from agm.config.general import (
-    exec_config_from_merged,
+    load_exec_config,
     load_merged_config,
     params_config_from_merged,
+    parse_timeout,
 )
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
-from agm.core.log import prepare_trace_log
+from agm.core.log import prepare_trace_log_from_layers
 from agm.parser import exit_with_usage_error
+
+_T = TypeVar("_T")
+
+
+def _first(*values: _T | None) -> _T | None:
+    """Return the first non-None value, or None if all are None."""
+    return next((v for v in values if v is not None), None)
+
+
+def _typed_pragma(pragmas: dict[str, PragmaValue], key: str, typ: type[_T]) -> _T | None:
+    """Return the pragma value for *key* if present and of type *typ*, else None."""
+    value = pragmas.get(key)
+    return value if isinstance(value, typ) else None
 
 
 def run(args: ExecArgs) -> None:
@@ -73,35 +92,80 @@ def run(args: ExecArgs) -> None:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
 
-    # Merge the config-file stack ONCE; both the [exec] section and the
-    # [params.<key>] table (and the default-runner [loop] lookup below) are
-    # derived from this single merged dict, so the files are read and merged
-    # only once per invocation.
+    # Load the merged config once; derive [exec] and [params.<program>] from it.
     ctx = current_config_context()
     try:
         merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-        config = exec_config_from_merged(merged_config)
+        config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    strict_json = args.strict_json if args.strict_json is not None else config.strict_json
-    loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
+    # ----------------------------------------------------------------
+    # Parse the source ONCE to read config pragmas before resolving
+    # any runtime settings.  Pragma values override config; CLI overrides
+    # pragma (CLI > pragma > config).
+    # ----------------------------------------------------------------
+    prepared = WorkflowRuntime.prepare(source)
+    pragmas = prepared.config_pragmas
+
+    # Resolve strict_json: CLI > pragma > config.
+    strict_json = _first(
+        args.strict_json,
+        _typed_pragma(pragmas, "strict_json", bool),
+        config.strict_json,
+    )
+    # config.strict_json is always a bool, so _first always returns a bool here.
+    assert strict_json is not None
+    resolved_strict_json: bool = strict_json
+
+    # Resolve loop limit: CLI > pragma > config.
+    loop_limit = _first(
+        args.max_iters,
+        _typed_pragma(pragmas, "max_iters", int),
+        config.default_loop_limit,
+    )
+    assert loop_limit is not None
+    resolved_loop_limit: int = loop_limit
+
+    # Resolve timeout: pragma > config (no CLI flag for timeout).
+    pragma_timeout_raw = pragmas.get("timeout")
+    if pragma_timeout_raw is not None:
+        try:
+            resolved_timeout: float | None = parse_timeout(str(pragma_timeout_raw))
+        except ValueError as exc:
+            print(f"Error: invalid pragma timeout: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+    else:
+        resolved_timeout = config.timeout
 
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
+    # Pragma log/log_file values are wired here (Milestone 3).
     if dry_run.enabled():
         log_file = None
     else:
-        log_file = prepare_trace_log(
-            command_name="exec", no_log=args.no_log, log_file=args.log_file
+        log_file = prepare_trace_log_from_layers(
+            command_name="exec",
+            cli_no_log=args.no_log,
+            cli_log=args.log,
+            cli_log_file=args.log_file,
+            pragma_log=_typed_pragma(pragmas, "log", bool),
+            pragma_log_file=_typed_pragma(pragmas, "log_file", str),
+            config_log=config.log,
+            config_log_file=config.log_file,
         )
 
     # ----------------------------------------------------------------
-    # Resolve the runner command: CLI flag > [exec] config > shared loop
-    # default (the same default used by agm loop/review, per plan §9.5).
+    # Resolve the runner command: CLI flag > pragma > [exec] config > shared
+    # loop default (the same default used by agm loop/review, per plan §9.5).
     # ----------------------------------------------------------------
-    runner_cmd = args.runner or config.runner or default_agent_runner(merged=merged_config)
+    runner_cmd = (
+        args.runner
+        or _typed_pragma(pragmas, "runner", str)
+        or config.runner
+        or default_agent_runner(merged=merged_config)
+    )
 
     # Validate the resolved runner command eagerly: malformed quoting (e.g.
     # unclosed quote) and whitespace-only values are caught here via
@@ -122,12 +186,11 @@ def run(args: ExecArgs) -> None:
     #     source `agent` runner hint
     #     resolved default runner (runner_cmd, the floor)
     #
-    # ``prepare`` parses + scopes the source ONCE (independent of registrations);
-    # the same ``PreparedProgram`` is handed to ``run_prepared`` below, so the
-    # program is never parsed or scoped twice.  On a source with parse/scope
-    # errors ``declared_agents`` is ``()`` and ``run_prepared`` resurfaces the
-    # captured diagnostic (exit 1).
-    prepared = WorkflowRuntime.prepare(source)
+    # ``prepare`` was already called above to read config pragmas; the same
+    # ``PreparedProgram`` is reused here and handed to ``run_prepared`` below,
+    # so the program is never parsed or scoped twice.  On a source with
+    # parse/scope errors ``declared_agents`` is ``()`` and ``run_prepared``
+    # resurfaces the captured diagnostic (exit 1).
     decls = prepared.declared_agents
     source_hints = {d.name: d.runner for d in decls if d.runner is not None}
     # Config wins over source hints (dict merge: later keys override earlier).
@@ -153,14 +216,14 @@ def run(args: ExecArgs) -> None:
     factory = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
         per_agent_cmds=per_agent_cmds,
-        idle_timeout=config.timeout,
+        idle_timeout=resolved_timeout,
     )
 
     runtime = WorkflowRuntime(
-        default_loop_limit=loop_limit,
-        default_strict_json=strict_json,
+        default_loop_limit=resolved_loop_limit,
+        default_strict_json=resolved_strict_json,
         default_agent=factory,
-        shell_exec_timeout=config.timeout,
+        shell_exec_timeout=resolved_timeout,
     )
 
     # Register every declared agent so the registered set equals the declared
@@ -169,52 +232,23 @@ def run(args: ExecArgs) -> None:
     for d in decls:
         runtime.register_agent(d.name, factory)
 
-    # ----------------------------------------------------------------
-    # Discover param declarations and validate CLI tokens.
-    #
-    # Only runs when the front-end (parse/scope) succeeded (prepared.resolved
-    # is not None) AND typecheck succeeded (discovery.checked is not None).
-    # On front-end failure we skip CLI-param validation and hand the prepared
-    # program directly to run_prepared, which resurfaces the captured diagnostic.
-    # ----------------------------------------------------------------
     discovery = runtime.discover_params(prepared)
-
-    # Surface discovery warnings on stderr (e.g. non-exhaustive case at
-    # typecheck time).  They never affect the exit code.
     for diag in discovery.warnings:
         print(f"warning: line {diag.line}: {diag.message}", file=sys.stderr)
 
-    # ----------------------------------------------------------------
-    # Resolve param values from config + CLI (D2), ONLY when the front-end
-    # and typecheck both succeeded.  When ``discovery.checked is None`` the
-    # param set is unknown (parse/scope/typecheck failed), so we skip the
-    # whole param layer — no config lookup, no collision/token validation, no
-    # undeclared-key warnings — and hand the prepared program straight to
-    # run_prepared, which resurfaces the captured diagnostic (exit 1).  Doing
-    # otherwise would spew misleading "undeclared config key" warnings that
-    # mask the real parse/type error.
-    # ----------------------------------------------------------------
-    external_inputs: dict[str, object] = {}
-    checked = discovery.checked  # None when front-end or typecheck failed
-
+    external_params: dict[str, object] = {}
+    checked = discovery.checked
     if checked is not None:
-        # Detect param names that collide with built-in exec flags before
-        # parsing tokens: a collision is a program error (rename the param).
         collision_errors = check_param_collisions(discovery.params)
         if collision_errors:
             for err in collision_errors:
                 print(f"Error: {err}", file=sys.stderr)
             raise SystemExit(1)
-
-        # Parse the leftover ``ctx.args`` tokens into the param dict.
         try:
             cli_params = parse_param_tokens(discovery.params, args.param_tokens)
         except ValueError as exc:
             exit_with_usage_error(["exec"], f"error: {exc}")
 
-        # Resolve the program key for [params.<key>] config lookup (D2).
-        # Priority: declared ``program NAME`` > .agl file stem > None (inline
-        # -c with no program decl has no config table).
         if discovery.program_name is not None:
             param_config_key: str | None = discovery.program_name
         elif args.file is not None:
@@ -222,39 +256,36 @@ def run(args: ExecArgs) -> None:
         else:
             param_config_key = None
 
-        if param_config_key is not None:
-            config_param_values = params_config_from_merged(merged_config, param_config_key)
-        else:
-            config_param_values = {}
-
-        # Merge config and CLI values (CLI wins; undeclared config keys warn).
+        config_param_values = (
+            params_config_from_merged(merged_config, param_config_key)
+            if param_config_key is not None
+            else {}
+        )
         declared_names = {p.name for p in discovery.params}
-        external_inputs, config_warnings = resolve_param_values(
+        resolved_params, config_warnings = resolve_param_values(
             declared_names,
             config_param_values,
             cli_params,
             program_name=param_config_key,
         )
+        external_params.update(resolved_params)
         for msg in config_warnings:
             print(msg, file=sys.stderr)
 
-    # ``run_prepared`` accepts a ``Mapping[str, object]``.  Reuse the
-    # ``PreparedProgram`` from above — no second parse/scope of the source.
-    # Pass ``checked`` to skip a redundant typecheck inside run_prepared
-    # (it already ran during discover_params when checked is not None).
+    # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
     result = runtime.run_prepared(
         prepared,
-        inputs=external_inputs,
+        param_values=external_params,
         check_only=dry_run.enabled(),
         log_file=log_file,
         checked=checked,
     )
 
-    printed_warnings = {(diag.line, diag.message, diag.severity) for diag in discovery.warnings}
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.
     # Warnings carry a ``warning:`` prefix to disambiguate them from error
     # diagnostics on the shared stderr channel (F8).
+    printed_warnings = {(diag.line, diag.message, diag.severity) for diag in discovery.warnings}
     for diag in result.warnings:
         warning_key = (diag.line, diag.message, diag.severity)
         if warning_key not in printed_warnings:

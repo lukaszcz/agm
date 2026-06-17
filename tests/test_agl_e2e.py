@@ -1,9 +1,8 @@
-"""End-to-end behavior tests for AgL v1 (the `agm exec` workflow DSL).
+"""End-to-end behavior tests for AgL v2 (the `agm exec` workflow DSL).
 
-This suite is the TDD specification for the AgL implementation planned in
-notes/PLAN_DSL.md and is RED until `agm.agl` exists. Every
-tests/agl/programs/**/*.agl file is a complete AgL program executed under each
-scenario in its sidecar `<name>.scenarios.json`; every
+This suite is the TDD specification for the AgL implementation. Every
+tests/agl/programs/**/*.agl file is a complete AgL v2 program executed under
+each scenario in its sidecar `<name>.scenarios.json`; every
 tests/agl/rejections/**/*.agl file is an invalid program that the static
 pipeline must reject before executing anything. The data format is documented
 in tests/agl/README.md.
@@ -20,13 +19,13 @@ Public contract exercised here (notes/PLAN_DSL.md §9, notes/dsl_design.md §7.6
     )
     runtime.register_agent(name, fn)   # fn(request) -> str; request.prompt is the
                                        # rendered user prompt (design §7.5)
-    result = runtime.run(source, inputs={...})
+    result = runtime.run(source, param_values={...})
 
 RunResult surface asserted:
 
-    result.ok           True iff static checks and input validation passed and
+    result.ok           True iff static checks and param validation passed and
                         no uncaught AgL exception was raised
-    result.diagnostics  pre-execution failures (static errors, input
+    result.diagnostics  pre-execution failures (static errors, param
                         validation), each with `.message: str` and
                         `.line: int` (1-based source line)
     result.error        the uncaught AgL exception or None, exposing
@@ -54,7 +53,7 @@ REJECTIONS_DIR = AGL_DIR / "rejections"
 
 def _load_json(path: Path) -> Any:
     # parse_float=Decimal: AgL has no binary floats (design §5.1); scenario
-    # inputs and expected exception fields must round-trip decimals exactly.
+    # params and expected exception fields must round-trip decimals exactly.
     return json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
 
 
@@ -107,15 +106,15 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
     for name, agent in agents.items():
         if name != "ask":
             runtime.register_agent(name, agent)
-    result = runtime.run(source, inputs=scenario.get("inputs", {}))
+    result = runtime.run(source, param_values=scenario.get("params", {}))
     return result, agents
 
 
 def _assert_host_error(
     result: Any, agents: dict[str, ScriptedAgent], spec: dict[str, Any]
 ) -> None:
-    assert not result.ok, "expected the run to fail input validation"
-    assert result.error is None, "input validation failure is not an AgL exception"
+    assert not result.ok, "expected the run to fail param validation"
+    assert result.error is None, "param validation failure is not an AgL exception"
     messages = " | ".join(d.message for d in result.diagnostics)
     for needle in spec.get("message_contains", []):
         assert needle.lower() in messages.lower(), (
@@ -123,7 +122,7 @@ def _assert_host_error(
         )
     for agent in agents.values():
         assert agent.prompts == [], (
-            f"agent {agent.name!r} was called despite input validation failing"
+            f"agent {agent.name!r} was called despite param validation failing"
         )
 
 
@@ -216,7 +215,7 @@ def test_static_rejection(program: Path) -> None:
     from agm.agl import WorkflowRuntime  # red until the AgL implementation lands
 
     expect = _load_json(program.with_name(program.stem + ".expect.json"))["diagnostic"]
-    result = WorkflowRuntime().run(program.read_text(encoding="utf-8"), inputs={})
+    result = WorkflowRuntime().run(program.read_text(encoding="utf-8"), param_values={})
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"
     diagnostics = list(result.diagnostics)

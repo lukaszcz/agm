@@ -1,4 +1,4 @@
-"""Symbol and scope-tree data types for the AgL resolution pass.
+"""Symbol and scope-tree data types for the AgL v2 resolution pass.
 
 Data model
 ----------
@@ -8,8 +8,8 @@ Data model
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
 - ``ResolvedProgram`` — the frozen output of the scope pass: the original
-  ``Program`` plus three side tables.
-- ``CallKind`` — enum distinguishing how an ``AgentCall`` node resolved.
+  ``Program`` plus side tables.
+- ``BuiltinKind`` — enum classifying a built-in Call node (print/exec/ask).
 - ``AglScopeError`` — fatal scope error raised by the resolver.
 """
 
@@ -19,11 +19,46 @@ import enum
 from dataclasses import dataclass, field
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.syntax.nodes import AgentDecl, Program
+from agm.agl.syntax.nodes import AgentDecl, FuncDef, PragmaValue, Program
 from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
-# CallKind — how an AgentCall was resolved
+# BuiltinKind — classification of a built-in Call node
+# ---------------------------------------------------------------------------
+
+
+class BuiltinKind(enum.Enum):
+    """Classification of a resolved built-in call.
+
+    Attached to ``Call.node_id`` in ``ResolvedProgram.builtin_calls`` when the
+    callee is one of the three special built-in names.
+
+    ``PRINT``
+        ``print(expr)`` — outputs a value; yields ``unit``.
+    ``EXEC``
+        ``exec(command, ...)`` — shell execution; yields ``ExecResult`` or
+        a context-typed value.
+    ``ASK``
+        ``ask(prompt, ...)`` — invokes an agent; yields a context-typed value.
+    """
+
+    PRINT = "PRINT"
+    EXEC = "EXEC"
+    ASK = "ASK"
+
+
+# The single source of truth for the built-in call names and their kinds.
+# The resolver classifies calls by this mapping; the checker and any other
+# layer that needs the set of built-in names derives it from here.
+BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
+    "print": BuiltinKind.PRINT,
+    "exec": BuiltinKind.EXEC,
+    "ask": BuiltinKind.ASK,
+}
+
+
+# ---------------------------------------------------------------------------
+# BinderKind — how a binding was introduced
 # ---------------------------------------------------------------------------
 
 
@@ -38,34 +73,26 @@ class BinderKind(enum.Enum):
     ``var_binding``
         A ``var`` declaration (mutable).
     ``param_binding``
-        A ``param`` declaration (immutable, root-scope).
+        A ``param`` declaration or function/lambda parameter (immutable).
     ``catch_binder``
         The binder introduced by a ``catch e`` clause (immutable, branch-local).
     ``pattern_binding``
         A variable introduced by a ``case``/``match`` pattern (immutable).
+    ``function_binding``
+        A top-level ``def`` declaration (immutable value binding).
+    ``agent_binding``
+        An ``agent`` declaration (immutable value binding of type ``agent``).
+    ``param_binding``
+        A function/lambda parameter binding (immutable, function-local).
     """
 
     let_binding = "let_binding"
     var_binding = "var_binding"
-    param_binding = "param_binding"
     catch_binder = "catch_binder"
     pattern_binding = "pattern_binding"
-
-
-class CallKind(enum.Enum):
-    """Classification of a resolved agent call.
-
-    ``agent``
-        A named custom agent (registered with the host runtime).
-    ``default_agent``
-        The ``ask`` contextual keyword → the runtime's default agent.
-    ``shell_exec``
-        The ``exec`` contextual keyword → shell execution.
-    """
-
-    agent = "agent"
-    default_agent = "default_agent"
-    shell_exec = "shell_exec"
+    function_binding = "function_binding"
+    agent_binding = "agent_binding"
+    param_binding = "param_binding"
 
 
 # ---------------------------------------------------------------------------
@@ -80,17 +107,15 @@ class BindingRef:
     ``name``
         The variable name.
     ``mutable``
-        ``True`` for ``var`` bindings; ``False`` for ``let`` and ``input``
-        bindings, and for pattern/catch binders.
+        ``True`` for ``var`` bindings; ``False`` for all others.
     ``decl_span``
         Source span of the declaration statement (used in error messages).
     ``decl_node_id``
-        The ``node_id`` of the declaration node (``LetDecl``, ``VarDecl``,
-        ``ParamDecl``, ``VarPattern``, or ``CatchClause``).
+        The ``node_id`` of the declaration node.
     ``kind``
-        How the binding was introduced (``let``/``var``/``input``/catch
-        binder/pattern binding).  Drives the precise ``set`` rejection message
-        so a mutation of a catch binder is not mislabelled as a ``let`` (F8).
+        How the binding was introduced.  Drives the precise ``set`` rejection
+        message so a mutation of a catch binder is not mislabelled as a
+        ``let`` (F8).
     """
 
     name: str
@@ -110,17 +135,11 @@ class ScopeNode:
     """A lexical scope in the scope tree.
 
     Each ``ScopeNode`` tracks:
-    - ``bindings``: the names introduced *directly* in this scope (by
-      ``let``/``var``/``input`` declarations, pattern variables, or catch
-      binders).
+    - ``bindings``: the names introduced *directly* in this scope.
     - ``parent``: the enclosing scope (``None`` for the root scope).
-    - ``node_id``: the ``node_id`` of the AST construct that opened this scope
-      (the ``Program.node_id`` for the root scope).
+    - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
 
-    Lookup walks the parent chain.  ``set`` and VarRef resolution both use
-    ``lookup``.  The scope chain is built bottom-up: the resolver opens a new
-    ``ScopeNode`` on entering a scope-introducing construct and restores the
-    previous one on exit.
+    Lookup walks the parent chain.
     """
 
     node_id: int
@@ -156,31 +175,37 @@ class ResolvedProgram:
     ``resolution``
         Maps every ``VarRef.node_id`` and ``SetStmt.node_id`` to the
         ``BindingRef`` it resolved to.
-    ``call_kinds``
-        Maps every ``AgentCall.node_id`` to its ``CallKind``.
+    ``builtin_calls``
+        Maps every ``Call.node_id`` whose callee is a built-in name
+        (``print``/``exec``/``ask``) to its ``BuiltinKind``.  Calls whose
+        callee resolves to a user-defined binding have no entry here.
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
     ``declared_agents``
         Maps each agent name declared in THIS program (via an ``agent``
-        declaration) to its :class:`AgentDecl` node.  Ambient agents supplied
-        by the host (see ``resolve(..., ambient_agents=...)``) are NOT included
-        here.  Always populated by the resolver.
+        declaration) to its :class:`AgentDecl` node.  Always populated by the
+        resolver.
+    ``declared_functions``
+        Maps each top-level ``def`` name to its :class:`FuncDef` node.
+        Populated in the pre-pass; useful for downstream typecheck and eval.
+    ``config_pragmas``
+        Validated config pragma key→value map collected in the header pass.
     ``program_name``
         The source-declared program name from a ``program NAME`` declaration,
-        or ``None`` when undeclared.  Used by the runtime/config layer for
-        ``[params.<name>]`` keying.  At most one ``program`` declaration is
-        allowed per program; a duplicate is a scope error.
+        or ``None`` when undeclared.
     ``warnings``
         Non-fatal scope-pass diagnostics (severity ``"warning"``), e.g. an
-        agent that is declared but never called.  Empty by default.
+        agent that is declared but never referenced.  Empty by default.
     """
 
     program: Program
     resolution: dict[int, BindingRef]
-    call_kinds: dict[int, CallKind]
+    builtin_calls: dict[int, BuiltinKind]
     root_scope: ScopeNode
     declared_agents: dict[str, AgentDecl] = field(default_factory=dict)
+    declared_functions: dict[str, FuncDef] = field(default_factory=dict)
+    config_pragmas: dict[str, PragmaValue] = field(default_factory=dict)
     program_name: str | None = None
     warnings: tuple[Diagnostic, ...] = ()
 
@@ -194,6 +219,6 @@ class AglScopeError(AglError):
     """A fatal name-resolution error.
 
     Raised by the scope resolver on the first static scope violation
-    (Q4: first-error abort policy).  Carries an optional ``SourceSpan`` for
+    (first-error abort policy).  Carries an optional ``SourceSpan`` for
     precise source location.
     """

@@ -9,14 +9,18 @@ agent impl
 agent reviewer
 agent critic
 
-var artifact: text = impl "Implement ${spec}"
+var artifact: text = ask("Implement ${spec}", agent: impl)
+
+# code and design declared as vars outside the loop so the until condition can see them.
+var code: Review = Pass
+var design: Review = Pass
 
 do[5]
-  let code: Review = reviewer[on_parse_error: retry[2]] "Review correctness:\n${artifact}"
-  let design: Review = critic[on_parse_error: retry[2]] "Review design:\n${artifact}"
+  set code = ask("Review correctness:\n${artifact}", agent: reviewer, on_parse_error: Retry(n: 2))
+  set design = ask("Review design:\n${artifact}", agent: critic, on_parse_error: Retry(n: 2))
 
   if code is Fail or design is Fail =>
-    set artifact = impl """
+    set artifact = ask("""
     Fix valid issues.
 
     Correctness review:
@@ -27,10 +31,10 @@ do[5]
 
     Current artifact:
     ${artifact}
-    """
-  | else =>
-    pass
+    """, agent: impl)
+  else =>
+    ()
 until code is Pass and design is Pass
 
-let stamp = exec "printf 'final:%s' ${artifact}"
+let stamp: text = exec "printf 'final:%s' ${artifact}"
 print stamp

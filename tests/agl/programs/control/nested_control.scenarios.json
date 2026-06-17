@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "accepted_first_round",
-      "inputs": {"spec": "a widget"},
+      "params": {"spec": "a widget"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["{\"$case\": \"Pass\"}"],
@@ -15,7 +15,7 @@
     },
     {
       "name": "two_retry_rounds_then_accepted",
-      "inputs": {"spec": "a widget"},
+      "params": {"spec": "a widget"},
       "agents": {
         "impl": ["v1", "v2", "v3"],
         "reviewer": [
@@ -29,14 +29,14 @@
         "stdout": "accepted\nv3\n",
         "calls": {"impl": 3, "reviewer": 3, "planner": 2},
         "prompts": [
-          {"agent": "planner", "call": 1, "contains": ["- i2"]},
+          {"agent": "planner", "call": 1, "contains": ["i2"]},
           {"agent": "impl", "call": 2, "contains": ["v2"]}
         ]
       }
     },
     {
       "name": "hopeless_giveup",
-      "inputs": {"spec": "a widget"},
+      "params": {"spec": "a widget"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"broken\"]}"],
@@ -49,7 +49,7 @@
     },
     {
       "name": "deferred_giveup",
-      "inputs": {"spec": "a widget"},
+      "params": {"spec": "a widget"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"broken\"]}"],
@@ -62,7 +62,7 @@
     },
     {
       "name": "endless_retries_exhaust_loop",
-      "inputs": {"spec": "a widget"},
+      "params": {"spec": "a widget"},
       "agents": {
         "impl": {"responses": ["v1", "fix"], "repeat_last": true},
         "reviewer": {

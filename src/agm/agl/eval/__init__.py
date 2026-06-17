@@ -8,7 +8,7 @@ Public API
 - :class:`AglRaise` — Python carrier for a propagating AgL exception.
 - Value types: ``TextValue``, ``IntValue``, ``DecimalValue``, ``BoolValue``,
   ``JsonValue``, ``ListValue``, ``DictValue``, ``RecordValue``, ``EnumValue``,
-  ``ExceptionValue``, ``Value``.
+  ``ExceptionValue``, ``UnitValue``, ``AgentValue``, ``Closure``, ``Value``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,10 @@ from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.interpreter import Interpreter
 from agm.agl.eval.scope import Binding, Scope
 from agm.agl.eval.values import (
+    UNIT_VALUE,
+    AgentValue,
     BoolValue,
+    Closure,
     DecimalValue,
     DictValue,
     EnumValue,
@@ -27,13 +30,16 @@ from agm.agl.eval.values import (
     ListValue,
     RecordValue,
     TextValue,
+    UnitValue,
     Value,
 )
 
 __all__ = [
+    "AgentValue",
     "AglRaise",
     "Binding",
     "BoolValue",
+    "Closure",
     "DecimalValue",
     "DictValue",
     "EnumValue",
@@ -45,5 +51,7 @@ __all__ = [
     "RecordValue",
     "Scope",
     "TextValue",
+    "UNIT_VALUE",
+    "UnitValue",
     "Value",
 ]

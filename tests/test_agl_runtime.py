@@ -8,7 +8,7 @@ Covers:
 - RunResult has .ok (bool), .diagnostics (list), .error (None for pre-exec failures)
 - AglError and SourceSpan
 - Token constants
-- M1 additions: agent registration/fallback, capability derivation, input validation,
+- M1 additions: agent registration/fallback, capability derivation, param validation,
   text-codec behavior, AgentCallError, empty-response valid case
 """
 
@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import os
 import pathlib
+from typing import TYPE_CHECKING
 
 import pytest
 
 from agm.agl import AglError, SourceSpan, WorkflowRuntime
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.runtime import Diagnostic, RunResult
+
+if TYPE_CHECKING:
+    from agm.agl.runtime.codec import OutputCodec
 
 
 class TestWorkflowRuntimeConstructor:
@@ -49,7 +53,7 @@ class TestWorkflowRuntimeConstructor:
         rt.register_agent("reviewer", my_agent)  # should not raise
         # The source declares the registered agent so the source↔host contract
         # holds (M4); a valid program then returns ok=True.
-        result = rt.run("agent reviewer\nlet x = 1")
+        result = rt.run("agent reviewer\nlet x = 1\nx")
         assert result.ok is True
         assert result.error is None
 
@@ -102,7 +106,7 @@ class TestRunBehavior:
 
     def test_valid_program_ok(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert result.ok is True
 
     def test_static_error_not_ok(self) -> None:
@@ -132,15 +136,15 @@ class TestRunBehavior:
         # pre-execution failure: error is None (no AgL exception was raised)
         assert result.error is None
 
-    def test_run_with_inputs(self) -> None:
+    def test_run_with_params(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param k\nprint k", inputs={"k": "value"})
+        result = rt.run("param k\nprint k", param_values={"k": "value"})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
-    def test_run_with_empty_inputs(self) -> None:
+    def test_run_with_empty_params(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1", inputs={})
+        result = rt.run("let x = 1\nx", param_values={})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
@@ -163,13 +167,13 @@ class TestFallbackAgent:
 
     def test_with_default_agent_ask_call_succeeds(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('let x = ask "hi"\nx')
         assert result.ok is True
 
     def test_named_agent_registered_accepted(self) -> None:
         rt = WorkflowRuntime()
         rt.register_agent("impl", lambda req: "output")
-        result = rt.run('agent impl\nlet x = impl "do it"')
+        result = rt.run('agent impl\nask("do it", agent: impl)')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
@@ -183,7 +187,7 @@ class TestFallbackAgent:
     def test_default_agent_backs_declared_name(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         # A default_agent backs any declared name without a dedicated registration.
-        result = rt.run('agent any_agent_name\nlet x = any_agent_name "hi"')
+        result = rt.run('agent any_agent_name\nask("hi", agent: any_agent_name)')
         assert result.ok is True
 
     def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
@@ -199,31 +203,32 @@ class TestFallbackAgent:
 
 
 class TestInputValidationRuntime:
-    """Input validation before execution (§11.3, §9.5)."""
+    """Param validation before execution (§11.3, §9.5)."""
 
-    def test_missing_input_fails_not_ok(self) -> None:
+    def test_missing_param_fails_not_ok(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param spec\nprint spec", inputs={})
+        result = rt.run("param spec\nprint spec", param_values={})
         assert result.ok is False
         assert result.error is None  # host error, not AgL exception
 
-    def test_missing_input_mentions_name(self) -> None:
+    def test_missing_param_mentions_name(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param spec\nprint spec", inputs={})
+        result = rt.run("param spec\nprint spec", param_values={})
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "spec" in msgs.lower()
 
-    def test_undeclared_extra_fails(self) -> None:
+    def test_undeclared_extra_is_ignored(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param a\nprint a", inputs={"a": "ok", "b": "extra"})
-        assert result.ok is True  # undeclared extras silently ignored per O4/runtime contract
+        result = rt.run("param a\nprint a", param_values={"a": "ok", "b": "extra"})
+        assert result.ok is True
+        assert result.diagnostics == []
 
-    def test_text_input_verbatim(self) -> None:
+    def test_text_param_verbatim(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param msg\nprint msg", inputs={"msg": "hello world"})
+        result = rt.run("param msg\nprint msg", param_values={"msg": "hello world"})
         assert result.ok is True
 
-    def test_no_agent_called_on_input_failure(self) -> None:
+    def test_no_agent_called_on_param_failure(self) -> None:
         calls: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -231,38 +236,38 @@ class TestInputValidationRuntime:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run("param x\nlet y = ask \"Hi\"", inputs={})
+        rt.run('param x\nask("Hi")', param_values={})
         assert calls == []
 
-    def test_int_input_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_int_param_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param n: int\nprint n", inputs={"n": 5})
+        result = rt.run("param n: int\nprint n", param_values={"n": 5})
         assert result.ok
         out = capsys.readouterr().out
         assert "5" in out
 
-    def test_invalid_typed_input_fails(self) -> None:
+    def test_invalid_typed_param_fails(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param n: int\nprint n", inputs={"n": "five"})
+        result = rt.run("param n: int\nprint n", param_values={"n": "five"})
         assert result.ok is False
         assert result.error is None
 
-    def test_missing_input_reports_declaration_line(self) -> None:
-        """F3: the missing-input diagnostic carries the declaration's line."""
+    def test_missing_param_reports_declaration_line(self) -> None:
+        """F3: the missing-param diagnostic carries the declaration's line."""
         rt = WorkflowRuntime()
-        # ``input spec`` is on line 3; the diagnostic must report line 3, not 1.
+        # ``param spec`` is on line 3; the diagnostic must report line 3, not 1.
         src = "let a = 1\nlet b = 2\nparam spec\nprint spec"
-        result = rt.run(src, inputs={})
+        result = rt.run(src, param_values={})
         assert result.ok is False
         missing = [d for d in result.diagnostics if "spec" in d.message.lower()]
         assert missing, result.diagnostics
         assert missing[0].line == 3
 
-    def test_invalid_typed_input_reports_declaration_line(self) -> None:
+    def test_invalid_typed_param_reports_declaration_line(self) -> None:
         """F3 parity: the type-invalid diagnostic already reports the line."""
         rt = WorkflowRuntime()
         src = "let a = 1\nlet b = 2\nparam n: int\nprint n"
-        result = rt.run(src, inputs={"n": "five"})
+        result = rt.run(src, param_values={"n": "five"})
         assert result.ok is False
         bad = [d for d in result.diagnostics if "n" in d.message.lower()]
         assert bad, result.diagnostics
@@ -274,7 +279,7 @@ class TestEmptyResponse:
 
     def test_empty_string_response_is_valid_text(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "")
-        result = rt.run('let x = ask "Say nothing."')
+        result = rt.run('let x = ask "Say nothing."\nx')
         assert result.ok is True
         from agm.agl.eval.values import TextValue
 
@@ -292,7 +297,7 @@ class TestAgentRequest:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('let x = ask "Hello world"')
+        rt.run('ask "Hello world"')
         assert received[0].prompt == "Hello world"
 
     def test_request_agent_name_for_default(self) -> None:
@@ -303,7 +308,7 @@ class TestAgentRequest:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('let x = ask "Hi"')
+        rt.run('ask "Hi"')
         assert received[0].agent == "ask"
 
     def test_request_agent_name_for_named(self) -> None:
@@ -315,7 +320,7 @@ class TestAgentRequest:
 
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", reviewer)
-        rt.run('agent reviewer\nlet x = reviewer "Review this"')
+        rt.run('agent reviewer\nask("Review this", agent: reviewer)')
         assert received[0].agent == "reviewer"
 
 
@@ -362,7 +367,7 @@ class TestUncaughtAgentCallErrorSpan:
             raise AglRaise(exc_val, span=existing)
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let a = 1\nlet x = ask "hi"')
+        result = rt.run('let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
         # The agent's own span (line 99) is kept, not replaced by the call site.
@@ -371,7 +376,7 @@ class TestUncaughtAgentCallErrorSpan:
     def test_uncaught_agent_call_error_reports_call_line(self) -> None:
         rt = self._failing_runtime()
         # The ``ask`` call is on line 2.
-        result = rt.run('let a = 1\nlet x = ask "hi"')
+        result = rt.run('let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
@@ -390,7 +395,7 @@ class TestUncaughtAgentCallErrorSpan:
         from agm.commands.exec import run as exec_run
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let a = 1\nlet x = ask "hi"\n')
+        agl_file.write_text('let a = 1\nask("hi")\n')
 
         def failing_agent(req: object) -> str:
             raise AgentCallHostError(
@@ -453,7 +458,7 @@ class TestRunResultType:
 
     def test_run_result_has_bindings(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert hasattr(result, "bindings")
         assert isinstance(result.bindings, dict)
 
@@ -613,7 +618,6 @@ class TestTokenConstants:
         assert tokens.KW_ENUM == "enum"
         assert tokens.KW_TYPE == "type"
         assert tokens.KW_PARAM == "param"
-        assert tokens.KW_PROGRAM == "program"
         assert tokens.KW_LET == "let"
         assert tokens.KW_VAR == "var"
         assert tokens.KW_SET == "set"
@@ -627,8 +631,6 @@ class TestTokenConstants:
         assert tokens.KW_CATCH == "catch"
         assert tokens.KW_RAISE == "raise"
         assert tokens.KW_AS == "as"
-        assert tokens.KW_PASS == "pass"
-        assert tokens.KW_PRINT == "print"
         assert tokens.KW_AND == "and"
         assert tokens.KW_OR == "or"
         assert tokens.KW_NOT == "not"
@@ -658,7 +660,7 @@ class TestNoDefaultAgent:
 
     def test_ask_without_default_agent_is_static_error(self) -> None:
         rt = WorkflowRuntime()  # no default agent configured
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is False
         assert result.error is None  # static (pre-execution), not an AgL exception
         assert any("default agent" in d.message.lower() for d in result.diagnostics)
@@ -668,7 +670,7 @@ class TestNoDefaultAgent:
             return "answer"
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is True
         assert result.error is None
 
@@ -699,15 +701,15 @@ class TestDryRunCheckOnly:
             return "should not be called"
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let x = ask "hi"', check_only=True)
+        result = rt.run('let x = ask "hi"\nx', check_only=True)
         assert result.ok is True
         # The agent must never be invoked during a dry run.
         assert calls == []
 
-    def test_check_only_input_validation_still_runs(self) -> None:
+    def test_check_only_param_validation_still_runs(self) -> None:
         rt = WorkflowRuntime()
-        # Missing declared input is caught even under check_only.
-        result = rt.run("param msg\nprint msg", inputs={}, check_only=True)
+        # Missing declared param is caught even under check_only.
+        result = rt.run("param msg\nprint msg", param_values={}, check_only=True)
         assert result.ok is False
         assert any("msg" in d.message for d in result.diagnostics)
 
@@ -715,12 +717,12 @@ class TestDryRunCheckOnly:
 class TestDecimalSerialization:
     """F3/F9: decimals print/round-trip exactly; never via binary float."""
 
-    def test_json_input_with_decimal_prints_exactly(
+    def test_json_param_with_decimal_prints_exactly(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         rt = WorkflowRuntime()
         result = rt.run(
-            'param data: json\nprint data', inputs={"data": '{"a": 1.5}'}
+            'param data: json\nprint data', param_values={"data": '{"a": 1.5}'}
         )
         assert result.ok is True
         captured = capsys.readouterr()
@@ -756,14 +758,14 @@ class TestDecimalSerialization:
 
 
 class TestWarningsThreadedOnFailurePaths:
-    """F14: typecheck warnings survive input-validation failure paths."""
+    """F14: typecheck warnings survive param-validation failure paths."""
 
-    def test_warning_and_missing_input_both_visible(
+    def test_warning_and_missing_param_both_visible(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # M1 produces no checker warnings organically, so inject one through the
         # CheckedProgram the runtime threads from ``check``.  This exercises the
-        # real failure path (missing input) while a warning is present.
+        # real failure path (missing param) while a warning is present.
         import agm.agl.typecheck as tc_mod
         from agm.agl.diagnostics import Diagnostic
         from agm.agl.typecheck.env import CheckedProgram
@@ -780,17 +782,18 @@ class TestWarningsThreadedOnFailurePaths:
                 call_sites=checked.call_sites,
                 warnings=(*checked.warnings, warning),
                 type_env=checked.type_env,
+                function_signatures=checked.function_signatures,
             )
 
         monkeypatch.setattr(tc_mod, "check", check_with_warning)
 
         rt = WorkflowRuntime()
-        result = rt.run("param msg\nprint msg", inputs={})
+        result = rt.run("param msg\nprint msg", param_values={})
         assert result.ok is False
         # The warning is threaded onto its own channel even on a failure path.
         warning_messages = [d.message for d in result.warnings]
         assert any("a checker warning" in m for m in warning_messages)
-        # The missing-input error lands in diagnostics (errors only).
+        # The missing-param error lands in diagnostics (errors only).
         error_messages = [d.message for d in result.diagnostics]
         assert any("msg" in m for m in error_messages)
         # Channels stay separate: no warning leaks into diagnostics.
@@ -836,8 +839,8 @@ class TestAgentRegistryDispatch:
             registry.dispatch("ghost", AgentRequest(agent="ghost", prompt="q"))
 
 
-class TestInputBindingInvariant:
-    """The runtime relies on the checker recording every input's binding type."""
+class TestParamBindingInvariant:
+    """The runtime relies on the checker recording every param's binding type."""
 
     def test_missing_binding_type_is_internal_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -851,7 +854,7 @@ class TestInputBindingInvariant:
 
         rt = WorkflowRuntime()
         with pytest.raises(AssertionError, match="binding type"):
-            rt.run("param msg\nprint msg", inputs={"msg": "hi"})
+            rt.run("param msg\nprint msg", param_values={"msg": "hi"})
 
 
 # ---------------------------------------------------------------------------
@@ -871,13 +874,9 @@ class TestCapabilitiesBuiltFromRegistrations:
         tc, jc = TextCodec(), JsonCodec()
         assert tc.name == "text"
         assert jc.name == "json"
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is True
 
-    def test_default_runtime_has_builtin_renderer_names(self) -> None:
-        """Built-in renderers (default, raw, json, bullets) are always present."""
-        from agm.agl.runtime.render import RENDERER_NAMES
-        assert frozenset({"default", "raw", "json", "bullets"}) <= RENDERER_NAMES
 
     def test_register_codec_before_run_extends_capabilities(self) -> None:
         """A custom codec registered before run() makes its kinds available to typecheck."""
@@ -920,301 +919,162 @@ class TestCapabilitiesBuiltFromRegistrations:
         rt = WorkflowRuntime()
         rt.register_codec(FooCodec())
         # The program just needs to run without capability errors.
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert result.ok is True
 
-    def test_registered_renderer_makes_interpolation_typecheck(self) -> None:
-        """``${x as fancy}`` typechecks ONLY when ``fancy`` is registered (F4)."""
-        src = 'param x\nlet y = ask "see ${x as fancy}"'
-
-        # Without registration: the renderer is unknown → static type error.
-        rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
-        unreg = rt_unreg.run(src, inputs={"x": "hi"})
-        assert unreg.ok is False
-        assert any("fancy" in d.message for d in unreg.diagnostics)
-
-        # With registration: the same program now passes static checking.
-        rt_reg = WorkflowRuntime(default_agent=lambda req: "ok")
-        rt_reg.register_renderer("fancy", lambda val, name: str(val))
-        reg = rt_reg.run(src, inputs={"x": "hi"})
-        assert reg.ok is True
-
-    def test_unregistered_renderer_is_a_static_error(self) -> None:
-        """An ``as <name>`` for an unregistered renderer is rejected (F4)."""
+    def test_as_renderer_syntax_is_parse_error(self) -> None:
+        """``${x as name}`` is a syntax error (renderer syntax removed)."""
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         result = rt.run(
-            'param x\nlet y = ask "${x as nope}"', inputs={"x": "hi"}
+            'param x\nlet y = ask "see ${x as fancy}"', param_values={"x": "hi"}
         )
         assert result.ok is False
-        assert any("nope" in d.message for d in result.diagnostics)
-
-    def test_no_duplicated_constant_in_runtime(self) -> None:
-        """runtime.py derives renderer names from the render module, not a literal.
-
-        Behavioral check: a renderer name that is a built-in (``json``) is
-        accepted in an interpolation without any registration, proving the
-        runtime sources the built-in set from ``render`` (F4).
-        """
-        from agm.agl.runtime.render import RENDERER_NAMES
-
-        assert isinstance(RENDERER_NAMES, frozenset)
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        # ``json`` is a built-in renderer → accepted with no registration.
-        result = rt.run('param x\nlet y = ask "${x as json}"', inputs={"x": "hi"})
-        assert result.ok is True
 
 
 # ---------------------------------------------------------------------------
-# Coverage: render.py — render_for_prompt / render_for_console / helpers
+# Coverage: render.py — render_value / _scalar_text / _pretty_json
 # ---------------------------------------------------------------------------
 
 
-class TestRenderForPrompt:
-    """Direct unit tests for render_for_prompt and render_for_console."""
+class TestRenderValue:
+    """Unit tests for the uniform render_value function."""
 
-    def test_text_default_renderer_has_boundary(self) -> None:
+    def test_text_value_is_verbatim(self) -> None:
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert render_value(TextValue("hello world")) == "hello world"
 
-        out = render_for_prompt(TextValue("hello"), renderer_name=None, var_name="x")
-        assert "hello" in out
-        assert 'name="x"' in out
-        assert 'type="text"' in out
-
-    def test_text_default_renderer_no_varname(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(TextValue("hi"), renderer_name=None, var_name=None)
-        assert "hi" in out
-        assert 'name="value"' in out
-
-    def test_int_default_renderer_scalar(self) -> None:
+    def test_int_value_is_plain_text(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert render_value(IntValue(42)) == "42"
 
-        out = render_for_prompt(IntValue(42), renderer_name=None, var_name="n")
-        assert out == "42"
-
-    def test_decimal_default_renderer_scalar(self) -> None:
+    def test_decimal_value_is_plain_text(self) -> None:
         from decimal import Decimal
 
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_prompt(DecimalValue(Decimal("1.5")), renderer_name=None, var_name="d")
-        assert out == "1.5"
+        assert render_value(DecimalValue(Decimal("1.5"))) == "1.5"
 
-    def test_bool_default_renderer_scalar(self) -> None:
+    def test_bool_value_is_plain_text(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert render_value(BoolValue(True)) == "true"
+        assert render_value(BoolValue(False)) == "false"
 
-        assert render_for_prompt(BoolValue(True), renderer_name=None, var_name="b") == "true"
-        assert render_for_prompt(BoolValue(False), renderer_name=None, var_name="b") == "false"
-
-    def test_json_default_renderer_structured(self) -> None:
-        from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(JsonValue({"k": 1}), renderer_name=None, var_name="j")
-        assert "k" in out
-        assert 'type="json"' in out
-
-    def test_list_default_renderer_structured(self) -> None:
+    def test_list_value_is_pretty_json(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        v = ListValue([IntValue(1), IntValue(2)])
+        out = render_value(v)
+        assert out == "[\n  1,\n  2\n]"
 
-        out = render_for_prompt(
-            ListValue(elements=(IntValue(1), IntValue(2))),
-            renderer_name=None,
-            var_name="xs",
-        )
-        assert 'type="list"' in out
+    def test_dict_value_is_pretty_json(self) -> None:
+        from agm.agl.eval.values import DictValue, TextValue
+        from agm.agl.runtime.render import render_value
+        v = DictValue({"k": TextValue("v")})
+        out = render_value(v)
+        assert '"k"' in out and '"v"' in out
 
-    def test_dict_default_renderer_structured(self) -> None:
-        from agm.agl.eval.values import DictValue, IntValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(
-            DictValue(entries={"a": IntValue(1)}),
-            renderer_name=None,
-            var_name="d",
-        )
-        assert 'type="dict"' in out
-
-    def test_record_default_renderer_uses_type_name(self) -> None:
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        rv = RecordValue(type_name="Issue", fields={"n": IntValue(3)})
-        out = render_for_prompt(rv, renderer_name=None, var_name="r")
-        assert 'type="Issue"' in out
-
-    def test_enum_default_renderer_uses_type_name(self) -> None:
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        ev = EnumValue(type_name="Status", variant="Done", fields={})
-        out = render_for_prompt(ev, renderer_name=None, var_name="s")
-        assert 'type="Status"' in out
-
-    def test_raw_renderer(self) -> None:
+    def test_no_dsl_value_tags_in_prompt_interpolation(self) -> None:
+        """Interpolation in a prompt never wraps values in <dsl-value> tags."""
         from agm.agl.eval.values import IntValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
+        assert "<dsl-value" not in render_value(TextValue("x"))
+        assert "<dsl-value" not in render_value(IntValue(1))
 
-        assert render_for_prompt(TextValue("hi"), renderer_name="raw", var_name="x") == "hi"
-        assert render_for_prompt(IntValue(7), renderer_name="raw", var_name="n") == "7"
-
-    def test_json_renderer(self) -> None:
-        from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(IntValue(5), renderer_name="json", var_name="n")
-        assert "5" in out
-
-    def test_bullets_renderer_list(self) -> None:
-        from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        out = render_for_prompt(
-            ListValue(elements=(TextValue("a"), TextValue("b"))),
-            renderer_name="bullets",
-            var_name="xs",
-        )
-        assert "- a" in out
-        assert "- b" in out
-
-    def test_bullets_renderer_non_list(self) -> None:
-        from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        # Non-list falls through to pretty JSON.
-        out = render_for_prompt(IntValue(3), renderer_name="bullets", var_name="n")
-        assert "3" in out
-
-    def test_unknown_renderer_raises_internal_error(self) -> None:
+    def test_render_value_text(self) -> None:
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
-        # An unknown renderer name is a checker-invariant violation, not a silent
-        # fallback (F2, M3b): render_for_prompt fails loudly so a broken
-        # renderers table cannot masquerade as default output.
-        with pytest.raises(AssertionError, match="notarenderer"):
-            render_for_prompt(
-                TextValue("x"),
-                renderer_name="notarenderer",
-                var_name="v",
-                renderers={},
-            )
+        assert render_value(TextValue("hello")) == "hello"
 
-    def test_render_for_console_text(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_for_console
-
-        assert render_for_console(TextValue("hello")) == "hello"
-
-    def test_render_for_console_int(self) -> None:
+    def test_render_value_int_via_render_value(self) -> None:
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        assert render_for_console(IntValue(7)) == "7"
+        assert render_value(IntValue(7)) == "7"
 
-    def test_render_for_console_decimal(self) -> None:
+    def test_render_value_decimal_via_render_value(self) -> None:
         from decimal import Decimal
 
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        assert render_for_console(DecimalValue(Decimal("1.5"))) == "1.5"
+        assert render_value(DecimalValue(Decimal("1.5"))) == "1.5"
 
-    def test_render_for_console_bool(self) -> None:
+    def test_render_value_bool_via_render_value(self) -> None:
         from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        assert render_for_console(BoolValue(True)) == "true"
-        assert render_for_console(BoolValue(False)) == "false"
+        assert render_value(BoolValue(True)) == "true"
+        assert render_value(BoolValue(False)) == "false"
 
-    def test_render_for_console_json(self) -> None:
+    def test_render_value_json_via_render_value(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(JsonValue({"k": 1}))
+        out = render_value(JsonValue({"k": 1}))
         assert "k" in out
 
-    def test_render_for_console_list(self) -> None:
+    def test_render_value_list_via_render_value(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(ListValue(elements=(IntValue(1),)))
+        out = render_value(ListValue(elements=(IntValue(1),)))
         assert "1" in out
 
-    def test_render_for_console_record(self) -> None:
+    def test_render_value_record_via_render_value(self) -> None:
         from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(RecordValue(type_name="R", fields={"x": IntValue(3)}))
+        out = render_value(RecordValue(type_name="R", fields={"x": IntValue(3)}))
         assert "x" in out
 
-    def test_render_for_console_enum(self) -> None:
+    def test_render_value_enum_via_render_value(self) -> None:
         from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(EnumValue(type_name="E", variant="A", fields={}))
+        out = render_value(EnumValue(type_name="E", variant="A", fields={}))
         assert "A" in out
 
-    def test_render_for_console_dict(self) -> None:
+    def test_render_value_dict_via_render_value(self) -> None:
         from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import render_for_console
+        from agm.agl.runtime.render import render_value
 
-        out = render_for_console(DictValue(entries={"k": TextValue("v")}))
+        out = render_value(DictValue(entries={"k": TextValue("v")}))
         assert "k" in out
 
-    def test_scalar_text_json_value(self) -> None:
-        """_scalar_text(JsonValue) delegates to dumps_exact (line 67-68)."""
-        from agm.agl.eval.values import JsonValue
+    def test_scalar_text_int(self) -> None:
+        """_scalar_text(IntValue) renders as plain decimal digits."""
+        from agm.agl.eval.values import IntValue
         from agm.agl.runtime.render import _scalar_text
 
-        out = _scalar_text(JsonValue({"a": 1}))
-        assert "a" in out
+        assert _scalar_text(IntValue(42)) == "42"
 
-    def test_scalar_text_list_value_falls_back_to_pretty_json(self) -> None:
-        """_scalar_text with a ListValue falls back to _pretty_json (line 69)."""
-        from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import _scalar_text
-
-        out = _scalar_text(ListValue(elements=(IntValue(1),)))
-        assert "1" in out
-
-    def test_type_kind_str_scalar_types(self) -> None:
-        """_type_kind_str returns the correct kind for each scalar type."""
+    def test_scalar_text_decimal(self) -> None:
+        """_scalar_text(DecimalValue) drops trailing zeros, no sci notation."""
         from decimal import Decimal
 
-        from agm.agl.eval.values import (
-            BoolValue,
-            DecimalValue,
-            ExceptionValue,
-            IntValue,
-            TextValue,
-        )
-        from agm.agl.runtime.render import _type_kind_str
+        from agm.agl.eval.values import DecimalValue
+        from agm.agl.runtime.render import _scalar_text
 
-        assert _type_kind_str(TextValue("x")) == "text"
-        assert _type_kind_str(IntValue(1)) == "int"
-        assert _type_kind_str(DecimalValue(Decimal("1.5"))) == "decimal"
-        assert _type_kind_str(BoolValue(True)) == "bool"
-        assert _type_kind_str(ExceptionValue(type_name="Boom", fields={})) == "Boom"
+        assert _scalar_text(DecimalValue(Decimal("1.50"))) == "1.5"
+        assert _scalar_text(DecimalValue(Decimal("100"))) == "100"
 
-    def test_exception_default_renderer_fenced_pretty_json(self) -> None:
-        """§8.1 / §2.12: ${e} interpolation renders as fenced pretty JSON.
+    def test_scalar_text_bool(self) -> None:
+        """_scalar_text(BoolValue) renders as 'true'/'false'."""
+        from agm.agl.eval.values import BoolValue
+        from agm.agl.runtime.render import _scalar_text
 
-        When an exception value is interpolated via the default renderer, the
-        output must be fenced with <dsl-value> boundary tags carrying the
-        exception's type name and contain the field values as pretty JSON.
-        This pins the ${e} rendering behavior described in §8.1 (whole-value
-        interpolation) and §2.12 (exceptions → fenced pretty JSON).
-        """
+        assert _scalar_text(BoolValue(True)) == "true"
+        assert _scalar_text(BoolValue(False)) == "false"
+
+    def test_exception_value_renders_as_pretty_json(self) -> None:
+        """Exception value renders as pretty JSON (no boundary tags)."""
         from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        from agm.agl.runtime.render import render_value
 
         exc_val = ExceptionValue(
             type_name="Abort",
@@ -1223,65 +1083,61 @@ class TestRenderForPrompt:
                 "trace_id": TextValue("abc123"),
             },
         )
-        out = render_for_prompt(exc_val, renderer_name=None, var_name="e")
-        # Must be boundary-marked with the exception's type name.
-        assert 'type="Abort"' in out, f"Expected type=Abort in output: {out!r}"
-        assert 'name="e"' in out, f"Expected name=e in output: {out!r}"
-        # Must contain the field values as JSON (fenced pretty JSON).
+        out = render_value(exc_val)
         assert "fatal" in out, f"Expected message value in output: {out!r}"
         assert "abc123" in out, f"Expected trace_id value in output: {out!r}"
-        # Must be wrapped in dsl-value tags.
-        assert "<dsl-value" in out and "</dsl-value>" in out, (
-            f"Expected dsl-value tags in output: {out!r}"
-        )
+        assert "<dsl-value" not in out, f"Expected no boundary tags: {out!r}"
 
+    def test_unit_value_renders_as_unit_literal(self) -> None:
+        """Unit value (``()``) renders as the literal text ``'()'``.
 
-# ---------------------------------------------------------------------------
-# §2.12: type= attribute finalization — list/dict/<TypeName> convention
-# ---------------------------------------------------------------------------
+        In v2, unit is a first-class value returned by expressions like
+        ``print(x)`` and unit-yielding if/do/try branches.  The renderer must
+        produce a stable, human-readable representation rather than crashing.
+        """
+        from agm.agl.eval.values import UnitValue
+        from agm.agl.runtime.render import render_value
 
+        assert render_value(UnitValue()) == "()"
 
-class TestTypeAttributeFinalization:
-    """§2.12 finalization: verify type= attribute convention for boundary tags.
+    def test_agent_value_renders_as_angle_bracket_form(self) -> None:
+        """AgentValue renders as ``<agent NAME>`` — no crash, no JSON attempt."""
+        from agm.agl.eval.values import AgentValue
+        from agm.agl.runtime.render import render_value
 
-    §2.12 says a conforming runtime may choose its boundary format (stable
-    and traceable).  Ruling: list/dict/<TypeName> convention.  These tests
-    pin the finalized convention after removing the provisional marker.
-    """
+        rendered = render_value(AgentValue(name="reviewer"))
+        assert rendered == "<agent reviewer>"
 
-    def test_list_type_attribute_is_list(self) -> None:
-        from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_for_prompt
+    def test_closure_renders_as_function_surface_form(self) -> None:
+        """Closure renders as ``<function/N -> T>`` — no crash, no JSON attempt.
 
-        out = render_for_prompt(
-            ListValue(elements=(IntValue(1),)), renderer_name=None, var_name="xs"
-        )
-        assert 'type="list"' in out, f"Expected type=list: {out!r}"
+        The surface form uses the arity (from ``params``) and the declared
+        return type (from ``return_type``), both of which every Closure carries.
+        """
+        from agm.agl.eval.values import Closure
+        from agm.agl.runtime.render import render_value
 
-    def test_dict_type_attribute_is_dict(self) -> None:
-        from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import render_for_prompt
+        # Obtain a real Closure via an AgL program (fn expression bound to let).
+        rt = WorkflowRuntime()
+        result = rt.run("let f = fn(x: int, y: int) -> int => x + y\nf\n")
+        assert result.ok is True
+        closure = result.bindings["f"]
+        assert isinstance(closure, Closure)
+        rendered = render_value(closure)
+        # Arity 2, return type int.
+        assert rendered == "<function/2 -> int>"
 
-        out = render_for_prompt(
-            DictValue(entries={"k": TextValue("v")}), renderer_name=None, var_name="d"
-        )
-        assert 'type="dict"' in out, f"Expected type=dict: {out!r}"
+    def test_closure_zero_arity_renders_correctly(self) -> None:
+        """A zero-parameter closure renders as ``<function/0 -> T>``."""
+        from agm.agl.eval.values import Closure
+        from agm.agl.runtime.render import render_value
 
-    def test_record_type_attribute_is_type_name(self) -> None:
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        rv = RecordValue(type_name="Review", fields={"score": IntValue(5)})
-        out = render_for_prompt(rv, renderer_name=None, var_name="r")
-        assert 'type="Review"' in out, f"Expected type=Review: {out!r}"
-
-    def test_enum_type_attribute_is_type_name(self) -> None:
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_for_prompt
-
-        ev = EnumValue(type_name="Status", variant="Pass", fields={})
-        out = render_for_prompt(ev, renderer_name=None, var_name="s")
-        assert 'type="Status"' in out, f"Expected type=Status: {out!r}"
+        rt = WorkflowRuntime()
+        result = rt.run("let thunk = fn() -> int => 42\nthunk\n")
+        assert result.ok is True
+        closure = result.bindings["thunk"]
+        assert isinstance(closure, Closure)
+        assert render_value(closure) == "<function/0 -> int>"
 
 
 # ---------------------------------------------------------------------------
@@ -1493,7 +1349,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 
@@ -1511,73 +1367,73 @@ class TestRuntimeErrorPaths:
             )
 
         rt = WorkflowRuntime(default_agent=bad_agent)
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "Abort"
 
-    def test_text_input_not_str_raises(self) -> None:
-        """convert_input: text type with non-str value → ValueError."""
-        from agm.agl.runtime.runtime import convert_input
+    def test_text_param_not_str_raises(self) -> None:
+        """convert_param_value: text type with non-str value → ValueError."""
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import TextType
 
         with pytest.raises(ValueError, match="expected a text value"):
-            convert_input("msg", 42, TextType())
+            convert_param_value("msg", 42, TextType())
 
-    def test_int_input_decimal_integral_widened(self) -> None:
-        """convert_input: integral Decimal → IntValue for int type."""
+    def test_int_param_decimal_integral_widened(self) -> None:
+        """convert_param_value: integral Decimal → IntValue for int type."""
         from decimal import Decimal
 
         from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import IntType
 
-        result = convert_input("n", Decimal("3"), IntType())
+        result = convert_param_value("n", Decimal("3"), IntType())
         assert result == IntValue(3)
 
-    def test_int_input_non_integral_fails(self) -> None:
-        """convert_input: non-integral value → ValueError for int type."""
-        from agm.agl.runtime.runtime import convert_input
+    def test_int_param_non_integral_fails(self) -> None:
+        """convert_param_value: non-integral value → ValueError for int type."""
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import IntType
 
         with pytest.raises(ValueError, match="expected an integer"):
-            convert_input("n", "1.5", IntType())
+            convert_param_value("n", "1.5", IntType())
 
-    def test_decimal_input_from_int(self) -> None:
-        """convert_input: int value → DecimalValue for decimal type."""
+    def test_decimal_param_from_int(self) -> None:
+        """convert_param_value: int value → DecimalValue for decimal type."""
         from decimal import Decimal
 
         from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import DecimalType
 
-        result = convert_input("d", 3, DecimalType())
+        result = convert_param_value("d", 3, DecimalType())
         assert isinstance(result, DecimalValue)
         assert result.value == Decimal(3)
 
-    def test_decimal_input_invalid_type_fails(self) -> None:
-        """convert_input: bool value → ValueError for decimal type."""
-        from agm.agl.runtime.runtime import convert_input
+    def test_decimal_param_invalid_type_fails(self) -> None:
+        """convert_param_value: bool value → ValueError for decimal type."""
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import DecimalType
 
         with pytest.raises(ValueError, match="expected a decimal"):
-            convert_input("d", "true", DecimalType())
+            convert_param_value("d", "true", DecimalType())
 
-    def test_bool_input_invalid_type_fails(self) -> None:
-        """convert_input: non-bool value → ValueError for bool type."""
-        from agm.agl.runtime.runtime import convert_input
+    def test_bool_param_invalid_type_fails(self) -> None:
+        """convert_param_value: non-bool value → ValueError for bool type."""
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import BoolType
 
         with pytest.raises(ValueError, match="expected a bool"):
-            convert_input("b", "1", BoolType())
+            convert_param_value("b", "1", BoolType())
 
-    def test_bool_input_true_succeeds(self) -> None:
-        """convert_input: bool value → BoolValue for bool type."""
+    def test_bool_param_true_succeeds(self) -> None:
+        """convert_param_value: bool value → BoolValue for bool type."""
         from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import BoolType
 
-        result = convert_input("b", True, BoolType())
+        result = convert_param_value("b", True, BoolType())
         assert result == BoolValue(True)
 
     # --- assertions migrated from TestRuntimeExceptionHandlers (eval tests) ---
@@ -1599,7 +1455,7 @@ class TestRuntimeErrorPaths:
 
         rt = WorkflowRuntime()
         with pytest.raises(RuntimeError, match="internal crash"):
-            rt.run("let x = 1")
+            rt.run("let x = 1\nx")
 
     def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
         """exception_value_to_run_error converts every Value kind to JSON shape.
@@ -1658,21 +1514,21 @@ class TestRuntimeErrorPaths:
         assert error.fields["enum_val"] == {"$case": "V"}
         assert isinstance(error.fields["exc_val"], dict)
 
-    def test_convert_input_json_type_accepts_any(self) -> None:
+    def test_convert_param_value_json_type_accepts_any(self) -> None:
         from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import JsonType
 
-        result = convert_input("meta", [1, 2, 3], JsonType())
+        result = convert_param_value("meta", [1, 2, 3], JsonType())
         assert result == JsonValue([1, 2, 3])
 
-    def test_convert_input_list_type_parsed_via_json_codec(self) -> None:
-        # M2: list/dict/record/enum inputs are now accepted via the JsonCodec.
+    def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
+        # M2: list/dict/record/enum params are now accepted via the JsonCodec.
         from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import ListType, TextType
 
-        result = convert_input("xs", '["a", "b"]', ListType(elem=TextType()))
+        result = convert_param_value("xs", '["a", "b"]', ListType(elem=TextType()))
         assert isinstance(result, ListValue)
         assert result.elements == (TextValue("a"), TextValue("b"))
 
@@ -1694,16 +1550,16 @@ class TestRuntimeErrorPaths:
         monkeypatch.setattr(Interpreter, "execute", bad_execute)
 
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "Abort"
         assert result.error.fields.get("message") == "fatal"
 
-    # --- Task 3: structured Decimal inputs and non-JSON-shaped rejection ---
+    # --- Task 3: structured Decimal params and non-JSON-shaped rejection ---
 
-    def test_list_decimal_input_validates_exactly(self) -> None:
-        """Task 3: a list[decimal] input with native Decimal values must bind
+    def test_list_decimal_param_validates_exactly(self) -> None:
+        """Task 3: a list[decimal] param with native Decimal values must bind
         correctly without the old default=str corruption.
 
         Before the fix, Decimal("1.5") was serialized as the JSON string "1.5"
@@ -1712,10 +1568,10 @@ class TestRuntimeErrorPaths:
         import decimal as _decimal
 
         from agm.agl.eval.values import DecimalValue, ListValue
-        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import DecimalType, ListType
 
-        result = convert_input(
+        result = convert_param_value(
             "xs", [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")], ListType(elem=DecimalType())
         )
         assert isinstance(result, ListValue)
@@ -1726,15 +1582,15 @@ class TestRuntimeErrorPaths:
 
     def test_non_json_shaped_object_yields_clean_diagnostic(self) -> None:
         """Task 3: a non-JSON-shaped object (e.g. a set) must yield a clean
-        input-validation error naming the input, not a stringified value or
+        param-validation error naming the param, not a stringified value or
         traceback.
         """
-        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.runtime.runtime import convert_param_value
         from agm.agl.typecheck.types import ListType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
-            convert_input("xs", {1, 2, 3}, ListType(elem=TextType()))
-        # The error message must name the input and mention the type, not
+            convert_param_value("xs", {1, 2, 3}, ListType(elem=TextType()))
+        # The error message must name the param and mention the type, not
         # contain a raw repr of the set or a json.dumps traceback.
         msg = str(exc_info.value)
         assert "set" in msg  # type name named
@@ -1742,12 +1598,12 @@ class TestRuntimeErrorPaths:
     def test_decimal_native_in_list_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Task 3 e2e: input xs: list[decimal] with Decimal values binds and prints."""
+        """Task 3 e2e: param xs: list[decimal] with Decimal values binds and prints."""
         import decimal as _decimal
 
         result = WorkflowRuntime().run(
             "param xs: list[decimal]\nprint xs\n",
-            inputs={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
+            param_values={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
         )
         assert result.ok is True
         out = capsys.readouterr().out
@@ -1766,67 +1622,28 @@ class TestRuntimeErrorPaths:
         assert _is_json_shaped({"k": 1}) is True
 
 
-class TestRegisteredRendererInvoked:
-    """F1 (M3b): a host-registered renderer is actually invoked at eval time.
+class TestUniformRenderingInPrompts:
+    """Uniform rendering: no boundary tags in agent prompts."""
 
-    Before F1 the registered renderer was never threaded into the interpreter,
-    so ``${x as myrender}`` silently produced the *default* boundary-marked
-    rendering.  These end-to-end tests run a program through ``run()`` with a
-    stub agent and assert the agent's received prompt contains the custom
-    renderer's distinctive output.
-    """
-
-    def test_custom_renderer_output_reaches_agent_prompt(self) -> None:
+    def test_text_interpolation_in_prompt_is_verbatim(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
-        def my_render(value: object, name: str | None) -> str:
-            # Distinctive marker the default renderer would never emit.
-            return "[[CUSTOM-RENDER]]"
-
         rt = WorkflowRuntime(default_agent=agent)
-        rt.register_renderer("myrender", my_render)
         result = rt.run(
-            'param x\nlet y = ask "see: ${x as myrender}"',
-            inputs={"x": "ignored-by-custom-renderer"},
+            'param x\nask("see: ${x}")',
+            param_values={"x": "hello"},
         )
         assert result.ok is True
         assert received, "agent should have been called"
         prompt = received[0].prompt
-        assert "[[CUSTOM-RENDER]]" in prompt
-        # The default text boundary marker must NOT appear: the custom renderer
-        # fully replaced the default rendering.
+        assert "hello" in prompt
         assert "<dsl-value" not in prompt
 
-    def test_custom_renderer_receives_value_and_name(self) -> None:
-        received: list[AgentRequest] = []
-        seen: list[tuple[object, str | None]] = []
-
-        def agent(req: AgentRequest) -> str:
-            received.append(req)
-            return "ok"
-
-        def my_render(value: object, name: str | None) -> str:
-            seen.append((value, name))
-            from agm.agl.eval.values import TextValue
-
-            assert isinstance(value, TextValue)
-            return f"<{value.value}|{name}>"
-
-        rt = WorkflowRuntime(default_agent=agent)
-        rt.register_renderer("tag", my_render)
-        result = rt.run(
-            'param x\nlet y = ask "${x as tag}"', inputs={"x": "payload"}
-        )
-        assert result.ok is True
-        assert seen and seen[0][1] == "x"
-        assert "<payload|x>" in received[0].prompt
-
-    def test_builtin_renderer_still_used_when_no_override(self) -> None:
-        """A program with no ``as`` override still gets the default rendering."""
+    def test_list_interpolation_in_prompt_is_pretty_json(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
@@ -1834,15 +1651,14 @@ class TestRegisteredRendererInvoked:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.register_renderer("unused", lambda v, n: "NOPE")
         result = rt.run(
-            'param x\nlet y = ask "${x}"', inputs={"x": "hello"}
+            'let items: list[text] = ["a", "b"]\nask("items: ${items}")',
         )
         assert result.ok is True
-        # Default text rendering is boundary-marked; the custom renderer is NOT
-        # applied to a plain ``${x}``.
-        assert "<dsl-value" in received[0].prompt
-        assert "NOPE" not in received[0].prompt
+        prompt = received[0].prompt
+        assert "a" in prompt
+        assert "b" in prompt
+        assert "<dsl-value" not in prompt
 
 
 class TestMaxIterationsExceededSchema:
@@ -1887,7 +1703,8 @@ class TestMaxIterationsExceededSchema:
         rt = WorkflowRuntime()
         program = (
             "try\n"
-            "  do[1] pass until false\n"
+            "  do[1] ()\n"
+            "  until false\n"
             "catch MaxIterationsExceeded as e =>\n"
             "  print e.metadata\n"
         )
@@ -1904,7 +1721,8 @@ class TestMaxIterationsExceededSchema:
         program = (
             "let done = false\n"
             "try\n"
-            "  do[1] pass until done\n"
+            "  do[1] ()\n"
+            "  until done\n"
             "catch MaxIterationsExceeded as e =>\n"
             "  print e.condition\n"
             "  print e.last_condition_value\n"
@@ -2056,7 +1874,7 @@ class TestTabWarningsInRunResult:
 
     def test_tab_warning_does_not_affect_ok(self) -> None:
         # A tab warning must not cause ok to become False.
-        source = "let\tx = 1"
+        source = "let\tx = 1\nx"
         rt = WorkflowRuntime()
         result = rt.run(source)
         assert result.ok is True
@@ -2173,14 +1991,14 @@ class TestAgentReconciliation:
 
         rt = WorkflowRuntime()
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nlet x = impl "do it"')
+        result = rt.run('agent impl\nask("do it", agent: impl)')
         assert result.ok is True
         assert calls == ["do it"]
 
     def test_declared_with_default_agent_runs(self) -> None:
         # No dedicated registration, but a default agent backs the declared name.
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('agent any_name\nlet x = any_name "hi"')
+        result = rt.run('agent any_name\nask("hi", agent: any_name)')
         assert result.ok is True
 
     def test_both_error_categories_reported_together(self) -> None:
@@ -2207,274 +2025,327 @@ class TestAgentReconciliation:
         assert calls == []
 
 
-class TestM3ParamSemantics:
-    """M3: param as executable binding — default expressions, precedence, discovery."""
+# ---------------------------------------------------------------------------
+# Coverage: schema.py — derive_schema branches not exercised higher up
+# ---------------------------------------------------------------------------
 
-    # --- Precedence: external value overrides default ---
 
-    def test_external_value_overrides_default(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+class TestDeriveSchema:
+    """Unit tests for derive_schema covering all type branches."""
+
+    def test_bool_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import BoolType
+
+        assert derive_schema(BoolType()) == {"type": "boolean"}
+
+    def test_json_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import JsonType
+
+        assert derive_schema(JsonType()) == {}
+
+    def test_dict_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import DictType, IntType
+
+        result = derive_schema(DictType(value=IntType()))
+        assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
+
+    def test_record_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import RecordType, TextType
+
+        result = derive_schema(RecordType(name="Point", fields={"x": TextType()}))
+        assert result["type"] == "object"
+        assert result["required"] == ["x"]
+        assert result["additionalProperties"] is False
+
+    def test_enum_type_with_payload(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import EnumType, TextType
+
+        typ = EnumType(
+            name="Status",
+            variants={"Pass": {}, "Fail": {"reason": TextType()}},
+        )
+        result = derive_schema(typ)
+        assert "oneOf" in result
+        assert len(result["oneOf"]) == 2
+
+    def test_exception_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import ExceptionType
+
+        with pytest.raises(TypeError, match="ExceptionType"):
+            derive_schema(ExceptionType(name="MyErr", fields={}))
+
+    def test_unit_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import UnitType
+
+        with pytest.raises(TypeError, match="UnitType"):
+            derive_schema(UnitType())
+
+    def test_agent_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import AgentType
+
+        with pytest.raises(TypeError, match="AgentType"):
+            derive_schema(AgentType())
+
+    def test_function_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import FunctionType, TextType
+
+        with pytest.raises(TypeError, match="FunctionType"):
+            derive_schema(FunctionType(params=(TextType(),), result=TextType()))
+
+    def test_bottom_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import BottomType
+
+        with pytest.raises(TypeError, match="BottomType"):
+            derive_schema(BottomType())
+
+
+# ---------------------------------------------------------------------------
+# Coverage: serialize.py — v2 opaque value TypeError branches
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeV2OpaqueValues:
+    """UnitValue, AgentValue, and Closure have no JSON representation (D9)."""
+
+    def test_unit_value_raises(self) -> None:
+        from agm.agl.eval.values import UnitValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        with pytest.raises(TypeError, match="UnitValue"):
+            value_to_json_obj(UnitValue())
+
+    def test_agent_value_raises(self) -> None:
+        from agm.agl.eval.values import AgentValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        with pytest.raises(TypeError, match="AgentValue"):
+            value_to_json_obj(AgentValue(name="myagent"))
+
+    def test_closure_raises(self) -> None:
+        from agm.agl.eval.values import Closure
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        # Retrieve a real Closure from an AgL program (fn expression bound to let).
         rt = WorkflowRuntime()
-        result = rt.run('param x = "fallback"\nprint x', inputs={"x": "supplied"})
+        result = rt.run("let f = fn(x: int) -> int => x + 1\nf\n")
         assert result.ok is True
-        out = capsys.readouterr().out
-        assert "supplied" in out
-        assert "fallback" not in out
+        closure = result.bindings["f"]
+        assert isinstance(closure, Closure)
+        with pytest.raises(TypeError, match="Closure"):
+            value_to_json_obj(closure)
 
-    def test_default_used_when_param_absent(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+
+# ---------------------------------------------------------------------------
+# Coverage: runtime.py — uncovered branches and new v2 properties
+# ---------------------------------------------------------------------------
+
+
+class TestRunErrorToMessage:
+    """RunError.to_message with include_trace_id=True/False."""
+
+    def test_to_message_with_trace_id(self) -> None:
+        from agm.agl.runtime.runtime import RunError
+
+        err = RunError(
+            type_name="AgentParseError",
+            fields={"message": "bad output", "trace_id": "abc123"},
+            line=5,
+            col=3,
+        )
+        msg = err.to_message(include_trace_id=True)
+        assert "trace_id=abc123" in msg
+        assert "at line 5, col 3" in msg
+
+    def test_to_message_without_trace_id(self) -> None:
+        from agm.agl.runtime.runtime import RunError
+
+        err = RunError(
+            type_name="SomeError",
+            fields={"message": "oops"},
+            line=2,
+        )
+        msg = err.to_message(include_trace_id=False)
+        assert "trace_id" not in msg
+        assert "at line 2" in msg
+
+
+class TestHostEnvironmentCache:
+    """WorkflowRuntime.host_environment() caches and is invalidated on registration."""
+
+    def test_host_environment_returns_same_object_on_second_call(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run('param x = "default_val"\nprint x', inputs={})
-        assert result.ok is True
-        out = capsys.readouterr().out
-        assert "default_val" in out
+        env1 = rt.host_environment()
+        env2 = rt.host_environment()
+        assert env1 is env2
 
-    # --- Required param errors ---
-
-    def test_required_param_missing_fails(self) -> None:
+    def test_register_agent_invalidates_cache(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param x\nprint x", inputs={})
-        assert result.ok is False
-        assert result.error is None
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "x" in msgs
+        env1 = rt.host_environment()
+        rt.register_agent("impl", lambda req: "ok")
+        env2 = rt.host_environment()
+        assert env1 is not env2
 
-    def test_required_param_missing_message_format(self) -> None:
+
+class TestRegisterCodecErrors:
+    """register_codec raises for reserved names and duplicates."""
+
+    def _make_codec(self, name: str) -> OutputCodec:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
+        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.typecheck.types import TextType, Type
+
+        class _Codec(OutputCodec):
+            @property
+            def name(self) -> str:
+                return _name
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(self, type_ref: Type) -> OutputContract:
+                return OutputContract(
+                    target_type=type_ref,
+                    codec=TextCodec(),
+                    strict_json=None,
+                    format_instructions="",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+            ) -> ParseResult:
+                return ParseResult.success(TextValue(""))
+
+        _name = name
+        return _Codec()
+
+    def test_reserved_name_raises(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param x\nprint x", inputs={})
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "missing required param" in msgs.lower()
+        codec = self._make_codec("text")  # "text" is a builtin codec name
+        with pytest.raises(ValueError, match="reserved"):
+            rt.register_codec(codec)
 
-    def test_required_param_missing_reports_decl_line(self) -> None:
+    def test_duplicate_name_raises(self) -> None:
         rt = WorkflowRuntime()
-        src = "let a = 1\nlet b = 2\nparam x\nprint x"
-        result = rt.run(src, inputs={})
-        assert result.ok is False
-        missing = [d for d in result.diagnostics if "x" in d.message.lower()]
-        assert missing
-        assert missing[0].line == 3
+        codec1 = self._make_codec("mycodec")
+        codec2 = self._make_codec("mycodec")
+        rt.register_codec(codec1)
+        with pytest.raises(ValueError, match="already registered"):
+            rt.register_codec(codec2)
 
-    def test_required_param_missing_also_under_check_only(self) -> None:
+
+class TestDefaultCallDepthLimit:
+    """default_call_depth_limit constructor parameter and property."""
+
+    def test_default_is_256(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param x\nprint x", inputs={}, check_only=True)
-        assert result.ok is False
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "x" in msgs
+        assert rt.default_call_depth_limit == 256
 
-    def test_all_missing_required_params_reported(self) -> None:
+    def test_custom_value_is_observable(self) -> None:
+        rt = WorkflowRuntime(default_call_depth_limit=128)
+        assert rt.default_call_depth_limit == 128
+
+
+class TestConvertInputUnsupportedType:
+    """convert_param_value raises ValueError for unsupported types (e.g. ListType of records)."""
+
+    def test_unsupported_type_raises(self) -> None:
+        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.typecheck.types import AgentType
+
+        with pytest.raises(ValueError, match="unsupported type"):
+            convert_param_value("x", "agent_val", AgentType())
+
+
+# ---------------------------------------------------------------------------
+# New v2 feature tests: user-defined functions, ExecResult, ask with AgentValue
+# ---------------------------------------------------------------------------
+
+
+class TestV2UserDefinedFunctions:
+    """v2 def expressions: first-class functions, recursion, call depth limit."""
+
+    def test_def_call_basic(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param a\nparam b\nprint a", inputs={})
-        assert result.ok is False
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "a" in msgs
-        assert "b" in msgs
-
-    # --- Undeclared extras silently ignored ---
-
-    def test_undeclared_extra_input_silently_ignored(self) -> None:
-        rt = WorkflowRuntime()
-        result = rt.run('param a\nprint a', inputs={"a": "ok", "b": "extra"})
-        assert result.ok is True
-
-    # --- Default expression referencing earlier param ---
-
-    def test_default_references_earlier_param(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        src = 'param a = "x"\nparam b = a\nprint b'
-        rt = WorkflowRuntime()
-        result = rt.run(src, inputs={})
-        assert result.ok is True
-        out = capsys.readouterr().out
-        assert "x" in out
-
-    def test_default_chain_multiple_params(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        src = 'param a: int = 10\nparam b: int = a\nparam c: int = b\nprint c'
-        rt = WorkflowRuntime()
-        result = rt.run(src, inputs={})
-        assert result.ok is True
-        out = capsys.readouterr().out
-        assert "10" in out
-
-    # --- Effectful default fires only when param unsupplied ---
-
-    def test_effectful_default_fires_when_unsupplied(self) -> None:
-        calls: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            calls.append(req.prompt)
-            return "agent_answer"
-
-        rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('param x = ask "give me x"\nprint x', inputs={})
-        assert result.ok is True
-        assert len(calls) == 1
-
-    def test_effectful_default_does_not_fire_when_supplied(self) -> None:
-        calls: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            calls.append("called")
-            return "should_not_appear"
-
-        rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('param x = ask "give me x"\nprint x', inputs={"x": "supplied"})
-        assert result.ok is True
-        assert calls == []
-
-    # --- Dry-run: effectful default does NOT fire ---
-
-    def test_effectful_default_does_not_fire_under_dry_run(self) -> None:
-        calls: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            calls.append("called")
-            return "should_not_appear"
-
-        rt = WorkflowRuntime(default_agent=agent)
         result = rt.run(
-            'param x = ask "give me x"\nprint x', inputs={}, check_only=True
+            "def add(a: int, b: int) -> int = a + b\n"
+            "add(1, 2)\n"
         )
         assert result.ok is True
-        assert calls == []
 
-    def test_dry_run_still_errors_on_missing_required_param(self) -> None:
+    def test_def_recursive_call(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("param x\nprint x", inputs={}, check_only=True)
+        result = rt.run(
+            "def fact(n: int) -> int =\n"
+            "  if n <= 1 =>\n"
+            "    1\n"
+            "  | else =>\n"
+            "    n * fact(n - 1)\n"
+            "fact(5)\n"
+        )
+        assert result.ok is True
+
+    def test_def_call_depth_limit_enforced(self) -> None:
+        """Exceeding max_call_depth raises a RecursionError (D8)."""
+        rt = WorkflowRuntime(default_call_depth_limit=10)
+        result = rt.run(
+            "def inf(n: int) -> int =\n"
+            "  inf(n + 1)\n"
+            "inf(0)\n"
+        )
         assert result.ok is False
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "x" in msgs
 
-    # --- discover_params API ---
 
-    def test_discover_params_returns_ordered_infos(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
+class TestV2ExecStructuredForm:
+    """v2 exec structured form: let x: T = exec ... raises on nonzero."""
 
+    def test_exec_text_form_captures_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare(
-            "program myapp\nparam first\nparam second: int\nparam third = \"hi\""
-        )
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        assert len(discovery.params) == 3
-        names = [p.name for p in discovery.params]
-        assert names == ["first", "second", "third"]
-
-    def test_discover_params_has_correct_has_default(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
-
-        rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare('param a\nparam b = "hi"')
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        infos = {p.name: p for p in discovery.params}
-        assert infos["a"].has_default is False
-        assert infos["b"].has_default is True
-
-    def test_discover_params_program_name(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
-
-        rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare("program myapp\nparam x")
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        assert discovery.program_name == "myapp"
-
-    def test_discover_params_no_program_name(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
-
-        rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare("param x")
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        assert discovery.program_name is None
-
-    def test_discover_params_degrades_on_type_error(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
-
-        rt = WorkflowRuntime()
-        # Type error: int + text is a type mismatch
-        prepared = WorkflowRuntime.prepare('param x: int = "not_an_int"')
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        assert discovery.params == ()
-        assert discovery.checked is None
-        assert len(discovery.diagnostics) >= 1
-
-    def test_discover_params_degrades_on_parse_error(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
-
-        rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare("@@@invalid@@@")
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        assert discovery.params == ()
-        assert len(discovery.diagnostics) >= 1
-
-    def test_discover_params_checked_is_set_on_success(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
-
-        rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare("param x\nparam y: int")
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        assert discovery.checked is not None
-
-    def test_discover_params_line_col(self) -> None:
-        from agm.agl.runtime.runtime import ParamDiscovery
-
-        rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare("let a = 1\nparam x\nparam y")
-        discovery = rt.discover_params(prepared)
-        assert isinstance(discovery, ParamDiscovery)
-        names_lines = {p.name: p.line for p in discovery.params}
-        assert names_lines["x"] == 2
-        assert names_lines["y"] == 3
-
-    # --- run_prepared with pre-checked program ---
-
-    def test_run_prepared_with_checked_reuses_it(self) -> None:
-        rt = WorkflowRuntime()
-        prepared = WorkflowRuntime.prepare('param x\nprint x')
-        discovery = rt.discover_params(prepared)
-        assert discovery.checked is not None
-        result = rt.run_prepared(prepared, inputs={"x": "hello"}, checked=discovery.checked)
+        result = rt.run('let out: text = exec "echo hello"\nprint out\n')
         assert result.ok is True
+        captured = capsys.readouterr()
+        assert "hello" in captured.out
 
-    def test_run_prepared_with_checked_same_result_as_without(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_exec_nonzero_raises_when_typed(self) -> None:
         rt = WorkflowRuntime()
-        src = 'param x = "default"\nprint x'
-        prepared = WorkflowRuntime.prepare(src)
-        discovery = rt.discover_params(prepared)
+        result = rt.run('let out: text = exec "false"\nprint out\n')
+        assert result.ok is False
+        # Uncaught AgL exception (exit 2 semantics): error is set
+        assert result.error is not None
 
-        # Run without pre-checked
-        result1 = rt.run_prepared(prepared, inputs={})
-        out1 = capsys.readouterr().out
 
-        # Run with pre-checked
-        result2 = rt.run_prepared(prepared, inputs={}, checked=discovery.checked)
-        out2 = capsys.readouterr().out
+class TestV2AskWithAgentValue:
+    """ask(..., agent: <agent_value>) dispatches to the named agent."""
 
-        assert result1.ok is True
-        assert result2.ok is True
-        assert out1 == out2
+    def test_ask_dispatches_to_named_agent(self) -> None:
+        received: list[str] = []
 
-    # --- PreparedProgram.program_name property ---
+        def agent(req: AgentRequest) -> str:
+            received.append(req.prompt)
+            return "answer"
 
-    def test_prepared_program_name_from_decl(self) -> None:
-        prepared = WorkflowRuntime.prepare("program myapp\nlet x = 1")
-        assert prepared.program_name == "myapp"
-
-    def test_prepared_program_name_none_without_decl(self) -> None:
-        prepared = WorkflowRuntime.prepare("let x = 1")
-        assert prepared.program_name is None
-
-    def test_prepared_program_name_none_on_parse_error(self) -> None:
-        prepared = WorkflowRuntime.prepare("@@@")
-        assert prepared.program_name is None
+        rt = WorkflowRuntime()
+        rt.register_agent("helper", agent)
+        result = rt.run('agent helper\nask("question", agent: helper)\n')
+        assert result.ok is True
+        assert received == ["question"]

@@ -1,9 +1,9 @@
 """Immutable host-capability catalog for the AgL static pipeline.
 
 ``HostCapabilities`` is a frozen, data-only dataclass that describes which
-agents, codecs, and renderers the host has registered.  It is constructed by
+agents and codecs the host has registered.  It is constructed by
 ``WorkflowRuntime.run()`` before the static passes execute and is consumed by
-the type checker (Component 5) — the checker never imports agent/codec/renderer
+the type checker (Component 5) — the checker never imports agent/codec
 *implementations*, only their capability descriptors.
 
 Design
@@ -20,9 +20,6 @@ Design
   ``{"text"}``); ``"json"`` (supports
   ``{"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}``).
   Hosts may register additional codecs via ``WorkflowRuntime``.
-- ``renderer_names``: frozenset of known renderer names.  The built-in set is
-  ``{"default", "raw", "json", "bullets"}``; hosts may register additional
-  renderers via :meth:`WorkflowRuntime.register_renderer`.
 
 The string type-kind identifiers used in ``codec_kinds`` match the names of
 the semantic ``Type`` subclasses in ``agm.agl.typecheck.types`` (lower-cased,
@@ -58,24 +55,9 @@ class HostCapabilities:
         Mapping from codec name to the frozenset of semantic type-kind strings
         the codec can handle.  Type-kind strings are the lower-cased class name
         without the ``"Type"`` suffix (e.g. ``"text"``, ``"json"``, ``"int"``).
-    renderer_names:
-        The set of renderer names the host has registered.  The checker verifies
-        that every explicit ``as <name>`` renderer reference in an interpolation
-        segment names a renderer in this set.
-    renderer_kinds:
-        Per-renderer capability descriptor: mapping from renderer name to the
-        frozenset of semantic type **kinds** that renderer supports, or ``None``
-        when the renderer is type-agnostic (accepts every kind — the built-in
-        ``default``/``raw``/``json``/``bullets`` renderers).  The checker
-        validates the interpolated value's kind against this descriptor and
-        rejects ``${x as <name>}`` when the kind is unsupported (F6, plan §9.1).
-        A name present in ``renderer_names`` but absent from ``renderer_kinds``
-        is treated as type-agnostic.
     """
 
     agent_names: frozenset[str] = field(default_factory=frozenset)
     has_default_agent: bool = False
     supports_shell_exec: bool = False
     codec_kinds: dict[str, frozenset[str]] = field(default_factory=dict)
-    renderer_names: frozenset[str] = field(default_factory=frozenset)
-    renderer_kinds: dict[str, frozenset[str] | None] = field(default_factory=dict)

@@ -1,0 +1,2 @@
+let x: text = ask("prompt1", "prompt2")
+x

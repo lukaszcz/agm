@@ -13,6 +13,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.eval.values import IntValue, TextValue, Value
 from agm.agl.repl import meta as meta_mod
@@ -264,6 +266,16 @@ class TestDispatchMeta:
         assert outcome.text is not None
         assert ":quit" in outcome.text
 
+    def test_command_index_cold_cache(self) -> None:
+        # _command_index() must rebuild if its cache is None (cold-start path).
+        original = meta_mod._command_index_cache
+        meta_mod._command_index_cache = None
+        try:
+            idx = meta_mod._command_index()
+            assert ":help" in idx or "help" in idx
+        finally:
+            meta_mod._command_index_cache = original
+
     def test_register_meta_command_cache_invalidation(self) -> None:
         # Issue #6: after registering a new command, dispatch and meta_command_names
         # must reflect the new entry (cache must be invalidated).
@@ -292,37 +304,39 @@ class TestDispatchMeta:
             # Force cache rebuild by resetting (implementation detail: the cache
             # must reflect removal too — call meta_command_names after removal).
 
-    def test_command_index_rebuilds_when_cache_cleared(self) -> None:
-        # Verify the lazy-rebuild path in _command_index() by temporarily clearing
-        # the cache and calling dispatch (which uses _command_index internally).
-        original = meta_mod._command_index_cache
-        meta_mod._command_index_cache = None
-        try:
-            outcome = meta_mod.dispatch_meta(":help", _ctx())
-            assert outcome.text is not None
-        finally:
-            meta_mod._command_index_cache = original
-
-
-# ---------------------------------------------------------------------------
-# Issue #4: :set now only handles echo on|off (input-setting removed in M6)
-# ---------------------------------------------------------------------------
-
-
-class TestSetEchoOnly:
-    def test_set_echo_off_only_form(self) -> None:
-        ctx = _session_ctx()
-        outcome = meta_mod.dispatch_meta(":set echo off", ctx)
-        assert ctx.echo is False
+    def test_command_index_lazy_build_on_cold_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Verify the lazy-build branch of _command_index() is reachable: when both
+        # caches are forced to None the functions rebuild them on the next call.
+        monkeypatch.setattr(meta_mod, "_command_index_cache", None)
+        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
+        # dispatch_meta → _command_index() triggers the lazy build of the index.
+        outcome = meta_mod.dispatch_meta(":help", _ctx())
         assert outcome.text is not None
+        assert ":quit" in outcome.text
+        # meta_command_names() rebuilds the names cache when it is cold.
+        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
+        names = meta_mod.meta_command_names()
+        assert ":help" in names
 
-    def test_set_name_equals_value_gives_usage(self) -> None:
-        # After M6, :set name=value no longer sets inputs; gives usage error.
-        outcome = meta_mod.dispatch_meta(":set foo=bar", _session_ctx())
+
+# ---------------------------------------------------------------------------
+# :set only controls REPL options
+# ---------------------------------------------------------------------------
+
+
+class TestSetOptions:
+    def test_set_non_option_gives_usage(self) -> None:
+        s = ReplSession()
+        outcome = meta_mod.dispatch_meta(":set count=5", _session_ctx(s))
+        assert outcome.text is not None
+        assert "usage" in outcome.text.lower()
+
+    def test_set_unknown_form_gives_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
-    def test_set_no_equals_gives_usage(self) -> None:
-        outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())
+    def test_set_empty_assignment_gives_usage(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set =5", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
 
@@ -364,7 +378,7 @@ class TestHelpFullSet:
     def test_help_lists_full_command_set(self) -> None:
         out = meta_mod.dispatch_meta(":help", _session_ctx()).text
         assert out is not None
-        for cmd in (":reset", ":type", ":bindings", ":env", ":agents", ":inputs",
+        for cmd in (":reset", ":type", ":bindings", ":env", ":agents", ":params",
                     ":set", ":agent", ":load", ":save"):
             assert cmd in out
 
@@ -452,36 +466,33 @@ class TestAgents:
 
 class TestInputs:
     def test_inputs_empty(self) -> None:
-        outcome = meta_mod.dispatch_meta(":inputs", _session_ctx())
+        outcome = meta_mod.dispatch_meta(":params", _session_ctx())
         assert outcome.text == "No params declared."
 
-    def test_inputs_shows_resolved_param_with_default(self) -> None:
-        # After M6, :inputs shows declared params with their resolved values.
+    def test_inputs_shows_unset_then_set(self) -> None:
         s = ReplSession()
-        s.eval_entry("param name = \"World\"")
-        out = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
-        assert out is not None
-        assert "name : text = World" in out
-
-    def test_inputs_shows_resolved_param_from_config(self) -> None:
-        # A param resolved from config shows its config value.
-        s = ReplSession(
-            params_config_loader=lambda name: {"count": 5} if name == "p" else {}
-        )
-        s.eval_entry("program p")
-        s.eval_entry("param count: int")
-        out = meta_mod.dispatch_meta(":inputs", _session_ctx(s)).text
-        assert out is not None
-        assert "count : int = 5" in out
+        s.eval_entry('param name: text = "World"')
+        out_set = meta_mod.dispatch_meta(":params", _session_ctx(s)).text
+        assert out_set is not None
+        assert "name : text = World" in out_set
 
 
 class TestSet:
-    def test_set_name_equals_value_now_gives_usage(self) -> None:
-        # After M6, :set name=value is no longer supported for input-setting.
+    def test_set_declared_input(self) -> None:
         s = ReplSession()
-        s.eval_entry("param count = 0")
         outcome = meta_mod.dispatch_meta(":set count=42", _session_ctx(s))
         assert "usage" in (outcome.text or "").lower()
+
+    def test_set_undeclared_input_clean_error(self) -> None:
+        outcome = meta_mod.dispatch_meta(":set nope=1", _session_ctx())
+        assert outcome.text is not None
+        assert "usage" in outcome.text.lower()
+
+    def test_set_bad_value_clean_error(self) -> None:
+        s = ReplSession()
+        s.eval_entry("param count: int")
+        outcome = meta_mod.dispatch_meta(":set count=oops", _session_ctx(s))
+        assert outcome.text is not None
 
     def test_set_missing_equals_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":set foo", _session_ctx())

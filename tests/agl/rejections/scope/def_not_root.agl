@@ -1,0 +1,3 @@
+if true =>
+  def nested(x: int) -> int = x
+  nested(1)

@@ -16,6 +16,10 @@ Type hierarchy
 - ``RecordType(name, fields)`` — a ``record`` nominal type.
 - ``EnumType(name, variants)`` — an ``enum`` nominal type.
 - ``ExceptionType(name, fields)`` — a built-in exception type.
+- ``UnitType`` — the ``unit`` type (AgL v2; single value ``()``).
+- ``AgentType`` — the opaque ``agent`` type (AgL v2).
+- ``FunctionType(params, result)`` — a first-class function type (AgL v2),
+  positional only; named/optional arguments are erased from the value type.
 
 ``Type`` is the closed union of all semantic types.
 
@@ -199,6 +203,83 @@ class ExceptionType:
         return self.name
 
 
+# ---------------------------------------------------------------------------
+# AgL v2 value types (plan R6, R7, R9)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class UnitType:
+    """The ``unit`` type — has a single value written ``()`` (AgL v2, R9).
+
+    Side-effecting expressions (``print``, ``set``, ``if`` with no ``else``,
+    loops) yield ``unit``.
+    """
+
+    @property
+    def kind(self) -> str:
+        return "unit"
+
+    def __repr__(self) -> str:
+        return "unit"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentType:
+    """The opaque ``agent`` type (AgL v2, R6, D7).
+
+    Agent values are first-class capability handles.  They are not
+    JSON-shaped, not renderable, and have no equality in v1 (D7).
+    """
+
+    @property
+    def kind(self) -> str:
+        return "agent"
+
+    def __repr__(self) -> str:
+        return "agent"
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionType:
+    """A first-class function value type (AgL v2, R7).
+
+    Positional only — named and optional argument information is erased from
+    the value type per plan R7.  Structural equality is derived from the
+    frozen ``params`` tuple and ``result`` field.
+
+    ``params``  — positional parameter types, in declaration order.
+    ``result``  — the function's return type.
+    """
+
+    params: tuple[Type, ...]
+    result: Type
+
+    @property
+    def kind(self) -> str:
+        return "function"
+
+    def __repr__(self) -> str:
+        param_str = ", ".join(repr(p) for p in self.params)
+        return f"({param_str}) -> {self.result!r}"
+
+
+@dataclass(frozen=True, slots=True)
+class BottomType:
+    """Internal bottom type for ``raise`` expressions.
+
+    Assignable to ANY target; nothing is assignable to it except itself.
+    Not JSON-shaped, not comparable, not user-writable (no TypeExpr yields it).
+    """
+
+    @property
+    def kind(self) -> str:
+        return "bottom"
+
+    def __repr__(self) -> str:
+        return "bottom"
+
+
 # Closed union of all semantic types.
 Type = (
     TextType
@@ -211,6 +292,10 @@ Type = (
     | RecordType
     | EnumType
     | ExceptionType
+    | UnitType
+    | AgentType
+    | FunctionType
+    | BottomType
 )
 
 
@@ -226,7 +311,10 @@ def is_json_shaped(value_type: Type) -> bool:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
     ``list``/``dict`` whose element/value types are themselves JSON-shaped.
     Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
-    ``json`` value they must be rendered explicitly (e.g. ``${review as json}``).
+    ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
+
+    AgL v2: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
+    JSON-shaped (plan D9 — function/agent values have no rendering).
     """
     if isinstance(value_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
         return True
@@ -234,7 +322,8 @@ def is_json_shaped(value_type: Type) -> bool:
         return is_json_shaped(value_type.elem)
     if isinstance(value_type, DictType):
         return is_json_shaped(value_type.value)
-    # RecordType, EnumType, ExceptionType are not JSON-shaped.
+    # RecordType, EnumType, ExceptionType, UnitType, AgentType, FunctionType
+    # are not JSON-shaped.
     return False
 
 
@@ -247,7 +336,16 @@ def comparable_types(left: Type, right: Type) -> bool:
     ``json = json`` is allowed but ``json`` vs any non-``json`` type is a static
     error (rule 4 as written).  Records/enums/exceptions compare only with their
     own exact type.
+
+    AgL v2: ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
+    NON-comparable — using ``=``/``!=``/``<`` on them is a static error (plan
+    D7: agents have no equality in v1; plan D9: function values are opaque).
     """
+    # Guard: agent, function, unit, and bottom values are never comparable.
+    if isinstance(left, (AgentType, FunctionType, UnitType, BottomType)):
+        return False
+    if isinstance(right, (AgentType, FunctionType, UnitType, BottomType)):
+        return False
     if left == right:
         return True
     # The only cross-type comparison is numeric int↔decimal (either direction).
@@ -266,13 +364,25 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
        JSON-shaped types.  Records/enums/exceptions are rejected.
 
     All other assignments require exact structural equality.
+
+    AgL v2: ``UnitType``, ``AgentType``, and ``FunctionType`` assignability is
+    exact-only — no widening and no variance (plan R7, D7, D9).  The
+    ``value_type == target_type`` check below handles them: ``UnitType`` and
+    ``AgentType`` are parameter-free singletons so equality is trivial;
+    ``FunctionType`` uses structural tuple equality on ``params`` + ``result``.
+
+    AgL v2: ``BottomType`` (the type of ``raise``) is assignable to any target.
     """
+    # Bottom type is assignable to any target (raise can appear anywhere).
+    if isinstance(value_type, BottomType):
+        return True
     if value_type == target_type:
         return True
     # Single scalar coercion: int can widen to decimal.
     if isinstance(value_type, IntType) and isinstance(target_type, DecimalType):
         return True
-    # json accepts any JSON-shaped value (records/enums/exceptions excluded).
+    # json accepts any JSON-shaped value (records/enums/exceptions excluded;
+    # UnitType/AgentType/FunctionType also excluded via is_json_shaped).
     if isinstance(target_type, JsonType):
         return is_json_shaped(value_type)
     return False
@@ -407,7 +517,56 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "trace_id": TextType(),
         },
     ),
+    # AgL v2: RecursionError raised when the call-depth limit is exceeded (plan D8).
+    "RecursionError": ExceptionType(
+        name="RecursionError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "limit": IntType(),
+        },
+    ),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).
 BUILTIN_EXCEPTION_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
+
+
+# ---------------------------------------------------------------------------
+# Built-in prelude types (AgL v2; plan D10, D11)
+#
+# These are registered into every fresh TypeEnvironment alongside the built-in
+# exceptions and are non-shadowable.  Their runtime semantics are implemented
+# in the eval/runtime stages (S4/S5).
+# ---------------------------------------------------------------------------
+
+# ``ExecResult`` — the structured result of an ``exec`` call when the target
+# type is ``ExecResult`` (plan D10).  Mirrors the field shape of ``ExecError``.
+_EXEC_RESULT_TYPE = RecordType(
+    name="ExecResult",
+    fields={
+        "stdout": TextType(),
+        "exit_code": IntType(),
+        "stderr": TextType(),
+        "timed_out": BoolType(),
+    },
+)
+
+# ``ParsePolicy`` — controls ``ask``/``exec`` error handling (plan D11).
+# ``Abort`` — abort on parse error (no fields).
+# ``Retry(n: int)`` — retry up to ``n`` times.
+_PARSE_POLICY_TYPE = EnumType(
+    name="ParsePolicy",
+    variants={
+        "Abort": {},
+        "Retry": {"n": IntType()},
+    },
+)
+
+BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
+    "ExecResult": _EXEC_RESULT_TYPE,
+    "ParsePolicy": _PARSE_POLICY_TYPE,
+}
+
+# Names of built-in prelude types (non-shadowable, like built-in exceptions).
+BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)

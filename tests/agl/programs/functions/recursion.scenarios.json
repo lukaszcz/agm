@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "base_case_zero",
+      "params": {"n": 0},
+      "expect": {
+        "stdout": "1\ntrue\n"
+      }
+    },
+    {
+      "name": "base_case_one",
+      "params": {"n": 1},
+      "expect": {
+        "stdout": "1\nfalse\n"
+      }
+    },
+    {
+      "name": "factorial_five_odd",
+      "params": {"n": 5},
+      "expect": {
+        "stdout": "120\nfalse\n"
+      }
+    },
+    {
+      "name": "factorial_six_even",
+      "params": {"n": 6},
+      "expect": {
+        "stdout": "720\ntrue\n"
+      }
+    }
+  ]
+}

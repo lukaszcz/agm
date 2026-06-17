@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "positive",
-      "inputs": {"n": 2},
+      "params": {"n": 2},
       "expect": {
         "stdout_contains": ["3\n", "\"one\"", "\"two\"", "pos\n"],
         "stdout_not_contains": ["neg"]
@@ -10,7 +10,7 @@
     },
     {
       "name": "negative",
-      "inputs": {"n": -1},
+      "params": {"n": -1},
       "expect": {
         "stdout_contains": ["0\n", "neg\n"],
         "stdout_not_contains": ["pos\n"]

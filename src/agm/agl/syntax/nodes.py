@@ -1,4 +1,4 @@
-"""Full AgL AST node set.
+"""Full AgL v2 AST node set.
 
 Every node is:
   - ``@dataclass(frozen=True, slots=True)`` — immutable and memory-efficient.
@@ -11,9 +11,19 @@ Every node is:
 
 Union aliases
 -------------
-``Stmt``, ``Expr``, ``Pattern``, ``TemplateSegment`` are closed typed unions
-over their respective node families.  They are defined at the bottom of this
-module after all constituent classes.
+``Expr``, ``Item``, ``Binder``, ``Declaration``, ``Pattern``, ``TemplateSegment``
+are closed typed unions over their respective node families.  They are defined at
+the bottom of this module after all constituent classes.
+
+v2 design notes
+---------------
+- The statement category is removed: every former statement is an expression.
+- ``Block`` is the sequencing expression; its value is the last item.
+- ``If``, ``Case``, ``Do``, ``Try`` unify the former statement/expression variants.
+- ``Call`` is the single call node for both paren-form and single-arg sugar.
+- ``FuncDef`` / ``Lambda`` / ``Param`` support first-class recursive functions.
+- ``UnitLit`` is the ``()`` unit-value literal.
+- ``Raise`` is an expression with bottom type (usable anywhere an ``Expr`` is).
 """
 
 from __future__ import annotations
@@ -22,12 +32,13 @@ import decimal
 import enum
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from decimal import Decimal
 
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 
 # ---------------------------------------------------------------------------
-# Sentinel for the else-branch of IfStmt
+# Sentinel for the else-branch of If
 # ---------------------------------------------------------------------------
 
 
@@ -67,47 +78,6 @@ class BinOp(enum.Enum):
 
 
 # ---------------------------------------------------------------------------
-# Call options (agent invocation modifiers)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class AbortPolicy:
-    """Parse policy: abort immediately on a parse failure."""
-
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class RetryPolicy:
-    """Parse policy: retry up to ``extra`` additional times on parse failure."""
-
-    extra: int
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-ParsePolicy = AbortPolicy | RetryPolicy
-
-
-@dataclass(frozen=True, slots=True)
-class CallOptions:
-    """Options that modify an agent-call invocation.
-
-    ``format``       — output format hint (e.g. ``"json"``, ``"text"``).
-    ``strict_json``  — override the runtime default for strict JSON parsing.
-    ``parse_policy`` — what to do when the output cannot be parsed.
-    """
-
-    format: str | None
-    strict_json: bool | None
-    parse_policy: ParsePolicy | None
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-# ---------------------------------------------------------------------------
 # Template segments
 # ---------------------------------------------------------------------------
 
@@ -125,13 +95,12 @@ class TextSegment:
 class InterpSegment:
     """An interpolated expression inside a template string (``${expr}``).
 
-    ``render`` holds the BARE renderer name with no leading colon
-    (e.g. ``"raw"``, ``"json"``, ``"bullets"``); ``None`` means default
-    rendering.
+    ``expr`` is an arbitrary expression; rendering is always uniform — text
+    verbatim, scalars as plain text, structured values as pretty JSON.  There
+    is no ``as <renderer>`` override: the grammar accepts only ``${expr}``.
     """
 
     expr: Expr
-    render: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -146,7 +115,7 @@ TemplateSegment = TextSegment | InterpSegment
 
 @dataclass(frozen=True, slots=True)
 class VarRef:
-    """Reference to a variable or input binding."""
+    """Reference to a variable or param binding."""
 
     name: str
     span: SourceSpan = dc_field(compare=False)
@@ -173,19 +142,8 @@ class Template:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentCall:
-    """An agent invocation: ``ask[options] template``."""
-
-    agent: str
-    options: CallOptions
-    template: Template
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class NamedArg:
-    """A named argument in a constructor call: ``name: value``."""
+    """A named argument in a constructor or call expression: ``name: value``."""
 
     name: str
     value: Expr
@@ -250,7 +208,106 @@ class IsTest:
 
 
 @dataclass(frozen=True, slots=True)
-class CaseExprBranch:
+class Call:
+    """A uniform function/built-in call: ``callee(args, name: v)``.
+
+    Also produced by the single-arg juxtaposition sugar ``f x``
+    (which desugars to ``Call(callee=f, args=(x,), named_args=())``.
+    """
+
+    callee: Expr
+    args: tuple[Expr, ...]
+    named_args: tuple[NamedArg, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Param:
+    """A function or lambda parameter: ``name: TypeExpr [= default]``."""
+
+    name: str
+    type_expr: TypeExpr
+    default: Expr | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class FuncDef:
+    """``def name(params) -> RetType = body`` — a top-level function declaration.
+
+    ``return_type`` is always required for ``def`` (full annotation in v1).
+    ``body`` is an expression (which may be a ``Block`` for multi-step bodies).
+    """
+
+    name: str
+    params: tuple[Param, ...]
+    return_type: TypeExpr
+    body: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Lambda:
+    """``fn(params) (-> R)? => body`` — an anonymous function expression.
+
+    ``return_type`` is ``None`` when omitted (inferred from the body).
+    Lambda parameter types are always required in v1.
+    """
+
+    params: tuple[Param, ...]
+    return_type: TypeExpr | None
+    body: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Block:
+    """An expression block: a sequence of items whose value is the last item.
+
+    Items may be declarations (``FuncDef``, ``RecordDef``, …), binders
+    (``LetDecl``, ``VarDecl``, ``SetStmt``), or expressions.  A block ending
+    in a binder is a static error (the binder needs a continuation expression).
+    """
+
+    items: tuple[Item, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class IfBranch:
+    """A single branch in an ``if`` expression.
+
+    ``cond`` is either an ``Expr`` (condition arm) or the singleton ``ELSE``
+    sentinel (the else arm).  ``body`` is a single expression (including
+    ``Block`` for multi-statement bodies).
+    """
+
+    cond: Expr | ElseSentinel
+    body: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class If:
+    """``if cond => body | ... [|] else => body`` expression.
+
+    Unifies the former ``IfStmt`` and ``IfExpr``.  An ``if`` with no ``else``
+    branch yields ``unit``.
+    """
+
+    branches: tuple[IfBranch, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class CaseBranch:
     """A single branch in a ``case`` expression."""
 
     pattern: Pattern
@@ -260,16 +317,85 @@ class CaseExprBranch:
 
 
 @dataclass(frozen=True, slots=True)
-class CaseExpr:
-    """A ``case expr of { ... }`` expression."""
+class Case:
+    """``case expr of { ... }`` expression.
+
+    Unifies the former ``CaseStmt`` and ``CaseExpr``.
+    """
 
     subject: Expr
-    branches: tuple[CaseExprBranch, ...]
+    branches: tuple[CaseBranch, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Do:
+    """``do[limit] body until condition`` — bounded loop expression.
+
+    Yields ``unit``.  ``limit`` is the optional iteration bound (``None``
+    means no static bound is enforced).  ``body`` is typically a ``Block``.
+    """
+
+    limit: int | None
+    body: Expr
+    condition: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class CatchClause:
+    """A ``catch`` handler in a ``try`` expression.
+
+    ``exc_type`` is the exception type name (or ``None`` for a catch-all).
+    ``binding`` is the optional variable name for the exception value.
+    ``body`` is a single expression (may be a ``Block``).
+    """
+
+    exc_type: str | None
+    binding: str | None
+    body: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Try:
+    """``try body catch { handlers }`` expression.
+
+    Unifies the former ``TryCatch``.  The type is the unified type of the
+    body and all handler bodies.
+    """
+
+    body: Expr
+    handlers: tuple[CatchClause, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Raise:
+    """``raise expr`` — throw an AgL exception.
+
+    Has the bottom type: it is assignable to any expected type because it
+    never produces a value.
+    """
+
+    exc: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
 
 # --- Literals ---
+
+
+@dataclass(frozen=True, slots=True)
+class UnitLit:
+    """The ``()`` unit literal — the single value of the ``unit`` type."""
+
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,17 +471,28 @@ class DictLit:
 
 
 # Closed union of all expression nodes.
+# NOTE: Raise is an Expr (bottom type — assignable to any expected type).
+# Block, If, Case, Do, Try are expressions (value-producing in v2).
+# Let/Var/Set are NOT Expr — they are binders (Item only, not directly usable
+# in expression position; they scope over the rest of a Block).
 Expr = (
     VarRef
     | FieldAccess
     | Template
-    | AgentCall
     | Constructor
     | BinaryOp
     | UnaryNot
     | UnaryNeg
     | IsTest
-    | CaseExpr
+    | Call
+    | Lambda
+    | Block
+    | If
+    | Case
+    | Do
+    | Try
+    | Raise
+    | UnitLit
     | IntLit
     | DecimalLit
     | BoolLit
@@ -423,13 +560,13 @@ Pattern = WildcardPattern | LiteralPattern | VarPattern | ConstructorPattern
 
 
 # ---------------------------------------------------------------------------
-# Statement nodes
+# Binder nodes (block-item level, not independently usable as Expr)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class LetDecl:
-    """``let name [: type] = expr`` — immutable binding."""
+    """``let name [: type] = expr`` — immutable binding (scopes over continuation)."""
 
     name: str
     type_ann: TypeExpr | None
@@ -440,7 +577,7 @@ class LetDecl:
 
 @dataclass(frozen=True, slots=True)
 class VarDecl:
-    """``var name [: type] = expr`` — mutable binding."""
+    """``var name [: type] = expr`` — mutable binding (scopes over continuation)."""
 
     name: str
     type_ann: TypeExpr | None
@@ -451,7 +588,7 @@ class VarDecl:
 
 @dataclass(frozen=True, slots=True)
 class SetStmt:
-    """``set target = expr`` — assignment to a mutable variable."""
+    """``set target = expr`` — assignment to a mutable variable.  Yields ``unit``."""
 
     target: str
     value: Expr
@@ -459,122 +596,12 @@ class SetStmt:
     node_id: int = dc_field(compare=False)
 
 
-@dataclass(frozen=True, slots=True)
-class PassStmt:
-    """``pass`` — no-op statement."""
-
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class PrintStmt:
-    """``print expr`` — emit a value to the trace output."""
-
-    value: Expr
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class ExprStmt:
-    """An expression used as a statement (result discarded)."""
-
-    expr: Expr
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class DoUntil:
-    """``do[limit] { body } until condition`` — bounded loop."""
-
-    limit: int | None
-    body: tuple[Stmt, ...]
-    condition: Expr
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class IfBranch:
-    """A single branch of an ``if`` statement.
-
-    ``cond`` is either an ``Expr`` (for the ``if``/``elif`` arms) or the
-    singleton ``ELSE`` sentinel (for the ``else`` arm).
-    """
-
-    cond: Expr | ElseSentinel
-    body: tuple[Stmt, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class IfStmt:
-    """``if … elif … else …`` statement, represented as a list of branches."""
-
-    branches: tuple[IfBranch, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class CaseStmtBranch:
-    """A single branch in a ``case`` statement."""
-
-    pattern: Pattern
-    body: tuple[Stmt, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class CaseStmt:
-    """``case expr of { ... }`` statement."""
-
-    subject: Expr
-    branches: tuple[CaseStmtBranch, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class CatchClause:
-    """A ``catch`` handler in a ``try/catch`` statement.
-
-    ``exc_type`` is the exception type name (or ``None`` for a catch-all).
-    ``binding`` is the optional variable name for the exception value.
-    """
-
-    exc_type: str | None
-    binding: str | None
-    body: tuple[Stmt, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class TryCatch:
-    """``try { body } catch { handlers }`` statement."""
-
-    body: tuple[Stmt, ...]
-    handlers: tuple[CatchClause, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
-class Raise:
-    """``raise expr`` — throw an AgL exception."""
-
-    exc: Expr
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
+# Closed union of binder nodes.
+Binder = LetDecl | VarDecl | SetStmt
 
 
 # ---------------------------------------------------------------------------
-# Declaration nodes (top-level constructs)
+# Declaration nodes (top-level + block-level constructs)
 # ---------------------------------------------------------------------------
 
 
@@ -637,8 +664,7 @@ class ParamDecl:
     pass, not synthesized by the parser, so ``annotation`` is ``None`` when the
     source omits it.
 
-    The ``default`` expression is optional; ``None`` when omitted.  Evaluation
-    of the default is handled by Milestone 2+ passes, not here.
+    The ``default`` expression is optional; ``None`` when omitted.
     """
 
     name: str
@@ -650,10 +676,7 @@ class ParamDecl:
 
 @dataclass(frozen=True, slots=True)
 class ProgramDecl:
-    """``program NAME`` declaration.
-
-    Declares the program name used for config lookup and CLI integration.
-    """
+    """``program NAME`` declaration used for host config lookup."""
 
     name: str
     span: SourceSpan = dc_field(compare=False)
@@ -666,6 +689,7 @@ class AgentDecl:
 
     ``runner`` is the optional static runner-command hint (a literal string
     with NO interpolation); ``None`` for a bare declaration.
+    In v2, agent names are ordinary value bindings of type ``agent``.
     """
 
     name: str
@@ -675,28 +699,52 @@ class AgentDecl:
 
 
 # ---------------------------------------------------------------------------
-# Closed statement union (defined after all Stmt classes)
+# Config pragma
 # ---------------------------------------------------------------------------
 
-Stmt = (
-    LetDecl
-    | VarDecl
-    | SetStmt
-    | PassStmt
-    | PrintStmt
-    | ExprStmt
-    | DoUntil
-    | IfStmt
-    | CaseStmt
-    | TryCatch
-    | Raise
+#: The set of value types a config pragma may carry.
+PragmaValue = bool | int | Decimal | str
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigPragma:
+    """``config KEY = VALUE`` header pragma.
+
+    Must appear before any non-pragma item at the program root.
+    Enforced by the scope pass; grammatically it is a top-level item.
+
+    ``key``    — the pragma name (e.g. ``"log"``, ``"max_iters"``).
+    ``value``  — a statically-known scalar: ``bool``, ``int``,
+                 ``Decimal``, or ``str``.
+    """
+
+    key: str
+    value: PragmaValue
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+# Closed union of declaration nodes.
+# FuncDef is a declaration (top-level or block-level named function).
+Declaration = (
+    FuncDef
     | RecordDef
     | EnumDef
     | TypeAlias
     | ParamDecl
     | ProgramDecl
     | AgentDecl
+    | ConfigPragma
 )
+
+
+# ---------------------------------------------------------------------------
+# Item union — element type of Block.items
+# ---------------------------------------------------------------------------
+
+# An item is anything that can appear in a block sequence:
+# declarations (introduce names), binders (scope over the rest), or expressions.
+Item = Declaration | Binder | Expr
 
 
 # ---------------------------------------------------------------------------
@@ -706,8 +754,8 @@ Stmt = (
 
 @dataclass(frozen=True, slots=True)
 class Program:
-    """Root node of an AgL program.  ``body`` is the ordered top-level sequence."""
+    """Root node of an AgL program.  ``body`` is a ``Block`` of top-level items."""
 
-    body: tuple[Stmt, ...]
+    body: Block
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)

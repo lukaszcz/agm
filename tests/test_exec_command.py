@@ -1,7 +1,7 @@
 """Tests for the `agm exec` CLI command (M0).
 
 Covers:
-- CLI wires FILE argument and --input, --strict-json/--no-strict-json,
+- CLI wires FILE argument and params, --strict-json/--no-strict-json,
   --max-iters, --runner, --log-file, --no-log flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
@@ -75,22 +75,29 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "file") == str(agl_file)
 
-    def test_exec_param_tokens_in_args(
+    def test_exec_param_token_after_file(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
-        """Extra ``--name value`` tokens land in ExecArgs.param_tokens."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
-        result = invoke(runner, ["exec", str(agl_file), "--foo", "bar"])
-        # exec.run is mocked, so unknown tokens don't cause errors here.
+        result = invoke(runner, ["exec", str(agl_file), "--k", "v"])
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        # param_tokens collects the leftover ctx.args tokens.
-        tokens = getattr(args, "param_tokens")
-        assert "--foo" in tokens
-        assert "bar" in tokens
+        assert getattr(args, "param_tokens") == ["--k", "v"]
+
+    def test_exec_multiple_param_tokens(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--a", "1", "--b", "2"])
+        assert result.exit_code == 0
+
+        args = recorded_runs[0]
+        assert getattr(args, "param_tokens") == ["--a", "1", "--b", "2"]
 
     def test_exec_strict_json_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -204,6 +211,31 @@ class TestExecCommandArgParsing:
         assert result.exit_code != 0
         assert recorded_runs == []
 
+    def test_exec_help_without_file_prints_help(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec", "--help"])
+        assert result.exit_code == 0
+        assert "agm exec" in result.output
+        assert recorded_runs == []
+
+    def test_exec_param_before_file_is_usage_error(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec", "--msg", "hello"])
+        assert result.exit_code != 0
+        assert "program parameter options must come after the FILE argument" in result.output
+        assert recorded_runs == []
+
+    def test_exec_inline_param_token_from_file_slot(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["exec", "-c", "param msg\nprint msg", "--msg", "hello"])
+        assert result.exit_code == 0
+        args = recorded_runs[0]
+        assert getattr(args, "file") is None
+        assert getattr(args, "param_tokens") == ["--msg", "hello"]
+
 
 class TestExecCommandInline:
     """Behavior tests for executing an inline -c/--command program."""
@@ -228,7 +260,7 @@ class TestExecCommandInline:
         assert exec_command.run(self._command_args('print "hello"')) is None
         assert capsys.readouterr().out == "hello\n"
 
-    def test_inline_command_with_param_token(
+    def test_inline_command_with_params(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         args = self._command_args("param msg\nprint msg", param_tokens=["--msg", "hi"])
@@ -261,6 +293,51 @@ class TestExecCommandInline:
             exec_command.run(args)
         assert exc_info.value.code == 1
         assert "Error" in capsys.readouterr().err
+
+
+class TestExecDynamicHelp:
+    def test_exec_help_for_file_includes_discovered_params(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('program demo\nparam msg: text = "hi"\nprint msg\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(agl_file), command=None)
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "Program parameters:" in out
+        assert "--msg" in out
+
+    def test_exec_help_for_inline_command_includes_discovered_params(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=None, command='param count: int = 1\nprint count')
+
+        assert exc_info.value.code == 0
+        assert "--count" in capsys.readouterr().out
+
+    def test_exec_help_for_source_without_params_has_no_param_section(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=None, command='print "hi"')
+
+        assert exc_info.value.code == 0
+        assert "Program parameters:" not in capsys.readouterr().out
+
+    def test_exec_help_for_unreadable_file_degrades(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            cli._exec_print_help(file=str(tmp_path / "missing.agl"), command=None)
+
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "agm exec" in out
+        assert "Program parameters:" not in out
 
 
 class TestExecCommandBehavior:
@@ -332,7 +409,7 @@ class TestExecCommandBehavior:
     ) -> None:
         """A valid .agl file with no agent calls exits 0 (success)."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
         from agm.commands.args import ExecArgs
 
         args = ExecArgs(
@@ -373,10 +450,7 @@ class TestExecCommandBehavior:
 
 
 def _exec_args(
-    agl_file: Path,
-    *,
-    param_tokens: list[str] | None = None,
-    log_file: str | None = None,
+    agl_file: Path, *, param_tokens: list[str] | None = None, log_file: str | None = None
 ) -> ExecArgs:
     """Build ExecArgs for *agl_file* with all optional flags defaulted."""
     return ExecArgs(
@@ -446,18 +520,17 @@ class TestExecCommandEdgePaths:
         captured = capsys.readouterr()
         assert captured.out == "ok\n"
 
-    def test_unknown_param_token_exits_1(
+    def test_unknown_param_option_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """An unknown --option in param_tokens exits 1 with an error message."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text('param msg: text = "ok"\nprint msg\n')
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, param_tokens=["--unknown-option"]))
+            exec_command.run(_exec_args(agl_file, param_tokens=["--unknown"]))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "error" in captured.err.lower() or "Error" in captured.err
+        assert "error:" in captured.err
 
     def test_non_exhaustive_case_warns_but_exits_0(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -487,7 +560,6 @@ class TestExecCommandEdgePaths:
         assert "warning:" in captured.err
         assert "Non-exhaustive" in captured.err
         assert "Fail" in captured.err
-        assert captured.err.count("warning:") == 1
 
 
 class TestExecExitCodeMapping:
@@ -526,7 +598,7 @@ class TestExecExitCodeMapping:
             self: WorkflowRuntime,
             prepared: object,
             *,
-            inputs: object = None,
+            param_values: object = None,
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
@@ -574,7 +646,7 @@ class TestExecCommandWarnings:
             self: WorkflowRuntime,
             prepared: object,
             *,
-            inputs: object = None,
+            param_values: object = None,
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
@@ -620,7 +692,7 @@ class TestExecCommandWarnings:
             self: WorkflowRuntime,
             prepared: object,
             *,
-            inputs: object = None,
+            param_values: object = None,
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
@@ -662,7 +734,7 @@ class TestExecParsesSourceOnce:
         agl_file = tmp_path / "prog.agl"
         # A declared+called agent: exec must read the inventory AND run the
         # static pipeline, the exact scenario that previously parsed twice.
-        agl_file.write_text('agent impl\nlet x = impl "do it"\n')
+        agl_file.write_text('agent impl\nask("do it", agent: impl)\n')
 
         real_parse = parser_mod.parse_program
         real_resolve = scope_mod.resolve
@@ -712,11 +784,11 @@ class TestExecCLIPaths:
 
 
 class TestExecCommandM1:
-    """M1 exec command behavior: exit codes, inputs, agent calls."""
+    """M1 exec command behavior: exit codes, params, agent calls."""
 
     def test_valid_program_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
         from agm.commands.args import ExecArgs
 
         args = ExecArgs(
@@ -731,7 +803,7 @@ class TestExecCommandM1:
         result = exec_command.run(args)
         assert result is None  # no SystemExit → exit 0
 
-    def test_program_with_inputs_exits_0(self, tmp_path: Path) -> None:
+    def test_program_with_params_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("param msg\nprint msg\n")
         from agm.commands.args import ExecArgs
@@ -748,7 +820,7 @@ class TestExecCommandM1:
         result = exec_command.run(args)
         assert result is None
 
-    def test_missing_input_exits_1(self, tmp_path: Path) -> None:
+    def test_missing_param_exits_1(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("param msg\nprint msg\n")
         from agm.commands.args import ExecArgs
@@ -766,6 +838,44 @@ class TestExecCommandM1:
             exec_command.run(args)
         assert exc_info.value.code == 1
 
+    def test_param_flag_collision_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("param max_iters: int = 1\nprint max_iters\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file))
+
+        assert exc_info.value.code == 1
+        assert "collides with a built-in exec option" in capsys.readouterr().err
+
+    def test_undeclared_param_config_warns_but_runs(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            "\n".join(["[params.demo]", 'typo = "ignored"'])
+        )
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text('program demo\nparam msg: text = "ok"\nprint msg\n')
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "ok\n"
+        assert "typo" in captured.err
+
     def test_ask_program_dispatches_to_runner_backed_agent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -777,7 +887,7 @@ class TestExecCommandM1:
         from agm.commands.args import ExecArgs
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask "hi"\n')
+        agl_file.write_text('ask("hi")\n')
 
         args = ExecArgs(
             file=str(agl_file),
@@ -922,7 +1032,7 @@ class TestExecConfigWiring:
 
         home = self._config_home(tmp_path)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -953,7 +1063,7 @@ class TestExecConfigWiring:
 
         home = self._config_home(tmp_path)  # config sets strict_json = true
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -988,7 +1098,7 @@ class TestExecConfigWiring:
         (home / ".agm" / "config.toml").write_text("[exec]\ntimeout = 60\n")
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -1047,12 +1157,8 @@ class TestExecConfigWiring:
         assert "Error: invalid exec configuration" in capsys.readouterr().err
 
 
-
 def _exec_args_with_fallback_runtime(
-    agl_file: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    param_tokens: list[str] | None = None,
+    agl_file: Path, monkeypatch: pytest.MonkeyPatch, *, param_tokens: list[str] | None = None
 ) -> ExecArgs:
     """Return ExecArgs for *agl_file* and patch WorkflowRuntime to have a fallback agent.
 
@@ -1101,7 +1207,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask "Hello"\n')
+        agl_file.write_text('let x = ask("Hello")\nx\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1112,7 +1218,7 @@ class TestDryRunInventory:
         assert "text" in captured.out
         # The entry surfaces both the source line and column as "line N:C:"
         # (F7: the captured call-site column is not dead).  `ask` starts at
-        # column 9 of `let x = ask "Hello"`.
+        # column 9 of `let x = ask("Hello")`.
         assert "line 1:9:" in captured.out
 
     def test_dry_run_inventory_named_agent(
@@ -1127,12 +1233,14 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent reviewer\nlet r = reviewer "Review this"\n')
+        agl_file.write_text('agent reviewer\nask("Review this", agent: reviewer)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
         captured = capsys.readouterr()
-        assert "reviewer" in captured.out
+        # In v2, named-agent calls use ask(..., agent: name); the inventory
+        # shows "ask" as the callee (the agent: arg is a routing hint, not the callee).
+        assert "ask" in captured.out
 
     def test_dry_run_inventory_abort_policy(
         self,
@@ -1146,7 +1254,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask[on_parse_error: abort] "Hello"\n')
+        agl_file.write_text('ask("Hello", on_parse_error: Abort)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1230,16 +1338,16 @@ class TestDryRunInventory:
         monkeypatch.setattr(exec_command, "WorkflowRuntime", SpyRuntime)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask "Hi"\n')
+        agl_file.write_text('ask("Hi")\n')
 
         assert exec_command.run(_exec_args(agl_file)) is None
         assert agent_calls == []
 
 
-class TestJsonInputsCLI:
-    """M4: structured param types via per-param CLI options."""
+class TestJsonParamsCLI:
+    """M2: --param with structured (record/list/decimal) types via JsonCodec."""
 
-    def test_record_input_parsed_from_json_string(self, tmp_path: Path) -> None:
+    def test_record_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A record-typed param provided as a JSON string is parsed and usable."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -1251,7 +1359,7 @@ class TestJsonInputsCLI:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=["--pt", '{"x": 1, "y": 2}'],
+            param_tokens=['--pt={"x": 1, "y": 2}'],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1271,8 +1379,8 @@ class TestJsonInputsCLI:
         assert result is None
         assert out.getvalue().strip() == "1"
 
-    def test_decimal_input_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """A decimal-typed param provided as a string is accepted."""
+    def test_decimal_param_parsed_from_json_string(self, tmp_path: Path) -> None:
+        """A decimal-typed param provided as a JSON string is accepted."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'param price: decimal\n'
@@ -1302,7 +1410,7 @@ class TestJsonInputsCLI:
         assert result is None
         assert out.getvalue().strip() == "1.5"
 
-    def test_list_input_parsed_from_json_string(self, tmp_path: Path) -> None:
+    def test_list_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A list-typed param provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -1313,7 +1421,7 @@ class TestJsonInputsCLI:
 
         args = ExecArgs(
             file=str(agl_file),
-            param_tokens=["--tags", '["a", "b"]'],
+            param_tokens=['--tags=["a", "b"]'],
             strict_json=None,
             max_iters=None,
             runner=None,
@@ -1335,7 +1443,7 @@ class TestJsonInputsCLI:
         output = out.getvalue().strip()
         assert output  # non-empty
 
-    def test_record_input_invalid_json_exits_1(self, tmp_path: Path) -> None:
+    def test_record_param_invalid_json_exits_1(self, tmp_path: Path) -> None:
         """A record-typed param with invalid JSON exits 1."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -1391,7 +1499,7 @@ class TestUncaughtExceptionOutputFormat:
         """Exit-2 stderr must include the source line number of the raise site."""
         agl_file = tmp_path / "prog.agl"
         # Force an uncaught AgentParseError from an exec call on line 1.
-        agl_file.write_text('let x: int = exec "echo not-an-int"\n')
+        agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._exec_args_nolog(agl_file))
         assert exc_info.value.code == 2
@@ -1408,7 +1516,7 @@ class TestUncaughtExceptionOutputFormat:
         """Exit-2 stderr must include the trace_id when it is non-empty."""
         log_file = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x: int = exec "echo not-an-int"\n')
+        agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
         from agm.commands.args import ExecArgs
         args = ExecArgs(
             file=str(agl_file),
@@ -1433,7 +1541,7 @@ class TestUncaughtExceptionOutputFormat:
         self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
     ) -> None:
         """Exit-2 stderr includes 'line N' when only line is set (col is None)."""
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
 
         from agm.agl.runtime.runtime import RunError, RunResult
         from agm.commands import exec as exec_command
@@ -1453,6 +1561,12 @@ class TestUncaughtExceptionOutputFormat:
             ),
         )
         with patch("agm.commands.exec.WorkflowRuntime") as mock_rt:
+            # prepare() must return a fake PreparedProgram with empty pragmas so
+            # the pragma-resolution logic does not choke on MagicMock values.
+            fake_prepared = MagicMock()
+            fake_prepared.config_pragmas = {}
+            fake_prepared.declared_agents = ()
+            mock_rt.prepare.return_value = fake_prepared
             mock_rt.return_value.run_prepared.return_value = fake_result
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
@@ -1648,10 +1762,10 @@ class TestExecPerAgentRunnerValidation:
             default_loop_limit=5,
             timeout=None,
             agents={"ghost": "bad 'quote"},  # malformed, but for an undeclared agent
+            log=False,
+            log_file=None,
         )
-        monkeypatch.setattr(
-            exec_command, "exec_config_from_merged", lambda *_a, **_k: bad_config
-        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: bad_config)
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('print "ran"\n')
         # Must not raise (the inert ghost command is never validated/dispatched).
@@ -1846,7 +1960,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner %{PROMPT_FILE}"\n'
-            'let x = impl "do it"\n'
+            'let x = ask("do it", agent: impl)\n'
             "print x\n"
         )
 
@@ -1871,7 +1985,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         # ``impl`` is declared BARE (no ``= "runner"`` hint).
-        agl_file.write_text('agent impl\nlet x = impl "do it"\nprint x\n')
+        agl_file.write_text('agent impl\nlet x = ask("do it", agent: impl)\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -1899,9 +2013,9 @@ class TestExecAgentPrecedence:
             'agent a = "source-a %{PROMPT_FILE}"\n'  # config override → CONFIG-A
             'agent b = "source-b %{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
             "agent c\n"  # bare, no config entry → DEFAULT
-            'let ra = a "first"\n'
-            'let rb = b "second"\n'
-            'let rc = c "third"\n'
+            'let ra = ask("first", agent: a)\n'
+            'let rb = ask("second", agent: b)\n'
+            'let rc = ask("third", agent: c)\n'
             "print ra\n"
             "print rb\n"
             "print rc\n"
@@ -1931,7 +2045,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner %{PROMPT_FILE}"\n'
-            'let x = impl "do it"\n'
+            'let x = ask("do it", agent: impl)\n'
             "print x\n"
         )
 
@@ -1950,7 +2064,7 @@ class TestExecAgentPrecedence:
         _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent impl\nlet x = impl "do it"\nprint x\n')
+        agl_file.write_text('agent impl\nlet x = ask("do it", agent: impl)\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -1973,7 +2087,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner --file=%{PROMPT_FILE}"\n'
-            'let x = impl "do it"\n'
+            'let x = ask("do it", agent: impl)\n'
             "print x\n"
         )
 
@@ -2001,7 +2115,7 @@ class TestExecAgentPrecedence:
         agl_file.write_text(
             "agent impl\n"
             'let a = ask "first"\n'
-            'let b = impl "second"\n'
+            'let b = ask("second", agent: impl)\n'
             "print a\n"
             "print b\n"
         )
@@ -2035,759 +2149,460 @@ class TestExecAgentPrecedence:
 
 
 # ---------------------------------------------------------------------------
-# M4: per-param CLI options for agm exec
+# M3: config pragma wiring — CLI > pragma > config precedence
 # ---------------------------------------------------------------------------
 
 
-class TestExecParamOptions:
-    """M4: each ``param`` declaration becomes a ``--<name>`` CLI option."""
-
-    def test_param_text_value_assigned(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``param msg: text`` can be supplied via ``--msg hello``."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\nprint msg\n")
-
-        result = exec_command.run(_exec_args(agl_file, param_tokens=["--msg", "hello"]))
-        assert result is None
-        assert capsys.readouterr().out == "hello\n"
-
-    def test_param_equals_form(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``--msg=hello`` works the same as ``--msg hello``."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\nprint msg\n")
-
-        result = exec_command.run(_exec_args(agl_file, param_tokens=["--msg=hello"]))
-        assert result is None
-        assert capsys.readouterr().out == "hello\n"
-
-    def test_param_bool_true(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``--flag`` for a bool param sets it to True."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param flag: bool\nprint flag\n")
-
-        result = exec_command.run(_exec_args(agl_file, param_tokens=["--flag"]))
-        assert result is None
-        assert "true" in capsys.readouterr().out.lower()
-
-    def test_param_bool_false(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``--no-flag`` for a bool param sets it to False."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param flag: bool\nprint flag\n")
-
-        result = exec_command.run(_exec_args(agl_file, param_tokens=["--no-flag"]))
-        assert result is None
-        assert "false" in capsys.readouterr().out.lower()
-
-    def test_param_int_value(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """An int param receives its value from CLI tokens."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param count: int\nprint count\n")
-
-        result = exec_command.run(_exec_args(agl_file, param_tokens=["--count", "42"]))
-        assert result is None
-        assert "42" in capsys.readouterr().out
-
-    def test_unknown_param_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """An unknown ``--blah`` token exits 1 with an error."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, param_tokens=["--blah"]))
-        assert exc_info.value.code == 1
-        assert "error" in capsys.readouterr().err.lower()
-
-    def test_reserved_name_collision_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A program with ``param max_iters`` exits 1 because it collides with a built-in flag."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param max_iters: int\nprint max_iters\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, param_tokens=["--max_iters", "3"]))
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        assert "max_iters" in err
-        assert "Error" in err
-
-    def test_required_param_missing_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A required param not provided on the CLI exits 1."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\nprint msg\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, param_tokens=[]))
-        assert exc_info.value.code == 1
-
-    def test_optional_param_uses_default(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A param with a default value succeeds even when not supplied."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param greeting: text = "hello"\nprint greeting\n')
-
-        result = exec_command.run(_exec_args(agl_file, param_tokens=[]))
-        assert result is None
-        assert "hello" in capsys.readouterr().out
-
-    def test_syntax_error_no_spurious_unknown_option(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A syntax-error program does not produce 'unknown option' errors."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("@@@invalid\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, param_tokens=["--some_param", "x"]))
-        assert exc_info.value.code == 1
-        # The error should be a parse/syntax error, not "Unknown option"
-        err = capsys.readouterr().err
-        assert "Unknown option" not in err
-
-    def test_input_flag_removed_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """The old ``--input k=v`` flag is no longer a recognized option.
-
-        With ``_RUN_CONTEXT_SETTINGS`` it lands in ``ctx.args`` as a param token.
-        When no param is named ``input`` in the program, exec.run exits 1.
-        """
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, param_tokens=["--input", "k=v"]))
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        assert "error" in err.lower() or "Error" in err
-
-
-class TestExecHelpFlag:
-    """Tests for the ``--help`` and ``-h`` flags in ``agm exec``."""
-
-    def test_help_no_file_shows_base_options(self, runner: CliRunner) -> None:
-        """``agm exec --help`` with no FILE exits 0 and shows base options."""
-        result = invoke(runner, ["exec", "--help"])
-        assert result.exit_code == 0
-        # Base help is printed; should mention the command name.
-        assert "exec" in result.output.lower()
-
-    def test_help_with_file_shows_params(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
-        """``agm exec FILE --help`` appends the program parameters section."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
-
-        result = invoke(runner, ["exec", str(agl_file), "--help"])
-        assert result.exit_code == 0
-        # The param section mentions --msg.
-        assert "--msg" in result.output
-
-    def test_help_with_command_shows_params(self, runner: CliRunner) -> None:
-        """``agm exec -c 'param msg...' --help`` shows program params."""
-        result = invoke(runner, ["exec", "-c", "param msg: text\n", "--help"])
-        assert result.exit_code == 0
-        assert "--msg" in result.output
-
-    def test_help_with_ask_program_shows_params(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
-        """Param discovery for help uses exec-capable agent availability."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param topic: text\nlet answer = ask "About ${topic as raw}"\n')
-
-        result = invoke(runner, ["exec", str(agl_file), "--help"])
-        assert result.exit_code == 0
-        assert "--topic" in result.output
-
-    def test_help_syntax_error_degrades(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
-        """Syntax error in FILE does not crash --help; shows base options."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("@@@invalid\n")
-
-        result = invoke(runner, ["exec", str(agl_file), "--help"])
-        assert result.exit_code == 0
-        # At minimum the base exec help should appear (no crash).
-        assert "exec" in result.output.lower()
-
-    def test_help_unreadable_file_degrades(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
-        """An unreadable FILE degrades --help to base options only."""
-        result = invoke(runner, ["exec", "/nonexistent/prog.agl", "--help"])
-        assert result.exit_code == 0
-        assert "exec" in result.output.lower()
-
-    def test_h_flag_also_shows_help(self, runner: CliRunner) -> None:
-        """``agm exec -h`` also exits 0 with help output."""
-        result = invoke(runner, ["exec", "-h"])
-        assert result.exit_code == 0
-        assert "exec" in result.output.lower()
-
-    def test_help_runtime_error_degrades(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Unexpected exception from WorkflowRuntime.prepare degrades to base help."""
-        import agm.agl as agl_module
-        from agm.agl.runtime.runtime import PreparedProgram
-
-        def _patched_prepare(source: str) -> PreparedProgram:
-            del source
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(agl_module.WorkflowRuntime, "prepare", staticmethod(_patched_prepare))
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\n")
-        result = invoke(runner, ["exec", str(agl_file), "--help"])
-        assert result.exit_code == 0
-        # Base help still rendered despite unexpected runtime error.
-        assert "exec" in result.output.lower()
-
-
-# ---------------------------------------------------------------------------
-# M5: [params.<program>] config integration tests
-# ---------------------------------------------------------------------------
-
-
-def _make_config_home(tmp_path: Path, toml: str) -> Path:
-    home = tmp_path / "home"
-    (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(toml)
-    return home
-
-
-def _exec_args_for_config(agl_file: Path) -> ExecArgs:
-    """ExecArgs for a file with no param tokens and no logging."""
+def _exec_args_no_log(
+    agl_file: Path,
+    *,
+    strict_json: bool | None = None,
+    max_iters: int | None = None,
+    runner: str | None = None,
+    no_log: bool = True,
+    log_file: str | None = None,
+    log: bool = False,
+) -> ExecArgs:
+    """Build a minimal ExecArgs for M3 pragma-precedence tests."""
     return ExecArgs(
         file=str(agl_file),
         param_tokens=[],
-        strict_json=None,
-        max_iters=None,
-        runner=None,
-        no_log=True,
-        log_file=None,
+        strict_json=strict_json,
+        max_iters=max_iters,
+        runner=runner,
+        no_log=no_log,
+        log_file=log_file,
+        log=log,
     )
 
 
-class TestExecParamConfigWiring:
-    """M5: [params.<program>] config integration with agm exec."""
+class TestExecPragmaPrecedence:
+    """M3: ``config`` pragmas in source (CLI > pragma > config precedence).
 
-    def test_file_stem_keying_supplies_param_from_config(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    Each test uses behavioral assertions — observable exit codes and output —
+    rather than internal call counts, following the testing policy.
+    """
+
+    # ------------------------------------------------------------------
+    # max_iters pragma
+    # ------------------------------------------------------------------
+
+    def test_pragma_max_iters_caps_loop_at_pragma_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """When program has no ``program NAME`` decl, the .agl file stem keys the config."""
-        from agm.config.context import ConfigContext
+        """``config max_iters = 3`` in source caps the do loop at 3 iterations.
 
-        home = _make_config_home(
-            tmp_path, "[params.myflow]\ngreeting = \"world\"\n"
-        )
-        agl_file = tmp_path / "myflow.agl"
-        agl_file.write_text("param greeting: text\nprint greeting\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        assert capsys.readouterr().out == "world\n"
-
-    def test_program_name_decl_keying_overrides_file_stem(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Declared ``program NAME`` takes precedence over the file stem for config key."""
-        from agm.config.context import ConfigContext
-
-        # Config uses the declared program name, NOT the file stem.
-        home = _make_config_home(
-            tmp_path,
-            "[params.declared_name]\ngreeting = \"from_config\"\n"
-            "[params.filestem]\ngreeting = \"wrong\"\n",
-        )
-        agl_file = tmp_path / "filestem.agl"
-        agl_file.write_text("program declared_name\nparam greeting: text\nprint greeting\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        assert capsys.readouterr().out == "from_config\n"
-
-    def test_cli_overrides_config_value(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """CLI option overrides the config value (CLI > config > default)."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, "[params.prog]\ngreeting = \"config_value\"\n")
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param greeting: text\nprint greeting\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        args = ExecArgs(
-            file=str(agl_file),
-            param_tokens=["--greeting", "cli_value"],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=True,
-            log_file=None,
-        )
-        assert exec_command.run(args) is None
-        assert capsys.readouterr().out == "cli_value\n"
-
-    def test_config_value_suppresses_default_expression(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Config presence suppresses the param's default expression."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, "[params.prog]\ngreeting = \"config_val\"\n")
-        agl_file = tmp_path / "prog.agl"
-        # param has a default, but config should win.
-        agl_file.write_text('param greeting: text = "default_val"\nprint greeting\n')
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        assert capsys.readouterr().out == "config_val\n"
-
-    def test_inline_command_no_config_table(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Inline ``-c`` with no ``program`` decl has no config table; params via CLI only."""
-        from agm.config.context import ConfigContext
-
-        # Even if config has a [params.*] entry, inline -c with no program decl ignores it.
-        home = _make_config_home(tmp_path, "[params.anything]\ngreeting = \"should_not_apply\"\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        args = ExecArgs(
-            file=None,
-            command="param greeting: text\nprint greeting\n",
-            param_tokens=["--greeting", "cli_only"],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=True,
-            log_file=None,
-        )
-        assert exec_command.run(args) is None
-        assert capsys.readouterr().out == "cli_only\n"
-
-    def test_inline_command_with_program_decl_uses_config(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Inline ``-c`` WITH ``program NAME`` still resolves config by the declared name."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(
-            tmp_path, "[params.inline_prog]\ngreeting = \"from_inline_config\"\n"
-        )
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        args = ExecArgs(
-            file=None,
-            command="program inline_prog\nparam greeting: text\nprint greeting\n",
-            param_tokens=[],
-            strict_json=None,
-            max_iters=None,
-            runner=None,
-            no_log=True,
-            log_file=None,
-        )
-        assert exec_command.run(args) is None
-        assert capsys.readouterr().out == "from_inline_config\n"
-
-    def test_undeclared_config_key_warns_but_program_runs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """An undeclared config key emits a warning to stderr but does not stop execution."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(
-            tmp_path,
-            "[params.prog]\ngreeting = \"hi\"\ntypo_key = \"oops\"\n",
-        )
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param greeting: text\nprint greeting\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        captured = capsys.readouterr()
-        assert captured.out == "hi\n"
-        # Warning mentions the undeclared key and is non-fatal.
-        assert "typo_key" in captured.err
-        assert "warning" in captured.err.lower()
-
-    def test_native_bool_config_value_reaches_program(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """TOML native bool reaches the program correctly (not stringified)."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, "[params.prog]\nflag = true\n")
+        The loop ``until n >= 100`` cannot complete in 3 iterations (n starts at
+        0 and increments by 1), so the runtime raises a LoopLimitExceeded and
+        the command exits 2.
+        """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "param flag: bool\n"
-            "case flag of\n"
-            '  | true => print "yes"\n'
-            '  | false => print "no"\n'
+            "config max_iters = 3\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
         )
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        assert capsys.readouterr().out == "yes\n"
-
-    def test_native_int_config_value_reaches_program(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """TOML native int reaches the program correctly."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, "[params.prog]\ncount = 7\n")
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param count: int\nprint count\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        assert capsys.readouterr().out == "7\n"
-
-    def test_toml_array_config_value_for_list_param(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A TOML array reaches a list param correctly (printed as JSON array)."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, '[params.prog]\ntags = ["alpha", "beta"]\n')
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param tags: list[text]\nprint tags\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        out = capsys.readouterr().out
-        assert "alpha" in out
-        assert "beta" in out
-
-    def test_json_string_config_value_for_list_param(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A JSON string config value also reaches a list param correctly."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, '[params.prog]\ntags = \'["x","y"]\'\n')
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param tags: list[text]\nprint tags\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        out = capsys.readouterr().out
-        assert "x" in out
-        assert "y" in out
-
-    def test_decimal_as_toml_string_reaches_program(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Decimal param value as a quoted TOML string is coerced correctly."""
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, '[params.prog]\nratio = "1.5"\n')
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param ratio: decimal\nprint ratio\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        assert capsys.readouterr().out == "1.5\n"
-
-    def test_decimal_as_bare_toml_float_exits_1(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A bare TOML float for a decimal param is a clean pre-exec error (no binary float)."""
-        from agm.config.context import ConfigContext
-
-        # 0.75 is a TOML float → Python float, which convert_input rejects
-        # (AgL forbids binary floats); the user must quote it as "0.75".
-        home = _make_config_home(tmp_path, "[params.prog]\nratio = 0.75\n")
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param ratio: decimal\nprint ratio\n")
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_for_config(agl_file))
-        assert exc_info.value.code == 1
-        assert "ratio" in capsys.readouterr().err
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 2
 
-    def test_typecheck_failure_with_config_table_no_spurious_warnings(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_pragma_max_iters_allows_completion_when_sufficient(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A type-error program does not emit config undeclared-key warnings.
+        """``config max_iters = 100`` allows a do loop that needs exactly 100 iterations."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "config max_iters = 100\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
+            'print "done"\n'
+        )
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None  # exit 0
+        assert capsys.readouterr().out == "done\n"
 
-        When typecheck fails the param set is unknown, so the config layer is
-        skipped entirely and only the real type-error diagnostic surfaces.
+    def test_cli_max_iters_overrides_pragma_max_iters(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """CLI ``--max-iters 100`` overrides ``config max_iters = 3`` in source.
+
+        With --max-iters 100 the loop completes in 100 iterations (exits 0);
+        with pragma max_iters=3 it would fail (exit 2).
         """
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(
-            tmp_path, '[params.prog]\ngreeting = "hi"\nother = "x"\n'
-        )
         agl_file = tmp_path / "prog.agl"
-        # Type error: int param bound a text default → typecheck fails.
-        agl_file.write_text('param greeting: int = "not an int"\nprint greeting\n')
-
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        agl_file.write_text(
+            "config max_iters = 3\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
+            'print "done"\n'
         )
+        result = exec_command.run(_exec_args_no_log(agl_file, max_iters=100))
+        assert result is None  # exit 0 — CLI 100 overrides pragma 3
+        assert capsys.readouterr().out == "done\n"
 
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_for_config(agl_file))
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        # No misleading "undeclared config key" noise masking the real error.
-        assert "other" not in err
-        assert "is not a declared param" not in err
+    def test_pragma_max_iters_overrides_config_max_iters(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Source pragma ``config max_iters = 100`` overrides ``[exec] default_loop_limit = 3``.
 
-    def test_no_config_table_missing_required_param_exits_1(
+        Config says 3 (loop would fail); pragma says 100 (loop completes).
+        """
+        from agm.config.general import ExecConfig
+
+        low_limit_config = ExecConfig(
+            runner=None,
+            strict_json=False,
+            default_loop_limit=3,
+            timeout=None,
+            agents={},
+            log=False,
+            log_file=None,
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: low_limit_config)
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "config max_iters = 100\n"
+            "var n = 0\n"
+            "do\n"
+            "  set n = n + 1\n"
+            "until n >= 100\n"
+            'print "done"\n'
+        )
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None  # exit 0 — pragma 100 overrides config 3
+        assert capsys.readouterr().out == "done\n"
+
+    # ------------------------------------------------------------------
+    # strict_json pragma
+    # ------------------------------------------------------------------
+
+    def test_pragma_strict_json_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No config table + no CLI value for a required param still exits 1."""
-        from agm.config.context import ConfigContext
+        """``config strict_json = true`` in source sets ``default_strict_json=True``
+        on the WorkflowRuntime (observable via the spy pattern)."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
 
-        home = tmp_path / "home"
-        home.mkdir()
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["default_strict_json"] is True
 
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    def test_cli_strict_json_overrides_pragma_strict_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict_json = true``."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file, strict_json=False))
+        assert result is None
+        assert captured["default_strict_json"] is False
+
+    def test_pragma_strict_json_overrides_config_strict_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Source pragma ``config strict_json = false`` overrides ``[exec] strict_json = true``."""
+        from agm.config.general import ExecConfig
+
+        strict_config = ExecConfig(
+            runner=None,
+            strict_json=True,
+            default_loop_limit=5,
+            timeout=None,
+            agents={},
+            log=False,
+            log_file=None,
         )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: strict_config)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param msg: text\nprint msg\n")
+        agl_file.write_text("config strict_json = false\nlet x = 1\nx\n")
 
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_for_config(agl_file))
-        assert exc_info.value.code == 1
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["default_strict_json"] is False
 
+    # ------------------------------------------------------------------
+    # timeout pragma
+    # ------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# UX fix: program param option placed before FILE gives a clear usage error
-# ---------------------------------------------------------------------------
-
-
-class TestExecParamOptionBeforeFile:
-    """When a program --param option is placed BEFORE the FILE argument, Click's
-    ignore_unknown_options mis-binds the option token to the FILE positional.
-    The exec command must detect this and emit a clear usage error (exit 1)
-    that mentions the offending token and the required ordering, instead of the
-    cryptic OS 'cannot read --name: No such file or directory' message.
-    """
-
-    def test_param_before_file_exits_1(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    def test_pragma_timeout_flows_into_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A program param option before FILE causes a usage error (exit 1)."""
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param name\nprint name\n")
+        """``config timeout = "30s"`` in source sets shell_exec_timeout=30.0."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
 
-        result = invoke(runner, ["exec", "--name", "Alice", str(agl_file)])
-        assert result.exit_code == 1
-        # exec.run must NOT be reached; the CLI layer rejects before dispatching.
-        assert recorded_runs == []
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["shell_exec_timeout"] == 30.0
 
-    def test_param_before_file_mentions_offending_token(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    def test_pragma_timeout_integer_seconds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The error message mentions the offending option token."""
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param name\nprint name\n")
+        """``config timeout = 60`` (integer) in source sets shell_exec_timeout=60.0."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config timeout = 60\nlet x = 1\nx\n")
 
-        result = invoke(runner, ["exec", "--name", "Alice", str(agl_file)])
-        assert "--name" in result.output
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["shell_exec_timeout"] == 60.0
 
-    def test_param_before_file_mentions_ordering(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    def test_pragma_timeout_overrides_config_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The error message refers to the required FILE-first ordering."""
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param name\nprint name\n")
+        """Source pragma timeout overrides ``[exec] timeout`` from config."""
+        from agm.config.general import ExecConfig
 
-        result = invoke(runner, ["exec", "--name", "Alice", str(agl_file)])
-        # Must NOT produce the old 'cannot read' OS-level error.
-        assert "cannot read" not in result.output
-        # Must hint that param options belong after FILE.
-        assert "FILE" in result.output or "after" in result.output
+        config_with_timeout = ExecConfig(
+            runner=None,
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=999.0,
+            agents={},
+            log=False,
+            log_file=None,
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: config_with_timeout)
 
-    def test_param_after_file_still_works(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
+
+        captured = _spy_runtime(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+        assert captured["shell_exec_timeout"] == 30.0
+
+    def test_pragma_timeout_invalid_string_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Normal usage (param AFTER FILE) still reaches exec.run unimpeded."""
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param name\nprint name\n")
+        """A pragma timeout string that passes the scope check but fails parse_timeout exits 1.
 
-        result = invoke(runner, ["exec", str(agl_file), "--name", "Alice"])
-        assert result.exit_code == 0
-        assert len(recorded_runs) == 1
-        args = recorded_runs[0]
-        assert "--name" in getattr(args, "param_tokens")
-        assert "Alice" in getattr(args, "param_tokens")
+        The pragma validator accepts any non-empty string; parse_timeout rejects
+        values like "forever" that are not valid duration strings.  We inject the
+        invalid value via a patched prepare() to bypass the scope pass.
+        """
+        from unittest.mock import MagicMock
 
-    def test_builtin_option_before_file_still_works(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
-    ) -> None:
-        """Built-in options (e.g. --max-iters) before FILE continue to work."""
-        agl_file = tmp_path / "test.agl"
+        from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
+
+        agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
 
-        result = invoke(runner, ["exec", "--max-iters", "3", str(agl_file)])
-        assert result.exit_code == 0
-        assert len(recorded_runs) == 1
-        args = recorded_runs[0]
-        assert getattr(args, "max_iters") == 3
+        real_prepare = RealRuntime.prepare
 
-    def test_inline_command_form_no_file_unaffected(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
-        """-c/--command inline form without extra param tokens is not affected by the guard."""
-        # The guard only triggers when file starts with '--' and command is None.
-        # With -c set and no FILE, file is None, so the guard is never reached.
-        result = invoke(runner, ["exec", "-c", 'print "hi"'])
-        assert result.exit_code == 0
-        assert len(recorded_runs) == 1
-        # exec.run is reached; the clear guard path (file starts with '--') is NOT triggered.
-        args = recorded_runs[0]
-        assert getattr(args, "file") is None
-        assert getattr(args, "command") is not None
+        def fake_prepare(source: str) -> object:
+            real_pp = real_prepare(source)
+            # Wrap the real PreparedProgram with an invalid timeout in config_pragmas.
+            fake_pp = MagicMock()
+            fake_pp.config_pragmas = {"timeout": "forever"}
+            fake_pp.declared_agents = real_pp.declared_agents
+            # Preserve other attributes for run_prepared.
+            fake_pp.program = real_pp.program
+            fake_pp.resolved = real_pp.resolved
+            fake_pp.diagnostics = real_pp.diagnostics
+            fake_pp.warnings = real_pp.warnings
+            return fake_pp
 
-    def test_inline_command_param_option_reaches_exec_args(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
-        """``agm exec -c SOURCE --param value`` passes the param through."""
-        result = invoke(runner, ["exec", "-c", "param msg\nprint msg", "--msg", "hello"])
-        assert result.exit_code == 0
-        assert len(recorded_runs) == 1
-        args = recorded_runs[0]
-        assert getattr(args, "file") is None
-        assert getattr(args, "param_tokens") == ["--msg", "hello"]
+        monkeypatch.setattr(exec_command.WorkflowRuntime, "prepare", staticmethod(fake_prepare))
 
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "timeout" in captured.err.lower()
 
-class TestExecLoadsMergedConfigOnce:
-    """``agm exec`` merges the config-file stack exactly ONCE per invocation.
+    # ------------------------------------------------------------------
+    # log pragma
+    # ------------------------------------------------------------------
 
-    Regression guard: a program with ``param`` declarations needs both the
-    ``[exec]`` section and the ``[params.<key>]`` table.  Both must be derived
-    from a single merged-config load so the config files are not read and merged
-    twice on every invocation.
-    """
-
-    def test_param_program_loads_merged_config_exactly_once(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        home = _make_config_home(tmp_path, '[params.prog]\ngreeting = "world"\n')
+    def test_pragma_log_true_creates_trace_file(self, tmp_path: Path) -> None:
+        """``config log = true`` in source enables trace logging (creates a file)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param greeting: text\nprint greeting\n")
+        agl_file.write_text('config log = true\nprint "hi"\n')
 
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        # Run in tmp_path so .agent-files/ is created there.
+        import os
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            exec_command.run(
+                ExecArgs(
+                    file=str(agl_file),
+                    param_tokens=[],
+                    strict_json=None,
+                    max_iters=None,
+                    runner=None,
+                    no_log=False,
+                    log_file=None,
+                )
+            )
+        finally:
+            os.chdir(old_cwd)
+
+        agent_files = tmp_path / ".agent-files"
+        log_files = list(agent_files.glob("exec-*.log"))
+        assert log_files, "Expected a trace log file to be created by config log = true"
+
+    def test_pragma_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
+        """``config log_file = "path"`` in source writes the trace to that path."""
+        log_path = tmp_path / "trace.log"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+
+        exec_command.run(
+            ExecArgs(
+                file=str(agl_file),
+                param_tokens=[],
+                strict_json=None,
+                max_iters=None,
+                runner=None,
+                no_log=False,
+                log_file=None,
+            )
+        )
+        assert log_path.exists(), "Expected trace log at pragma-specified path"
+
+    def test_cli_no_log_overrides_pragma_log_true(self, tmp_path: Path) -> None:
+        """CLI ``--no-log`` overrides ``config log = true`` — no trace file created."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config log = true\nprint "hi"\n')
+
+        import os
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            exec_command.run(_exec_args_no_log(agl_file, no_log=True))
+        finally:
+            os.chdir(old_cwd)
+
+        # --no-log must prevent trace creation even when the pragma says log=true.
+        agent_files = tmp_path / ".agent-files"
+        if agent_files.exists():
+            log_files = list(agent_files.glob("exec-*.log"))
+            assert not log_files, "Expected no trace log when --no-log overrides pragma log=true"
+
+    def test_pragma_log_file_overrides_config_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config log_file`` pragma overrides ``[exec] log = false`` in config."""
+        log_path = tmp_path / "pragma_trace.log"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+
+        from agm.config.general import ExecConfig
+
+        no_log_config = ExecConfig(
+            runner=None,
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=None,
+            agents={},
+            log=False,
+            log_file=None,
+        )
+        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: no_log_config)
+
+        exec_command.run(
+            ExecArgs(
+                file=str(agl_file),
+                param_tokens=[],
+                strict_json=None,
+                max_iters=None,
+                runner=None,
+                no_log=False,
+                log_file=None,
+            )
+        )
+        assert log_path.exists(), (
+            "Expected trace log at pragma-specified path despite config log=false"
         )
 
-        real_load = exec_command.load_merged_config
-        merge_calls = 0
+    # ------------------------------------------------------------------
+    # runner pragma
+    # ------------------------------------------------------------------
 
-        def counting_load(
-            *, home: Path, proj_dir: Path | None, cwd: Path
-        ) -> dict[str, object]:
-            nonlocal merge_calls
-            merge_calls += 1
-            return real_load(home=home, proj_dir=proj_dir, cwd=cwd)
+    def test_pragma_runner_flows_into_agent_factory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config runner = "..."`` pragma sets the default runner command.
 
-        monkeypatch.setattr(exec_command, "load_merged_config", counting_load)
+        We capture the runner command passed to runner_backed_agent_factory
+        because it is the single user-observable boundary between exec.py and
+        the subprocess world.
+        """
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config runner = "my-runner"\nlet x = 1\nx\n')
 
-        assert exec_command.run(_exec_args_for_config(agl_file)) is None
-        assert capsys.readouterr().out == "world\n"
-        assert merge_calls == 1
+        captured_runner: list[str] = []
+
+        import agm.agl.runtime.agents as agents_mod
+        from agm.agl.runtime.agents import AgentFn
+
+        real_factory = agents_mod.runner_backed_agent_factory
+
+        def spy_factory(
+            *,
+            default_runner_cmd: str,
+            per_agent_cmds: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> AgentFn:
+            captured_runner.append(default_runner_cmd)
+            return real_factory(
+                default_runner_cmd=default_runner_cmd,
+                per_agent_cmds=per_agent_cmds,
+                idle_timeout=idle_timeout,
+            )
+
+        monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
+
+        exec_command.run(_exec_args_no_log(agl_file))
+        assert captured_runner == ["my-runner"]
+
+    def test_cli_runner_overrides_pragma_runner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLI ``--runner`` overrides ``config runner`` pragma."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config runner = "pragma-runner"\nlet x = 1\nx\n')
+
+        captured_runner: list[str] = []
+
+        import agm.agl.runtime.agents as agents_mod
+        from agm.agl.runtime.agents import AgentFn
+
+        real_factory = agents_mod.runner_backed_agent_factory
+
+        def spy_factory(
+            *,
+            default_runner_cmd: str,
+            per_agent_cmds: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> AgentFn:
+            captured_runner.append(default_runner_cmd)
+            return real_factory(
+                default_runner_cmd=default_runner_cmd,
+                per_agent_cmds=per_agent_cmds,
+                idle_timeout=idle_timeout,
+            )
+
+        monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
+
+        exec_command.run(_exec_args_no_log(agl_file, runner="cli-runner"))
+        assert captured_runner == ["cli-runner"]

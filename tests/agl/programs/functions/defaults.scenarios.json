@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "defaults_applied_when_omitted",
+      "params": {"msg": "hello"},
+      "expect": {
+        "stdout": "[INFO] hello\n[WARN] hello\n[ERR] hello!\n[OK] done\n"
+      }
+    },
+    {
+      "name": "different_input_same_logic",
+      "params": {"msg": "problem"},
+      "expect": {
+        "stdout": "[INFO] problem\n[WARN] problem\n[ERR] problem!\n[OK] done\n"
+      }
+    }
+  ]
+}

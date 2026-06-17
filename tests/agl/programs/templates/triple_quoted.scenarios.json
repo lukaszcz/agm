@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "single_line_body",
-      "inputs": {"body": "payload"},
+      "params": {"body": "payload"},
       "agents": {"critic": ["c1", "c2"]},
       "expect": {
         "stdout": "block sent\nmixed sent\n",
@@ -19,7 +19,7 @@
     },
     {
       "name": "multiline_indented_body_kept_verbatim",
-      "inputs": {"body": "line1\n      line2 deep"},
+      "params": {"body": "line1\n      line2 deep"},
       "agents": {"critic": ["c1", "c2"]},
       "expect": {
         "stdout": "block sent\nmixed sent\n",

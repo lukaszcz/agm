@@ -34,21 +34,24 @@ from lark.tree import Meta
 
 import agm.agl.syntax as syntax
 from agm.agl.parser.errors import AglSyntaxError
-from agm.agl.syntax.nodes import ELSE
+from agm.agl.syntax.nodes import ELSE, PragmaValue
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
+    AgentT,
     BoolT,
     DecimalT,
     DictT,
+    FuncT,
     IntT,
     JsonT,
     ListT,
     NameT,
     TextT,
     TypeExpr,
+    UnitT,
 )
 
-# Types used internally for constructor-arg assembly
+# Types used internally
 _NamedArgList = list[syntax.NamedArg]
 
 # ---------------------------------------------------------------------------
@@ -56,6 +59,8 @@ _NamedArgList = list[syntax.NamedArg]
 # ---------------------------------------------------------------------------
 
 _Args = list[object]  # Rule children after transformation (tokens + AST nodes)
+
+_ALL_TYPE_EXPRS = (TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT)
 
 
 def _span_from_meta(meta: Meta) -> SourceSpan:
@@ -116,8 +121,7 @@ class AstBuilder(Transformer):
         # node_ids of Constructor nodes that already had a constructor_payload
         # applied via ctor_applied.  Used to reject a second payload
         # (``Issue(a: 1)(b: 2)``) regardless of whether the first payload was
-        # empty (``Empty()``).  Tracking applied state explicitly avoids the
-        # ``len(args) == 0`` ambiguity between "no payload" and "empty payload".
+        # empty (``Empty()``).
         self._payload_applied: set[int] = set()
 
     def _next_id(self) -> int:
@@ -141,69 +145,33 @@ class AstBuilder(Transformer):
 
     def start(self, meta: Meta, args: _Args) -> syntax.Program:
         (block,) = args
-        assert isinstance(block, tuple)
-        stmts: tuple[syntax.Stmt, ...] = block
+        assert isinstance(block, syntax.Block)
         span = _span_from_meta(meta)
-        return syntax.Program(body=stmts, span=span, node_id=self._next_id())
+        return syntax.Program(body=block, span=span, node_id=self._next_id())
 
-    def block_stmts(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
-        # args contains stmts interleaved with SEMICOLON tokens.
-        # _NEWLINE is filtered by the leading underscore convention, but
-        # SEMICOLON (uppercase, %declare'd) appears in the tree.  Drop tokens.
-        return tuple(
-            s
-            for s in args
-            if s is not None and not isinstance(s, Token)
-            if isinstance(s, (
-                syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
-                syntax.ParamDecl, syntax.ProgramDecl, syntax.AgentDecl,
-                syntax.LetDecl, syntax.VarDecl,
-                syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
-                syntax.ExprStmt, syntax.Raise,
-                syntax.DoUntil, syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch,
-            ))
+    def block(self, meta: Meta, args: _Args) -> syntax.Block:
+        """block: item (_sep item)* _sep?
+
+        _NEWLINE tokens are filtered by leading underscore convention.
+        SEMICOLON tokens are %declare'd and appear in tree — drop them.
+        items are Declaration | Binder | Expr (all are AST nodes, not Tokens).
+        """
+        items = tuple(
+            cast(syntax.Item, a)
+            for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        return syntax.Block(
+            items=items,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
-    # closed_stmt is transparent (?-prefixed via stmt)
-    # ------------------------------------------------------------------
-
-    def closed_stmt(self, meta: Meta, args: _Args) -> syntax.Stmt:
-        (inner,) = args
-        assert isinstance(inner, (
-            syntax.RecordDef, syntax.EnumDef, syntax.TypeAlias,
-            syntax.ParamDecl, syntax.ProgramDecl, syntax.AgentDecl,
-            syntax.LetDecl, syntax.VarDecl,
-            syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
-            syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
-        ))
-        return inner
-
-    # open_stmt is transparent: if/case/try already return the right type
-    def open_stmt(self, meta: Meta, args: _Args) -> syntax.Stmt:
-        (inner,) = args
-        assert isinstance(inner, (syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch))
-        return inner
-
-    # bar_closed_stmt: transparent — delegates to the non-bar sub-rule return values
-    def bar_closed_stmt(self, meta: Meta, args: _Args) -> syntax.Stmt:
-        (inner,) = args
-        assert isinstance(inner, (
-            syntax.TypeAlias, syntax.LetDecl, syntax.VarDecl,
-            syntax.SetStmt, syntax.PassStmt, syntax.PrintStmt,
-            syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
-        ))
-        return inner
-
-    # ------------------------------------------------------------------
-    # param_decl / program_decl
+    # Declarations
     # ------------------------------------------------------------------
 
     def param_decl(self, meta: Meta, args: _Args) -> syntax.ParamDecl:
-        # Grammar: "param" VAR_NAME type_ann? (EQ expr)?
-        # After transformation:
-        #   args[0] = Token(VAR_NAME)
-        #   args[1:] is the same shape as let/var tail but with the expr optional
         name_tok = args[0]
         assert isinstance(name_tok, Token)
         ann, default = _extract_ann_and_optional_expr(args[1:])
@@ -217,11 +185,7 @@ class AstBuilder(Transformer):
         )
 
     def program_decl(self, meta: Meta, args: _Args) -> syntax.ProgramDecl:
-        # Grammar: "program" VAR_NAME
-        name_tok = next(
-            (a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None
-        )
-        assert name_tok is not None, "program_decl: no VAR_NAME token"
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "VAR_NAME")
         span = _span_from_meta(meta)
         return syntax.ProgramDecl(
             name=str(name_tok),
@@ -229,16 +193,8 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    # ------------------------------------------------------------------
-    # agent_decl
-    # ------------------------------------------------------------------
-
     def agent_decl(self, meta: Meta, args: _Args) -> syntax.AgentDecl:
         # Grammar: AGENT VAR_NAME (EQ template)?
-        # The leading AGENT keyword token is kept in the tree (it is a declared
-        # terminal, so Lark does not filter it); the agent name is the VAR_NAME.
-        # The template transformer normalises a plain (non-interpolated) string
-        # to a StringLit and keeps an interpolated one as a Template.
         name_tok = next(
             a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"
         )
@@ -263,8 +219,188 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def config_pragma(self, meta: Meta, args: _Args) -> syntax.ConfigPragma:
+        """config_pragma: "config" VAR_NAME EQ pragma_value"""
+        key_tok = next(a for a in args if isinstance(a, Token) and a.type == "VAR_NAME")
+        raw_value = next(
+            a for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        span = _span_from_meta(meta)
+        return syntax.ConfigPragma(
+            key=str(key_tok),
+            value=cast(PragmaValue, raw_value),
+            span=span,
+            node_id=self._next_id(),
+        )
+
+    def pragma_true(self, meta: Meta, args: _Args) -> bool:
+        return True
+
+    def pragma_false(self, meta: Meta, args: _Args) -> bool:
+        return False
+
+    def pragma_int(self, meta: Meta, args: _Args) -> int:
+        tok = args[0]
+        assert isinstance(tok, Token)
+        return int(str(tok))
+
+    def pragma_decimal(self, meta: Meta, args: _Args) -> decimal.Decimal:
+        tok = args[0]
+        assert isinstance(tok, Token)
+        return decimal.Decimal(str(tok))
+
+    def pragma_str(self, meta: Meta, args: _Args) -> str:
+        lit = _require_literal_string(
+            args[0],
+            "config pragma value must be a literal string with no interpolation.",
+        )
+        return lit.value
+
     # ------------------------------------------------------------------
-    # let_decl / var_decl / set_stmt  (and bar twins)
+    # record_def / field_def
+    # ------------------------------------------------------------------
+
+    def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
+        # Grammar: "record" TYPE_NAME _NEWLINE _INDENT field_def+ _DEDENT
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        fields = tuple(a for a in args[1:] if isinstance(a, syntax.FieldDef))
+        return syntax.RecordDef(
+            name=str(name_tok),
+            fields=fields,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
+        # Grammar: field_name COLON type_expr
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        type_expr = _find_type_expr(args[1:])
+        return syntax.FieldDef(
+            name=str(name_tok),
+            type_expr=type_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # enum_def / variant_def / variant_payload / field_list / field_inline
+    # ------------------------------------------------------------------
+
+    def enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        variants = tuple(a for a in args[1:] if isinstance(a, syntax.VariantDef))
+        return syntax.EnumDef(
+            name=str(name_tok),
+            variants=variants,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
+        # Grammar: PIPE TYPE_NAME variant_payload?
+        name_tok = next((a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None)
+        assert name_tok is not None, "variant_def: no TYPE_NAME token"
+        fields: tuple[syntax.FieldDef, ...] = ()
+        for a in args:
+            if isinstance(a, tuple):
+                fields = cast(tuple[syntax.FieldDef, ...], a)
+                break
+        return syntax.VariantDef(
+            name=str(name_tok),
+            fields=fields,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+        # Grammar: LPAR field_list? RPAR
+        for a in args:
+            if isinstance(a, tuple):
+                return cast(tuple[syntax.FieldDef, ...], a)
+        return ()
+
+    def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+        # Grammar: field_inline (COMMA field_inline)* COMMA?
+        return tuple(a for a in args if isinstance(a, syntax.FieldDef))
+
+    # Grammar: VAR_NAME COLON type_expr — identical shape to ``field_def``.
+    field_inline = field_def
+
+    # ------------------------------------------------------------------
+    # type_alias
+    # ------------------------------------------------------------------
+
+    def type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
+        # Grammar: "type" TYPE_NAME EQ type_expr
+        name_tok = next((a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None)
+        assert name_tok is not None, "type_alias: no TYPE_NAME token"
+        type_expr = _find_type_expr(args)
+        return syntax.TypeAlias(
+            name=str(name_tok),
+            type_expr=type_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # func_def / param_list / param_def / func_body
+    # ------------------------------------------------------------------
+
+    def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """func_def: "def" VAR_NAME LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body"""
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "VAR_NAME")
+        params, return_type, body = self._split_params_type_body(args)
+        assert return_type is not None, "func_def: no return type"
+        assert body is not None, "func_def: no body"
+        return syntax.FuncDef(
+            name=str(name_tok),
+            params=params,
+            return_type=return_type,
+            body=body,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def param_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
+        """param_list: param_def (COMMA param_def)* COMMA?"""
+        return tuple(a for a in args if isinstance(a, syntax.Param))
+
+    def param_def(self, meta: Meta, args: _Args) -> syntax.Param:
+        """param_def: VAR_NAME COLON type_expr (EQ or_expr)?"""
+        name_tok = args[0]
+        assert isinstance(name_tok, Token)
+        type_expr = _find_type_expr(args[1:])
+        # Default value: the or_expr after EQ, if present.
+        # After the type_expr, look for any Expr (skip Tokens and TypeExprs).
+        default: syntax.Expr | None = None
+        seen_type = False
+        for a in args[1:]:
+            if isinstance(a, _ALL_TYPE_EXPRS):
+                seen_type = True
+                continue
+            if seen_type and a is not None and not isinstance(a, Token):
+                default = cast(syntax.Expr, a)
+                break
+        return syntax.Param(
+            name=str(name_tok),
+            type_expr=type_expr,
+            default=default,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def func_body(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """func_body: suite_expr | expr — pass through the inner expr."""
+        # args[0] is a Block (from suite_expr) or any Expr (from expr).
+        expr = _find_non_token(args)
+        return cast(syntax.Expr, expr)
+
+    # ------------------------------------------------------------------
+    # let_decl / var_decl / set_stmt
     # ------------------------------------------------------------------
 
     def let_decl(self, meta: Meta, args: _Args) -> syntax.LetDecl:
@@ -307,182 +443,12 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    # Bar-safe twins: identical to the non-bar forms because bar_expr aliases or_expr.
-    def bar_let_decl(self, meta: Meta, args: _Args) -> syntax.LetDecl:
-        return self.let_decl(meta, args)
-
-    def bar_var_decl(self, meta: Meta, args: _Args) -> syntax.VarDecl:
-        return self.var_decl(meta, args)
-
-    def bar_set_stmt(self, meta: Meta, args: _Args) -> syntax.SetStmt:
-        return self.set_stmt(meta, args)
-
-    def bar_print_stmt(self, meta: Meta, args: _Args) -> syntax.PrintStmt:
-        return self.print_stmt(meta, args)
-
-    def bar_raise_stmt(self, meta: Meta, args: _Args) -> syntax.Raise:
-        return self.raise_stmt(meta, args)
-
-    # ------------------------------------------------------------------
-    # M2: record_def / field_def
-    # ------------------------------------------------------------------
-
-    def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
-        # Grammar: "record" TYPE_NAME _NEWLINE _INDENT field_def+ _DEDENT
-        # args: [Token(TYPE_NAME), FieldDef, FieldDef, ...]
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-        fields = tuple(a for a in args[1:] if isinstance(a, syntax.FieldDef))
-        return syntax.RecordDef(
-            name=str(name_tok),
-            fields=fields,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
-        # Grammar: field_name COLON type_expr
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-        type_expr = _find_type_expr(args[1:])
-        return syntax.FieldDef(
-            name=str(name_tok),
-            type_expr=type_expr,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    # ------------------------------------------------------------------
-    # M2: enum_def / variant_def / variant_payload / field_list / field_inline
-    # ------------------------------------------------------------------
-
-    def enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
-        # Grammar: "enum" TYPE_NAME _NEWLINE _INDENT variant_def+ _DEDENT
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-        variants = tuple(a for a in args[1:] if isinstance(a, syntax.VariantDef))
-        return syntax.EnumDef(
-            name=str(name_tok),
-            variants=variants,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
-        # Grammar: PIPE TYPE_NAME variant_payload?
-        # args: [Token(PIPE), Token(TYPE_NAME), fields_tuple_or_nothing]
-        name_tok = next((a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None)
-        assert name_tok is not None, "variant_def: no TYPE_NAME token"
-        # variant_payload returns a tuple[FieldDef, ...]; may be absent.
-        fields: tuple[syntax.FieldDef, ...] = ()
-        for a in args:
-            if isinstance(a, tuple):
-                fields = cast(tuple[syntax.FieldDef, ...], a)
-                break
-        return syntax.VariantDef(
-            name=str(name_tok),
-            fields=fields,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
-        # Grammar: LPAR field_list? RPAR
-        # args: [Token(LPAR), fields_tuple_or_None, Token(RPAR)]
-        # field_list returns a tuple[FieldDef, ...]; when absent (empty payload),
-        # maybe_placeholders=True yields None.
-        for a in args:
-            if isinstance(a, tuple):
-                return cast(tuple[syntax.FieldDef, ...], a)
-        return ()
-
-    def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
-        # Grammar: field_inline (COMMA field_inline)* COMMA?
-        return tuple(a for a in args if isinstance(a, syntax.FieldDef))
-
-    def field_inline(self, meta: Meta, args: _Args) -> syntax.FieldDef:
-        # Grammar: VAR_NAME COLON type_expr  (same as field_def)
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-        type_expr = _find_type_expr(args[1:])
-        return syntax.FieldDef(
-            name=str(name_tok),
-            type_expr=type_expr,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    # ------------------------------------------------------------------
-    # M2: type_alias
-    # ------------------------------------------------------------------
-
-    def type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
-        # Grammar: "type" TYPE_NAME EQ type_expr
-        name_tok = next((a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None)
-        assert name_tok is not None, "type_alias: no TYPE_NAME token"
-        type_expr = _find_type_expr(args)
-        return syntax.TypeAlias(
-            name=str(name_tok),
-            type_expr=type_expr,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    # ------------------------------------------------------------------
-    # pass_stmt
-    # ------------------------------------------------------------------
-
-    def pass_stmt(self, meta: Meta, args: _Args) -> syntax.PassStmt:
-        span = _span_from_meta(meta)
-        return syntax.PassStmt(span=span, node_id=self._next_id())
-
-    # ------------------------------------------------------------------
-    # print_stmt
-    # ------------------------------------------------------------------
-
-    def print_stmt(self, meta: Meta, args: _Args) -> syntax.PrintStmt:
-        value = _find_expr(args)
-        span = _span_from_meta(meta)
-        return syntax.PrintStmt(value=value, span=span, node_id=self._next_id())
-
-    # ------------------------------------------------------------------
-    # raise_stmt
-    # ------------------------------------------------------------------
-
-    def raise_stmt(self, meta: Meta, args: _Args) -> syntax.Raise:
-        exc = _find_expr(args)
-        return syntax.Raise(exc=exc, span=_span_from_meta(meta), node_id=self._next_id())
-
-    # ------------------------------------------------------------------
-    # expr_stmt
-    # ------------------------------------------------------------------
-
-    def expr_stmt(self, meta: Meta, args: _Args) -> syntax.ExprStmt:
-        expr = _find_expr(args)
-        span = _span_from_meta(meta)
-        # Design constraint: bare equality expressions such as `n = 2` look like
-        # accidental assignments (use `set n = 2` to mutate a variable).  Reject
-        # them at the parse level with a helpful diagnostic.
-        if (
-            isinstance(expr, syntax.BinaryOp)
-            and expr.op == syntax.BinOp.EQ
-            and isinstance(expr.left, syntax.VarRef)
-        ):
-            raise AglSyntaxError(
-                f"Bare assignment '{expr.left.name} = …' is not valid. "
-                "Use 'set' to reassign a mutable variable.",
-                span=span,
-            )
-        return syntax.ExprStmt(expr=expr, span=span, node_id=self._next_id())
-
     # ------------------------------------------------------------------
     # type_ann
     # ------------------------------------------------------------------
 
     def type_ann(self, meta: Meta, args: _Args) -> TypeExpr:
         # Grammar: type_ann: COLON type_expr
-        # args = [Token(COLON, ':'), type_expr_node]
-        # Find the TypeExpr (non-Token) child.
         return _find_type_expr(args)
 
     # ------------------------------------------------------------------
@@ -506,7 +472,9 @@ class AstBuilder(Transformer):
             return IntT(span=span, node_id=nid)
         if name == "decimal":
             return DecimalT(span=span, node_id=nid)
-        # Anything else is a named type reference (e.g. a type alias VAR_NAME).
+        if name == "unit":
+            return UnitT(span=span, node_id=nid)
+        # Anything else is a named type reference.
         return NameT(name=name, span=span, node_id=nid)
 
     def named_type(self, meta: Meta, args: _Args) -> NameT:
@@ -514,6 +482,10 @@ class AstBuilder(Transformer):
         tok = args[0]
         assert isinstance(tok, Token)
         return NameT(name=str(tok), span=_span_from_meta(meta), node_id=self._next_id())
+
+    def agent_type(self, meta: Meta, args: _Args) -> AgentT:
+        """AGENT terminal in type position → AgentT."""
+        return AgentT(span=_span_from_meta(meta), node_id=self._next_id())
 
     def generic_type_1(self, meta: Meta, args: _Args) -> TypeExpr:
         """VAR_NAME LSQB type_expr RSQB — handles list[T]."""
@@ -528,13 +500,7 @@ class AstBuilder(Transformer):
         raise syntax_error_from_meta(meta, f"Unknown generic type: {head!r}")
 
     def dict_type(self, meta: Meta, args: _Args) -> DictT:
-        """VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB — dict[text, V].
-
-        The head must be ``dict``; any other head is rejected.  In v1 the key
-        type is always ``text``; any other key is rejected with the key token's
-        span so the diagnostic pinpoints the offending type.
-        """
-        # args: [head VAR_NAME, LSQB, key VAR_NAME, COMMA, type_expr, RSQB].
+        """VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB — dict[text, V]."""
         var_name_toks = [
             a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"
         ]
@@ -551,16 +517,82 @@ class AstBuilder(Transformer):
         value: TypeExpr = _find_type_expr(args[1:])
         return DictT(value=value, span=_span_from_meta(meta), node_id=self._next_id())
 
+    def func_type(self, meta: Meta, args: _Args) -> FuncT:
+        """LPAR type_list? RPAR THIN_ARROW type_expr — function type (A, B) -> C."""
+        # All TypeExpr nodes in args; the last one is the result type.
+        # The type_list (if present) produces a tuple of TypeExprs as a tuple.
+        # With maybe_placeholders=True, absent type_list is None.
+        param_types: tuple[TypeExpr, ...] = ()
+        result_type: TypeExpr | None = None
+        for a in args:
+            if isinstance(a, tuple) and all(isinstance(x, _ALL_TYPE_EXPRS) for x in a):
+                # type_list result
+                param_types = cast(tuple[TypeExpr, ...], a)
+            elif isinstance(a, _ALL_TYPE_EXPRS):
+                # The result type (last TypeExpr child after THIN_ARROW)
+                result_type = a
+            # None (placeholder for absent type_list) and Tokens are skipped
+        assert result_type is not None, "func_type: no result type"
+        return FuncT(
+            params=param_types,
+            result=result_type,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def type_list(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
+        """type_list: type_expr (COMMA type_expr)* COMMA?"""
+        return tuple(a for a in args if isinstance(a, _ALL_TYPE_EXPRS))
+
     # ------------------------------------------------------------------
-    # paren_expr — transparent: just return the inner expr
+    # unit_lit / paren_expr
     # ------------------------------------------------------------------
+
+    def unit_lit(self, meta: Meta, args: _Args) -> syntax.UnitLit:
+        return syntax.UnitLit(span=_span_from_meta(meta), node_id=self._next_id())
 
     def paren_expr(self, meta: Meta, args: _Args) -> syntax.Expr:
         # args: LPAR, expr, RPAR — find the expr (non-Token)
         for a in args:
             if not isinstance(a, Token) and a is not None:
                 return cast(syntax.Expr, a)
-        raise AssertionError("paren_expr: no inner expression found")
+        raise AssertionError("paren_expr: no inner expression found")  # pragma: no cover
+
+    # ------------------------------------------------------------------
+    # Lambda expression
+    # ------------------------------------------------------------------
+
+    def _split_params_type_body(
+        self, args: _Args
+    ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None, syntax.Expr | None]:
+        """Classify a func/lambda arg list into ``(params, return_type, body)``.
+
+        Shared by ``func_def`` (return type required) and ``lambda_expr`` (return
+        type optional); callers assert on the parts they require.
+        """
+        params: tuple[syntax.Param, ...] = ()
+        return_type: TypeExpr | None = None
+        body: syntax.Expr | None = None
+        for a in args:
+            if isinstance(a, tuple) and all(isinstance(x, syntax.Param) for x in a):
+                params = cast(tuple[syntax.Param, ...], a)
+            elif isinstance(a, _ALL_TYPE_EXPRS):
+                return_type = a
+            elif a is not None and not isinstance(a, Token) and not isinstance(a, tuple):
+                body = cast(syntax.Expr, a)
+        return params, return_type, body
+
+    def lambda_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
+        """lambda_expr: "fn" LPAR param_list? RPAR (THIN_ARROW type_expr)? ARROW expr"""
+        params, return_type, body = self._split_params_type_body(args)
+        assert body is not None, "lambda_expr: no body"
+        return syntax.Lambda(
+            params=params,
+            return_type=return_type,
+            body=body,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
     # ------------------------------------------------------------------
     # Literals
@@ -598,7 +630,7 @@ class AstBuilder(Transformer):
         return syntax.NullLit(span=_span_from_meta(meta), node_id=self._next_id())
 
     # ------------------------------------------------------------------
-    # var_ref
+    # var_ref / constructor
     # ------------------------------------------------------------------
 
     def var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
@@ -608,27 +640,84 @@ class AstBuilder(Transformer):
             name=str(tok), span=_span_from_meta(meta), node_id=self._next_id()
         )
 
+    def ctor_unqualified(self, meta: Meta, args: _Args) -> syntax.Constructor:
+        """constructor: TYPE_NAME → bare unqualified constructor (no args)."""
+        name_tok = next(
+            (a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None
+        )
+        assert name_tok is not None, "ctor_unqualified: no TYPE_NAME token"
+        return syntax.Constructor(
+            qualifier=None,
+            name=str(name_tok),
+            args=(),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     # ------------------------------------------------------------------
-    # M2: access-level rules (field_access, type_access, access transparent)
+    # Postfix: call / field_access / type_access / ctor_applied
     # ------------------------------------------------------------------
 
-    def access(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """access: atom — transparent; return the single Expr child.
+    def call(self, meta: Meta, args: _Args) -> syntax.Call | syntax.Constructor:
+        """postfix LPAR arg_list? RPAR → Call node, or Constructor when callee is TYPE_NAME.
 
-        The ``access: atom`` production passes through a single non-Token child.
+        Constructor application: when the callee is a bare Constructor node
+        (e.g. ``Issue``, ``Review.Pass``), we route the named args into the
+        Constructor rather than producing a Call.  Constructors only take named
+        args in v1; positional args on a constructor are rejected here.
+
+        When the callee is a Constructor that already had args applied (double
+        payload ``Issue(a:1)(b:2)``), we reject it.
+
+        For all other callees, we produce a Call node.
         """
-        # args always contains exactly one non-Token element (the atom).
-        expr = next(a for a in args if a is not None and not isinstance(a, Token))
-        return cast(syntax.Expr, expr)
+        # args[0] is the callee (postfix result, any Expr)
+        callee = cast(syntax.Expr, args[0])
+        # Remaining args: optional arg_list result, Tokens (LPAR/RPAR)
+        pos_args: list[syntax.Expr] = []
+        named_args: list[syntax.NamedArg] = []
+        for a in args[1:]:
+            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
+                # arg_list returned a (pos_args, named_args) pair
+                pa, na = cast(tuple[list[syntax.Expr], list[syntax.NamedArg]], a)
+                pos_args = pa
+                named_args = na
+            # Tokens (LPAR, RPAR) and None are skipped
+
+        span = _span_from_meta(meta)
+
+        # Handle constructor application: Issue(title: x, severity: 1)
+        if isinstance(callee, syntax.Constructor):
+            if callee.node_id in self._payload_applied:
+                raise AglSyntaxError(
+                    "constructor takes a single argument list.",
+                    span=self._span_after(callee.span, meta),
+                )
+            if pos_args:
+                raise AglSyntaxError(
+                    "constructor arguments must be named (e.g. Issue(title: x)).",
+                    span=span,
+                )
+            new_id = self._next_id()
+            self._payload_applied.add(new_id)
+            return syntax.Constructor(
+                qualifier=callee.qualifier,
+                name=callee.name,
+                args=tuple(named_args),
+                span=span,
+                node_id=new_id,
+            )
+
+        return syntax.Call(
+            callee=callee,
+            args=tuple(pos_args),
+            named_args=tuple(named_args),
+            span=span,
+            node_id=self._next_id(),
+        )
 
     def field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
-        """access DOT field_name — record field access.
-
-        ``field_name`` yields the field-name Token (type ``VAR_NAME`` or, for the
-        reserved word ``agent``, ``AGENT``).  ``agent`` is reserved (it leads an
-        agent declaration) but stays valid as a field name so built-in exception
-        fields like ``AgentCallError.agent`` keep working.
-        """
+        """postfix DOT field_name — record field access."""
         obj_expr = cast(syntax.Expr, args[0])
         field_tok = _find_name_token(args)
         return syntax.FieldAccess(
@@ -639,18 +728,10 @@ class AstBuilder(Transformer):
         )
 
     def type_access(self, meta: Meta, args: _Args) -> syntax.Constructor:
-        """access DOT TYPE_NAME — qualified enum-variant constructor.
+        """postfix DOT TYPE_NAME — qualified enum-variant constructor.
 
-        Only ``TYPE_NAME . TYPE_NAME`` qualification is legal (design §10.13:
-        ``qualified_constructor ::= TYPE_NAME | TYPE_NAME "." TYPE_NAME``).  The
-        LHS must therefore be a bare, unqualified, no-arg ``Constructor``
-        (a lone ``TYPE_NAME``).  Any other LHS is rejected:
-
-        - ``x.Done``  — VAR_NAME / record / other expr on the LHS (F1).
-        - ``A.B.C``   — the LHS is already a qualified Constructor (F2).
-        - ``Empty(a: 1).Done`` — the LHS already carries constructor args.
-
-        The error span pinpoints the offending ``.TypeName`` suffix.
+        Only ``TYPE_NAME . TYPE_NAME`` qualification is legal.  The LHS must
+        be a bare, unqualified, no-arg ``Constructor``.
         """
         obj_expr = args[0]
         type_name_tok = next(
@@ -678,62 +759,9 @@ class AstBuilder(Transformer):
             span=_span_from_token(type_name_tok),
         )
 
-    def ctor_applied(self, meta: Meta, args: _Args) -> syntax.Constructor:
-        """access constructor_payload — apply args to a bare constructor.
-
-        Handles both unqualified ``Type(x: 1)`` and qualified ``Ns.Type(x: 1)``
-        by taking the existing (possibly qualified) Constructor from the access
-        position and attaching the named arguments from constructor_payload.
-
-        ``args`` is always ``[<access>, list[NamedArg]]`` since
-        ``constructor_payload`` is required (not optional) in this rule.
-
-        Two forms are rejected as clean ``AglSyntaxError``s:
-
-        - F4: the access base is not a ``Constructor`` (``x.f(arg)``,
-          ``(x)(a: 1)``, ``1(a: 1)`` …).  Constructor arguments may only follow
-          a type name; method-call syntax is not part of v1.
-        - F3: the base ``Constructor`` already had a payload applied
-          (``Issue(a: 1)(b: 2)``).  A constructor takes a single argument list.
-          ``Status.Done`` followed by its *first* payload is still legal even
-          when the type-access produced empty args.
-        """
-        ctor = args[0]
-        payload = args[1]
-        assert isinstance(payload, list), (
-            f"ctor_applied: expected list payload, got {type(payload)}"
-        )
-        if not isinstance(ctor, syntax.Constructor):
-            raise AglSyntaxError(
-                "constructor arguments may only follow a type name; "
-                "method-call syntax is not supported.",
-                span=_span_from_meta(meta),
-            )
-        if ctor.node_id in self._payload_applied:
-            # A second payload on an already-applied constructor.  Pin the error
-            # to the second payload's span (everything after the base ctor).
-            raise AglSyntaxError(
-                "constructor takes a single argument list.",
-                span=self._span_after(ctor.span, meta),
-            )
-        named_args = tuple(cast(_NamedArgList, payload))
-        new_id = self._next_id()
-        self._payload_applied.add(new_id)
-        return syntax.Constructor(
-            qualifier=ctor.qualifier,
-            name=ctor.name,
-            args=named_args,
-            span=_span_from_meta(meta),
-            node_id=new_id,
-        )
-
     @staticmethod
     def _span_after(base: SourceSpan, meta: Meta) -> SourceSpan:
-        """Span covering the payload that follows ``base`` within the rule meta.
-
-        Used to pinpoint the *second* payload of ``Issue(a: 1)(b: 2)``: the
-        offending ``(b: 2)`` starts where the base constructor's span ends.
-        """
+        """Span covering the payload that follows ``base`` within the rule meta."""
         return SourceSpan(
             start_line=base.end_line,
             start_col=base.end_col,
@@ -744,136 +772,104 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
-    # M2: list literal
+    # Juxtaposition (single-arg sugar)
     # ------------------------------------------------------------------
 
-    def lit_list(self, meta: Meta, args: _Args) -> syntax.ListLit:
-        """lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB"""
-        elements = tuple(
-            cast(syntax.Expr, a)
-            for a in args
-            if a is not None and not isinstance(a, Token)
-        )
-        return syntax.ListLit(
-            elements=elements,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+    def juxt(self, meta: Meta, args: _Args) -> syntax.Call | syntax.Expr:
+        """juxt: postfix juxt_arg -> juxt_call | postfix
 
-    # ------------------------------------------------------------------
-    # M2: dict literal
-    # ------------------------------------------------------------------
-
-    def lit_dict(self, meta: Meta, args: _Args) -> syntax.DictLit:
-        """lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE"""
-        entries = tuple(a for a in args if isinstance(a, syntax.DictEntry))
-        return syntax.DictLit(
-            entries=entries,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def dict_entry_str(self, meta: Meta, args: _Args) -> syntax.DictEntry:
-        """dict_entry: template COLON expr — quoted string key.
-
-        The template transformer normalises plain strings to StringLit already.
-        A plain ``StringLit`` key is valid (design §10.14: dict keys are
-        ``STRING`` or ``VAR_NAME``).  A key carrying any interpolation segment
-        (e.g. ``{"${a}": 1}``) is rejected — dict keys must be literal strings
-        (F5).
+        The postfix-only alternative wraps nothing — just returns the postfix expr.
+        The juxt_call alternative builds a Call with one positional arg.
+        This method is never called directly because both alternatives have
+        explicit aliases; see juxt_call below and the transparent postfix passthrough.
         """
-        non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
-        assert len(non_tokens) >= 2, (
-            f"dict_entry_str: expected key + expr, got {args!r}"
-        )
-        key_lit = _require_literal_string(
-            non_tokens[0],
-            "dict keys must be literal strings (no interpolation).",
-        )
-        val_expr = cast(syntax.Expr, non_tokens[1])
-        return syntax.DictEntry(
-            key=key_lit,
-            value=val_expr,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+        # This method is called for the `postfix` alternative (no alias).
+        # The `postfix juxt_arg` alternative uses `-> juxt_call` alias.
+        (inner,) = [a for a in args if a is not None and not isinstance(a, Token)]
+        return cast(syntax.Expr, inner)
 
-    def dict_entry_name(self, meta: Meta, args: _Args) -> syntax.DictEntry:
-        """dict_entry: VAR_NAME COLON expr — identifier shorthand key.
+    def juxt_call(self, meta: Meta, args: _Args) -> syntax.Call:
+        """juxt: postfix juxt_arg -> juxt_call
 
-        The identifier is converted to ``StringLit`` so the AST key is always
-        ``StringLit``, matching ``DictEntry.key``.  ``field_name`` admits the
-        reserved word ``agent`` as a shorthand key in addition to ordinary
-        identifiers.
+        Single-arg sugar: `f x` desugars to `Call(callee=f, args=(x,), named_args=())`.
         """
-        name_tok = _find_name_token(args)
-        val_expr = _find_expr(args[1:])
-        key_lit = syntax.StringLit(
-            value=str(name_tok),
-            span=_span_from_token(name_tok),
-            node_id=self._next_id(),
-        )
-        return syntax.DictEntry(
-            key=key_lit,
-            value=val_expr,
+        # args[0] is the callee (postfix result)
+        # args[1] is the juxt_arg result (an Expr)
+        callee = cast(syntax.Expr, args[0])
+        arg_expr = cast(syntax.Expr, args[1])
+        return syntax.Call(
+            callee=callee,
+            args=(arg_expr,),
+            named_args=(),
             span=_span_from_meta(meta),
             node_id=self._next_id(),
         )
+
+    def juxt_bare(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """juxt_arg: juxt_atom -> juxt_bare — pass through the atom."""
+        (inner,) = [a for a in args if a is not None and not isinstance(a, Token)]
+        return cast(syntax.Expr, inner)
+
+    def juxt_field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
+        """juxt_arg: juxt_atom (DOT field_name)+ -> juxt_field_access
+
+        Builds a chain of FieldAccess nodes for `print res.stdout`.
+        The first non-Token non-None arg is the base; the remaining name
+        tokens (from DOT field_name repetitions) are the field chain.
+        """
+        # The base atom is the sole non-Token arg; the field chain is the
+        # VAR_NAME/AGENT tokens from the DOT repetitions.
+        field_names = [
+            str(a) for a in args if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT")
+        ]
+        non_tokens = [a for a in args if not isinstance(a, Token)]
+        assert non_tokens, "juxt_field_access: no base atom"
+        assert field_names, "juxt_field_access: no field names"
+        result: syntax.Expr = cast(syntax.Expr, non_tokens[0])
+        for fname in field_names:
+            result = syntax.FieldAccess(
+                obj=result,
+                field=fname,
+                span=_span_from_meta(meta),
+                node_id=self._next_id(),
+            )
+        return cast(syntax.FieldAccess, result)
 
     # ------------------------------------------------------------------
-    # M2: constructor expressions
+    # Call arguments
     # ------------------------------------------------------------------
 
-    def ctor_unqualified(self, meta: Meta, args: _Args) -> syntax.Constructor:
-        """constructor: TYPE_NAME → bare unqualified constructor (no args).
+    def arg_list(
+        self, meta: Meta, args: _Args
+    ) -> tuple[list[syntax.Expr], list[syntax.NamedArg]]:
+        """arg_list: arg (COMMA arg)* COMMA?
 
-        The payload (if any) is applied by ``ctor_applied`` at the access level.
+        Returns (pos_args, named_args) pair for the call builder.
+        Duplicate named arg names are rejected with the span of the duplicate.
         """
-        name_tok = next(
-            (a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"), None
-        )
-        assert name_tok is not None, "ctor_unqualified: no TYPE_NAME token"
-        return syntax.Constructor(
-            qualifier=None,
-            name=str(name_tok),
-            args=(),
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def constructor_payload(self, meta: Meta, args: _Args) -> _NamedArgList:
-        """constructor_payload: LPAR constructor_args? RPAR → list[NamedArg]."""
+        pos_args: list[syntax.Expr] = []
+        named_args: list[syntax.NamedArg] = []
+        seen_names: dict[str, SourceSpan] = {}
         for a in args:
-            if isinstance(a, list):
-                return cast(_NamedArgList, a)
-        return []
+            if isinstance(a, syntax.NamedArg):
+                if a.name in seen_names:
+                    raise AglSyntaxError(
+                        f"duplicate argument {a.name!r}.",
+                        span=a.span,
+                    )
+                seen_names[a.name] = a.span
+                named_args.append(a)
+            elif a is not None and not isinstance(a, Token):
+                # pos_arg (transparent ?) — the expr itself
+                pos_args.append(cast(syntax.Expr, a))
+        return (pos_args, named_args)
 
-    def constructor_args(self, meta: Meta, args: _Args) -> _NamedArgList:
-        """constructor_args: named_arg (COMMA named_arg)* COMMA?
-
-        Duplicate argument names are rejected with the span of the duplicate.
-        """
-        result: list[syntax.NamedArg] = []
-        seen: dict[str, SourceSpan] = {}
-        for a in args:
-            if not isinstance(a, syntax.NamedArg):
-                continue
-            if a.name in seen:
-                raise AglSyntaxError(
-                    f"duplicate constructor argument {a.name!r}.",
-                    span=a.span,
-                )
-            seen[a.name] = a.span
-            result.append(a)
-        return result
+    def pos_arg(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """pos_arg: expr — transparent wrapper; return the expr."""
+        return _find_expr(args)
 
     def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg:
-        """named_arg: field_name COLON expr
-
-        ``field_name`` admits the reserved word ``agent`` as an argument name so
-        built-in exception constructors (e.g. ``AgentCallError(agent: …)``) can
-        be written.
-        """
+        """named_arg: field_name COLON expr"""
         name_tok = _find_name_token(args)
         val_expr = _find_expr(args[1:])
         return syntax.NamedArg(
@@ -884,176 +880,7 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
-    # agent_call
-    # ------------------------------------------------------------------
-
-    def agent_call(self, meta: Meta, args: _Args) -> syntax.AgentCall:
-        # Grammar: VAR_NAME call_options? template
-        # args when no options:   [Token(VAR_NAME), Template|StringLit]
-        # args when with options: [Token(VAR_NAME), CallOptions, Template|StringLit]
-        # Note: the template transformer normalises plain strings to StringLit;
-        # AgentCall.template requires Template, so we wrap StringLit back here.
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-
-        options: syntax.CallOptions | None = None
-        tmpl: syntax.Template | None = None
-
-        for a in args[1:]:
-            if isinstance(a, syntax.CallOptions):
-                options = a
-            if isinstance(a, syntax.Template):
-                tmpl = a
-            elif isinstance(a, syntax.StringLit):
-                # Normalised from a plain-text template — re-wrap as Template.
-                text_seg = syntax.TextSegment(
-                    text=a.value, span=a.span, node_id=self._next_id()
-                )
-                tmpl = syntax.Template(
-                    segments=(text_seg,),
-                    span=a.span,
-                    node_id=self._next_id(),
-                )
-
-        assert tmpl is not None, "agent_call: no Template found"
-
-        if options is None:
-            # No options specified — use an empty CallOptions.
-            opt_span = _span_from_token(name_tok)
-            options = syntax.CallOptions(
-                format=None,
-                strict_json=None,
-                parse_policy=None,
-                span=opt_span,
-                node_id=self._next_id(),
-            )
-
-        span = _span_from_meta(meta)
-        return syntax.AgentCall(
-            agent=str(name_tok),
-            options=options,
-            template=tmpl,
-            span=span,
-            node_id=self._next_id(),
-        )
-
-    # ------------------------------------------------------------------
-    # call_options
-    # ------------------------------------------------------------------
-
-    def call_options(self, meta: Meta, args: _Args) -> syntax.CallOptions:
-        fmt: str | None = None
-        strict_json: bool | None = None
-        parse_policy: syntax.ParsePolicy | None = None
-        seen: set[str] = set()
-
-        for opt in args:
-            if isinstance(opt, (_FormatOpt, _StrictJsonOpt, _ParseErrorOpt)):
-                if opt.key in seen:
-                    # Reject the second occurrence of any option key, pinning the
-                    # error to the duplicate's span (design §4.3).
-                    raise AglSyntaxError(
-                        f"duplicate option {opt.key!r}.", span=opt.span
-                    )
-                seen.add(opt.key)
-            if isinstance(opt, _FormatOpt):
-                fmt = opt.value
-            elif isinstance(opt, _StrictJsonOpt):
-                strict_json = opt.value
-            elif isinstance(opt, _ParseErrorOpt):
-                parse_policy = opt.value
-            # Tokens (LSQB, RSQB, COMMA) are silently ignored.
-
-        span = _span_from_meta(meta)
-        return syntax.CallOptions(
-            format=fmt,
-            strict_json=strict_json,
-            parse_policy=parse_policy,
-            span=span,
-            node_id=self._next_id(),
-        )
-
-    def opt_raw(
-        self, meta: Meta, args: _Args
-    ) -> "_FormatOpt | _StrictJsonOpt | _ParseErrorOpt":
-        """call_option: VAR_NAME COLON call_option_value — dispatch on key name."""
-        key_tok = args[0]
-        assert isinstance(key_tok, Token)
-        key = str(key_tok)
-        # Last arg that is not a Token is the option value node.
-        val_node = args[-1]
-        span = _span_from_meta(meta)
-
-        if key == "format":
-            # format: text | json | VAR_NAME  (val_node is str from opt_val_name)
-            if isinstance(val_node, _NameOrPolicy) and isinstance(val_node.value, str):
-                return _FormatOpt(val_node.value, span)
-            raise AglSyntaxError(
-                f"format expects a format name (e.g. text, json), got {val_node!r}.",
-                span=span,
-            )
-
-        if key == "strict_json":
-            if isinstance(val_node, bool):
-                return _StrictJsonOpt(val_node, span)
-            raise AglSyntaxError(
-                f"strict_json expects true or false, got {val_node!r}.",
-                span=span,
-            )
-
-        if key == "on_parse_error":
-            # val_node is _NameOrPolicy(AbortPolicy) or RetryPolicy
-            if isinstance(val_node, _NameOrPolicy) and isinstance(
-                val_node.value, (syntax.AbortPolicy, syntax.RetryPolicy)
-            ):
-                return _ParseErrorOpt(val_node.value, span)
-            if isinstance(val_node, syntax.RetryPolicy):
-                return _ParseErrorOpt(val_node, span)
-            raise AglSyntaxError(
-                f"on_parse_error expects abort or retry[N], got {val_node!r}.",
-                span=span,
-            )
-
-        raise AglSyntaxError(f"Unknown call option: {key!r}.", span=span)
-
-    def opt_val_true(self, meta: Meta, args: _Args) -> bool:
-        return True
-
-    def opt_val_false(self, meta: Meta, args: _Args) -> bool:
-        return False
-
-    def opt_val_name(self, meta: Meta, args: _Args) -> "_NameOrPolicy":
-        tok = args[0]
-        assert isinstance(tok, Token)
-        name = str(tok)
-        if name == "abort":
-            return _NameOrPolicy(
-                syntax.AbortPolicy(span=_span_from_meta(meta), node_id=self._next_id())
-            )
-        return _NameOrPolicy(name)
-
-    def opt_val_name_int(self, meta: Meta, args: _Args) -> syntax.RetryPolicy:
-        # VAR_NAME LSQB INT RSQB — must be retry[N]
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-        name = str(name_tok)
-        if name != "retry":
-            raise AglSyntaxError(
-                f"Expected 'retry[N]', got {name!r}.",
-                span=_span_from_meta(meta),
-            )
-        int_tok = next(
-            (t for t in args if isinstance(t, Token) and t.type == "INT"), None
-        )
-        assert int_tok is not None, "opt_val_name_int: no INT token found"
-        return syntax.RetryPolicy(
-            extra=int(str(int_tok)),
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    # ------------------------------------------------------------------
-    # M3: Binary operators
+    # Binary operators
     # ------------------------------------------------------------------
 
     def _binary(self, meta: Meta, args: _Args, op: syntax.BinOp) -> syntax.BinaryOp:
@@ -1104,7 +931,7 @@ class AstBuilder(Transformer):
         return self._binary(meta, args, syntax.BinOp.DIV)
 
     # ------------------------------------------------------------------
-    # M3: Unary operators
+    # Unary operators
     # ------------------------------------------------------------------
 
     def unary_not(self, meta: Meta, args: _Args) -> syntax.UnaryNot:
@@ -1114,83 +941,101 @@ class AstBuilder(Transformer):
         )
 
     def unary_neg(self, meta: Meta, args: _Args) -> syntax.UnaryNeg:
-        # args: [Token(MINUS), expr]
         operand = cast(syntax.Expr, args[-1])
         return syntax.UnaryNeg(
             operand=operand, span=_span_from_meta(meta), node_id=self._next_id()
         )
 
     # ------------------------------------------------------------------
-    # M3: is / is not tests
+    # is / is not tests
     # ------------------------------------------------------------------
+
+    def _make_is_test(
+        self, meta: Meta, args: _Args, *, qualified: bool, negated: bool
+    ) -> syntax.IsTest:
+        left = cast(syntax.Expr, args[0])
+        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
+        if qualified:
+            assert len(type_toks) == 2
+            qualifier: str | None = str(type_toks[0])
+            variant = str(type_toks[1])
+        else:
+            qualifier = None
+            variant = str(type_toks[0])
+        return syntax.IsTest(
+            expr=left, qualifier=qualifier, variant=variant, negated=negated,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
 
     def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        # additive "is" TYPE_NAME
-        left = cast(syntax.Expr, args[0])
-        variant_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
-        return syntax.IsTest(
-            expr=left, qualifier=None, variant=str(variant_tok), negated=False,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
+        return self._make_is_test(meta, args, qualified=False, negated=False)
 
     def is_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        # additive "is" TYPE_NAME DOT TYPE_NAME
-        left = cast(syntax.Expr, args[0])
-        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
-        assert len(type_toks) == 2
-        return syntax.IsTest(
-            expr=left, qualifier=str(type_toks[0]), variant=str(type_toks[1]), negated=False,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
+        return self._make_is_test(meta, args, qualified=True, negated=False)
 
     def is_not_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        # additive "is" "not" TYPE_NAME
-        left = cast(syntax.Expr, args[0])
-        variant_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
-        return syntax.IsTest(
-            expr=left, qualifier=None, variant=str(variant_tok), negated=True,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
+        return self._make_is_test(meta, args, qualified=False, negated=True)
 
     def is_not_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        # additive "is" "not" TYPE_NAME DOT TYPE_NAME
-        left = cast(syntax.Expr, args[0])
-        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
-        assert len(type_toks) == 2
-        return syntax.IsTest(
-            expr=left, qualifier=str(type_toks[0]), variant=str(type_toks[1]), negated=True,
+        return self._make_is_test(meta, args, qualified=True, negated=True)
+
+    # ------------------------------------------------------------------
+    # Control flow: if_expr
+    # ------------------------------------------------------------------
+
+    def if_cond_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
+        """if_cond_branch: or_expr ARROW branch_body"""
+        cond = cast(syntax.Expr, args[0])
+        body = _find_expr(args[1:])
+        return syntax.IfBranch(
+            cond=cond, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def if_else_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
+        """if_else_branch: PIPE? "else" ARROW branch_body"""
+        body = _find_expr(args)
+        return syntax.IfBranch(
+            cond=ELSE, body=body,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    def if_expr(self, meta: Meta, args: _Args) -> syntax.If:
+        branches = tuple(a for a in args if isinstance(a, syntax.IfBranch))
+        return syntax.If(
+            branches=branches,
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
-    # M3: case_expr
+    # Control flow: case_expr
     # ------------------------------------------------------------------
 
-    def case_expr(self, meta: Meta, args: _Args) -> syntax.CaseExpr:
-        # args: [expr, CaseExprBranch, CaseExprBranch, ...]
-        subject = cast(syntax.Expr, args[0])
-        branches = tuple(a for a in args[1:] if isinstance(a, syntax.CaseExprBranch))
-        return syntax.CaseExpr(
-            subject=subject, branches=branches,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
-
-    def case_expr_branch(self, meta: Meta, args: _Args) -> syntax.CaseExprBranch:
-        # args: [pattern, ARROW token, body_expr] — find the pattern and body
-        pat_types = (
+    def case_branch(self, meta: Meta, args: _Args) -> syntax.CaseBranch:
+        """case_branch: pattern ARROW branch_body"""
+        _pat_types = (
             syntax.WildcardPattern, syntax.LiteralPattern,
             syntax.VarPattern, syntax.ConstructorPattern,
         )
-        pat = next(a for a in args if isinstance(a, pat_types))
-        body = _find_expr([a for a in args if not isinstance(a, pat_types)])
-        assert isinstance(pat, pat_types)
-        return syntax.CaseExprBranch(
+        pat = next(a for a in args if isinstance(a, _pat_types))
+        body = _find_expr([a for a in args if not isinstance(a, _pat_types)])
+        assert isinstance(pat, _pat_types)
+        return syntax.CaseBranch(
             pattern=pat, body=body,
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
 
+    def case_expr(self, meta: Meta, args: _Args) -> syntax.Case:
+        """case_expr: "case" or_expr "of" (PIPE case_branch)+"""
+        subject = cast(syntax.Expr, args[0])
+        branches = tuple(a for a in args[1:] if isinstance(a, syntax.CaseBranch))
+        return syntax.Case(
+            subject=subject, branches=branches,
+            span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
     # ------------------------------------------------------------------
-    # M3: do_until
+    # Control flow: do_expr
     # ------------------------------------------------------------------
 
     def loop_bound(self, meta: Meta, args: _Args) -> int:
@@ -1205,145 +1050,67 @@ class AstBuilder(Transformer):
             )
         return n
 
-    def body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
-        """Body of a do_until: either a suite or inline_seq."""
-        (inner,) = args
-        assert isinstance(inner, tuple)
-        return cast(tuple[syntax.Stmt, ...], inner)
+    def do_body(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """do_body: suite_expr | inline_seq — pass through the inner expr."""
+        inner = _find_non_token(args)
+        return cast(syntax.Expr, inner)
 
-    def inline_seq(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
-        """inline_seq: closed_stmt (SEMICOLON closed_stmt)* (SEMICOLON do_tail)? | do_tail"""
-        # Filter out only SEMICOLON tokens; all AST node types (closed_stmt and
-        # do_tail results) are preserved so the scope resolver can reject type/input
-        # declarations that appear at a non-root position.
-        return tuple(
-            cast(syntax.Stmt, s) for s in args if s is not None and not isinstance(s, Token)
+    def inline_seq(self, meta: Meta, args: _Args) -> syntax.Block:
+        """inline_seq: inline_item (SEMICOLON inline_item)*
+
+        Build a Block from the inline items (or_exprs and binders).
+        """
+        items = tuple(
+            cast(syntax.Item, a)
+            for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        return syntax.Block(
+            items=items,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
-    def do_tail(self, meta: Meta, args: _Args) -> syntax.Stmt:
-        """do_tail: if_stmt | case_stmt | try_stmt — transparent."""
-        (inner,) = args
-        assert isinstance(inner, (syntax.IfStmt, syntax.CaseStmt, syntax.TryCatch))
-        return inner
+    def inline_item(self, meta: Meta, args: _Args) -> syntax.Item:
+        """inline_item: binder | or_expr — transparent."""
+        inner = _find_non_token(args)
+        return cast(syntax.Item, inner)
 
-    def suite(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
-        """suite: _INDENT block_stmts _DEDENT — unwrap the block_stmts tuple."""
-        # block_stmts always returns a tuple[Stmt,...]; it's the only non-Token child.
-        stmts = next(a for a in args if isinstance(a, tuple))
-        return cast(tuple[syntax.Stmt, ...], stmts)
-
-    def do_until(self, meta: Meta, args: _Args) -> syntax.DoUntil:
-        # Grammar: "do" loop_bound? body "until" bar_expr
-        # After transformation (with maybe_placeholders=True):
-        #   bounded:   [int, tuple[Stmt,...], Expr]
-        #   unbounded: [tuple[Stmt,...], Expr]
-        # Anonymous terminals ("do", "until") are filtered by Lark.
-        # loop_bound? absent: no None placeholder — the item is simply omitted.
+    def do_expr(self, meta: Meta, args: _Args) -> syntax.Do:
+        """do_expr: "do" loop_bound? do_body "until" or_expr"""
+        # Grammar children (post-transform): int? (loop_bound), Expr (do_body),
+        # Expr (until condition) — no Token or None placeholders.
         limit: int | None = None
-        body_stmts: tuple[syntax.Stmt, ...] = ()
-        cond: syntax.Expr | None = None
+        exprs: list[syntax.Expr] = []
         for a in args:
             if isinstance(a, int):
                 limit = a
-            elif isinstance(a, tuple):
-                body_stmts = cast(tuple[syntax.Stmt, ...], a)
             else:
-                cond = cast(syntax.Expr, a)
-        assert cond is not None, "do_until: no condition"
-        return syntax.DoUntil(
-            limit=limit, body=body_stmts, condition=cond,
+                exprs.append(cast(syntax.Expr, a))
+        assert len(exprs) == 2, "do_expr: expected body and condition"
+        body, condition = exprs[0], exprs[1]
+        return syntax.Do(
+            limit=limit, body=body, condition=condition,
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
-    # M3: if_stmt
+    # Control flow: try_expr / catch_clause
     # ------------------------------------------------------------------
 
-    def if_cond_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
-        # Grammar: bar_expr ARROW branch_body
-        # After transformation: [Expr, tuple[Stmt,...]]
-        cond = cast(syntax.Expr, args[0])
-        body = _find_branch_body(args[1:])
-        return syntax.IfBranch(
-            cond=cond, body=body,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
+    def try_body(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """try_body: suite_expr | or_expr (SEMICOLON or_expr)*
 
-    def if_else_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
-        # Grammar: "else" ARROW branch_body
-        body = _find_branch_body(args)
-        return syntax.IfBranch(
-            cond=ELSE, body=body,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
-
-    def if_stmt(self, meta: Meta, args: _Args) -> syntax.IfStmt:
-        branches = tuple(a for a in args if isinstance(a, syntax.IfBranch))
-        # Validate: else must be last
-        for i, b in enumerate(branches):
-            if b.cond is ELSE and i < len(branches) - 1:
-                raise AglSyntaxError(
-                    "'else' branch must be the last branch in an if statement.",
-                    span=b.span,
-                )
-        return syntax.IfStmt(
-            branches=branches,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
-
-    def branch_body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
-        """branch_body: suite | bar_closed_stmt | try_stmt
-
-        Returns a flat tuple of statements.  The grammar guarantees exactly one
-        non-None, non-Token child:
-          * suite          → already a tuple[Stmt, ...]
-          * bar_closed_stmt → a single Stmt wrapped into a 1-tuple
-          * try_stmt       → a TryCatch wrapped into a 1-tuple
+        Returns a Block (for multiple items) or the single expr.
         """
-        # args always has exactly one relevant child (the grammar guarantees it).
-        child = args[0]
-        if isinstance(child, tuple):
-            return cast(tuple[syntax.Stmt, ...], child)
-        return (cast(syntax.Stmt, child),)
-
-    # ------------------------------------------------------------------
-    # M3: case_stmt
-    # ------------------------------------------------------------------
-
-    def case_stmt(self, meta: Meta, args: _Args) -> syntax.CaseStmt:
-        # Grammar: "case" expr "of" (PIPE case_stmt_branch)+
-        subject = cast(syntax.Expr, args[0])
-        branches = tuple(a for a in args[1:] if isinstance(a, syntax.CaseStmtBranch))
-        return syntax.CaseStmt(
-            subject=subject, branches=branches,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
-
-    def case_stmt_branch(self, meta: Meta, args: _Args) -> syntax.CaseStmtBranch:
-        # args: [pattern, tuple[Stmt,...]]
-        pat = cast(syntax.Pattern, args[0])
-        body = _find_branch_body(args[1:])
-        return syntax.CaseStmtBranch(
-            pattern=pat, body=body,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
-
-    # ------------------------------------------------------------------
-    # M3: try_stmt / catch_clause
-    # ------------------------------------------------------------------
-
-    def try_body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
-        """try_body: suite | closed_stmt (SEMICOLON closed_stmt)*"""
-        for a in args:
-            if isinstance(a, tuple):
-                return cast(tuple[syntax.Stmt, ...], a)
-        # Inline form: list of closed stmts
-        return tuple(
-            cast(syntax.Stmt, a) for a in args
-            if a is not None and not isinstance(a, Token) and isinstance(a, (
-                syntax.LetDecl, syntax.VarDecl, syntax.SetStmt, syntax.PassStmt,
-                syntax.PrintStmt, syntax.ExprStmt, syntax.Raise, syntax.DoUntil,
-            ))
+        items = [a for a in args if a is not None and not isinstance(a, Token)]
+        if len(items) == 1:
+            return cast(syntax.Expr, items[0])
+        # Multiple or_exprs: wrap in a Block.
+        return syntax.Block(
+            items=tuple(cast(syntax.Item, i) for i in items),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def catch_type_pattern(self, meta: Meta, args: _Args) -> tuple[str | None, str | None]:
@@ -1366,57 +1133,75 @@ class AstBuilder(Transformer):
                 "Catch patterns take an exception type (capitalized) or '_'.",
                 span=_span_from_token(wildcard_tok),
             )
-        # First token is the wildcard "_"; second (if present) is the binding name.
         binding: str | None = str(var_toks[1]) if len(var_toks) >= 2 else None
         return (None, binding)
 
-    def catch_body(self, meta: Meta, args: _Args) -> tuple[syntax.Stmt, ...]:
-        """catch_body: suite | bar_closed_stmt
-
-        Returns a flat tuple of statements.  The grammar guarantees exactly one child:
-          * suite            → already a tuple[Stmt, ...]
-          * bar_closed_stmt  → a single Stmt wrapped into a 1-tuple
-        """
-        child = args[0]
-        if isinstance(child, tuple):
-            return cast(tuple[syntax.Stmt, ...], child)
-        return (cast(syntax.Stmt, child),)
+    def catch_body(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """catch_body: suite_expr | or_expr — pass through the inner expr."""
+        inner = _find_non_token(args)
+        return cast(syntax.Expr, inner)
 
     def catch_clause(self, meta: Meta, args: _Args) -> syntax.CatchClause:
-        # args: [(exc_type, binding), tuple[Stmt,...]]
-        # The catch_pattern sub-rule returns (exc_type, binding) — a plain tuple.
-        # The catch_body sub-rule returns a tuple[Stmt,...].
-        # Distinguish by checking element types.
+        """catch_clause: "catch" catch_pattern ARROW catch_body"""
         exc_type: str | None = None
         binding: str | None = None
-        body: tuple[syntax.Stmt, ...] = ()
+        body: syntax.Expr | None = None
         for a in args:
             if isinstance(a, tuple):
-                # Is it (exc_type, binding) or (Stmt, ...)?
                 if len(a) == 2 and (a[0] is None or isinstance(a[0], str)) and (
                     a[1] is None or isinstance(a[1], str)
                 ):
                     exc_type, binding = cast(tuple[str | None, str | None], a)
-                else:
-                    body = cast(tuple[syntax.Stmt, ...], a)
+                elif a is not None:  # pragma: no cover
+                    # Grammar guarantees tuples in catch_clause come only from
+                    # catch_pattern (a (str|None, str|None) pair); no other
+                    # tuple-valued child is possible.
+                    body = cast(syntax.Expr, a)
+            elif a is not None and not isinstance(a, Token):
+                body = cast(syntax.Expr, a)
+        assert body is not None, "catch_clause: no body"
         return syntax.CatchClause(
             exc_type=exc_type, binding=binding, body=body,
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
 
-    def try_stmt(self, meta: Meta, args: _Args) -> syntax.TryCatch:
-        # args: [tuple[Stmt,...] (try_body), CatchClause, ...]
-        # All grammar children transform to exactly one of: tuple[Stmt,...] or CatchClause.
+    def try_expr(self, meta: Meta, args: _Args) -> syntax.Try:
+        """try_expr: "try" try_body (catch_clause)+"""
         handlers = [a for a in args if isinstance(a, syntax.CatchClause)]
-        try_body = next(a for a in args if isinstance(a, tuple))
-        return syntax.TryCatch(
-            body=cast(tuple[syntax.Stmt, ...], try_body),
+        try_body = next(
+            a for a in args
+            if a is not None and not isinstance(a, Token) and not isinstance(a, syntax.CatchClause)
+        )
+        return syntax.Try(
+            body=cast(syntax.Expr, try_body),
             handlers=tuple(handlers),
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
-    # M3: Patterns
+    # Control flow: raise_expr
+    # ------------------------------------------------------------------
+
+    def raise_expr(self, meta: Meta, args: _Args) -> syntax.Raise:
+        exc = _find_expr(args)
+        return syntax.Raise(exc=exc, span=_span_from_meta(meta), node_id=self._next_id())
+
+    # ------------------------------------------------------------------
+    # suite_expr / branch_body
+    # ------------------------------------------------------------------
+
+    def suite_expr(self, meta: Meta, args: _Args) -> syntax.Block:
+        """suite_expr: _INDENT block _DEDENT — unwrap to Block."""
+        block = next(a for a in args if isinstance(a, syntax.Block))
+        return block
+
+    def branch_body(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """branch_body: suite_expr | or_expr — pass through the inner expr."""
+        inner = _find_non_token(args)
+        return cast(syntax.Expr, inner)
+
+    # ------------------------------------------------------------------
+    # Patterns
     # ------------------------------------------------------------------
 
     def pat_var_or_wild(
@@ -1432,7 +1217,6 @@ class AstBuilder(Transformer):
         )
 
     def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
-        # Grammar: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?
         type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
         qualifier: str | None = None
         if len(type_toks) == 2:
@@ -1470,9 +1254,8 @@ class AstBuilder(Transformer):
     def pat_lit_decimal(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         tok = args[0]
         assert isinstance(tok, Token)
-        import decimal as _decimal
         lit = syntax.DecimalLit(
-            value=_decimal.Decimal(str(tok)),
+            value=decimal.Decimal(str(tok)),
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
         return self._literal_pattern(lit, meta)
@@ -1494,9 +1277,6 @@ class AstBuilder(Transformer):
         return self._literal_pattern(lit, meta)
 
     def pat_lit_str(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
-        # args: [StringLit | Template] — the template transformer normalises plain strings.
-        # A plain string (no interpolation) becomes StringLit; an interpolated string
-        # stays as Template and must be rejected as a pattern literal.
         tmpl = _require_literal_string(
             args[0], "Pattern string literals cannot contain interpolation."
         )
@@ -1506,7 +1286,6 @@ class AstBuilder(Transformer):
         return tuple(a for a in args if isinstance(a, syntax.PatternField))
 
     def pat_field_full(self, meta: Meta, args: _Args) -> syntax.PatternField:
-        # VAR_NAME COLON pattern
         name_tok = next((a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"), None)
         assert name_tok is not None
         _pat_types = (
@@ -1522,7 +1301,6 @@ class AstBuilder(Transformer):
         )
 
     def pat_field_shorthand(self, meta: Meta, args: _Args) -> syntax.PatternField:
-        # VAR_NAME — shorthand: name: name
         name_tok = args[0]
         assert isinstance(name_tok, Token)
         name = str(name_tok)
@@ -1542,18 +1320,8 @@ class AstBuilder(Transformer):
         """Build a Template from its segment children.
 
         Invariant: ``segments`` never contains empty ``TextSegment`` nodes.
-        Adjacent interpolations (e.g. ``"${a}${b}"``) and leading/trailing
-        interpolations produce empty text fragments in the token stream; an
-        empty fragment carries no information, so it is normalized away here.
-        Adjacent ``InterpSegment`` nodes are legal.
-
-        Normalisation: a template with no interpolation segments (only text) is
-        returned as a ``StringLit``.  This covers simple quoted strings such as
-        ``"hello"`` which have no runtime interpolation behaviour.
+        A template with no interpolation segments collapses to a ``StringLit``.
         """
-        # args: TEMPLATE_START, [segments...], TEMPLATE_END
-        # Filter out the synthetic tokens; keep only template_segment results,
-        # dropping empty TextSegments (they carry no information).
         segments: list[syntax.TemplateSegment] = [
             a
             for a in args
@@ -1562,7 +1330,6 @@ class AstBuilder(Transformer):
         ]
         span = _span_from_meta(meta)
         nid = self._next_id()
-        # Plain string (no interpolations) → StringLit
         if all(isinstance(s, syntax.TextSegment) for s in segments):
             text = "".join(s.text for s in segments if isinstance(s, syntax.TextSegment))
             return syntax.StringLit(value=text, span=span, node_id=nid)
@@ -1582,62 +1349,78 @@ class AstBuilder(Transformer):
         )
 
     def tmpl_interp(self, meta: Meta, args: _Args) -> syntax.InterpSegment:
-        # Unwrap the inner interp node.
         (seg,) = args
         assert isinstance(seg, syntax.InterpSegment)
         return seg
 
     def interp(self, meta: Meta, args: _Args) -> syntax.InterpSegment:
-        # Grammar: INTERP_START expr ("as" VAR_NAME)? INTERP_END
-        # Lark drops the "as" anonymous terminal from the tree, so args are:
-        #   [Token(INTERP_START), <expr-node>, Token?(VAR_NAME renderer), Token(INTERP_END)]
-        # The renderer VAR_NAME is the only non-synthetic Token after the expr.
-        # Extract the non-token (expr) and any VAR_NAME tokens that follow it.
+        # Grammar: INTERP_START expr INTERP_END
         expr: syntax.Expr = _find_expr(args)
-        render: str | None = None
-        # Scan for a VAR_NAME token that appears after the expr in the args list.
-        past_expr = False
-        for a in args:
-            if not isinstance(a, Token):
-                past_expr = True
-            elif past_expr and a.type == "VAR_NAME":
-                render = str(a)
-                break
         return syntax.InterpSegment(
             expr=expr,
-            render=render,
             span=_span_from_meta(meta),
             node_id=self._next_id(),
         )
 
+    # ------------------------------------------------------------------
+    # List and dict literals
+    # ------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Internal helper types (not exported)
-# ---------------------------------------------------------------------------
+    def lit_list(self, meta: Meta, args: _Args) -> syntax.ListLit:
+        """lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB"""
+        elements = tuple(
+            cast(syntax.Expr, a)
+            for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        return syntax.ListLit(
+            elements=elements,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
+    def lit_dict(self, meta: Meta, args: _Args) -> syntax.DictLit:
+        """lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE"""
+        entries = tuple(a for a in args if isinstance(a, syntax.DictEntry))
+        return syntax.DictLit(
+            entries=entries,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
-class _FormatOpt:
-    key = "format"
+    def dict_entry_str(self, meta: Meta, args: _Args) -> syntax.DictEntry:
+        """dict_entry: template COLON expr — quoted string key."""
+        non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
+        assert len(non_tokens) >= 2, (
+            f"dict_entry_str: expected key + expr, got {args!r}"
+        )
+        key_lit = _require_literal_string(
+            non_tokens[0],
+            "dict keys must be literal strings (no interpolation).",
+        )
+        val_expr = cast(syntax.Expr, non_tokens[1])
+        return syntax.DictEntry(
+            key=key_lit,
+            value=val_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
-    def __init__(self, value: str, span: SourceSpan) -> None:
-        self.value = value
-        self.span = span
-
-
-class _StrictJsonOpt:
-    key = "strict_json"
-
-    def __init__(self, value: bool, span: SourceSpan) -> None:
-        self.value = value
-        self.span = span
-
-
-class _ParseErrorOpt:
-    key = "on_parse_error"
-
-    def __init__(self, value: syntax.ParsePolicy, span: SourceSpan) -> None:
-        self.value = value
-        self.span = span
+    def dict_entry_name(self, meta: Meta, args: _Args) -> syntax.DictEntry:
+        """dict_entry: VAR_NAME COLON expr — identifier shorthand key."""
+        name_tok = _find_name_token(args)
+        val_expr = _find_expr(args[1:])
+        key_lit = syntax.StringLit(
+            value=str(name_tok),
+            span=_span_from_token(name_tok),
+            node_id=self._next_id(),
+        )
+        return syntax.DictEntry(
+            key=key_lit,
+            value=val_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1648,9 +1431,9 @@ class _ParseErrorOpt:
 def _find_type_expr(args: _Args) -> TypeExpr:
     """Return the first element that is a TypeExpr instance."""
     for a in args:
-        if isinstance(a, (TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT)):
+        if isinstance(a, _ALL_TYPE_EXPRS):
             return a
-    raise AssertionError(f"_find_type_expr: no TypeExpr found in {args!r}")
+    raise AssertionError(f"_find_type_expr: no TypeExpr found in {args!r}")  # pragma: no cover
 
 
 def _find_name_token(args: _Args) -> Token:
@@ -1658,23 +1441,15 @@ def _find_name_token(args: _Args) -> Token:
 
     ``field_name`` matches either a ``VAR_NAME`` identifier or the reserved word
     ``agent`` (token type ``AGENT``); both arrive here as plain name Tokens.
-    The first such Token is the field/key name.
     """
     for a in args:
         if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT"):
             return a
-    raise AssertionError(f"_find_name_token: no name token found in {args!r}")
+    raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
 
 
 def _require_literal_string(node: object, message: str) -> syntax.StringLit:
-    """Return *node* as a ``StringLit``, rejecting an interpolated ``Template``.
-
-    The ``template`` transformer normalises a plain (non-interpolated) string to
-    a ``StringLit`` and keeps an interpolated one as a ``Template``.  Positions
-    that require a static string — agent runner hints, dict keys, pattern string
-    literals — call this to accept the former and raise ``AglSyntaxError`` with
-    *message* on the latter.
-    """
+    """Return *node* as a ``StringLit``, rejecting an interpolated ``Template``."""
     if isinstance(node, syntax.StringLit):
         return node
     assert isinstance(node, syntax.Template), (
@@ -1688,35 +1463,24 @@ def _is_expr_obj(a: object) -> bool:
     return a is not None and not isinstance(a, Token)
 
 
+def _find_non_token(args: _Args) -> object:
+    """Return the first non-None, non-Token element in args."""
+    result = next(
+        (a for a in args if a is not None and not isinstance(a, Token)),
+        None,
+    )
+    if result is None:  # pragma: no cover
+        raise AssertionError(f"_find_non_token: no non-token found in {args!r}")
+    return result
+
+
 def _find_expr(args: _Args) -> syntax.Expr:
-    """Return the first Expr in *args* (skip Tokens and None placeholders)."""
-    for a in args:
-        if _is_expr_obj(a):
-            return cast(syntax.Expr, a)
-    raise AssertionError(f"_find_expr: no Expr found in {args!r}")
+    """Return the first Expr in *args* (skip Tokens and None placeholders).
 
-
-def _extract_ann_and_optional_expr(
-    tail: _Args,
-) -> tuple[TypeExpr | None, syntax.Expr | None]:
-    """Extract (type_ann, expr_or_None) from a rule tail.
-
-    Grammar tail is: type_ann? (EQ expr)?
-    With maybe_placeholders=True: [None|TypeExpr, Token(EQ)?, Expr?]
-
-    Returns ``None`` for the expression when no ``EQ expr`` was present (e.g.
-    a ``param`` declaration without a default).  Use ``_extract_ann_and_value``
-    when the expression is mandatory (``let``/``var``).
+    Also used to extract single-Expr branch/suite bodies, which are likewise
+    the sole non-token element in *args*.
     """
-    ann: TypeExpr | None = None
-    value: syntax.Expr | None = None
-    for a in tail:
-        if isinstance(a, (TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT)):
-            ann = a
-        elif _is_expr_obj(a) and not isinstance(a, Token):
-            value = cast(syntax.Expr, a)
-        # None (placeholder) and Token (EQ) are skipped
-    return ann, value
+    return cast(syntax.Expr, _find_non_token(args))
 
 
 def _extract_ann_and_value(
@@ -1727,35 +1491,31 @@ def _extract_ann_and_value(
     Grammar tail is: type_ann? EQ expr
     With maybe_placeholders=True: [None|TypeExpr, Token(EQ), Expr]
     """
-    ann, value = _extract_ann_and_optional_expr(tail)
+    ann: TypeExpr | None = None
+    value: syntax.Expr | None = None
+    for a in tail:
+        if isinstance(a, _ALL_TYPE_EXPRS):
+            ann = a
+        elif _is_expr_obj(a) and not isinstance(a, Token):
+            value = cast(syntax.Expr, a)
     assert value is not None, f"_extract_ann_and_value: no Expr found in {tail!r}"
+    return ann, value
+
+
+def _extract_ann_and_optional_expr(
+    tail: _Args,
+) -> tuple[TypeExpr | None, syntax.Expr | None]:
+    """Extract (type_ann, optional_expr) from a param declaration tail."""
+    ann: TypeExpr | None = None
+    value: syntax.Expr | None = None
+    for a in tail:
+        if isinstance(a, _ALL_TYPE_EXPRS):
+            ann = a
+        elif _is_expr_obj(a):
+            value = cast(syntax.Expr, a)
     return ann, value
 
 
 def syntax_error_from_meta(meta: Meta, message: str) -> AglSyntaxError:
     """Create an AglSyntaxError from a Meta object."""
     return AglSyntaxError(message, span=_span_from_meta(meta))
-
-
-def _find_branch_body(args: _Args) -> tuple[syntax.Stmt, ...]:
-    """Extract the branch_body tuple[Stmt,...] from transformer args.
-
-    ``branch_body`` always returns a ``tuple[Stmt, ...]``; this helper picks it
-    out of the args list (which may also contain an expression from the condition
-    or an ARROW token, both of which are not tuples).
-    """
-    stmts = next((a for a in args if isinstance(a, tuple)), None)
-    assert stmts is not None, "_find_branch_body: no tuple found in args"
-    return cast(tuple[syntax.Stmt, ...], stmts)
-
-
-# ---------------------------------------------------------------------------
-# _NameOrPolicy: intermediate result from opt_val_name
-# ---------------------------------------------------------------------------
-
-
-class _NameOrPolicy:
-    """Either a plain name string or an AbortPolicy (from opt_val_name)."""
-
-    def __init__(self, value: str | syntax.AbortPolicy) -> None:
-        self.value = value

@@ -37,6 +37,7 @@ class OutputContract:
     strict_json: bool | None
     format_instructions: str
     json_schema: object  # dict[str, object] | None, but object keeps mypy happy
+    structured_exec: bool = False
 
 
 def materialize_contract(
@@ -49,9 +50,23 @@ def materialize_contract(
     derive format instructions and JSON Schema, then overlays the per-call
     ``strict_json`` flag from the spec.
 
+    For ``structured_exec`` specs, returns a passthrough text contract without
+    consulting the codec table (the codec field is unused for structured exec).
+
     Raises ``ValueError`` if the codec is not found (host-configuration error,
     not an AgL exception).
     """
+    if spec.structured_exec:
+        from agm.agl.runtime.codec import TextCodec
+
+        return OutputContract(
+            target_type=spec.target_type,
+            codec=TextCodec(),
+            strict_json=None,
+            format_instructions="",
+            json_schema=None,
+            structured_exec=True,
+        )
     codec = codecs.get(spec.codec_name)
     if codec is None:
         raise ValueError(

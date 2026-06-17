@@ -29,6 +29,9 @@ class ConfigCommandNotFound(ValueError):
 # the config file that defines them.  When the config-dir-resolved path does
 # not exist, cwd is used as a fallback.
 _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
+    "exec": [
+        "log_file",
+    ],
     "loop": [
         "tasks_dir",
         "prompt_file",
@@ -529,6 +532,8 @@ class ExecConfig:
     default_loop_limit: int
     timeout: float | None
     agents: dict[str, str]
+    log: bool
+    log_file: str | None
 
 
 def load_exec_config(
@@ -586,12 +591,17 @@ def exec_config_from_merged(
             if isinstance(k, str) and isinstance(v, str) and v.strip():
                 resolved_agents[k] = v
 
+    resolved_log = _optional_bool(exec_table, "log")
+    resolved_log_file = _optional_str(exec_table, "log_file")
+
     return ExecConfig(
         runner=resolved_runner,
         strict_json=resolved_strict_json,
         default_loop_limit=resolved_loop_limit,
         timeout=resolved_timeout,
         agents=resolved_agents,
+        log=resolved_log,
+        log_file=resolved_log_file,
     )
 
 
@@ -644,14 +654,14 @@ def load_params_config(
     values.  Returns an empty dict when the table is absent.
 
     Values are returned as-is (TOML-native Python objects) so that
-    ``convert_input`` in the runtime can coerce them to AgL types.  In
+    ``convert_param_value`` in the runtime can coerce them to AgL types.  In
     particular, ``bool`` values must NOT be stringified (``str(True)`` → ``"True"``
     which the bool coercion path rejects).
 
     Note for decimal params: TOML has no decimal type; a TOML float (e.g.
     ``3.14``) is a Python ``float`` and AgL rejects binary floats.  Decimal param
     values in config must be written as TOML strings (e.g. ``ratio = "3.14"``);
-    ``convert_input`` will parse them correctly via ``json.loads(parse_float=Decimal)``.
+    ``convert_param_value`` will parse them correctly via ``json.loads(parse_float=Decimal)``.
     """
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     return params_config_from_merged(merged, program_name)

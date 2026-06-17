@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -210,12 +210,13 @@ class TmuxLayoutArgs:
 @dataclass(slots=True)
 class ExecArgs:
     file: str | None
-    param_tokens: list[str]
     strict_json: bool | None
     max_iters: int | None
     runner: str | None
     no_log: bool
     log_file: str | None
+    param_tokens: list[str] = field(default_factory=list)
+    log: bool = False
     command: str | None = None
 
 
@@ -228,3 +229,4 @@ class ReplArgs:
     quiet: bool
     no_log: bool
     log_file: str | None
+    log: bool = False

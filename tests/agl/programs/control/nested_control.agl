@@ -14,23 +14,23 @@ agent impl
 agent reviewer
 agent planner
 
-var artifact: text = impl "Implement ${spec}"
+var artifact: text = ask("Implement ${spec}", agent: impl)
 var status: text = "working"
 
 do[3]
-  let review: Review = reviewer "Review:\n${artifact}"
+  let review: Review = ask("Review:\n${artifact}", agent: reviewer)
   case review of
     | Pass =>
         set status = "accepted"
     | Fail(issues) =>
-        let plan: Plan = planner "Plan for:\n${issues as bullets}"
+        let plan: Plan = ask("Plan for:\n${issues}", agent: planner)
         case plan of
           | Retry =>
-              set artifact = impl "Fix ${issues} in ${artifact}"
+              set artifact = ask("Fix ${issues} in ${artifact}", agent: impl)
           | GiveUp(why) =>
               if why = "hopeless" =>
                 set status = "abandoned"
-              | else =>
+              else =>
                 set status = "deferred: ${why}"
 until status != "working"
 print status

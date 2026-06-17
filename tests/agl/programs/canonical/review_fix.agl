@@ -21,23 +21,26 @@ agent impl
 agent reviewer
 agent critic
 
-var artifact: text = impl "Implement ${spec}"
+var artifact: text = ask("Implement ${spec}", agent: impl)
+
+# review declared as var so the until condition can reference it.
+var review: Review = Pass
 
 try
   do[5]
-    let review: Review = reviewer[on_parse_error: retry[2]] """
+    set review = ask("""
     Review the artifact for correctness, completeness, and maintainability.
 
     Artifact:
     ${artifact}
-    """
+    """, agent: reviewer, on_parse_error: Retry(n: 2))
 
     case review of
       | Pass =>
-          pass
+          ()
 
       | Fail(issues) =>
-          let result: FixResult = impl[on_parse_error: retry[2]] """
+          let result: FixResult = ask("""
           Fix valid issues.
 
           Issues:
@@ -45,7 +48,7 @@ try
 
           Current artifact:
           ${artifact}
-          """
+          """, agent: impl, on_parse_error: Retry(n: 2))
 
           case result of
             | Complete(output) =>
@@ -53,13 +56,13 @@ try
             | Changed(output) =>
                 set artifact = output
             | Blocked(reason) =>
-                let blocker_report = critic "Explain blocker:\n${reason}"
+                let blocker_report = ask("Explain blocker:\n${reason}", agent: critic)
                 raise Abort(message: blocker_report)
 
   until review is Pass
 
 catch AgentParseError as e =>
-  let diagnostic = critic """
+  let diagnostic = ask("""
   An agent failed to return valid structured output.
 
   Agent:
@@ -69,15 +72,15 @@ catch AgentParseError as e =>
   ${e.expected_schema}
 
   Raw output:
-  ${e.raw as raw}
+  ${e.raw}
 
   Validation errors:
   ${e.validation_errors}
-  """
+  """, agent: critic)
   raise e
 
 catch MaxIterationsExceeded as e =>
-  let summary = critic """
+  let summary = ask("""
   The review/fix loop did not converge.
 
   Last artifact:
@@ -85,7 +88,7 @@ catch MaxIterationsExceeded as e =>
 
   Loop metadata:
   ${e}
-  """
+  """, agent: critic)
   raise e
 
 print artifact

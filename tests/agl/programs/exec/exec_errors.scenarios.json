@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "caught_failure_exposes_fields",
-      "inputs": {"mode": "calm"},
+      "params": {"mode": "calm"},
       "expect": {
         "stdout_contains": [
           "failed code 3\n",
@@ -15,7 +15,7 @@
     },
     {
       "name": "uncaught_exec_error",
-      "inputs": {"mode": "uncaught"},
+      "params": {"mode": "uncaught"},
       "expect": {
         "stdout_contains": ["failed code 3\n", "timed false\n"],
         "stdout_not_contains": ["skip", "tail"],

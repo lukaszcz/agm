@@ -326,7 +326,7 @@ class TestReplRun:
 
 
 # ---------------------------------------------------------------------------
-# M4 wiring: agent mode, --input pre-seed, trace path resolution
+# M4 wiring: agent mode and trace path resolution
 # ---------------------------------------------------------------------------
 
 

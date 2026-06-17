@@ -1,4 +1,4 @@
-# Host inputs: untyped defaults to text; typed inputs are JSON-validated.
+# Host params: untyped defaults to text; typed params are JSON-validated.
 param topic
 param rounds: int
 param ratio: decimal

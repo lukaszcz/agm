@@ -1408,7 +1408,7 @@ class TestExecCommandShellComplete:
     def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
         """Completion discovers params for normal exec programs using ``ask``."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param topic: text\nlet answer = ask "About ${topic as raw}"\n')
+        agl_file.write_text('param topic: text\nlet answer = ask "About ${topic}"\nanswer\n')
 
         result = self._complete(["exec", str(agl_file)], "--")
         assert "--topic" in result

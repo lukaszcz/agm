@@ -107,7 +107,7 @@ def parse_param_tokens(
 
     Returns a ``dict[str, object]`` mapping param names to their values:
     - bool params: native ``bool`` (``True`` for ``--name``, ``False`` for ``--no-name``)
-    - all others: raw ``str`` (runtime ``convert_input`` handles type coercion)
+    - all others: raw ``str`` (runtime ``convert_param_value`` handles type coercion)
 
     Non-option tokens (not starting with ``--``) are silently skipped so that
     the FILE positional argument landing in ``ctx.args`` does not cause errors.

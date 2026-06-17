@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "high_score_pass",
+      "params": {"score": 95},
+      "expect": {
+        "stdout": "pass\nhigh\n1\nexcellent\n"
+      }
+    },
+    {
+      "name": "mid_score_ok",
+      "params": {"score": 60},
+      "expect": {
+        "stdout": "fail\nlow\n1\nok\n"
+      }
+    },
+    {
+      "name": "low_score_needs_work",
+      "params": {"score": 30},
+      "expect": {
+        "stdout": "fail\nlow\n0\nneeds work\n"
+      }
+    }
+  ]
+}

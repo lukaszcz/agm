@@ -4,13 +4,14 @@ param mode
 let x = 1
 var trail: text = ""
 
-if mode = "shadow" =>
-  let x = 2
-  set trail = "branch ${x}"
-| mode = "plain" =>
-  set trail = "branch kept ${x}"
-| else =>
-  pass
+if
+  | mode = "shadow" =>
+    let x = 2
+    set trail = "branch ${x}"
+  | mode = "plain" =>
+    set trail = "branch kept ${x}"
+  | else =>
+    ()
 
 print trail
 print "after ${x}"

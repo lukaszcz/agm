@@ -14,7 +14,7 @@ param who
 
 agent picker
 
-let shape: Shape = picker "Pick a shape."
+let shape: Shape = ask("Pick a shape.", agent: picker)
 
 case shape of
   | Shape.Dot => print "dot"

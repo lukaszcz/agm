@@ -71,6 +71,7 @@ from agm.agl.lexer.tokens import (
     STRING_FRAGMENT,
     TEMPLATE_END,
     TEMPLATE_START,
+    THIN_ARROW,
     TYPE_NAME,
     VAR_NAME,
 )
@@ -81,7 +82,10 @@ from agm.agl.lexer.tokens import (
 
 _TAB_LEN = 4
 
-# Single-char operator table (must not overlap with maximal-munch multi-char ops)
+# Single-char operator table (must not overlap with maximal-munch multi-char ops).
+# NOTE: "-" is intentionally absent — it is handled in the multi-char operator
+# section of _scan_one_code_token so that "->" (THIN_ARROW) takes priority via
+# maximal munch before falling back to MINUS.
 _SINGLE_OPS: dict[str, str] = {
     "(": LPAR,
     ")": RPAR,
@@ -95,7 +99,6 @@ _SINGLE_OPS: dict[str, str] = {
     "|": PIPE,
     ";": SEMICOLON,
     "+": PLUS,
-    "-": MINUS,
     "*": STAR,
     "/": SLASH,
 }
@@ -406,8 +409,10 @@ class _Scanner:
                 raise LexError("Unterminated string literal", span=span)
             ch = self._peek()
             if ch == quote:
-                # End of template
-                self._advance()
+                # End of template. Emit the literal fragment *before* consuming
+                # the closing quote so its end_pos stops at the quote instead of
+                # spanning it; an overlap would otherwise duplicate the quote in
+                # span consumers such as the REPL syntax highlighter.
                 yield self._make_token(
                     STRING_FRAGMENT,
                     "".join(buf),
@@ -415,8 +420,10 @@ class _Scanner:
                     frag_start_line,
                     frag_start_col,
                 )
+                quote_pos, quote_line, quote_col = self._pos, self._line, self._col
+                self._advance()
                 yield self._make_token(
-                    TEMPLATE_END, quote, self._pos - 1, self._line, self._col - 1
+                    TEMPLATE_END, quote, quote_pos, quote_line, quote_col
                 )
                 return
             if ch == "\n":
@@ -745,6 +752,15 @@ class _Scanner:
             return
         if ch == ">":
             yield self._make_token(GT, ">", start_pos, start_line, start_col)
+            return
+        # "->" is THIN_ARROW (v2 function/return type); bare "-" is MINUS.
+        # Maximal munch: check the next character before deciding.
+        if ch == "-" and self._peek() == ">":
+            self._advance()
+            yield self._make_token(THIN_ARROW, "->", start_pos, start_line, start_col)
+            return
+        if ch == "-":
+            yield self._make_token(MINUS, "-", start_pos, start_line, start_col)
             return
 
         # Single-char operators

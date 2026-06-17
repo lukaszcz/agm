@@ -1,0 +1,2 @@
+def dbl(n: int) -> int = n * 2
+print dbl

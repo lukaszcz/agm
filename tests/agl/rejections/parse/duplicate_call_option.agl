@@ -1,0 +1,2 @@
+let x: json = ask("Question.", strict_json: true, strict_json: true)
+x

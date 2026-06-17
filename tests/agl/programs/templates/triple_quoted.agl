@@ -5,18 +5,18 @@ param body
 agent critic
 
 if true =>
-  let block = critic """
+  let block = ask("""
   Header line:
     keep two spaces
   A "quoted" tail.
-  """
+  """, agent: critic)
   print "block sent"
-| else =>
-  pass
+else =>
+  ()
 
-let mixed = critic """
+let mixed = ask("""
 Wrap:
 ${body}
 End.
-"""
+""", agent: critic)
 print "mixed sent"

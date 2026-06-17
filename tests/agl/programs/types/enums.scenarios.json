@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "nullary_variant",
-      "inputs": {"fallback": "n/a"},
+      "params": {"fallback": "n/a"},
       "agents": {"worker": ["{\"$case\": \"Done\"}"]},
       "expect": {
         "stdout_contains": [
@@ -18,7 +18,7 @@
     },
     {
       "name": "payload_variant_destructured",
-      "inputs": {"fallback": "n/a"},
+      "params": {"fallback": "n/a"},
       "agents": {"worker": ["{\"$case\": \"Partial\", \"left\": 4}"]},
       "expect": {
         "stdout_contains": ["not failed\nremaining 4\n", "\"Partial\""],
@@ -27,7 +27,7 @@
     },
     {
       "name": "multi_field_fatal_branch",
-      "inputs": {"fallback": "n/a"},
+      "params": {"fallback": "n/a"},
       "agents": {
         "worker": ["{\"$case\": \"Failed\", \"reason\": \"disk full\", \"fatal\": true}"]
       },
@@ -38,7 +38,7 @@
     },
     {
       "name": "multi_field_recoverable_branch",
-      "inputs": {"fallback": "manual review"},
+      "params": {"fallback": "manual review"},
       "agents": {
         "worker": ["{\"$case\": \"Failed\", \"reason\": \"rate limit\", \"fatal\": false}"]
       },
@@ -49,7 +49,7 @@
     },
     {
       "name": "unknown_case_tag_is_parse_error",
-      "inputs": {"fallback": "n/a"},
+      "params": {"fallback": "n/a"},
       "agents": {"worker": ["{\"$case\": \"Exploded\"}"]},
       "expect": {
         "stdout": "",

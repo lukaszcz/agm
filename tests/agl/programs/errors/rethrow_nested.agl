@@ -6,8 +6,8 @@ try
   try
     if mode = "inner" =>
       raise Abort(message: "from inner")
-    | else =>
-      pass
+    else =>
+      ()
     print "inner ok"
   catch Abort as e =>
     print "inner saw ${e.message}"

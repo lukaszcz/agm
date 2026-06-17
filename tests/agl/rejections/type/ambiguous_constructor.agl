@@ -3,3 +3,4 @@ enum Review
 enum TestResult
   | Same
 let x = Same
+x

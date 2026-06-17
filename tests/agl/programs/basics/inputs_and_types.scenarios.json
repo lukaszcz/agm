@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "typical_values",
-      "inputs": {
+      "params": {
         "topic": "unit tests",
         "rounds": 3,
         "ratio": 2.5,
@@ -24,7 +24,7 @@
     },
     {
       "name": "unicode_multiline_and_falsy_values",
-      "inputs": {
+      "params": {
         "topic": "café ✓\nline two",
         "rounds": 0,
         "ratio": 0.1,
@@ -46,13 +46,13 @@
     },
     {
       "name": "missing_declared_input",
-      "inputs": {"topic": "x", "ratio": 1.5, "flag": true, "meta": {}},
+      "params": {"topic": "x", "ratio": 1.5, "flag": true, "meta": {}},
       "agents": {"ask": []},
       "expect": {"host_error": {"message_contains": ["rounds"]}}
     },
     {
       "name": "undeclared_extra_input",
-      "inputs": {
+      "params": {
         "topic": "x",
         "rounds": 1,
         "ratio": 1.5,
@@ -68,7 +68,7 @@
     },
     {
       "name": "type_invalid_input",
-      "inputs": {"topic": "x", "rounds": "three", "ratio": 1.5, "flag": true, "meta": {}},
+      "params": {"topic": "x", "rounds": "three", "ratio": 1.5, "flag": true, "meta": {}},
       "agents": {"ask": []},
       "expect": {"host_error": {"message_contains": ["rounds"]}}
     }

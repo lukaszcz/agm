@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "inner_raise_is_rethrown_to_outer",
-      "inputs": {"mode": "inner"},
+      "params": {"mode": "inner"},
       "expect": {
         "stdout": "inner saw from inner\nouter saw abort\ncontinue\n",
         "raises": {
@@ -13,7 +13,7 @@
     },
     {
       "name": "quiet_inner_body",
-      "inputs": {"mode": "quiet"},
+      "params": {"mode": "quiet"},
       "expect": {
         "stdout": "inner ok\ncontinue\n",
         "raises": {

@@ -2,17 +2,17 @@
 # typed targets parsed like agent output.
 param name
 
-let greeting = exec "printf 'hi %s' ${name}"
+let greeting: text = exec "printf 'hi %s' ${name}"
 print greeting
 
-let trimmed = exec "echo padded"
+let trimmed: text = exec "echo padded"
 print trimmed
 print "end marker"
 
 exec "true"
 
 let answer: int = exec "echo 42"
-print answer + 1
+print(answer + 1)
 
 let data: json = exec "printf '{\"k\": [1, 2]}'"
 print data

@@ -606,9 +606,9 @@ class TestResolveLogFileUnique:
         with patch("agm.core.log.datetime") as mock_dt, patch("agm.core.log.os.getpid") as mock_pid:
             mock_dt.now.return_value = fixed
             mock_pid.return_value = 11111
-            path_a = resolve_log_file(command_name="exec", no_log=False, log_file=None, unique=True)
+            path_a = resolve_log_file(command_name="exec", enabled=True, log_file=None, unique=True)
             mock_pid.return_value = 22222
-            path_b = resolve_log_file(command_name="exec", no_log=False, log_file=None, unique=True)
+            path_b = resolve_log_file(command_name="exec", enabled=True, log_file=None, unique=True)
 
         assert path_a is not None
         assert path_b is not None
@@ -631,8 +631,8 @@ class TestResolveLogFileUnique:
         fixed = _dt(2026, 1, 1, 12, 0, 0)
         with patch("agm.core.log.datetime") as mock_dt:
             mock_dt.now.return_value = fixed
-            path_a = resolve_log_file(command_name="exec", no_log=False, log_file=None)
-            path_b = resolve_log_file(command_name="exec", no_log=False, log_file=None)
+            path_a = resolve_log_file(command_name="exec", enabled=True, log_file=None)
+            path_b = resolve_log_file(command_name="exec", enabled=True, log_file=None)
 
         assert path_a is not None
         assert path_b is not None

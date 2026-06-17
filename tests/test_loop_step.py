@@ -163,7 +163,7 @@ class TestLogFile:
         assert (
             resolve_log_file(
                 command_name="loop",
-                no_log=args.no_log,
+                enabled=not args.no_log,
                 log_file=args.log_file,
             )
             is None
@@ -174,7 +174,7 @@ class TestLogFile:
         args = _make_loop_args(no_log=False, log_file=explicit)
         result = resolve_log_file(
             command_name="loop",
-            no_log=args.no_log,
+            enabled=not args.no_log,
             log_file=args.log_file,
         )
         assert result == Path(explicit)
@@ -187,7 +187,7 @@ class TestLogFile:
         args = _make_loop_args(no_log=False, log_file=None)
         result = resolve_log_file(
             command_name="loop",
-            no_log=args.no_log,
+            enabled=not args.no_log,
             log_file=args.log_file,
         )
         assert result is not None
@@ -206,7 +206,7 @@ class TestLogFile:
         args = _make_loop_args(no_log=False, log_file=None)
         result = resolve_log_file(
             command_name="refine",
-            no_log=args.no_log,
+            enabled=not args.no_log,
             log_file=args.log_file,
         )
         assert result is not None
@@ -223,7 +223,7 @@ class TestLogFile:
         args = _make_loop_args(no_log=False, log_file="logs/run.log")
         result = resolve_log_file(
             command_name="loop",
-            no_log=args.no_log,
+            enabled=not args.no_log,
             log_file=args.log_file,
         )
         assert result == work / "logs" / "run.log"
@@ -233,7 +233,7 @@ class TestLogFile:
         assert (
             resolve_log_file(
                 command_name="loop",
-                no_log=args.no_log,
+                enabled=not args.no_log,
                 log_file=args.log_file,
             )
             is None

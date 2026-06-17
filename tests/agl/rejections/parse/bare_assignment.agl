@@ -1,2 +1,2 @@
-var n: int = 1
-n = 2
+def classify(n: int) -> text = "hi"
+print classify(1)

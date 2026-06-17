@@ -16,6 +16,8 @@ Special cases:
 
 from __future__ import annotations
 
+import re
+
 from agm.agl.diagnostics import AglError
 from agm.agl.syntax.spans import SourceSpan
 
@@ -52,6 +54,8 @@ _STMT_STARTERS: frozenset[str] = frozenset(
         "_INDENT",
     }
 )
+
+_ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
 
 
 class AglSyntaxError(AglError):
@@ -152,10 +156,25 @@ def _make_inline_compound_error(
     return AglSyntaxError(guidance, span=span)
 
 
+def _make_missing_else_arrow_error(span: SourceSpan) -> AglSyntaxError:
+    return AglSyntaxError("Missing `=>` after `else`.", span=span)
+
+
+def _is_missing_arrow_after_else(
+    *, source_text: str | None, token_pos: int, expected: set[str]
+) -> bool:
+    return (
+        source_text is not None
+        and expected == {"ARROW"}
+        and _ELSE_BEFORE_TOKEN_RE.search(source_text[:token_pos]) is not None
+    )
+
+
 def syntax_error_from_lark(
     exc: Exception,
     *,
     filename: str = "<agl>",
+    source_text: str | None = None,
 ) -> AglSyntaxError:
     """Convert a Lark parse exception to ``AglSyntaxError``.
 
@@ -181,6 +200,10 @@ def syntax_error_from_lark(
         col = tok.column if tok.column is not None else 1
         pos = tok.start_pos if tok.start_pos is not None else 0
         span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
+        if _is_missing_arrow_after_else(
+            source_text=source_text, token_pos=pos, expected=set(exc.expected)
+        ):
+            return _make_missing_else_arrow_error(span)
         if tok.type == _EQ_EQ:
             return _make_eq_eq_error(span)
         # Chained comparison detection (design §4.3): the unexpected token is

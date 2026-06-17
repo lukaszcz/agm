@@ -1,4 +1,4 @@
-// AgL grammar — M3a: full control-flow grammar.
+// AgL v2 grammar — expression-oriented with uniform function-call syntax.
 //
 // Terminals are %declare'd or generated from string literals; the custom
 // AglLexer supplies all token values (remapping lowercase keyword types to
@@ -9,37 +9,57 @@
 // LALR(1) conflict-freeness verified: 0 shift/reduce, 0 reduce/reduce.
 // See tests/test_agl_parser.py for the mandatory conflict-guard regression.
 //
-// Terminal naming: keyword string literals (e.g. "pass") produce uppercase
-// terminal names (e.g. PASS) in Lark's grammar tables.  AglLexer.lex()
+// Terminal naming: keyword string literals (e.g. "let") produce uppercase
+// terminal names (e.g. LET) in Lark's grammar tables.  AglLexer.lex()
 // remaps lowercase scanner output to the uppercase names required here.
 //
-// Type annotation keywords (text, json, bool, int, decimal, list, dict):
+// Type annotation keywords (text, json, bool, int, decimal, list, dict, unit):
 // These are NOT reserved by the scanner.  The grammar accepts them as
-// VAR_NAME tokens; AstBuilder.type_ann() maps the string value to the
-// appropriate TypeExpr node (TextT, JsonT, etc.).
+// VAR_NAME tokens; AstBuilder type handlers map the string value to the
+// appropriate TypeExpr node.
 //
-// Statement taxonomy (bar-safe stratification — §4.1):
-//   closed_stmt      — self-contained; safe anywhere inline, may be followed by ;
-//   open_stmt        — extends open to the right (if/case/try); last in inline block
-//   bar_closed_stmt  — bar-safe twin of closed_stmt: trailing exprs use bar_expr
+// v2 design notes:
+// (A) Single-arg juxtaposition vs operators vs paren-calls:
+//   - postfix level: paren-calls `f(args)` and field access `f.field` (left-assoc).
+//   - `juxt`: concrete (non-transparent) non-terminal — `postfix juxt_arg` or `postfix`.
+//     Making juxt transparent (?juxt) cascades S/R conflicts into all operator rules.
+//   - juxt_arg excludes LPAR (so `f(x)` is always a paren-call at postfix level,
+//     not juxtaposition) and excludes unary-minus (so `f -1` = subtraction).
+//   - Juxtaposition does NOT chain: `f a b` is a parse error.
+//   - Result: `print x + 1` = `(print x) + 1`; `f (x+1)` = call; `f -1` = sub.
 //
-// Expression stratification:
-//   expr     — general: admits bare case_expr
-//   bar_expr — bar-safe: case_expr only via "(" expr ")" (= or_expr alias)
+// (B) `fn` keyword required for lambdas:
+//   - Keyword-free `(params) -> R => body` is NOT LALR(1): after `(name` the
+//     parser cannot distinguish param from grouped expr with 1 token lookahead.
+//   - `fn(params) -> R => body` disambiguates via the keyword.
 //
-// Operator precedence (highest to lowest):
-//   access > unary(-) > multiplicative > additive > comparison (non-associative)
-//   > not > and > or
-//   `in` and `is`/`is not` at comparison level.
+// (C) Bar-stratification — dropped to ZERO:
+//   - The production grammar had a 3-tier system (closed_stmt/open_stmt/bar_closed_stmt).
+//   - For v2, all expressions are uniform. Branch bodies use `or_expr` directly.
+//   - We do NOT introduce a `bar_expr` or `closed_expr` alias non-terminal:
+//     `closed_expr: or_expr` creates a FOLLOW-set cycle where OR appears in
+//     FOLLOW(closed_expr) causing S/R conflicts in every operator-chain rule.
+//   - Fix: use or_expr directly in all branch/body positions.
 //
-// M3a adds:
-//   Binary/unary operators: or, and, not, comparisons (= != < <= > >= in), + - * /
-//   is / is not tests
-//   do_until with optional loop bound [N] (zero/negative → AglSyntaxError)
-//   if_stmt with | branch lists, optional else
-//   case_stmt and case_expr (parenthesized in bar positions)
-//   try/catch + raise_stmt
-//   Patterns: wildcard, literal, var, constructor+fields
+// (D) Lambda position:
+//   - lambda_expr is at the TOP of the expr chain (alongside if/case/do/try),
+//     NOT in atom/postfix position. This is critical for LALR(1):
+//     if lambda is an atom, its body creates a FOLLOW-set conflict.
+//   - Consequence: a lambda as a function argument must be parenthesized.
+//
+// (E) `agent` as a type: `agent` arrives as AGENT (declared terminal, not string
+//   literal), so a type_expr alternative `AGENT -> agent_type` is safe. It cannot
+//   conflict with `agent_decl` because declarations appear at item level, not in
+//   type_expr position.
+//
+// (F) Suite bodies for func_def, catch, branch:
+//   - `suite_expr: _INDENT block _DEDENT` starts with _INDENT.
+//   - The production custom lexer emits _INDENT directly (without a preceding
+//     _NEWLINE); the _NEWLINE is consumed and only _INDENT is emitted.
+//   - `expr` / `or_expr` never start with _INDENT.
+//   - So `func_body: suite_expr | expr` and `catch_body: suite_expr | or_expr`
+//     are unambiguous (_INDENT distinguishes the suite alternative).
+//   - Branch bodies (if/case) also support suite_expr via `branch_body`.
 
 // ---------------------------------------------------------------------------
 // Synthetic tokens (custom lexer — no regex; underscore-prefixed are filtered)
@@ -55,85 +75,75 @@
 %declare VAR_NAME TYPE_NAME
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
 // string literal "agent") so it can be referenced by name in `field_name`,
-// where `agent` is admitted as a field/key name.  The custom lexer emits this
-// token type for the `agent` keyword.
+// where `agent` is admitted as a field/key name, and in `type_expr` where
+// `agent` is the opaque agent type.  The custom lexer emits this token type
+// for the `agent` keyword.
 %declare AGENT
 %declare INT DECIMAL
-%declare EQ EQ_EQ NEQ LT LE GT GE
+%declare EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
-%declare ARROW LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE DOT
+%declare ARROW THIN_ARROW
+%declare LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE DOT
 %declare LOOP_BOUND
+
+// Note: EQ_EQ (==) is declared by the lexer but not used in any grammar rule.
+// When the lexer emits it, Lark raises UnexpectedToken; the parser error
+// handler checks for EQ_EQ and converts it to a friendly AglSyntaxError.
 
 // ---------------------------------------------------------------------------
 // Program root
 // ---------------------------------------------------------------------------
 
-start: block_stmts
+start: block
 
-block_stmts: stmt ((_NEWLINE | SEMICOLON) stmt)* (_NEWLINE | SEMICOLON)?
+// A block is a sequence of items separated by newlines or semicolons.
+// The block's value is its last item.
+block: item (_sep item)* _sep?
 
-// ---------------------------------------------------------------------------
-// Statement dispatch (M3: full taxonomy)
-// ---------------------------------------------------------------------------
-
-?stmt: closed_stmt | open_stmt
-
-closed_stmt: record_def
-           | enum_def
-           | type_alias
-           | param_decl
-           | program_decl
-           | agent_decl
-           | let_decl
-           | var_decl
-           | set_stmt
-           | pass_stmt
-           | print_stmt
-           | raise_stmt
-           | expr_stmt
-           | do_until
-
-open_stmt: if_stmt | case_stmt | try_stmt
-
-// Bar-safe twin of closed_stmt: identical forms but trailing expr slots use bar_expr.
-bar_closed_stmt: type_alias
-               | bar_let_decl
-               | bar_var_decl
-               | bar_set_stmt
-               | pass_stmt
-               | bar_print_stmt
-               | bar_raise_stmt
-               | expr_stmt
-               | do_until
+_sep: _NEWLINE | SEMICOLON
 
 // ---------------------------------------------------------------------------
-// Declarations and statements
+// Item (transparent)
 // ---------------------------------------------------------------------------
+
+?item: declaration
+     | binder
+     | expr
+
+// ---------------------------------------------------------------------------
+// Declarations (transparent)
+// ---------------------------------------------------------------------------
+
+?declaration: record_def
+            | enum_def
+            | type_alias
+            | param_decl
+            | program_decl
+            | agent_decl
+            | config_pragma
+            | func_def
 
 // ---------------------------------------------------------------------------
 // Type declarations
 // ---------------------------------------------------------------------------
 
-// record_def: indented block of field definitions (design §10.4).
+// record_def: indented block of field definitions.
+// The custom lexer emits _INDENT directly after the TYPE_NAME (no _NEWLINE before _INDENT).
 record_def: "record" TYPE_NAME _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
 
 field_def: field_name COLON type_expr
 
 // field_name: a record/struct field or named-key reference.  The reserved word
-// `agent` (which leads an agent_decl) is also a legitimate field name on the
-// built-in exception records (AgentCallError.agent / AgentParseError.agent), so
-// it is admitted here alongside ordinary lower-case identifiers.  This is used
-// only in *field-name* positions (field defs, named args, dict shorthand keys,
-// postfix field access) — never where a NEW variable is bound (let/var/set/
-// input/catch/loop/pattern var-binders), so `agent` cannot become a variable.
-// Inlined (`?`): each alternative is a single token, so the parent rule receives
-// the name Token (type VAR_NAME or AGENT) directly — see `_find_name_token`.
+// `agent` (which leads an agent_decl and is also a type) is also a legitimate
+// field name on built-in exception records (AgentCallError.agent), so it is
+// admitted here alongside ordinary lower-case identifiers.
+// Inlined (`?`): each alternative is a single token, so the parent rule
+// receives the name Token (type VAR_NAME or AGENT) directly.
 ?field_name: VAR_NAME | AGENT
 
-// enum_def: flat variant list (design §10.4).
-//   The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
-//   before each | — the entire variant list is a flat token sequence starting with
-//   the enum keyword.  No _INDENT/_DEDENT wrapping is needed.
+// enum_def: flat variant list using the |-continuation layout rule.
+// The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
+// before each | so the entire variant list is a flat token sequence.
 enum_def: "enum" TYPE_NAME variant_def+
 
 variant_def: PIPE TYPE_NAME variant_payload?
@@ -144,37 +154,59 @@ field_list: field_inline (COMMA field_inline)* COMMA?
 
 field_inline: field_name COLON type_expr
 
-// type_alias: "type" TYPE_NAME EQ type_expr (design §10.4)
+// type_alias: "type" TYPE_NAME = type_expr
 type_alias: "type" TYPE_NAME EQ type_expr
 
-param_decl:   "param" VAR_NAME type_ann? (EQ expr)?
+// param declaration: "param" VAR_NAME [: type_expr] [= default_expr]
+param_decl: "param" VAR_NAME type_ann? (EQ expr)?
+
+// program declaration: "program" VAR_NAME
 program_decl: "program" VAR_NAME
 
-// agent_decl: "agent" VAR_NAME (= "runner string")?
-// The optional runner string is a template; the transformer rejects any
-// template carrying interpolation (it must be a static string literal).
+// agent_decl: "agent" VAR_NAME [= template]
+// The optional runner string must be a static literal (checked in transformer).
 agent_decl: AGENT VAR_NAME (EQ template)?
 
-let_decl:   "let"  VAR_NAME type_ann? EQ expr
-var_decl:   "var"  VAR_NAME type_ann? EQ expr
-set_stmt:   "set"  VAR_NAME          EQ expr
+// config_pragma: "config" KEY = VALUE (header-only; enforced in scope pass).
+// pragma_value covers bool, int, decimal, and static string literals.
+config_pragma: "config" VAR_NAME EQ pragma_value
 
-// Bar-safe twins for let/var/set/print/raise: trailing expr is bar_expr.
-bar_let_decl:   "let"  VAR_NAME type_ann? EQ bar_expr
-bar_var_decl:   "var"  VAR_NAME type_ann? EQ bar_expr
-bar_set_stmt:   "set"  VAR_NAME          EQ bar_expr
-bar_print_stmt: "print" bar_expr
-bar_raise_stmt: "raise" bar_expr
+pragma_value: "true"     -> pragma_true
+            | "false"    -> pragma_false
+            | INT        -> pragma_int
+            | DECIMAL    -> pragma_decimal
+            | template   -> pragma_str
 
-pass_stmt:  "pass"
+// ---------------------------------------------------------------------------
+// Function definition
+// ---------------------------------------------------------------------------
 
-print_stmt: "print" expr
+// func_def: def name(params) -> RetType = body
+// The return type is REQUIRED for def (not inferred).
+// func_body is either a suite (indented block starting with _NEWLINE) or an
+// inline expression.  The suite_expr alternative is unambiguous because
+// _NEWLINE does not start any expr form.
+func_def: "def" VAR_NAME LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body
 
-raise_stmt: "raise" expr
+param_list: param_def (COMMA param_def)* COMMA?
 
-// expr_stmt uses or_expr (not expr) so that statement-level bare case_expr
-// is always case_stmt, not expr_stmt.
-expr_stmt: or_expr
+// param_def default value uses or_expr (inside LPAR…RPAR, COMMA terminates).
+param_def: VAR_NAME COLON type_expr (EQ or_expr)?
+
+// func_body: indented suite OR inline expr (full expr, including if/case/do/try/lambda).
+// The suite_expr alternative starts with _INDENT; expr never starts with _INDENT,
+// so this is unambiguous (the production lexer emits _INDENT without a preceding _NEWLINE).
+func_body: suite_expr | expr
+
+// ---------------------------------------------------------------------------
+// Binders (transparent)
+// ---------------------------------------------------------------------------
+
+?binder: let_decl | var_decl | set_stmt
+
+let_decl: "let" VAR_NAME type_ann? EQ expr
+var_decl: "var" VAR_NAME type_ann? EQ expr
+set_stmt: "set" VAR_NAME EQ expr
 
 // Type annotation: COLON followed by a type_expr.
 type_ann: COLON type_expr
@@ -182,106 +214,139 @@ type_ann: COLON type_expr
 // ---------------------------------------------------------------------------
 // Type expressions
 //
-// Type keywords (text, json, bool, int, decimal, list, dict) are NOT reserved
-// by the scanner; they arrive as VAR_NAME tokens.  TYPE_NAME handles named
-// user types.  The AstBuilder maps VAR_NAME values to the right TypeExpr.
+// Type keywords (text, json, bool, int, decimal, list, dict, unit) are NOT
+// reserved by the scanner; they arrive as VAR_NAME tokens.  TYPE_NAME handles
+// named user types.  The AstBuilder maps VAR_NAME values to the right TypeExpr.
+//
+// `agent` type: AGENT terminal (declared, not string literal) so `agent` is
+// also admissible as field_name without conflict.
+//
+// func_type: (A, B) -> C — the unit func type () -> C uses empty type_list.
 // ---------------------------------------------------------------------------
 
-type_expr: VAR_NAME                              -> prim_type_or_name
-         | TYPE_NAME                             -> named_type
-         | VAR_NAME LSQB type_expr RSQB          -> generic_type_1
+type_expr: LPAR type_list? RPAR THIN_ARROW type_expr  -> func_type
+         | VAR_NAME LSQB type_expr RSQB               -> generic_type_1
          | VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB -> dict_type
+         | VAR_NAME                                    -> prim_type_or_name
+         | TYPE_NAME                                   -> named_type
+         | AGENT                                       -> agent_type
+
+// Comma-separated type list for function-type parameters.
+type_list: type_expr (COMMA type_expr)* COMMA?
 
 // ---------------------------------------------------------------------------
-// do_until (closed_stmt: right-delimited by `until`)
+// Expressions
+//
+// Stratification: expr (open) vs or_expr (base/closed).
+//
+// `expr` is fully transparent (?) and includes lambda, if, case, do, try, raise.
+// These are all "greedy" top-level forms that consume as much as possible.
+//
+// Branch/body positions use `or_expr` directly (NOT a named alias).
+// Using a named `closed_expr: or_expr` creates a FOLLOW-set cycle (OR
+// propagates into FOLLOW(closed_expr)) causing S/R conflicts everywhere.
 // ---------------------------------------------------------------------------
 
-do_until: "do" loop_bound? body "until" bar_expr
+?expr: if_expr
+     | case_expr
+     | do_expr
+     | try_expr
+     | raise_expr
+     | lambda_expr
+     | or_expr
 
-// loop_bound: [N] as a single LOOP_BOUND token emitted by the lexer.
-// The lexer merges DO LSQB INT RSQB → DO LOOP_BOUND to avoid the LALR(1)
-// conflict between loop_bound and lit_list (both match LSQB INT RSQB).
-// N must be positive — checked in AstBuilder.
+// ---------------------------------------------------------------------------
+// Lambda expression (at TOP level, not in atom — see design note D)
+//
+// lambda_expr: fn(params) [-> RetType] => body
+// The `-> RetType` part is OPTIONAL: the return type may be omitted and inferred
+// by the type checker later.  Only `def` return types are required.
+//
+// Body is `expr` (not or_expr) so lambdas can contain if/case/do/try/raise/lambdas.
+// Since lambda_expr is a top-level expr alternative, there's no operator-chain
+// ambiguity: once FN is shifted, the parser is committed to lambda_expr.
+// ---------------------------------------------------------------------------
+
+lambda_expr: "fn" LPAR param_list? RPAR (THIN_ARROW type_expr)? ARROW expr
+
+// ---------------------------------------------------------------------------
+// Control flow expressions
+// Branch bodies use or_expr to prevent | and other terminators
+// from being consumed as part of the branch body.
+//
+// Multi-line branch lists: the branch-continuation layout rule (already in the
+// custom lexer) suppresses _NEWLINE/_INDENT/_DEDENT before each | or pipe-less
+// else, so multi-line if/case/try branches parse correctly with the flat
+// grammar below.
+//
+// Suite bodies: branch_body and catch_body admit `suite_expr` (which starts
+// with _NEWLINE _INDENT) alongside or_expr/bar_closed_stmt alternatives.
+// ---------------------------------------------------------------------------
+
+// if expression: if [|] cond => body [| cond => body]* [|] else => body
+if_expr: "if" PIPE? if_cond_branch (PIPE if_cond_branch)* if_else_branch?
+
+if_cond_branch: or_expr ARROW branch_body
+if_else_branch: PIPE? "else" ARROW branch_body
+
+// case expression: case val of | pat => body [| pat => body]*
+case_expr: "case" or_expr "of" (PIPE case_branch)+
+
+case_branch: pattern ARROW branch_body
+
+// do-until loop expression.
+// LOOP_BOUND is a single token for [N] emitted by the lexer (avoids S/R).
+// do body: suite_expr (indented block) or inline sequence.
+do_expr: "do" loop_bound? do_body "until" or_expr
+
+// loop_bound: [N] as a single LOOP_BOUND token.
 loop_bound: LOOP_BOUND
 
-// do body:
-//   suite                               — indented block
-//   inline_seq: closed (";" closed)* (";" do_tail)?  — inline, may end in open
-//   do_tail:     open_stmt (if/case/try; sealed by `until`)
-body: suite | inline_seq
+// do body: suite (indented block) or inline sequence of or_expr/binder items.
+do_body: suite_expr | inline_seq
 
-inline_seq: closed_stmt (SEMICOLON closed_stmt)* (SEMICOLON do_tail)?
-          | do_tail
+// inline_seq: semicolon-separated or_exprs and binders.
+// (Open forms like if/case/try must use the suite form in do-body position.)
+inline_seq: inline_item (SEMICOLON inline_item)*
 
-do_tail: if_stmt | case_stmt | try_stmt
+inline_item: binder | or_expr
 
-// ---------------------------------------------------------------------------
-// if_stmt (open_stmt)
-// ---------------------------------------------------------------------------
+// try expression
+try_expr: "try" try_body (catch_clause)+
 
-if_stmt: "if" if_branch (PIPE if_branch)*
-
-if_branch: bar_expr ARROW branch_body     -> if_cond_branch
-         | "else" ARROW branch_body       -> if_else_branch
-
-// ---------------------------------------------------------------------------
-// case_stmt (open_stmt)
-// ---------------------------------------------------------------------------
-
-case_stmt: "case" expr "of" (PIPE case_stmt_branch)+
-
-case_stmt_branch: pattern ARROW branch_body
-
-// ---------------------------------------------------------------------------
-// try_stmt (open_stmt)
-// ---------------------------------------------------------------------------
-
-try_stmt: "try" try_body (catch_clause)+
-
-// try body: inline form allows only closed statements (no open_stmt); a
-// trailing open_stmt would put a nested catch-list directly before this
-// try's own `catch` (dangling-catch problem).
-try_body: suite | closed_stmt (SEMICOLON closed_stmt)*
+try_body: suite_expr | or_expr (SEMICOLON or_expr)*
 
 catch_clause: "catch" catch_pattern ARROW catch_body
 
 // catch_pattern: TYPE_NAME ("as" VAR_NAME)?  |  VAR_NAME ("as" VAR_NAME)?
-// Note: "_" arrives as VAR_NAME (not a keyword). The transformer checks the
-// value — "_" becomes a wildcard catch, any other VAR_NAME is a type-name error
-// (but the grammar rule for TYPE_NAME covers named exception types).
+// "_" arrives as VAR_NAME; transformer dispatches on value.
 catch_pattern: TYPE_NAME ("as" VAR_NAME)?    -> catch_type_pattern
              | VAR_NAME ("as" VAR_NAME)?     -> catch_wildcard_pattern
 
-// catch_body: single bar-safe statement; suite for multiple/open constructs.
-catch_body: suite | bar_closed_stmt
+// catch_body: single or_expr (inline) or suite_expr (multi-statement indented block).
+// Suite form starts with _INDENT; or_expr never starts with _INDENT.
+catch_body: suite_expr | or_expr
 
-// branch_body: single bar-safe statement, a try_stmt, or a suite.
-branch_body: suite | bar_closed_stmt | try_stmt
+// branch_body: single or_expr (inline) or suite_expr (indented block).
+// Suite form starts with _INDENT; or_expr never starts with _INDENT.
+branch_body: suite_expr | or_expr
 
-suite: _INDENT block_stmts _DEDENT
+// raise expression
+raise_expr: "raise" or_expr
 
-// ---------------------------------------------------------------------------
-// Expressions
-// ---------------------------------------------------------------------------
-
-// ?expr — general form; admits bare case_expr.
-?expr: case_expr | or_expr
-
-// case_expr: "case" expr "of" ("|" case_expr_branch)+
-// Arm RHS is bar_expr (bar-safe by construction).
-case_expr: "case" expr "of" (PIPE case_expr_branch)+
-
-case_expr_branch: pattern ARROW bar_expr
-
-// ?bar_expr — bar-safe alias for or_expr.
-// A case_expr in a bar-safe position must be parenthesized (re-enters via
-// paren_expr: LPAR expr RPAR which accepts any expr including case_expr).
-?bar_expr: or_expr
+// suite_expr: indented block — produces a Block expr.
+// The production custom lexer emits _INDENT directly (without a preceding _NEWLINE)
+// when indentation increases.  Since _INDENT cannot start any expr form, the
+// alternative `func_body: suite_expr | expr` is unambiguous.
+// Similarly for branch_body and catch_body.
+suite_expr: _INDENT block _DEDENT
 
 // ---------------------------------------------------------------------------
-// Operator precedence chain (highest to lowest):
-//   or_expr > and_expr > not_expr > comparison > additive > multiplicative
-//   > unary(-) > access > atom
+// Operator precedence chain (all transparent — no wrapper nodes)
+//
+// Highest to lowest:
+//   postfix (call/access) > juxt > unary(-) > * / > + - >
+//   comparison (non-assoc) > not > and > or
 // ---------------------------------------------------------------------------
 
 ?or_expr:  or_expr "or" and_expr   -> bin_or
@@ -293,25 +358,18 @@ case_expr_branch: pattern ARROW bar_expr
 ?not_expr: "not" not_expr          -> unary_not
          | comparison
 
-// comparison: non-associative (chained a < b < c is a parse error via the
-// flat single-optional-rhs design below).
-// `is` / `is not` test: additive "is" "not"? qualified_constructor
-// Structural comparisons: additive cmp_op additive
-// `in`: additive "in" additive
-// Note: we express non-associativity by making comparison -> additive (cmp_op additive)?
-// which admits at most ONE binary operator; a second would be unreachable and
-// Lark would reject it as an unexpected token, giving the non-associativity error.
-?comparison: additive "is" "not" TYPE_NAME         -> is_not_test_simple
-           | additive "is" "not" TYPE_NAME DOT TYPE_NAME -> is_not_test_qualified
-           | additive "is" TYPE_NAME               -> is_test_simple
-           | additive "is" TYPE_NAME DOT TYPE_NAME -> is_test_qualified
-           | additive "in" additive                -> bin_in
-           | additive EQ additive                  -> bin_eq
-           | additive NEQ additive                 -> bin_neq
-           | additive LT additive                  -> bin_lt
-           | additive LE additive                  -> bin_le
-           | additive GT additive                  -> bin_gt
-           | additive GE additive                  -> bin_ge
+// comparison: non-associative.
+?comparison: additive "is" "not" TYPE_NAME                      -> is_not_test_simple
+           | additive "is" "not" TYPE_NAME DOT TYPE_NAME        -> is_not_test_qualified
+           | additive "is" TYPE_NAME                            -> is_test_simple
+           | additive "is" TYPE_NAME DOT TYPE_NAME              -> is_test_qualified
+           | additive "in" additive                             -> bin_in
+           | additive EQ additive                               -> bin_eq
+           | additive NEQ additive                              -> bin_neq
+           | additive LT additive                               -> bin_lt
+           | additive LE additive                               -> bin_le
+           | additive GT additive                               -> bin_gt
+           | additive GE additive                               -> bin_ge
            | additive
 
 ?additive: additive PLUS multiplicative   -> bin_add
@@ -323,29 +381,106 @@ case_expr_branch: pattern ARROW bar_expr
                | unary
 
 ?unary: MINUS unary   -> unary_neg
-      | access
+      | juxt
 
-// access: postfix field-access, namespace-qualification, and constructor-payload chains.
-// access -> atom is transparent (returns atom as-is).
-access: access DOT field_name        -> field_access
-      | access DOT TYPE_NAME         -> type_access
-      | access constructor_payload   -> ctor_applied
-      | atom
+// ---------------------------------------------------------------------------
+// Juxtaposition (single-arg sugar, CONCRETE non-terminal — see design note A)
+//
+// `callee juxt_arg` — one arg without parens.
+// MUST be concrete (not transparent `?`) — transparent cascades S/R conflicts.
+// juxt_arg excludes LPAR (paren-call handled at postfix level) and MINUS
+// (so `f -1` parses as subtraction, not juxtaposition).
+// Does NOT chain: `f a b` is a parse error.
+//
+// juxt_arg allows an optional dotted field-access tail so `print res.stdout`
+// and `print a.b.c` parse as juxt_call with a field_access argument.
+// Conflict-safety: DOT is NOT in FOLLOW(juxt).
+//
+// paren-call results are still excluded: `print classify(x)` is a parse error
+// (requires parens: `print(classify(x))`).
+// ---------------------------------------------------------------------------
+
+juxt: postfix juxt_arg -> juxt_call
+    | postfix
+
+// juxt_arg: a restricted atom optionally followed by .field accesses.
+juxt_arg: juxt_atom (DOT field_name)+ -> juxt_field_access
+        | juxt_atom                   -> juxt_bare
+
+// juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
+?juxt_atom: lit_int
+          | lit_decimal
+          | lit_true
+          | lit_false
+          | lit_null
+          | template
+          | var_ref
+          | constructor
+          | lit_list
+          | lit_dict
+
+// ---------------------------------------------------------------------------
+// Postfix: paren-calls and field access (left-associative chain, transparent)
+//
+// Constructor application (Issue(title: x)) is handled by the `call` rule:
+// the transformer checks whether the callee is a Constructor node and routes
+// the named args into Constructor.args.  Removing the separate
+// `constructor_payload` rule eliminates the R/R conflict between
+// `LPAR constructor_args RPAR` and `LPAR arg_list RPAR`.
+// ---------------------------------------------------------------------------
+
+?postfix: postfix LPAR arg_list? RPAR  -> call
+        | postfix DOT field_name       -> field_access
+        | postfix DOT TYPE_NAME        -> type_access
+        | atom
+
+// ---------------------------------------------------------------------------
+// Atom: primary non-operator expressions (transparent)
+// NOTE: lambda_expr is NOT here — it is a top-level expr form (see design note D).
+// ---------------------------------------------------------------------------
 
 ?atom: lit_int
      | lit_decimal
      | lit_true
      | lit_false
      | lit_null
+     | template
      | lit_list
      | lit_dict
      | constructor
      | var_ref
-     | agent_call
-     | template
-     | paren_expr
+     | paren_expr_or_unit
 
-paren_expr: LPAR expr RPAR
+// Parenthesized expression or unit literal.
+// `()` is BOTH the unit literal and the empty argument list.
+paren_expr_or_unit: LPAR RPAR         -> unit_lit
+                  | LPAR expr RPAR    -> paren_expr
+
+// ---------------------------------------------------------------------------
+// Call arguments
+// ---------------------------------------------------------------------------
+
+arg_list: arg (COMMA arg)* COMMA?
+
+?arg: named_arg | pos_arg
+
+pos_arg: expr
+
+named_arg: field_name COLON expr
+
+// ---------------------------------------------------------------------------
+// Constructor expressions
+// ---------------------------------------------------------------------------
+
+// Constructors start with TYPE_NAME. The bare form (no payload) is parsed here.
+// Constructor application Issue(title: x) is handled via the `call` rule at the
+// postfix level — the transformer routes named args into Constructor.args when
+// the callee is a Constructor node.
+constructor: TYPE_NAME    -> ctor_unqualified
+
+// ---------------------------------------------------------------------------
+// Literal nodes
+// ---------------------------------------------------------------------------
 
 lit_int:     INT
 lit_decimal: DECIMAL
@@ -353,30 +488,6 @@ lit_true:    "true"
 lit_false:   "false"
 lit_null:    "null"
 var_ref:     VAR_NAME
-
-// EQ_EQ (==) is not in any grammar rule.  When the lexer emits it, Lark
-// raises UnexpectedToken; the parser error handler checks for EQ_EQ and
-// converts it to a friendly AglSyntaxError: "Use `=` for equality."
-
-// ---------------------------------------------------------------------------
-// Agent call:  VAR_NAME call_options? template
-// ---------------------------------------------------------------------------
-
-agent_call: VAR_NAME call_options? template
-
-// Call options: [option, option, ...]
-call_options: LSQB call_option (COMMA call_option)* COMMA? RSQB
-
-// Call option keys arrive as VAR_NAME (format, strict_json, on_parse_error,
-// abort, retry, text, json are not reserved keywords).  The transformer
-// matches on the token value.
-call_option: VAR_NAME COLON call_option_value -> opt_raw
-
-// call_option_value covers: format names, bool literals, parse policies
-call_option_value: "true"                      -> opt_val_true
-                 | "false"                     -> opt_val_false
-                 | VAR_NAME                    -> opt_val_name
-                 | VAR_NAME LSQB INT RSQB      -> opt_val_name_int
 
 // ---------------------------------------------------------------------------
 // Template string
@@ -387,10 +498,10 @@ template: TEMPLATE_START template_segment* TEMPLATE_END
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
 
-interp: INTERP_START expr ("as" VAR_NAME)? INTERP_END
+interp: INTERP_START expr INTERP_END
 
 // ---------------------------------------------------------------------------
-// M2: List and dict literals (design §10.14)
+// List and dict literals
 // ---------------------------------------------------------------------------
 
 // list_literal: "[" (expr ("," expr)* ","?)? "]"
@@ -400,29 +511,13 @@ lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB
 // dict_literal: "{" (dict_entry ("," dict_entry)* ","?)? "}"
 // Inside LBRACE…RBRACE paren_level>0 (implicit continuation).
 // dict_entry key is either a template (quoted string) or a VAR_NAME identifier shorthand.
-// Both are converted to StringLit by the AstBuilder.
 lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE
 
 dict_entry: template COLON expr     -> dict_entry_str
           | field_name COLON expr   -> dict_entry_name
 
 // ---------------------------------------------------------------------------
-// M2: Constructor expressions (design §10.13, §5.5)
-// ---------------------------------------------------------------------------
-
-// Constructors start with TYPE_NAME. The bare form (no payload) is parsed here.
-// The payload is applied at the access level (ctor_applied) to handle both
-// unqualified (Type(x:1)) and qualified (Qualifier.Type(x:1)) constructors.
-constructor: TYPE_NAME    -> ctor_unqualified
-
-constructor_payload: LPAR constructor_args? RPAR
-
-constructor_args: named_arg (COMMA named_arg)* COMMA?
-
-named_arg: field_name COLON expr
-
-// ---------------------------------------------------------------------------
-// Patterns (design §6.1, §10.12)
+// Patterns
 // ---------------------------------------------------------------------------
 
 // pattern: wildcard | literal | var_binder | constructor_pattern
@@ -431,9 +526,6 @@ named_arg: field_name COLON expr
 //   TYPE_NAME (qualified or not) + optional fields → constructor pattern
 //   VAR_NAME (other) → var binder
 //   literal → literal pattern
-//
-// Note: "_" is NOT a reserved keyword — it arrives as VAR_NAME.
-// The transformer dispatches to WildcardPattern or VarPattern based on the value.
 pattern: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?  -> pat_constructor
        | VAR_NAME                                -> pat_var_or_wild
        | INT                                     -> pat_lit_int
@@ -443,7 +535,6 @@ pattern: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?  -> pat_constru
        | "null"                                  -> pat_lit_null
        | template                                -> pat_lit_str
 
-// Pattern fields: (field_shorthand | field_bind | nested_pattern)+
 pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
 pattern_field: VAR_NAME COLON pattern   -> pat_field_full

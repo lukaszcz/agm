@@ -3,6 +3,6 @@ enum R
   | Fail(issues: list[text])
 let r: R = Fail(issues: ["a"])
 case r of
-  | Fail(issues) => pass
-  | Pass => pass
+  | Fail(issues) => ()
+  | Pass => ()
 print issues

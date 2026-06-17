@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "pass_first_review",
-      "inputs": {"spec": "a CSV parser"},
+      "params": {"spec": "a CSV parser"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["{\"$case\": \"Pass\"}"],
@@ -19,7 +19,7 @@
     },
     {
       "name": "fail_then_complete",
-      "inputs": {"spec": "a CSV parser"},
+      "params": {"spec": "a CSV parser"},
       "agents": {
         "impl": ["v1", "{\"$case\": \"Complete\", \"output\": \"v2\"}"],
         "reviewer": [
@@ -39,7 +39,7 @@
     },
     {
       "name": "changed_then_complete_then_pass",
-      "inputs": {"spec": "a CSV parser"},
+      "params": {"spec": "a CSV parser"},
       "agents": {
         "impl": [
           "v1",
@@ -60,7 +60,7 @@
     },
     {
       "name": "blocked_fix_aborts_with_critic_report",
-      "inputs": {"spec": "a CSV parser"},
+      "params": {"spec": "a CSV parser"},
       "agents": {
         "impl": ["v1", "{\"$case\": \"Blocked\", \"reason\": \"no repository access\"}"],
         "reviewer": [
@@ -82,7 +82,7 @@
     },
     {
       "name": "reviewer_retries_exhausted_diagnosed_and_rethrown",
-      "inputs": {"spec": "a CSV parser"},
+      "params": {"spec": "a CSV parser"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["nonsense one", "nonsense two", "nonsense three"],
@@ -106,7 +106,7 @@
     },
     {
       "name": "never_converges_summarized_and_rethrown",
-      "inputs": {"spec": "a CSV parser"},
+      "params": {"spec": "a CSV parser"},
       "agents": {
         "impl": {
           "responses": ["v1", "{\"$case\": \"Complete\", \"output\": \"vN\"}"],

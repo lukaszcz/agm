@@ -80,5 +80,36 @@ class DictT:
     node_id: int = field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class UnitT:
+    """The ``unit`` primitive type — the type of side-effecting expressions."""
+
+    span: SourceSpan = field(compare=False)
+    node_id: int = field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class AgentT:
+    """The ``agent`` opaque type.  Agent values are first-class but not JSON-shaped."""
+
+    span: SourceSpan = field(compare=False)
+    node_id: int = field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class FuncT:
+    """A function type ``(A, B) -> C`` — positional parameters only in the type.
+
+    ``params`` is the ordered tuple of parameter types; ``result`` is the return type.
+    Named/optional arguments are erased from the value type (they only matter at
+    declared-name call sites).
+    """
+
+    params: tuple[TypeExpr, ...]
+    result: TypeExpr
+    span: SourceSpan = field(compare=False)
+    node_id: int = field(compare=False)
+
+
 # Closed union of all type-expression nodes.
-TypeExpr = TextT | JsonT | BoolT | IntT | DecimalT | NameT | ListT | DictT
+TypeExpr = TextT | JsonT | BoolT | IntT | DecimalT | NameT | ListT | DictT | UnitT | AgentT | FuncT

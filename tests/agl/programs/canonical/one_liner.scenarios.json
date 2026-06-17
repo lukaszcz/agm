@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "pass_first_try",
-      "inputs": {"spec": "a thing"},
+      "params": {"spec": "a thing"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["{\"$case\": \"Pass\"}"]
@@ -11,7 +11,7 @@
     },
     {
       "name": "one_fix_round",
-      "inputs": {"spec": "a thing"},
+      "params": {"spec": "a thing"},
       "agents": {
         "impl": ["v1", "v2"],
         "reviewer": [
@@ -30,7 +30,7 @@
     },
     {
       "name": "retry_inside_one_liner",
-      "inputs": {"spec": "a thing"},
+      "params": {"spec": "a thing"},
       "agents": {
         "impl": ["v1"],
         "reviewer": ["mumble", "{\"$case\": \"Pass\"}"]
@@ -39,7 +39,7 @@
     },
     {
       "name": "loop_exhaustion",
-      "inputs": {"spec": "a thing"},
+      "params": {"spec": "a thing"},
       "agents": {
         "impl": {"responses": ["v1", "fix"], "repeat_last": true},
         "reviewer": {

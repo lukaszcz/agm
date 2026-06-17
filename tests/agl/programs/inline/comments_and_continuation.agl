@@ -24,6 +24,6 @@ print pairs
 
 if n > 0 =>  # trailing comment before an indented suite
   print "pos"  # comment inside a suite
-# full-line comment between a branch body and the next branch marker
-| else =>
+# full-line comment between a branch body and the else branch
+else =>
   print "neg"

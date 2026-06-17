@@ -70,6 +70,8 @@ KW_AGENT = "agent"
 KW_LET = "let"
 KW_VAR = "var"
 KW_SET = "set"
+KW_DEF = "def"  # v2: function declaration keyword
+KW_FN = "fn"  # v2: lambda keyword
 KW_DO = "do"
 KW_UNTIL = "until"
 KW_IF = "if"
@@ -80,8 +82,8 @@ KW_TRY = "try"
 KW_CATCH = "catch"
 KW_RAISE = "raise"
 KW_AS = "as"
-KW_PASS = "pass"
-KW_PRINT = "print"
+# KW_PASS removed in v2: `pass` is now a plain identifier (role taken by `()`)
+# KW_PRINT removed in v2: `print` is now an ordinary function name (VAR_NAME)
 KW_AND = "and"
 KW_OR = "or"
 KW_NOT = "not"
@@ -90,6 +92,7 @@ KW_IN = "in"
 KW_TRUE = "true"
 KW_FALSE = "false"
 KW_NULL = "null"
+KW_CONFIG = "config"
 
 # Set of all reserved keyword strings (used by the scanner for fast lookup).
 KEYWORDS: frozenset[str] = frozenset(
@@ -103,6 +106,8 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_LET,
         KW_VAR,
         KW_SET,
+        KW_DEF,
+        KW_FN,
         KW_DO,
         KW_UNTIL,
         KW_IF,
@@ -113,8 +118,6 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_CATCH,
         KW_RAISE,
         KW_AS,
-        KW_PASS,
-        KW_PRINT,
         KW_AND,
         KW_OR,
         KW_NOT,
@@ -123,6 +126,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_TRUE,
         KW_FALSE,
         KW_NULL,
+        KW_CONFIG,
     }
 )
 
@@ -141,6 +145,7 @@ DECIMAL = "DECIMAL"  # /[0-9]+\.[0-9]+/
 # ---------------------------------------------------------------------------
 # Operators and punctuation
 # ---------------------------------------------------------------------------
+THIN_ARROW = "THIN_ARROW"  # -> (v2: function return type / function type)
 ARROW = "ARROW"  # =>
 EQ = "EQ"  # =
 NEQ = "NEQ"  # !=

@@ -5,3 +5,4 @@ let r: R = Pass
 let x = case r of
   | Pass => 1
   | Fail(issues) => "many"
+x

@@ -1,12 +1,9 @@
 # AgL Grammar Reference
 
 This document describes the token alphabet, layout rules, and operator
-precedence table for the AgL (Agent Language) DSL.  It is the portability
-contract (plan §12): a future parser replacement (e.g. tree-sitter) must
+precedence table for the AgL (Agent Language) DSL. It is the portability
+contract for the parser: a future parser replacement (e.g. tree-sitter) must
 produce the same token stream and honour the same precedence rules.
-
-All information below is derived from
-`src/agm/agl/lexer/tokens.py` and `src/agm/agl/grammar/agl.lark`.
 
 ---
 
@@ -14,19 +11,18 @@ All information below is derived from
 
 ### Layout tokens (synthetic)
 
-Produced by the INDENT/DEDENT filter (`agm.agl.lexer.layout`).  They never
-appear in source text directly.  The leading underscore causes Lark to filter
-them from parse trees.
+Produced by the INDENT/DEDENT filter. They never appear in source text
+directly.
 
 | Token | Meaning |
 |-------|---------|
-| `_NEWLINE` | Statement separator at the current indent level |
+| `_NEWLINE` | Item separator at the current indent level |
 | `_INDENT` | Start of a new indented block |
 | `_DEDENT` | End of an indented block |
 
 ### Template / interpolation tokens (synthetic)
 
-Produced by the template sub-scanner inside string literals.  Inside any open
+Produced by the template sub-scanner inside string literals. Inside any open
 bracket (`(`, `[`, `{`, `${…}`) the paren level is positive and `_NEWLINE`
 tokens are suppressed (implicit continuation).
 
@@ -40,74 +36,43 @@ tokens are suppressed (implicit continuation).
 
 ### Keywords
 
-All keywords below are **always reserved**: the scanner never emits them as
-`VAR_NAME`.  The token *type* is the keyword string itself (e.g. the `let`
-keyword has token type `"let"`); the `KW_*` constants in `tokens.py` are
-readable aliases.  When the Lark parser receives the token stream the custom
-`AglLexer.lex()` method uppercases keyword types (e.g. `"let"` → `"LET"`).
-
-`record` `enum` `type` `param` `program` `agent` `let` `var` `set` `do` `until` `if`
-`else` `case` `of` `try` `catch` `raise` `as` `pass` `print` `and` `or` `not`
-`is` `in` `true` `false` `null`
-
-`agent` is reserved (it leads an `agent` declaration) but it is still accepted
-as a *field name* — record/enum field definitions, named constructor arguments,
-dict shorthand keys, and postfix field access — via the `field_name`
-nonterminal (`field_name: VAR_NAME | AGENT`).  This keeps built-in exception
-fields such as `AgentCallError.agent` usable.  It cannot be used as a variable
-binder (`let`/`var`/`set`/`param`/patterns/catch).
-
-The `param` keyword leads a root-level declaration production.  Both the type
-annotation and the default expression are optional; the default may reference
-earlier `param` binders:
+The following words are **always reserved**: the scanner never emits them as
+`VAR_NAME`.
 
 ```
-param_decl: "param" VAR_NAME type_ann? (EQ expr)?
+record enum type input agent config def fn let var set do until if else
+case of try catch raise as and or not is in true false null unit
 ```
 
-`param` binders are root-level only and immutable (not rebindable with `set`).
-The declaration is executable: at evaluation time the runtime resolves a value
-from an external source (CLI option, config `[params.<program>]`) or evaluates
-the default expression; a `param` with no default and no external value is a
-pre-execution error.
+**Removed from v1:** `pass` and `print` are no longer reserved. `pass`'s
+role is taken by the unit literal `()`. `print` is a contextual built-in
+resolved by the scope pass (it lexes as `VAR_NAME`).
 
-The `program` keyword names the program for external-value keying and is
-root-level only, at most once:
+`agent` is reserved (it leads an `agent` declaration) but is still accepted
+as a *field name* via a `field_name` production in the grammar. It cannot be
+used as a variable binder, pattern binder, or catch binder.
 
-```
-program_decl: "program" VAR_NAME
-```
-
-The `agent` keyword leads a root-level declaration production:
-
-```
-agent_decl: AGENT VAR_NAME (EQ template)?
-```
-
-The optional runner string reuses the `template` rule, but the AST builder
-rejects a template carrying any interpolation hole — the runner string must be
-a static string literal.  See `src/agm/agl/grammar/agl.lark`.
-
-**Contextual keywords** — `ask` and `exec` are NOT reserved; they lex as
-plain `VAR_NAME` tokens.  The scope pass gives them their built-in meaning.
+**Contextual keywords** — `ask`, `exec`, and `print` are NOT reserved; they
+lex as plain `VAR_NAME` tokens. The scope pass gives them their built-in
+meaning.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
-`list`, `dict` are NOT reserved; they also lex as `VAR_NAME`.  The AST builder
-maps them to `TypeExpr` nodes inside type-annotation positions.
+`list`, `dict`, and `unit` are NOT reserved; they lex as `VAR_NAME` and are
+mapped to type nodes in type-annotation positions.
 
 ### Identifiers
 
 | Token | Pattern | Used for |
 |-------|---------|----------|
-| `TYPE_NAME` | `/[A-Z][A-Za-z0-9_]*/` | Record/enum types, qualified constructors |
-| `VAR_NAME` | `/[a-z_][A-Za-z0-9_]*/` | Variables, field names, agent names (the reserved word `agent` is also accepted as a field name via `field_name`) |
+| `TYPE_NAME` | `/[A-Z][A-Za-z0-9_]*/` | Record/enum types, qualified constructors, exception types |
+| `VAR_NAME` | `/[a-z_][A-Za-z0-9_]*/` | Variables, fields, agent names, function names, parameter names |
 
-`_` (the wildcard) is NOT a distinct token — it lexes as a plain `VAR_NAME`;
-wildcard interpretation (`WildcardPattern`) happens in the AST builder.
+`_` (the wildcard) lexes as a plain `VAR_NAME`; wildcard interpretation
+happens in the AST builder.
 
 ### Numbers
 
-No float type in AgL.  Decimal arithmetic is exact fixed-point.
+No float type in AgL. Decimal arithmetic is exact fixed-point.
 
 | Token | Matches |
 |-------|---------|
@@ -118,59 +83,67 @@ No float type in AgL.  Decimal arithmetic is exact fixed-point.
 
 | Token | Source | Token | Source |
 |-------|--------|-------|--------|
-| `ARROW` | `=>` | `EQ` | `=` |
-| `NEQ` | `!=` | `LT` | `<` |
-| `LE` | `<=` | `GT` | `>` |
-| `GE` | `>=` | `PLUS` | `+` |
-| `MINUS` | `-` | `STAR` | `*` |
-| `SLASH` | `/` | `LPAR` | `(` |
-| `RPAR` | `)` | `LSQB` | `[` |
-| `RSQB` | `]` | `LBRACE` | `{` |
-| `RBRACE` | `}` | `COLON` | `:` |
-| `COMMA` | `,` | `DOT` | `.` |
-| `PIPE` | `\|` | `SEMICOLON` | `;` |
+| `ARROW` | `=>` | `THIN_ARROW` | `->` |
+| `EQ` | `=` | `NEQ` | `!=` |
+| `LT` | `<` | `LE` | `<=` |
+| `GT` | `>` | `GE` | `>=` |
+| `PLUS` | `+` | `MINUS` | `-` |
+| `STAR` | `*` | `SLASH` | `/` |
+| `LPAR` | `(` | `RPAR` | `)` |
+| `LSQB` | `[` | `RSQB` | `]` |
+| `LBRACE` | `{` | `RBRACE` | `}` |
+| `COLON` | `:` | `COMMA` | `,` |
+| `DOT` | `.` | `PIPE` | `\|` |
+| `SEMICOLON` | `;` | | |
+
+`THIN_ARROW` (`->`) is a new token in v2. It is used for:
+- function return-type annotations: `def f(x: int) -> text = …`
+- function type expressions: `(int, int) -> text`
+- lambda return types (optional): `fn(x: int) -> text => …`
+
+`ARROW` (`=>`) is used for branch and lambda bodies only.
 
 **Special tokens:**
 
 | Token | Source | Purpose |
 |-------|--------|---------|
-| `EQ_EQ` | `==` | Error token; not in any grammar rule.  The parser emits `"Use \`=\` for equality."` |
-| `LOOP_BOUND` | `[N]` after `do` | Merged from `LSQB INT RSQB` by the lexer to eliminate the LALR(1) conflict with list literals.  The token's value is the integer string `N`; the AST builder rejects zero or negative values. |
+| `EQ_EQ` | `==` | Error token; not in any grammar rule. The parser emits *"Use `=` for equality."* |
+| `LOOP_BOUND` | `[N]` after `do` | Merged from `LSQB INT RSQB` by the lexer to eliminate the LALR(1) conflict with list literals. The token's value is the integer string `N`. |
 
 ---
 
 ## Layout Rules
 
-AgL uses significant indentation (Python-style).  The INDENT/DEDENT filter in
-`agm.agl.lexer.layout` transforms the raw token stream:
+AgL uses significant indentation (Python-style).
 
 1. **Indent stack** starts at `[0]`.
-2. **Inside brackets** — `paren_level > 0` when any of `( [ { ${` is open
-   (including template interpolations).  While `paren_level > 0`, `_NEWLINE`
-   tokens are suppressed (implicit line continuation).  Closing brackets
-   `} ) ] }` decrement the level.
+2. **Inside brackets** — `paren_level > 0` when any of `( [ { ${` is open.
+   While `paren_level > 0`, `_NEWLINE` tokens are suppressed. Closing
+   brackets `} ) ]` decrement the level.
 3. **On a `_NEWLINE`:**
-   - Indentation deeper than the stack top → emit `_INDENT`, push new level.
-   - Same depth → emit `_NEWLINE` as-is.
+   - Deeper than stack top → emit `_INDENT`, push new level.
+   - Same depth → emit `_NEWLINE`.
    - Shallower → emit one `_DEDENT` per popped level; if the resulting top
-     does not equal the new depth, a `LexError` ("misaligned dedent") is raised.
-4. **`|`/`catch`/`until`-continuation rule** — when the first significant token
-   on the next line is `|`, `catch`, or `until`, the `_NEWLINE` is suppressed
-   and only the `_DEDENT`s needed to pop the stack to levels strictly greater
-   than the keyword's column are emitted.  The line never pushes an indent.
-   This rule lets `|` branches, `catch` clauses, and `until` continuations
-   align with their enclosing keyword without triggering a new block.
+     does not equal the new depth, a `LexError` ("misaligned dedent") is
+     raised.
+4. **`|`/`else`/`catch`/`until`-continuation rule** — when the first
+   significant token on the next line is `|`, `else`, `catch`, or `until`,
+   the `_NEWLINE` is suppressed and only the `_DEDENT`s needed to pop the stack
+   to levels strictly greater than the keyword's column are emitted. This rule
+   lets branches, pipe-less `else` clauses, catch clauses, and `until`
+   continuations align with their enclosing keyword without triggering a new
+   block.
 5. **At EOF** — remaining indent levels are unwound with `_DEDENT` tokens.
 
 ---
 
 ## Operator Precedence and Associativity
 
-Listed from **lowest** to **highest** binding power (bottom of the table binds
-tightest).  This matches the `agl.lark` grammar's operator chain.
+Listed from **lowest** to **highest** binding power (bottom binds tightest).
 
-| Level | Operators | Associativity |
-|-------|-----------|---------------|
+| Level | Operators / Forms | Associativity |
+|-------|-------------------|---------------|
+| `case_expr`, `if_expr` | loosest expression forms | — |
 | `or` | `or` | left |
 | `and` | `and` | left |
 | `not` | `not` (unary prefix) | right (unary) |
@@ -178,22 +151,46 @@ tightest).  This matches the `agl.lark` grammar's operator chain.
 | additive | `+` `-` | left |
 | multiplicative | `*` `/` | left |
 | unary minus | `-` (unary prefix) | right (unary) |
-| access | `.field` `.Type` `ctor(…)` (postfix) | left |
-| atom | literals, identifiers, `(expr)`, templates, agent calls | — |
+| **application** | single-arg sugar `f x` (non-chaining) | — |
+| postfix | `.field`, `.Type`, `f(args)` call | left |
+| atom | literals, names, `()`, `(expr)`, templates, lambdas | — |
 
-**Notes on the comparison level:**
+**Application (juxtaposition sugar)** is a new precedence level in v2. It
+binds tighter than all binary operators: `print x + 1` parses as
+`(print x) + 1`. It is **non-chaining**: `f g x` is a parse error.
+`juxt_arg` (the sugar argument) excludes `(`-led forms — so `f(x)` is always
+a parenthesized call, never `f` applied to `(x)` — and excludes unary `-`,
+so `f -1` is subtraction.
 
-- `=` is the equality operator (not assignment; assignment is `let`/`var`/`set`).
-- `in` tests membership: `x in list`.
-- `is` / `is not` test against a constructor type: `v is Some`, `v is not None`.
-  `is` and `is not` are at the same precedence level as the other comparison
-  operators.
-- All comparison operators are **non-associative**.  The grammar encodes this by
-  allowing at most one binary comparison per expression; a second chained
-  operator is an unexpected token.  The parser emits a targeted diagnostic:
-  *"Comparisons are non-associative; parenthesize explicitly, e.g. `(x = y) = z`."*
+**`case` and `if` expressions** are the lowest-precedence forms. In
+`or_expr` positions (branch bodies, `until` conditions, call arguments) a
+`case` or `if` expression must be wrapped in parentheses.
 
-**Case expressions** (`case expr of | …`) are the lowest-precedence expression
-form.  In positions where a `|` would otherwise be ambiguous (the `bar_expr`
-positions: `if` branches, `catch` bodies, assignment RHS, `do…until`
-conditions), a `case` expression must be wrapped in parentheses.
+**Comparison operators** are **non-associative**: at most one binary
+comparison per expression; a second chained operator is a parse error.
+
+### Removed from v1
+
+- The `[options]` bracket cluster after agent/`exec` calls — replaced by
+  named arguments inside parentheses.
+- The bar-safe statement stratification (`closed_stmt`, `open_stmt`,
+  `bar_safe_stmt`, `bar_expr`) — branch bodies and `until` conditions now
+  reference `or_expr` directly. A `case` or `if` expression in those
+  positions must be parenthesized.
+- `print_stmt` as a distinct grammar production — `print` is now a built-in
+  function name.
+- `pass` as a keyword — replaced by the unit literal `()`.
+
+### New in v2
+
+- `THIN_ARROW` (`->`) — return type and function type arrow.
+- `def` and `fn` as reserved keywords.
+- `unit` as a non-reserved type keyword.
+- `func_type`: `"(" type_list? ")" "->" type_expr`.
+- `lambda_expr`: `"fn" "(" params? ")" ("->" type_expr)? "=>" expr`.
+- `func_def`: `"def" VAR_NAME "(" params? ")" "->" type_expr "=" expr`.
+- `juxt` production for single-arg sugar (non-chaining, concrete rule).
+- `"(" ")"` as the unit literal (unified with the empty argument list of a
+  zero-arg call).
+- Named arguments `VAR_NAME ":" expr` in `arg_list` (reusing the
+  constructor shape).

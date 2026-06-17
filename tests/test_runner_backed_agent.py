@@ -1035,7 +1035,7 @@ class TestAgentCallErrorViaRuntime:
         rt = WorkflowRuntime(
             default_agent=self._make_failing_default_agent(cause="nonzero_exit")
         )
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('let x = ask("hi")\nx')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
@@ -1045,9 +1045,10 @@ class TestAgentCallErrorViaRuntime:
 
         program = (
             "try\n"
-            "  let x = ask \"hi\"\n"
+            "  ask(\"hi\")\n"
+            "  ()\n"
             "catch AgentCallError as e =>\n"
-            "  print e.cause\n"
+            "  print(e.cause)\n"
         )
         rt = WorkflowRuntime(
             default_agent=self._make_failing_default_agent(cause="nonzero_exit")
@@ -1063,9 +1064,10 @@ class TestAgentCallErrorViaRuntime:
 
         program = (
             "try\n"
-            "  let x = ask \"hi\"\n"
+            "  ask(\"hi\")\n"
+            "  ()\n"
             "catch AgentCallError as e =>\n"
-            "  print e.cause\n"
+            "  print(e.cause)\n"
         )
         rt = WorkflowRuntime(
             default_agent=self._make_failing_default_agent(cause="spawn_failure", exit_code=None)
@@ -1080,7 +1082,7 @@ class TestAgentCallErrorViaRuntime:
         from agm.agl import WorkflowRuntime
 
         rt = WorkflowRuntime(default_agent=lambda req: "")
-        result = rt.run('let x = ask "say nothing"')
+        result = rt.run('let x = ask("say nothing")\nx')
         assert result.ok is True
         from agm.agl.eval.values import TextValue
 
@@ -1100,7 +1102,7 @@ class TestAgentCallErrorViaRuntime:
         from agm.agl import WorkflowRuntime
 
         rt = WorkflowRuntime(default_agent=counting_agent)
-        rt.run('let x = ask[on_parse_error: retry[3]] "hi"')
+        rt.run('let x = ask("hi", on_parse_error: Retry(n: 3))\nx')
         # Must only be called once — transport failures are not retried
         assert call_count[0] == 1
 
@@ -1122,7 +1124,7 @@ class TestWorkflowRuntimeRunnerWiring:
         from agm.agl import WorkflowRuntime
 
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('agent any_random_agent\nlet x = any_random_agent "hi"')
+        result = rt.run('agent any_random_agent\nlet x = ask("hi", agent: any_random_agent)\nx')
         assert result.ok is True  # default agent backs the declared name
 
     def test_exec_config_runner_wires_through_to_runtime(self) -> None:
@@ -1148,6 +1150,8 @@ class TestWorkflowRuntimeRunnerWiring:
             default_loop_limit=5,
             timeout=None,
             agents={},
+            log=False,
+            log_file=None,
         )
 
         import agm.agl.runtime.runtime as rt_mod
@@ -1160,7 +1164,7 @@ class TestWorkflowRuntimeRunnerWiring:
             patch.object(
                 exec_mod,
                 "read_text_arg",
-                return_value="let x = 1\n",
+                return_value="let x = 1\nx\n",
             ),
             patch.object(rt_mod.WorkflowRuntime, "__init__", capturing_init),
             patch.object(
@@ -1304,9 +1308,10 @@ class TestCliRunnerIntegration:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "try\n"
-            "  let x = ask \"hi\"\n"
+            "  ask(\"hi\")\n"
+            "  ()\n"
             "catch AgentCallError as e =>\n"
-            "  print e.cause\n"
+            "  print(e.cause)\n"
         )
 
         config_dir = tmp_path / ".agm"
@@ -1345,7 +1350,7 @@ class TestCliRunnerIntegration:
         _install_fake_runner(tmp_path / "bin", env)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent myagent\nlet x = myagent "do this"\nprint x\n')
+        agl_file.write_text('agent myagent\nlet x = ask("do this", agent: myagent)\nprint(x)\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()

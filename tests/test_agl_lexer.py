@@ -29,7 +29,8 @@ def tok(source: str) -> list[tuple[str, str]]:
 
 class TestKeywordsAndIdentifiers:
     def test_reserved_keywords_emitted_as_literal_tokens(self) -> None:
-        result = tok("let var set do until if else case of try catch raise as pass print")
+        # pass and print are no longer reserved in v2 (they lex as VAR_NAME).
+        result = tok("let var set do until if else case of try catch raise as")
         types = [t for t, _ in result]
         assert "let" in types
         assert "var" in types
@@ -44,8 +45,6 @@ class TestKeywordsAndIdentifiers:
         assert "catch" in types
         assert "raise" in types
         assert "as" in types
-        assert "pass" in types
-        assert "print" in types
 
     def test_agent_is_reserved_keyword(self) -> None:
         # `agent` is a reserved keyword — its token type is the literal string.
@@ -769,7 +768,7 @@ class TestPipeContinuation:
 
     def test_catch_suppresses_newline(self) -> None:
         # ``catch`` at the start of a line suppresses the preceding _NEWLINE
-        # (§3.4 |/catch/until-continuation rule) so the ``try`` body and catch
+        # (§3.4 continuation rule) so the ``try`` body and catch
         # clause are lexically joined without an interior _NEWLINE.
         source = "try\n  pass\ncatch _ =>\n  pass"
         result = tok(source)
@@ -784,9 +783,23 @@ class TestPipeContinuation:
             if types[j] not in ("_DEDENT",):
                 break
 
+    def test_else_suppresses_newline(self) -> None:
+        # ``else`` may omit its leading pipe, so at the start of a line it
+        # continues the enclosing if expression like ``|`` does.
+        source = "if x =>\n  pass\nelse =>\n  pass"
+        result = tok(source)
+        types = [t for t, _ in result]
+        else_idx = next(i for i, t in enumerate(types) if t == "else")
+        for j in range(else_idx - 1, -1, -1):
+            assert types[j] != "_NEWLINE", (
+                f"_NEWLINE found at position {j} before 'else' at {else_idx}"
+            )
+            if types[j] not in ("_DEDENT",):
+                break
+
     def test_until_suppresses_newline(self) -> None:
         # ``until`` at the start of a line suppresses the preceding _NEWLINE
-        # (§3.4 |/catch/until-continuation rule) so the do body and condition
+        # (§3.4 continuation rule) so the do body and condition
         # are lexically joined without an interior _NEWLINE.
         source = "do[2]\n  pass\nuntil true"
         result = tok(source)
@@ -1126,9 +1139,11 @@ case review of
         assert "_DEDENT" in types
 
     def test_print_statement(self) -> None:
+        # In v2, `print` is an ordinary function name (VAR_NAME), not a reserved keyword.
         result = tok('print "hello"')
         types = [t for t, _ in result]
-        assert types[0] == "print"
+        assert types[0] == "VAR_NAME"
+        assert result[0][1] == "print"
         assert "TEMPLATE_START" in types
 
     def test_raise_statement(self) -> None:
@@ -1279,6 +1294,28 @@ class TestTripleTemplatePositions:
             and t.start_pos is not None
         ]
         assert starts == sorted(starts)
+
+    def test_single_template_fragment_does_not_overlap_closing_quote(self) -> None:
+        # Regression: STRING_FRAGMENT's end_pos used to span the closing quote
+        # (it was emitted after consuming the quote), overlapping TEMPLATE_END
+        # and duplicating the quote in span consumers like the REPL highlighter.
+        for source in ('x = "hi"', "x = 'hi'", 'f("a" + "b")'):
+            spanned = [
+                t
+                for t in tokenize(source)
+                if t.start_pos is not None
+                and t.end_pos is not None
+                and t.end_pos > t.start_pos
+            ]
+            ends = sorted(spanned, key=lambda t: t.start_pos)
+            for prev, nxt in zip(ends, ends[1:]):
+                assert prev.end_pos <= nxt.start_pos, (
+                    f"overlap in {source!r}: {prev.type} {prev.value!r} "
+                    f"[{prev.start_pos},{prev.end_pos}) overlaps "
+                    f"{nxt.type} {nxt.value!r} [{nxt.start_pos},{nxt.end_pos})"
+                )
+            frag = next(t for t in tokenize(source) if t.type == "STRING_FRAGMENT")
+            assert frag.end_pos == frag.start_pos + len(frag.value)
 
     def test_layout_tokens_have_positions(self) -> None:
         # _NEWLINE/_INDENT/_DEDENT must all carry concrete positions.
@@ -1583,3 +1620,270 @@ class TestTabWarnings:
         warnings = lex_tab_warnings("\tx = 1")
         assert all(isinstance(w, Diagnostic) for w in warnings)
         assert all(w.severity == "warning" for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# AgL v2 token changes (S1b)
+# ---------------------------------------------------------------------------
+
+
+class TestV2Keywords:
+    """Tests for new and changed keyword reservation in AgL v2."""
+
+    # --- def is a new reserved keyword ---
+
+    def test_def_lexes_as_keyword_token(self) -> None:
+        result = tok("def")
+        assert result == [("def", "def")]
+
+    def test_def_is_reserved_not_var_name(self) -> None:
+        types = [t for t, _ in tok("def")]
+        assert "VAR_NAME" not in types
+        assert "def" in types
+
+    def test_def_prefix_identifier_is_var_name(self) -> None:
+        # "default" starts with "def" but must lex as a plain identifier.
+        result = tok("default")
+        assert result == [("VAR_NAME", "default")]
+
+    def test_def_remapped_to_uppercase_in_lark_interface(self) -> None:
+        # AglLexer.lex() remaps lowercase "def" → "DEF" for the grammar.
+        lexer = AglLexer(None)
+        state = LexerState("def")
+        result = list(lexer.lex(state, None))
+        assert len(result) == 1
+        assert result[0].type == "DEF"
+
+    # --- fn is a new reserved keyword ---
+
+    def test_fn_lexes_as_keyword_token(self) -> None:
+        result = tok("fn")
+        assert result == [("fn", "fn")]
+
+    def test_fn_is_reserved_not_var_name(self) -> None:
+        types = [t for t, _ in tok("fn")]
+        assert "VAR_NAME" not in types
+        assert "fn" in types
+
+    def test_fn_prefix_identifier_is_var_name(self) -> None:
+        # "find" starts with "fn"? No — "fn" would not prefix "find" anyway.
+        # But "fnord" starts with "fn" and must be a plain identifier.
+        result = tok("fnord")
+        assert result == [("VAR_NAME", "fnord")]
+
+    def test_fn_remapped_to_uppercase_in_lark_interface(self) -> None:
+        lexer = AglLexer(None)
+        state = LexerState("fn")
+        result = list(lexer.lex(state, None))
+        assert len(result) == 1
+        assert result[0].type == "FN"
+
+    # --- pass is no longer a reserved keyword (v2: role taken by ()) ---
+
+    def test_pass_lexes_as_var_name(self) -> None:
+        result = tok("pass")
+        assert result == [("VAR_NAME", "pass")]
+
+    def test_pass_not_a_keyword_type(self) -> None:
+        types = [t for t, _ in tok("pass")]
+        assert "pass" not in types
+        assert "VAR_NAME" in types
+
+    # --- print is no longer a reserved keyword (v2: ordinary function name) ---
+
+    def test_print_lexes_as_var_name(self) -> None:
+        result = tok("print")
+        assert result == [("VAR_NAME", "print")]
+
+    def test_print_not_a_keyword_type(self) -> None:
+        types = [t for t, _ in tok("print")]
+        assert "print" not in types
+        assert "VAR_NAME" in types
+
+    def test_print_used_as_call_lexes_correctly(self) -> None:
+        # print(x) should now lex as: VAR_NAME LPAR VAR_NAME RPAR
+        result = tok("print(x)")
+        types = [t for t, _ in result]
+        assert types == ["VAR_NAME", "LPAR", "VAR_NAME", "RPAR"]
+        assert result[0] == ("VAR_NAME", "print")
+
+    # --- unit is non-reserved (like text/int/bool — just a VAR_NAME) ---
+
+    def test_unit_lexes_as_var_name(self) -> None:
+        # `unit` is a type keyword but not reserved — it lexes as VAR_NAME,
+        # exactly like `text`, `int`, `bool`, `json`, `decimal`, `list`, `dict`.
+        result = tok("unit")
+        assert result == [("VAR_NAME", "unit")]
+
+    def test_unit_usable_as_type_annotation_context(self) -> None:
+        # `unit` in a type annotation position lexes as VAR_NAME (grammar
+        # handles it as a primitive type — same as "text", "int", etc.).
+        result = tok("x: unit")
+        types = [t for t, _ in result]
+        assert types == ["VAR_NAME", "COLON", "VAR_NAME"]
+        values = [v for _, v in result]
+        assert values[-1] == "unit"
+
+    def test_unit_usable_as_identifier_no_crash(self) -> None:
+        # Since unit is non-reserved, it can appear as an identifier too.
+        result = tok("let unit = 1")
+        types = [t for t, _ in result]
+        assert "let" in types
+        assert "VAR_NAME" in types
+
+    def test_existing_primitive_type_keywords_still_lex_as_var_name(self) -> None:
+        # Regression guard: text, int, bool, json, decimal, list, dict
+        # must all still be VAR_NAME (unchanged from before).
+        for word in ("text", "int", "bool", "json", "decimal", "list", "dict"):
+            result = tok(word)
+            assert result == [("VAR_NAME", word)], f"{word!r} should be VAR_NAME"
+
+    # --- mixed v2 keywords in a snippet ---
+
+    def test_def_and_fn_reserved_together(self) -> None:
+        result = tok("def fn")
+        types = [t for t, _ in result]
+        assert types == ["def", "fn"]
+
+    def test_still_reserved_keywords_unchanged(self) -> None:
+        # let/var/set/do/until/if/else/case/of/try/catch/raise/as/and/or/not
+        # are still reserved.
+        source = "let var set do until if else case of try catch raise as and or not"
+        result = tok(source)
+        types = [t for t, _ in result]
+        for kw in ("let", "var", "set", "do", "until", "if", "else", "case",
+                   "of", "try", "catch", "raise", "as", "and", "or", "not"):
+            assert kw in types, f"keyword {kw!r} must still be reserved"
+
+
+class TestV2ThinArrow:
+    """Tests for the new THIN_ARROW (->) token, distinct from ARROW (=>)."""
+
+    def test_thin_arrow_emits_thin_arrow_token(self) -> None:
+        result = tok("->")
+        assert result == [("THIN_ARROW", "->")]
+
+    def test_fat_arrow_still_emits_arrow_token(self) -> None:
+        # => must still be ARROW (unchanged)
+        result = tok("=>")
+        assert result == [("ARROW", "=>")]
+
+    def test_thin_arrow_not_confused_with_minus_gt(self) -> None:
+        # -> as a single token, not MINUS then GT
+        result = tok("->")
+        assert len(result) == 1
+        assert result[0][0] == "THIN_ARROW"
+
+    def test_minus_then_var_is_minus_and_var(self) -> None:
+        # "- x" must still be MINUS VAR_NAME (not consumed as THIN_ARROW)
+        result = tok("- x")
+        types = [t for t, _ in result]
+        assert types == ["MINUS", "VAR_NAME"]
+
+    def test_minus_not_followed_by_gt_is_minus(self) -> None:
+        # "-1" should still be MINUS INT
+        result = tok("- 1")
+        types = [t for t, _ in result]
+        assert types == ["MINUS", "INT"]
+
+    def test_gt_alone_is_gt(self) -> None:
+        # standalone ">" must still be GT
+        result = tok(">")
+        assert result == [("GT", ">")]
+
+    def test_ge_still_works(self) -> None:
+        # >= must still be GE
+        result = tok(">=")
+        assert result == [("GE", ">=")]
+
+    def test_func_type_annotation_lexes_correctly(self) -> None:
+        # "(int) -> text" as a type expression lexes with THIN_ARROW
+        result = tok("(int) -> text")
+        types = [t for t, _ in result]
+        assert "LPAR" in types
+        assert "VAR_NAME" in types  # int
+        assert "RPAR" in types
+        assert "THIN_ARROW" in types
+        assert "VAR_NAME" in types  # text
+
+    def test_thin_arrow_in_def_signature_context(self) -> None:
+        # def f(x: int) -> text = body
+        result = tok("def f(x: int) -> text")
+        types = [t for t, _ in result]
+        assert "def" in types
+        assert "THIN_ARROW" in types
+
+    def test_lambda_with_thin_arrow_return_type(self) -> None:
+        # fn(x: int) -> int => x
+        result = tok("fn(x: int) -> int => x")
+        types = [t for t, _ in result]
+        assert "fn" in types
+        assert "THIN_ARROW" in types
+        assert "ARROW" in types
+
+    def test_thin_arrow_remapped_to_uppercase_in_lark_interface(self) -> None:
+        # THIN_ARROW must appear in the Lark interface stream unchanged
+        # (it's not a keyword remap, it's a punctuation token — already uppercase).
+        lexer = AglLexer(None)
+        state = LexerState("->")
+        result = list(lexer.lex(state, None))
+        assert len(result) == 1
+        assert result[0].type == "THIN_ARROW"
+
+    def test_maximal_munch_thin_arrow_over_minus_gt(self) -> None:
+        # "->" must be one THIN_ARROW, not MINUS + GT
+        result = tok("->")
+        assert result == [("THIN_ARROW", "->")]
+
+    def test_arrow_vs_thin_arrow_in_sequence(self) -> None:
+        # Both tokens in the same snippet
+        result = tok("-> =>")
+        assert result == [("THIN_ARROW", "->"), ("ARROW", "=>")]
+
+
+class TestV2LoopBoundPreserved:
+    """Verify the do[N] LOOP_BOUND merge is fully preserved after v2 changes.
+
+    Note: the LOOP_BOUND merge (DO LSQB INT RSQB → DO LOOP_BOUND) is performed
+    by ``_remap()`` inside ``AglLexer.lex()`` — the Lark-parser-facing interface.
+    The plain ``tokenize()`` / ``tok()`` helper does NOT perform this merge (it
+    bypasses ``_remap``).  Tests here use ``AglLexer.lex()`` directly so they
+    test the actual merge path.
+    """
+
+    def _lex(self, source: str) -> list[tuple[str, str]]:
+        """Lex via AglLexer (Lark interface) which applies LOOP_BOUND merge."""
+        lexer = AglLexer(None)
+        state = LexerState(source)
+        return [(t.type, str(t)) for t in lexer.lex(state, None)]
+
+    def test_do_loop_bound_merge_preserved(self) -> None:
+        # do[5] — the LSQB INT RSQB must still merge into LOOP_BOUND
+        result = self._lex("do[5]")
+        types = [t for t, _ in result]
+        assert "DO" in types  # uppercase after remap
+        assert "LOOP_BOUND" in types
+        assert "LSQB" not in types
+        assert "RSQB" not in types
+
+    def test_loop_bound_value_is_integer_string(self) -> None:
+        result = self._lex("do[10]")
+        lb = next(v for t, v in result if t == "LOOP_BOUND")
+        assert lb == "10"
+
+    def test_loop_bound_not_confused_with_list_literal(self) -> None:
+        # [5] alone (not after do) must NOT become LOOP_BOUND even via AglLexer.
+        result = self._lex("[5]")
+        types = [t for t, _ in result]
+        assert "LSQB" in types
+        assert "INT" in types
+        assert "RSQB" in types
+        assert "LOOP_BOUND" not in types
+
+    def test_do_with_body_and_thin_arrow_no_conflict(self) -> None:
+        # Ensure the thin-arrow addition doesn't interfere with the do[N] merge
+        # when both appear in the same token stream.
+        result = self._lex("do[3] x -> y")
+        types = [t for t, _ in result]
+        assert "LOOP_BOUND" in types
+        assert "THIN_ARROW" in types

@@ -472,27 +472,33 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
-                 [--log-file PATH|--no-log]
+                 [--log|--log-file PATH|--no-log]
                  (FILE | -c COMMAND) [--PARAM VALUE]...
 
         Execute an AgL (Agent Language) workflow program from FILE, or from
         the inline program text given with -c/--command.
 
-        Each ``param`` declaration in the program becomes a ``--<name>`` option.
-        Boolean params use the ``--name/--no-name`` flag form.  Structured types
-        (list, dict, record, enum, json) take a JSON string.
+        Each `param` declaration in the program becomes a `--<name>` option.
+        Boolean params use the `--name/--no-name` flag form. Structured types
+        take a JSON string. Run `agm exec FILE --help` to show discovered params.
+
+        Trace logging is OFF by default.  Enable it with --log, --log-file,
+        a source-level "config log = true" pragma, or [exec] log = true in
+        config.toml.  Source pragmas (config KEY = VALUE at the top of the
+        program) override config; CLI flags override pragmas.
 
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
-          --strict-json          Require bare JSON output from agents (no recovery).
-          --no-strict-json       Use lenient JSON recovery (default).
-          --max-iters N          Override the default do-loop iteration limit.
-          --runner COMMAND       Override the default agent runner command.
-          --log-file PATH        Write trace log to PATH.
-          --no-log               Disable trace logging.
+          --strict-json         Require bare JSON output from agents (no recovery).
+          --no-strict-json      Use lenient JSON recovery (default).
+          --max-iters N         Override the default do-loop iteration limit.
+          --runner COMMAND      Override the default agent runner command.
+          --log                 Enable trace logging (auto timestamped path).
+          --log-file PATH       Write trace log to PATH.
+          --no-log              Disable trace logging (overrides pragma/config).
+          --log, --log-file, and --no-log are mutually exclusive.
 
         FILE and -c/--command are mutually exclusive; exactly one is required.
-        Run ``agm exec FILE --help`` to see the discovered program parameters.
 
         Exit codes:
           0  The workflow completed successfully.
@@ -501,9 +507,9 @@ _HELP_TEXTS: dict[str, str] = {
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\
-        agm repl [--strict-json|--no-strict-json] [--max-iters N]
-                 [--runner COMMAND] [--auto-agents]
-                 [--quiet] [--log-file PATH|--no-log]
+        agm repl [--strict-json|--no-strict-json]
+                 [--max-iters N] [--runner COMMAND] [--auto-agents]
+                 [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
         parsed, type-checked, and evaluated once against a persistent session
@@ -512,11 +518,14 @@ _HELP_TEXTS: dict[str, str] = {
         session reuses the [exec] configuration (runner, per-agent commands,
         loop limit, JSON strictness, timeout).
 
-        Params (``param NAME: T`` declarations) resolve eagerly when entered:
-        from the [params.<program>] config table (when a ``program NAME``
-        declaration is active in the session), then from the param's default
-        expression.  There is no CLI param seeding.  Use ``:inputs`` to list
-        declared params and their resolved values.
+        Trace logging is OFF by default.  Config pragmas (config KEY = VALUE)
+        entered at the prompt are rejected — set session options via CLI flags
+        or [exec] config instead.
+
+        Params (`param NAME: T`) resolve eagerly when entered: first from
+        [params.<program>] config when a `program NAME` declaration is active,
+        then from the param default expression. There is no CLI param seeding.
+        Use :params to list declared params and their resolved values.
 
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).
@@ -526,20 +535,21 @@ _HELP_TEXTS: dict[str, str] = {
           --auto-agents         Fire agent calls without confirming each one
                                 (default: confirm each live agent call).
           --quiet               Suppress automatic echoing of entry results.
+          --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write a JSONL trace log to PATH.
           --no-log              Disable trace logging.
+          --log, --log-file, and --no-log are mutually exclusive.
           --dry-run             Type-check only: run the static pipeline for each
                                 entry but never evaluate it (no agent/exec calls,
                                 no persisted bindings); echo the inferred type.
 
         Type :help inside the REPL for the meta-command list; :quit or Ctrl-D
-        exits.  Ctrl-C cancels the current entry without exiting.  --no-log and
-        --log-file are mutually exclusive.
+        exits.  Ctrl-C cancels the current entry without exiting.
 
         Exit codes:
           0  The session ended normally (:quit / :exit / Ctrl-D).
-          1  Pre-loop setup failure: invalid [exec] config, --runner command,
-             or an unwritable --log-file (reported before the prompt appears).
+          1  Pre-loop setup failure: invalid [exec] config, --runner, or an
+             unwritable --log-file (reported before the prompt).
     """),
     "help": textwrap.dedent("""\
         agm help [COMMAND...]

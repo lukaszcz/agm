@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "clean_json_responses",
-      "inputs": {"payload": {"theme": "tests"}},
+      "params": {"payload": {"theme": "tests"}},
       "agents": {
         "source": [
           "{\"a\": 1}",
@@ -31,7 +31,7 @@
     },
     {
       "name": "lenient_default_extraction_and_null_json",
-      "inputs": {"payload": null},
+      "params": {"payload": null},
       "agents": {
         "source": [
           "null",
@@ -49,7 +49,7 @@
     },
     {
       "name": "wrong_shape_for_list_target",
-      "inputs": {"payload": [1, 2]},
+      "params": {"payload": [1, 2]},
       "agents": {
         "source": ["{}", "1", "1.5", "true", "{\"not\": \"a list\"}"]
       },

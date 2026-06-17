@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "severe_issue_escalates",
-      "inputs": {"min_severity": 4},
+      "params": {"min_severity": 4},
       "agents": {
         "tracker": [
           "{\"title\": \"Crash on save\", \"severity\": 5, \"weight\": 1.25, \"tags\": [\"bug\"], \"extra\": {\"seen\": 2}, \"author\": {\"name\": \"Bo\", \"active\": false}}"
@@ -15,7 +15,7 @@
     },
     {
       "name": "mild_issue_ignored",
-      "inputs": {"min_severity": 4},
+      "params": {"min_severity": 4},
       "agents": {
         "tracker": [
           "{\"title\": \"Typo\", \"severity\": 1, \"weight\": 0.1, \"tags\": [], \"extra\": null, \"author\": {\"name\": \"Cy\", \"active\": true}}"
@@ -28,7 +28,7 @@
     },
     {
       "name": "lenient_default_extracts_chatty_reply",
-      "inputs": {"min_severity": 2},
+      "params": {"min_severity": 2},
       "agents": {
         "tracker": [
           "Sure! Here is the issue you asked for:\n```json\n{\"title\": \"Flaky test\", \"severity\": 2, \"weight\": 0.75, \"tags\": [\"ci\"], \"extra\": {}, \"author\": {\"name\": \"Di\", \"active\": true}}\n```\nLet me know if you need more."
@@ -41,7 +41,7 @@
     },
     {
       "name": "missing_field_aborts_by_default",
-      "inputs": {"min_severity": 2},
+      "params": {"min_severity": 2},
       "agents": {
         "tracker": ["{\"title\": \"No severity\"}"]
       },

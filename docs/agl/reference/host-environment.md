@@ -70,20 +70,16 @@ Transport failures (spawn failure, nonzero exit, timeout) surface as the
 catchable `AgentCallError` with an enumerated `cause`; exit 0 with empty
 output is a valid empty response ([Exceptions](exceptions.md)).
 
-## Codecs and renderers
+## Codecs
 
-The built-in codecs are `text` and `json`; the built-in renderers are
-`default`, `raw`, `json`, and `bullets`. Hosts may register additional
-codecs (selectable per call with `format:`) and additional renderers
-(usable as `${x as name}`). Built-in names are reserved; duplicate
-registrations are host configuration errors.
+The built-in codecs are `text` and `json`. Hosts may register additional
+codecs (selectable per call with `format:`). Built-in names are reserved;
+duplicate registrations are host configuration errors.
 
 Each registration declares which type kinds it supports, and the
-type-checker validates every `format` option and every explicit renderer
-against this **capability catalog** before execution — an unsupported
-codec/type or renderer/type combination is a static error, not a runtime
-surprise. A registered renderer that declares no kind restriction accepts
-every type, like the built-ins.
+type-checker validates every `format` option against this **capability
+catalog** before execution — an unsupported codec/type combination is a
+static error, not a runtime surprise.
 
 ## Params
 

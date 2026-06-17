@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "no_exception_skips_catches",
-      "inputs": {"mode": "calm"},
+      "params": {"mode": "calm"},
       "agents": {"reviewer": []},
       "expect": {
         "stdout": "calm\nbody end\nafter try\n",
@@ -11,7 +11,7 @@
     },
     {
       "name": "valid_parse_no_exception",
-      "inputs": {"mode": "parse"},
+      "params": {"mode": "parse"},
       "agents": {"reviewer": ["{\"$case\": \"Pass\"}"]},
       "expect": {
         "stdout": "parsed true\nbody end\nafter try\n",
@@ -20,7 +20,7 @@
     },
     {
       "name": "parse_error_routes_to_first_clause",
-      "inputs": {"mode": "parse"},
+      "params": {"mode": "parse"},
       "agents": {"reviewer": ["garbage"]},
       "expect": {
         "stdout": "parse error from reviewer after 1\nafter try\n",
@@ -29,7 +29,7 @@
     },
     {
       "name": "abort_routes_past_parse_clause",
-      "inputs": {"mode": "abort"},
+      "params": {"mode": "abort"},
       "agents": {"reviewer": []},
       "expect": {
         "stdout": "abort: stop now\nafter try\n",
@@ -38,7 +38,7 @@
     },
     {
       "name": "match_error_falls_to_wildcard",
-      "inputs": {"mode": "match"},
+      "params": {"mode": "match"},
       "agents": {"reviewer": []},
       "expect": {
         "stdout_contains": ["other: ", "after try\n"],

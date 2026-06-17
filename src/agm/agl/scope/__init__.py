@@ -7,8 +7,7 @@ Public API
 - :class:`ResolvedProgram` — frozen dataclass carrying the ``Program`` plus
   side tables keyed by ``node_id``.
 - :class:`BindingRef` — resolved reference to a scope binding.
-- :class:`CallKind` — enum distinguishing ``agent``, ``default_agent``, and
-  ``shell_exec`` calls.
+- :class:`BuiltinKind` — enum classifying a built-in Call node (print/exec/ask).
 - :class:`AglScopeError` — fatal scope error (span-aware ``AglError``
   subclass).
 """
@@ -16,12 +15,18 @@ Public API
 from __future__ import annotations
 
 from agm.agl.scope.resolver import resolve
-from agm.agl.scope.symbols import AglScopeError, BindingRef, CallKind, ResolvedProgram, ScopeNode
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    BindingRef,
+    BuiltinKind,
+    ResolvedProgram,
+    ScopeNode,
+)
 
 __all__ = [
     "AglScopeError",
     "BindingRef",
-    "CallKind",
+    "BuiltinKind",
     "ResolvedProgram",
     "ScopeNode",
     "resolve",

@@ -1,19 +1,35 @@
-# AgL end-to-end test programs
+# AgL end-to-end test corpus
 
-Data files for `tests/test_agl_e2e.py`, the TDD specification suite for the AgL v1
-implementation planned in `notes/PLAN_DSL.md` (language spec: `notes/dsl_design.md`).
-The suite is **red until `agm.agl` exists**.
+Data files for `tests/test_agl_e2e.py`, the specification suite for the AgL v2
+implementation (expression-oriented core, uniform call syntax, user-defined
+functions).
 
 Layout:
 
 - `programs/**/*.agl` — valid AgL programs, each with a sidecar
   `<name>.scenarios.json` describing the scenarios it runs under. Every program is
-  exercised under **multiple scenarios**: distinct combinations of host inputs and
+  exercised under **multiple scenarios**: distinct combinations of host params and
   scripted mock agent responses, each driving a different control-flow path with its
   own expected outcome.
 - `rejections/**/*.agl` — invalid programs that the static pipeline
   (lex/parse/scope/typecheck) must reject before executing anything, each with a
   sidecar `<name>.expect.json`.
+
+## Program categories
+
+| Directory | What it exercises |
+|-----------|-------------------|
+| `basics/` | `let`/`var`/`set`, params, agent calls, print rendering |
+| `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
+| `canonical/` | Multi-agent review/fix workflows |
+| `control/` | `if`/`case`/`do…until`/`try…catch`/`raise` |
+| `errors/` | Exception types, field access in catch, rethrow |
+| `exec/` | Shell execution, `ExecResult` structured handle |
+| `exprs/` | Arithmetic, comparisons, string operations |
+| `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `ask(agent:)` in a `def` body |
+| `inline/` | Single-expression programs |
+| `templates/` | Template interpolation |
+| `types/` | Records, enums, `json`, `list`, `dict` |
 
 ## `<name>.scenarios.json`
 
@@ -22,7 +38,7 @@ Layout:
   "scenarios": [
     {
       "name": "snake_case_scenario_id",
-      "inputs": {"spec": "verbatim text", "rounds": 3},
+      "params": {"spec": "verbatim text", "rounds": 3},
       "agents": {
         "reviewer": ["first response", "second response"],
         "impl": {"responses": ["fix"], "repeat_last": true}
@@ -50,7 +66,7 @@ Layout:
 
 Field notes:
 
-- `inputs` — passed to `runtime.run(source, inputs=...)` verbatim. JSON numbers with
+- `params` — passed to `runtime.run(source, params=...)` verbatim. JSON numbers with
   a fractional part are loaded as `decimal.Decimal` (AgL has no binary floats).
 - `agents` — per-agent response queues, consumed in call order **across all call
   sites** of that agent. A list is a strict queue (a call past its end fails the
@@ -64,7 +80,7 @@ Field notes:
   agent received on a given 0-based call index.
 - `expect.raises` — the uncaught AgL exception ending the run: its type name, an
   exact-match subset of its fields, and substrings of its `message` field.
-- `expect.host_error` — the run must fail pre-execution (input validation): no agent
+- `expect.host_error` — the run must fail pre-execution (param validation): no agent
   is called, no AgL exception is raised, and the diagnostics mention the fragments.
 - Exact `stdout` is asserted only where rendering is pinned by the design (`text`
   verbatim, scalars as scalar text). Pretty-JSON console rendering and
@@ -81,3 +97,11 @@ The program must be rejected statically: `result.ok` is false, `result.error` is
 `None` (nothing executed), and at least one diagnostic exists — on `line`
 (1-based, when given) and containing the `message_contains` fragments
 (case-insensitive, when given).
+
+## Rejection categories
+
+| Directory | What it tests |
+|-----------|---------------|
+| `parse/` | Syntax errors |
+| `scope/` | Undefined names, duplicate declarations |
+| `type/` | Type mismatches, arity errors, operator type rules, opacity |

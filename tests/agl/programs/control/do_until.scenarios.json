@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "converges_first_iteration",
-      "inputs": {"target": 1},
+      "params": {"target": 1},
       "agents": {"oracle": ["hit"]},
       "expect": {
         "stdout": "1\n1\n",
@@ -12,7 +12,7 @@
     },
     {
       "name": "converges_third_iteration",
-      "inputs": {"target": 2},
+      "params": {"target": 2},
       "agents": {"oracle": ["miss", "hit", "hit"]},
       "expect": {
         "stdout": "3\n2\n",
@@ -25,7 +25,7 @@
     },
     {
       "name": "exhausts_bound",
-      "inputs": {"target": 3},
+      "params": {"target": 3},
       "agents": {"oracle": ["miss", "miss", "miss", "hit"]},
       "expect": {
         "stdout": "",

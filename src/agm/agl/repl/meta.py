@@ -5,9 +5,9 @@ A meta-command is any console line whose first non-blank character is ``:`` —
 (no AgL statement begins with ``:``), so the loop can route on that single
 character.
 
-The full v1 meta-command set is implemented here: ``:help``, ``:quit`` /
+The meta-command set is implemented here: ``:help``, ``:quit`` /
 ``:exit``, ``:reset``, ``:type``, ``:bindings`` / ``:env``, ``:agents``,
-``:inputs``, ``:set``, ``:agent``, ``:load``, ``:save``, plus a clean error for
+``:params``, ``:set``, ``:agent``, ``:load``, ``:save``, plus a clean error for
 an unknown ``:command``.  The dispatcher is a registry/table (``_COMMANDS``), so
 the command set is a single source of truth shared by the dispatcher and the
 completer.
@@ -146,8 +146,8 @@ def _handle_agents(arg: str, ctx: MetaContext) -> MetaOutcome:
     return MetaOutcome(text="\n".join(lines))
 
 
-def _handle_inputs(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:inputs`` — list declared params with their resolved values (``name : Type = value``)."""
+def _handle_params(arg: str, ctx: MetaContext) -> MetaOutcome:
+    """``:params`` — list declared params with their resolved values (``name : Type = value``)."""
     del arg
     from agm.agl.repl.render import format_typed_value
 
@@ -289,10 +289,10 @@ _COMMANDS: list[MetaCommand] = [
         handler=_handle_agents,
     ),
     MetaCommand(
-        names=("inputs",),
-        usage=":inputs",
+        names=("params",),
+        usage=":params",
         summary="List declared params with their resolved values.",
-        handler=_handle_inputs,
+        handler=_handle_params,
     ),
     MetaCommand(
         names=("set",),

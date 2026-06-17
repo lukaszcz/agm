@@ -9,7 +9,7 @@ param bonus: int
 
 agent grader
 
-let grade: Grade = grader "Grade the work."
+let grade: Grade = ask("Grade the work.", agent: grader)
 
 let points: int = case grade of
   | Top => 100

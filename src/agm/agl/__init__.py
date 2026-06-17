@@ -10,7 +10,7 @@ Usage::
         default_agent=my_agent_fn,
     )
     runtime.register_agent("reviewer", reviewer_fn)
-    result = runtime.run(source_text, inputs={"spec": "..."})
+    result = runtime.run(source_text, param_values={"spec": "..."})
 
     if result.ok:
         ...

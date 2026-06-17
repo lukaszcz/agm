@@ -8,9 +8,9 @@ let count = 2
 let exact = 1.5
 let okay = true
 
-var artifact = impl "Start from ${start}"
+var artifact = ask("Start from ${start}", agent: impl)
 print artifact
-set artifact = impl "Refine: ${artifact}"
+set artifact = ask("Refine: ${artifact}", agent: impl)
 print artifact
 
 var total: int = count + 1

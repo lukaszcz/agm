@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "done_immediately",
-      "inputs": {"problem": "name the service"},
+      "params": {"problem": "name the service"},
       "agents": {
         "researcher": ["{\"$case\": \"Done\", \"answer\": \"call it iris\"}"],
         "critic": []
@@ -14,7 +14,7 @@
     },
     {
       "name": "two_critique_rounds",
-      "inputs": {"problem": "name the service"},
+      "params": {"problem": "name the service"},
       "agents": {
         "researcher": [
           "{\"$case\": \"Continue\", \"message\": \"draft A\"}",
@@ -38,7 +38,7 @@
     },
     {
       "name": "never_done_exhausts",
-      "inputs": {"problem": "name the service"},
+      "params": {"problem": "name the service"},
       "agents": {
         "researcher": {
           "responses": ["{\"$case\": \"Continue\", \"message\": \"again\"}"],

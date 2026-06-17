@@ -15,12 +15,7 @@ Agent calls are gated: a single shared :class:`AgentMode` (``confirm`` by
 default, ``auto`` under ``--auto-agents``) is passed to BOTH the confirming
 wrapper and the console, so the ``:agent`` meta-command, an ``always`` answer,
 and the wrapper all stay in sync.  Trace logging (``--log-file`` / ``--no-log``)
-is wired exactly as ``agm exec`` resolves them.
-
-**param / program (M6):** ``param`` declarations in a REPL session resolve
-EAGERLY from ``[params.<program>]`` config (if a ``program`` decl is active)
-or a default expression.  The old ``--input KEY=VALUE`` pre-seed option has
-been removed; there is no CLI-level param seeding for the REPL.
+and param config loading are wired from the same config stack as ``agm exec``.
 """
 
 from __future__ import annotations
@@ -38,7 +33,7 @@ from agm.commands.args import ReplArgs
 from agm.config.context import current_config_context
 from agm.config.general import load_exec_config, load_params_config
 from agm.core import dry_run
-from agm.core.log import prepare_trace_log
+from agm.core.log import prepare_trace_log_from_layers
 
 
 def run(args: ReplArgs) -> None:
@@ -62,7 +57,7 @@ def run(args: ReplArgs) -> None:
 
     # Resolve and validate the trace log file.  ``--dry-run`` is side-effect-free
     # (no eval, no trace), mirroring ``agm exec``.
-    trace_path = _resolve_trace_path(args)
+    trace_path = _resolve_trace_path(args, config_log=config.log, config_log_file=config.log_file)
 
     runner_agent = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
@@ -83,8 +78,6 @@ def run(args: ReplArgs) -> None:
         runner_agent, agent_mode, confirm=make_console_confirm()
     )
 
-    # Build the params_config_loader: when a ``program NAME`` decl is entered in
-    # the session, this loader is called to fetch [params.NAME] from merged config.
     def _params_config_loader(program_name: str) -> dict[str, object]:
         return load_params_config(
             program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
@@ -113,16 +106,23 @@ def run(args: ReplArgs) -> None:
     )
 
 
-def _resolve_trace_path(args: ReplArgs) -> Path | None:
-    """Resolve + validate the JSONL trace path, or ``None`` (dry-run / --no-log).
+def _resolve_trace_path(
+    args: ReplArgs, config_log: bool, config_log_file: str | None
+) -> Path | None:
+    """Resolve + validate the JSONL trace path, or ``None`` (dry-run / disabled).
 
-    Mirrors ``agm exec`` via the shared :func:`prepare_trace_log`: ``--dry-run``
-    writes no trace; otherwise the path is resolved and validated up front so an
-    unwritable ``--log-file`` exits 1 BEFORE the loop starts rather than crashing
-    mid-session.
+    Mirrors ``agm exec`` via the shared :func:`prepare_trace_log_from_layers`:
+    ``--dry-run`` writes no trace; otherwise the path is resolved and validated
+    up front so an unwritable ``--log-file`` exits 1 BEFORE the loop starts
+    rather than crashing mid-session.
     """
     if dry_run.enabled():
         return None
-    return prepare_trace_log(
-        command_name="repl", no_log=args.no_log, log_file=args.log_file
+    return prepare_trace_log_from_layers(
+        command_name="repl",
+        cli_no_log=args.no_log,
+        cli_log=args.log,
+        cli_log_file=args.log_file,
+        config_log=config_log,
+        config_log_file=config_log_file,
     )

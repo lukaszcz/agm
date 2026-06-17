@@ -2,12 +2,13 @@
 # shallower column closes the nested construct first.
 param k: int
 
-if k = 1 =>
-  print "one"
-| k = 2 =>
+if
+  | k = 1 =>
+    print "one"
+  | k = 2 =>
     print "two indented body"
-| else =>
-  print "other"
+  | else =>
+    print "other"
 
 case k of
   | 0 =>
@@ -15,12 +16,12 @@ case k of
   | _ =>
       if k > 10 =>
         print "big"
-      | else =>
+      else =>
         print "small"
 
 if k > 0 =>
   case k of
     | 1 => print "pos one"
     | _ => print "pos many"
-| else =>
+else =>
   print "non-positive"

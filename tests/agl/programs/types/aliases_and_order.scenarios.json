@@ -2,24 +2,24 @@
   "scenarios": [
     {
       "name": "approved_input_and_approved_verdict",
-      "inputs": {"verdict": {"$case": "Approved"}},
+      "params": {"verdict": {"$case": "Approved"}},
       "agents": {"judge": ["{\"$case\": \"Approved\"}"]},
       "expect": {"stdout": "approved input\nok\n", "calls": {"judge": 1}}
     },
     {
       "name": "rejected_with_bulleted_notes",
-      "inputs": {"verdict": {"$case": "Rejected", "notes": ["too long"]}},
+      "params": {"verdict": {"$case": "Rejected", "notes": ["too long"]}},
       "agents": {
         "judge": ["{\"$case\": \"Rejected\", \"notes\": [\"missing tests\", \"unclear API\"]}"]
       },
       "expect": {
-        "stdout_contains": ["not approved\n", "- missing tests", "- unclear API"],
+        "stdout_contains": ["not approved\n", "missing tests", "unclear API"],
         "calls": {"judge": 1}
       }
     },
     {
       "name": "input_with_invalid_case_tag",
-      "inputs": {"verdict": {"$case": "Maybe"}},
+      "params": {"verdict": {"$case": "Maybe"}},
       "agents": {"judge": []},
       "expect": {"host_error": {"message_contains": ["verdict"]}}
     }

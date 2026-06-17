@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "small_int_input",
-      "inputs": {"n": 9},
+      "params": {"n": 9},
       "expect": {
         "stdout_contains": [
           "plain text line\n",
@@ -30,7 +30,7 @@
     },
     {
       "name": "arbitrary_precision_int_input",
-      "inputs": {"n": 123456789012345678901234567890},
+      "params": {"n": 123456789012345678901234567890},
       "expect": {
         "stdout_contains": ["123456789012345678901234567890\n"],
         "stdout_not_contains": ["<dsl-value", "e+", "E+"]

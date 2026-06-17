@@ -1,9 +1,17 @@
-# The compact one-line variant, with the declarations it assumes.
+# The compact variant: vars for loop-carried state, indented case for branches.
 param spec
 enum Review
   | Pass
   | Fail(issues: list[text])
 agent impl
 agent reviewer
-var artifact: text = impl "Implement ${spec}"; do[5] let review: Review = reviewer[on_parse_error: retry[2]] "Review ${artifact}"; case review of | Pass => pass | Fail(issues) => set artifact = impl "Fix ${issues} in ${artifact}" until review is Pass
+var artifact: text = ask("Implement ${spec}", agent: impl)
+var review: Review = Pass
+do[5]
+  set review = ask("Review ${artifact}", agent: reviewer, on_parse_error: Retry(n: 2))
+  case review of
+    | Fail(issues) =>
+        set artifact = ask("Fix ${issues} in ${artifact}", agent: impl)
+    | Pass => ()
+until review is Pass
 print artifact

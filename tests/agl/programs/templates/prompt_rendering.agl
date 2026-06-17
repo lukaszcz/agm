@@ -1,0 +1,15 @@
+# Uniform rendering: all value types render without boundary tags.
+enum Review
+  | Fail(issues: list[text])
+  | Pass
+
+param artifact
+
+let issues = ["missing tests", "unclear API"]
+let review: Review = Fail(issues: issues)
+
+let a = ask "artifact: ${artifact}"
+let b = ask "text again: ${artifact}"
+let c = ask "list: ${issues}"
+let d = ask "enum: ${review}"
+print "sent"

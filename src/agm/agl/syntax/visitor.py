@@ -29,55 +29,53 @@ from collections.abc import Callable
 from typing import cast
 
 from agm.agl.syntax.nodes import (
-    AbortPolicy,
-    AgentCall,
     AgentDecl,
     BinaryOp,
+    Block,
     BoolLit,
-    CallOptions,
-    CaseExpr,
-    CaseExprBranch,
-    CaseStmt,
-    CaseStmtBranch,
+    Call,
+    Case,
+    CaseBranch,
     CatchClause,
+    ConfigPragma,
     Constructor,
     ConstructorPattern,
     DecimalLit,
     DictEntry,
     DictLit,
-    DoUntil,
+    Do,
     ElseSentinel,
     EnumDef,
-    ExprStmt,
     FieldAccess,
     FieldDef,
+    FuncDef,
+    If,
     IfBranch,
-    IfStmt,
     InterpSegment,
     IntLit,
     IsTest,
+    Lambda,
     LetDecl,
     ListLit,
     LiteralPattern,
     NamedArg,
     NullLit,
+    Param,
     ParamDecl,
-    PassStmt,
     PatternField,
-    PrintStmt,
     Program,
     ProgramDecl,
     Raise,
     RecordDef,
-    RetryPolicy,
     SetStmt,
     StringLit,
     Template,
     TextSegment,
-    TryCatch,
+    Try,
     TypeAlias,
     UnaryNeg,
     UnaryNot,
+    UnitLit,
     VarDecl,
     VariantDef,
     VarPattern,
@@ -85,14 +83,17 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.syntax.types import (
+    AgentT,
     BoolT,
     DecimalT,
     DictT,
+    FuncT,
     IntT,
     JsonT,
     ListT,
     NameT,
     TextT,
+    UnitT,
 )
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,8 @@ class Visitor:
     # --- Default no-op visit methods (one per node class) ---
 
     def visit_Program(self, node: Program) -> None: ...
+
+    # Type nodes
     def visit_TextT(self, node: TextT) -> None: ...
     def visit_JsonT(self, node: JsonT) -> None: ...
     def visit_BoolT(self, node: BoolT) -> None: ...
@@ -141,6 +144,11 @@ class Visitor:
     def visit_NameT(self, node: NameT) -> None: ...
     def visit_ListT(self, node: ListT) -> None: ...
     def visit_DictT(self, node: DictT) -> None: ...
+    def visit_UnitT(self, node: UnitT) -> None: ...
+    def visit_AgentT(self, node: AgentT) -> None: ...
+    def visit_FuncT(self, node: FuncT) -> None: ...
+
+    # Declaration nodes
     def visit_FieldDef(self, node: FieldDef) -> None: ...
     def visit_RecordDef(self, node: RecordDef) -> None: ...
     def visit_VariantDef(self, node: VariantDef) -> None: ...
@@ -149,6 +157,16 @@ class Visitor:
     def visit_ParamDecl(self, node: ParamDecl) -> None: ...
     def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
     def visit_AgentDecl(self, node: AgentDecl) -> None: ...
+    def visit_FuncDef(self, node: FuncDef) -> None: ...
+    def visit_ConfigPragma(self, node: ConfigPragma) -> None: ...
+
+    # Binder nodes
+    def visit_LetDecl(self, node: LetDecl) -> None: ...
+    def visit_VarDecl(self, node: VarDecl) -> None: ...
+    def visit_SetStmt(self, node: SetStmt) -> None: ...
+
+    # Literal nodes
+    def visit_UnitLit(self, node: UnitLit) -> None: ...
     def visit_IntLit(self, node: IntLit) -> None: ...
     def visit_DecimalLit(self, node: DecimalLit) -> None: ...
     def visit_BoolLit(self, node: BoolLit) -> None: ...
@@ -157,42 +175,42 @@ class Visitor:
     def visit_ListLit(self, node: ListLit) -> None: ...
     def visit_DictEntry(self, node: DictEntry) -> None: ...
     def visit_DictLit(self, node: DictLit) -> None: ...
+
+    # Template nodes
     def visit_TextSegment(self, node: TextSegment) -> None: ...
     def visit_InterpSegment(self, node: InterpSegment) -> None: ...
     def visit_Template(self, node: Template) -> None: ...
+
+    # Expression nodes
     def visit_VarRef(self, node: VarRef) -> None: ...
     def visit_FieldAccess(self, node: FieldAccess) -> None: ...
     def visit_NamedArg(self, node: NamedArg) -> None: ...
     def visit_Constructor(self, node: Constructor) -> None: ...
-    def visit_AbortPolicy(self, node: AbortPolicy) -> None: ...
-    def visit_RetryPolicy(self, node: RetryPolicy) -> None: ...
-    def visit_CallOptions(self, node: CallOptions) -> None: ...
-    def visit_AgentCall(self, node: AgentCall) -> None: ...
     def visit_BinaryOp(self, node: BinaryOp) -> None: ...
     def visit_UnaryNot(self, node: UnaryNot) -> None: ...
     def visit_UnaryNeg(self, node: UnaryNeg) -> None: ...
     def visit_IsTest(self, node: IsTest) -> None: ...
-    def visit_CaseExprBranch(self, node: CaseExprBranch) -> None: ...
-    def visit_CaseExpr(self, node: CaseExpr) -> None: ...
+    def visit_Call(self, node: Call) -> None: ...
+    def visit_Param(self, node: Param) -> None: ...
+    def visit_Lambda(self, node: Lambda) -> None: ...
+    def visit_Block(self, node: Block) -> None: ...
+    def visit_IfBranch(self, node: IfBranch) -> None: ...
+    def visit_If(self, node: If) -> None: ...
+    def visit_CaseBranch(self, node: CaseBranch) -> None: ...
+    def visit_Case(self, node: Case) -> None: ...
+    def visit_Do(self, node: Do) -> None: ...
+    def visit_CatchClause(self, node: CatchClause) -> None: ...
+    def visit_Try(self, node: Try) -> None: ...
+    def visit_Raise(self, node: Raise) -> None: ...
+
+    # Pattern nodes
     def visit_WildcardPattern(self, node: WildcardPattern) -> None: ...
     def visit_LiteralPattern(self, node: LiteralPattern) -> None: ...
     def visit_VarPattern(self, node: VarPattern) -> None: ...
     def visit_PatternField(self, node: PatternField) -> None: ...
     def visit_ConstructorPattern(self, node: ConstructorPattern) -> None: ...
-    def visit_LetDecl(self, node: LetDecl) -> None: ...
-    def visit_VarDecl(self, node: VarDecl) -> None: ...
-    def visit_SetStmt(self, node: SetStmt) -> None: ...
-    def visit_PassStmt(self, node: PassStmt) -> None: ...
-    def visit_PrintStmt(self, node: PrintStmt) -> None: ...
-    def visit_ExprStmt(self, node: ExprStmt) -> None: ...
-    def visit_DoUntil(self, node: DoUntil) -> None: ...
-    def visit_IfBranch(self, node: IfBranch) -> None: ...
-    def visit_IfStmt(self, node: IfStmt) -> None: ...
-    def visit_CaseStmtBranch(self, node: CaseStmtBranch) -> None: ...
-    def visit_CaseStmt(self, node: CaseStmt) -> None: ...
-    def visit_CatchClause(self, node: CatchClause) -> None: ...
-    def visit_TryCatch(self, node: TryCatch) -> None: ...
-    def visit_Raise(self, node: Raise) -> None: ...
+
+    # Sentinel
     def visit_ElseSentinel(self, node: ElseSentinel) -> None: ...
 
 
@@ -206,6 +224,7 @@ class Visitor:
 _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
     {
         Program,
+        # type nodes
         TextT,
         JsonT,
         BoolT,
@@ -214,6 +233,10 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         NameT,
         ListT,
         DictT,
+        UnitT,
+        AgentT,
+        FuncT,
+        # declaration nodes
         FieldDef,
         RecordDef,
         VariantDef,
@@ -222,6 +245,14 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ParamDecl,
         ProgramDecl,
         AgentDecl,
+        FuncDef,
+        ConfigPragma,
+        # binder nodes
+        LetDecl,
+        VarDecl,
+        SetStmt,
+        # literal nodes
+        UnitLit,
         IntLit,
         DecimalLit,
         BoolLit,
@@ -230,42 +261,38 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ListLit,
         DictEntry,
         DictLit,
+        # template nodes
         TextSegment,
         InterpSegment,
         Template,
+        # expression nodes
         VarRef,
         FieldAccess,
         NamedArg,
         Constructor,
-        AbortPolicy,
-        RetryPolicy,
-        CallOptions,
-        AgentCall,
         BinaryOp,
         UnaryNot,
         UnaryNeg,
         IsTest,
-        CaseExprBranch,
-        CaseExpr,
+        Call,
+        Param,
+        Lambda,
+        Block,
+        IfBranch,
+        If,
+        CaseBranch,
+        Case,
+        Do,
+        CatchClause,
+        Try,
+        Raise,
+        # pattern nodes
         WildcardPattern,
         LiteralPattern,
         VarPattern,
         PatternField,
         ConstructorPattern,
-        LetDecl,
-        VarDecl,
-        SetStmt,
-        PassStmt,
-        PrintStmt,
-        ExprStmt,
-        DoUntil,
-        IfBranch,
-        IfStmt,
-        CaseStmtBranch,
-        CaseStmt,
-        CatchClause,
-        TryCatch,
-        Raise,
+        # sentinel
         ElseSentinel,
     }
 )
@@ -294,8 +321,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     callback(node)
 
     if isinstance(node, Program):
-        for child in node.body:
-            walk(child, callback)
+        walk(node.body, callback)
 
     # --- Type nodes ---
     elif isinstance(node, (TextT, JsonT, BoolT, IntT, DecimalT, NameT)):
@@ -307,7 +333,15 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, DictT):
         walk(node.value, callback)
 
-    # --- Declarations ---
+    elif isinstance(node, (UnitT, AgentT)):
+        pass  # leaves
+
+    elif isinstance(node, FuncT):
+        for param_t in node.params:
+            walk(param_t, callback)
+        walk(node.result, callback)
+
+    # --- Declaration nodes ---
     elif isinstance(node, FieldDef):
         walk(node.type_expr, callback)
 
@@ -338,8 +372,31 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, AgentDecl):
         pass  # leaf — name and runner are plain strings
 
-    # --- Literals ---
-    elif isinstance(node, (IntLit, DecimalLit, BoolLit, NullLit, StringLit)):
+    elif isinstance(node, FuncDef):
+        for param in node.params:
+            walk(param, callback)
+        walk(node.return_type, callback)
+        walk(node.body, callback)
+
+    elif isinstance(node, ConfigPragma):
+        pass  # leaf — key and value are plain scalars
+
+    # --- Binder nodes ---
+    elif isinstance(node, LetDecl):
+        if node.type_ann is not None:
+            walk(node.type_ann, callback)
+        walk(node.value, callback)
+
+    elif isinstance(node, VarDecl):
+        if node.type_ann is not None:
+            walk(node.type_ann, callback)
+        walk(node.value, callback)
+
+    elif isinstance(node, SetStmt):
+        walk(node.value, callback)
+
+    # --- Literal nodes ---
+    elif isinstance(node, (UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit)):
         pass  # leaves
 
     elif isinstance(node, ListLit):
@@ -354,7 +411,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for entry in node.entries:
             walk(entry, callback)
 
-    # --- Template ---
+    # --- Template nodes ---
     elif isinstance(node, TextSegment):
         pass  # leaf
 
@@ -365,7 +422,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for seg in node.segments:
             walk(seg, callback)
 
-    # --- Expressions ---
+    # --- Expression nodes ---
     elif isinstance(node, VarRef):
         pass  # leaf
 
@@ -376,22 +433,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.value, callback)
 
     elif isinstance(node, Constructor):
-        for arg in node.args:
-            walk(arg, callback)
-
-    elif isinstance(node, AbortPolicy):
-        pass  # leaf
-
-    elif isinstance(node, RetryPolicy):
-        pass  # leaf
-
-    elif isinstance(node, CallOptions):
-        if node.parse_policy is not None:
-            walk(node.parse_policy, callback)
-
-    elif isinstance(node, AgentCall):
-        walk(node.options, callback)
-        walk(node.template, callback)
+        for ctor_arg in node.args:
+            walk(ctor_arg, callback)
 
     elif isinstance(node, BinaryOp):
         walk(node.left, callback)
@@ -406,16 +449,62 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, IsTest):
         walk(node.expr, callback)
 
-    elif isinstance(node, CaseExprBranch):
+    elif isinstance(node, Call):
+        walk(node.callee, callback)
+        for call_arg in node.args:
+            walk(call_arg, callback)
+        for call_named in node.named_args:
+            walk(call_named, callback)
+
+    elif isinstance(node, Param):
+        walk(node.type_expr, callback)
+        if node.default is not None:
+            walk(node.default, callback)
+
+    elif isinstance(node, Lambda):
+        for param in node.params:
+            walk(param, callback)
+        if node.return_type is not None:
+            walk(node.return_type, callback)
+        walk(node.body, callback)
+
+    elif isinstance(node, Block):
+        for item in node.items:
+            walk(item, callback)
+
+    elif isinstance(node, IfBranch):
+        walk(node.cond, callback)
+        walk(node.body, callback)
+
+    elif isinstance(node, If):
+        for if_branch in node.branches:
+            walk(if_branch, callback)
+
+    elif isinstance(node, CaseBranch):
         walk(node.pattern, callback)
         walk(node.body, callback)
 
-    elif isinstance(node, CaseExpr):
+    elif isinstance(node, Case):
         walk(node.subject, callback)
-        for branch in node.branches:
-            walk(branch, callback)
+        for case_branch in node.branches:
+            walk(case_branch, callback)
 
-    # --- Patterns ---
+    elif isinstance(node, Do):
+        walk(node.body, callback)
+        walk(node.condition, callback)
+
+    elif isinstance(node, CatchClause):
+        walk(node.body, callback)
+
+    elif isinstance(node, Try):
+        walk(node.body, callback)
+        for clause in node.handlers:
+            walk(clause, callback)
+
+    elif isinstance(node, Raise):
+        walk(node.exc, callback)
+
+    # --- Pattern nodes ---
     elif isinstance(node, WildcardPattern):
         pass  # leaf
 
@@ -432,68 +521,15 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for pf in node.fields:
             walk(pf, callback)
 
-    # --- Statements ---
-    elif isinstance(node, LetDecl):
-        if node.type_ann is not None:
-            walk(node.type_ann, callback)
-        walk(node.value, callback)
-
-    elif isinstance(node, VarDecl):
-        if node.type_ann is not None:
-            walk(node.type_ann, callback)
-        walk(node.value, callback)
-
-    elif isinstance(node, SetStmt):
-        walk(node.value, callback)
-
-    elif isinstance(node, PassStmt):
-        pass  # leaf
-
-    elif isinstance(node, PrintStmt):
-        walk(node.value, callback)
-
-    elif isinstance(node, ExprStmt):
-        walk(node.expr, callback)
-
-    elif isinstance(node, DoUntil):
-        for stmt in node.body:
-            walk(stmt, callback)
-        walk(node.condition, callback)
-
-    elif isinstance(node, IfBranch):
-        walk(node.cond, callback)
-        for stmt in node.body:
-            walk(stmt, callback)
-
-    elif isinstance(node, IfStmt):
-        for if_branch in node.branches:
-            walk(if_branch, callback)
-
-    elif isinstance(node, CaseStmtBranch):
-        walk(node.pattern, callback)
-        for stmt in node.body:
-            walk(stmt, callback)
-
-    elif isinstance(node, CaseStmt):
-        walk(node.subject, callback)
-        for case_branch in node.branches:
-            walk(case_branch, callback)
-
-    elif isinstance(node, CatchClause):
-        for stmt in node.body:
-            walk(stmt, callback)
-
-    elif isinstance(node, TryCatch):
-        for stmt in node.body:
-            walk(stmt, callback)
-        for clause in node.handlers:
-            walk(clause, callback)
-
-    elif isinstance(node, Raise):
-        walk(node.exc, callback)
+    elif isinstance(node, ElseSentinel):
+        pass  # leaf sentinel
 
     else:
-        # The _is_known_node guard at the top guarantees this is ElseSentinel.
-        # This dispatch must stay in lockstep with _KNOWN_NODE_TYPES above:
-        # every known node class needs a branch here, and vice versa.
-        pass  # leaf sentinel
+        # A node is in _KNOWN_NODE_TYPES (the guard at the top passed) but has no
+        # walk branch here.  This dispatch MUST stay in lockstep with
+        # _KNOWN_NODE_TYPES: every known node class needs an explicit branch.
+        # Fail loudly rather than silently dropping the node's children.
+        raise AssertionError(
+            f"walk(): node type {type(node)!r} is known but has no walk branch. "
+            "Add an isinstance branch (and keep _KNOWN_NODE_TYPES in lockstep)."
+        )

@@ -16,14 +16,14 @@ let document: json = {
 }
 print document
 
-let fetched: json = source "Emit a JSON document about ${payload}."
+let fetched: json = ask("Emit a JSON document about ${payload}.", agent: source)
 print fetched
 
-let n: int = source "Emit a count."
-let d: decimal = source "Emit a ratio."
-let flag: bool = source "Emit a flag."
-let names: list[text] = source "Emit names."
-let scores: dict[text, int] = source "Emit scores."
+let n: int = ask("Emit a count.", agent: source)
+let d: decimal = ask("Emit a ratio.", agent: source)
+let flag: bool = ask("Emit a flag.", agent: source)
+let names: list[text] = ask("Emit names.", agent: source)
+let scores: dict[text, int] = ask("Emit scores.", agent: source)
 print n
 print d
 print flag

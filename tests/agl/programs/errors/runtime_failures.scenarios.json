@@ -2,7 +2,7 @@
   "scenarios": [
     {
       "name": "all_failure_paths",
-      "inputs": {"d": 0, "mode": "diverge"},
+      "params": {"d": 0, "mode": "diverge"},
       "agents": {"tosser": ["{\"$case\": \"Tails\"}"]},
       "expect": {
         "stdout_contains": [
@@ -17,7 +17,7 @@
     },
     {
       "name": "all_success_paths",
-      "inputs": {"d": 5, "mode": "converge"},
+      "params": {"d": 5, "mode": "converge"},
       "agents": {"tosser": ["{\"$case\": \"Heads\"}"]},
       "expect": {
         "stdout": "2\nheads\nloop done 1\nend\n",
@@ -26,7 +26,7 @@
     },
     {
       "name": "abort_caught_by_exception_base",
-      "inputs": {"d": 5, "mode": "boom"},
+      "params": {"d": 5, "mode": "boom"},
       "agents": {"tosser": ["{\"$case\": \"Heads\"}"]},
       "expect": {
         "stdout_contains": ["generic: boom\n", "anon\n", "exhausted at 2\n", "end\n"],

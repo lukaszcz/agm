@@ -36,16 +36,17 @@ The layout rules:
    literals, constructor argument lists, and function call argument lists may
    therefore span multiple lines.
 4. **Branch-marker continuation.** When the first token of a line is `|`,
-   `catch`, or `until`, the line continues the enclosing construct instead of
-   starting a new item, and may align with the enclosing keyword without
-   opening a new block. This is what lets `if`/`case` branches, `catch`
-   clauses, enum variants, and the `until` clause of a loop sit at the same
-   indentation as the construct that owns them:
+   `else`, `catch`, or `until`, the line continues the enclosing construct
+   instead of starting a new item, and may align with the enclosing keyword
+   without opening a new block. This is what lets `if`/`case` branches, `else`
+   branches, `catch` clauses, enum variants, and the `until` clause of a loop
+   sit at the same indentation as the construct that owns them:
 
    ```agl
-   if | status is Complete => ()
-   | status is Blocked => let report = ask("Explain ${status}", agent: critic)
-   | else => ()
+   if
+     | status is Complete => ()
+     | status is Blocked => let report = ask("Explain ${status}", agent: critic)
+     | else => ()
 
    do[5]
      let r: Review = ask("Review ${artifact}", agent: reviewer)

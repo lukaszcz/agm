@@ -21,9 +21,10 @@ may be a block (a sequence of items ending in an expression):
 
 ```agl
 def classify(n: int) -> text =
-  if n > 0 => "pos"
-  | n < 0  => "neg"
-  | else   => "zero"
+  if
+    | n > 0 => "pos"
+    | n < 0  => "neg"
+    | else   => "zero"
 
 def summarize(doc: text, limit: int = 3) -> text =
   let head = ask "Summarize: ${doc}"
@@ -56,10 +57,10 @@ recursion among top-level `def`s is therefore unrestricted:
 
 ```agl
 def is_even(n: int) -> bool =
-  if n = 0 => true | else => is_odd(n - 1)
+  if n = 0 => true else => is_odd(n - 1)
 
 def is_odd(n: int) -> bool =
-  if n = 0 => false | else => is_even(n - 1)
+  if n = 0 => false else => is_even(n - 1)
 ```
 
 `def` is **not** a valid declaration inside a block (`do` body, `if`
@@ -223,7 +224,7 @@ at the language level. The runtime enforces a **call-depth limit** (default
 
 ```agl
 def fact(n: int) -> int =
-  if n <= 1 => 1 | else => n * fact(n - 1)
+  if n <= 1 => 1 else => n * fact(n - 1)
 
 let r = fact(10)     # fine
 let s = fact(10000)  # raises RecursionError at depth limit
@@ -241,7 +242,7 @@ can be stored in bindings and passed to functions:
 
 ```agl
 def make_policy(retries: int) -> ParsePolicy =
-  if retries = 0 => ParsePolicy.Abort | else => Retry(n: retries)
+  if retries = 0 => ParsePolicy.Abort else => Retry(n: retries)
 ```
 
 ## Complete example
@@ -261,7 +262,7 @@ def summarize_issues(issues: list[text]) -> text =
   "Issues found:\n${issues}"
 
 def review_artifact(artifact: text, max_retries: int = 2) -> Review =
-  let policy = if max_retries > 0 => Retry(n: max_retries) | else => Abort
+  let policy = if max_retries > 0 => Retry(n: max_retries) else => Abort
   let r: Review = ask(
     "Review this artifact:\n${artifact}",
     agent: reviewer,

@@ -295,7 +295,7 @@ class IfBranch:
 
 @dataclass(frozen=True, slots=True)
 class If:
-    """``if cond => body | ... | else => body`` expression.
+    """``if cond => body | ... [|] else => body`` expression.
 
     Unifies the former ``IfStmt`` and ``IfExpr``.  An ``if`` with no ``else``
     branch yields ``unit``.

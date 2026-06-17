@@ -106,9 +106,9 @@ inline_body ::= item (";" item)*
 ## `if`
 
 ```ebnf
-if_expr        ::= "if" "|"? if_branch ("|" if_branch)*
-if_branch      ::= or_expr "=>" (suite | or_expr)
-                 | "else" "=>" (suite | or_expr)   (* must be last, if present *)
+if_expr        ::= "if" "|"? if_cond_branch ("|" if_cond_branch)* if_else_branch?
+if_cond_branch ::= or_expr "=>" (suite | or_expr)
+if_else_branch ::= "|"? "else" "=>" (suite | or_expr)
 ```
 
 Without an `else` branch the `if` expression has type `unit`. With all
@@ -255,7 +255,7 @@ config_value  ::= "true" | "false" | INT | DECIMAL | STRING
   comparison tail) and rejected with a non-associativity message.
 - The `[N]` after `do` is a single lexical unit, so it never conflicts with
   a list literal.
-- A `|`, `catch`, or `until` at the start of a line attaches to the
+- A `|`, `else`, `catch`, or `until` at the start of a line attaches to the
   innermost construct that can accept it; the layout rules guarantee each
   such token belongs to exactly one construct
   ([Lexical structure](lexical-structure.md)).

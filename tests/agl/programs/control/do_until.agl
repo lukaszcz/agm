@@ -12,7 +12,7 @@ do[4]
   let verdict = ask("Round ${rounds}: have ${hits} of ${target}.", agent: oracle)
   if verdict = "hit" =>
     set hits = hits + 1
-  | else =>
+  else =>
     ()
 until hits >= target
 print rounds

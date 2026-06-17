@@ -10,20 +10,19 @@ and else-less `if` produce `unit`. Exception control flow — `try`, `catch`,
 ## `if`
 
 ```ebnf
-if_expr        ::= "if" "|"? if_branch ("|" if_branch)*
-if_branch      ::= or_expr "=>" branch_body
-                 | "else" "=>" branch_body   (* must be last, if present *)
+if_expr        ::= "if" "|"? if_cond_branch ("|" if_cond_branch)* if_else_branch?
+if_cond_branch ::= or_expr "=>" branch_body
+if_else_branch ::= "|"? "else" "=>" branch_body
 ```
 
 An optional leading `|` after `if` is accepted, making all branches —
-including the first — introduced by `|`. The `else` branch, if present,
-must be last:
+including the first condition branch — introduced by `|`. The `else` branch,
+if present, must be last; its own `|` is optional:
 
 ```agl
-if
-| code is Fail or design is Fail =>
+if code is Fail or design is Fail =>
   set artifact = ask("Fix issues:\n${code}\n${design}", agent: impl)
-| else =>
+else =>
   ()
 ```
 
@@ -48,7 +47,7 @@ When an `else` branch is present **and** all branches have a common type `T`
 ```agl
 let label: text = if | score > 90 => "A" | score > 75 => "B" | else => "C"
 
-print(if | status is Pass => "passed" | else => "failed")
+print(if status is Pass => "passed" else => "failed")
 ```
 
 ### `if` without `else`: type `unit`

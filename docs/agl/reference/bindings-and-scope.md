@@ -79,10 +79,10 @@ every other `def` (and itself) without forward declaration:
 
 ```agl
 def is_even(n: int) -> bool =
-  if n = 0 => true | else => is_odd(n - 1)
+  if n = 0 => true else => is_odd(n - 1)
 
 def is_odd(n: int) -> bool =
-  if n = 0 => false | else => is_even(n - 1)
+  if n = 0 => false else => is_even(n - 1)
 ```
 
 A `def` inside a nested block is a static error. See

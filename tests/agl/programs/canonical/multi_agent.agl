@@ -32,7 +32,7 @@ do[5]
     Current artifact:
     ${artifact}
     """, agent: impl)
-  | else =>
+  else =>
     ()
 until code is Pass and design is Pass
 

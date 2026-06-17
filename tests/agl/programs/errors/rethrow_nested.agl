@@ -6,7 +6,7 @@ try
   try
     if mode = "inner" =>
       raise Abort(message: "from inner")
-    | else =>
+    else =>
       ()
     print "inner ok"
   catch Abort as e =>

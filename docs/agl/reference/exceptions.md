@@ -87,7 +87,7 @@ The operand must be an exception value (statically checked). `raise`
 assignable to any expected type:
 
 ```agl
-let x: int = if condition => 1 | else => raise Abort(message: "!")
+let x: int = if condition => 1 else => raise Abort(message: "!")
 raise Abort(message: "Cannot continue without repository access.")
 ```
 

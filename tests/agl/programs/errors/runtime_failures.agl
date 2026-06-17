@@ -34,7 +34,7 @@ catch MaxIterationsExceeded as e =>
 try
   if mode = "boom" =>
     raise Abort(message: "boom")
-  | else =>
+  else =>
     ()
 catch Exception as e =>
   print "generic: ${e.message}"
@@ -42,7 +42,7 @@ catch Exception as e =>
 try
   if mode = "boom" =>
     raise Abort(message: "again")
-  | else =>
+  else =>
     ()
 catch _ =>
   print "anon"

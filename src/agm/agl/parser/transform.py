@@ -974,7 +974,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def if_cond_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
-        """if_branch: or_expr ARROW branch_body -> if_cond_branch"""
+        """if_cond_branch: or_expr ARROW branch_body"""
         cond = cast(syntax.Expr, args[0])
         body = _find_expr(args[1:])
         return syntax.IfBranch(
@@ -983,7 +983,7 @@ class AstBuilder(Transformer):
         )
 
     def if_else_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
-        """if_branch: "else" ARROW branch_body -> if_else_branch"""
+        """if_else_branch: PIPE? "else" ARROW branch_body"""
         body = _find_expr(args)
         return syntax.IfBranch(
             cond=ELSE, body=body,
@@ -992,7 +992,6 @@ class AstBuilder(Transformer):
 
     def if_expr(self, meta: Meta, args: _Args) -> syntax.If:
         branches = tuple(a for a in args if isinstance(a, syntax.IfBranch))
-        _validate_else_last(branches)
         return syntax.If(
             branches=branches,
             span=_span_from_meta(meta), node_id=self._next_id(),
@@ -1497,14 +1496,3 @@ def syntax_error_from_meta(meta: Meta, message: str) -> AglSyntaxError:
     """Create an AglSyntaxError from a Meta object."""
     return AglSyntaxError(message, span=_span_from_meta(meta))
 
-
-def _validate_else_last(
-    branches: tuple[syntax.IfBranch, ...],
-) -> None:
-    """Raise AglSyntaxError if an else branch is not the last in *branches*."""
-    for i, b in enumerate(branches):
-        if b.cond is ELSE and i < len(branches) - 1:
-            raise AglSyntaxError(
-                "'else' branch must be the last branch in an if expression.",
-                span=b.span,
-            )

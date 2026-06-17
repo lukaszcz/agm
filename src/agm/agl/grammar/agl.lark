@@ -270,19 +270,20 @@ lambda_expr: "fn" LPAR param_list? RPAR (THIN_ARROW type_expr)? ARROW expr
 // Branch bodies use or_expr to prevent | and other terminators
 // from being consumed as part of the branch body.
 //
-// Multi-line branch lists: the |-continuation layout rule (already in the
-// custom lexer) suppresses _NEWLINE/_INDENT/_DEDENT before each |, so
-// multi-line if/case/try branches parse correctly with the flat grammar below.
+// Multi-line branch lists: the branch-continuation layout rule (already in the
+// custom lexer) suppresses _NEWLINE/_INDENT/_DEDENT before each | or pipe-less
+// else, so multi-line if/case/try branches parse correctly with the flat
+// grammar below.
 //
 // Suite bodies: branch_body and catch_body admit `suite_expr` (which starts
 // with _NEWLINE _INDENT) alongside or_expr/bar_closed_stmt alternatives.
 // ---------------------------------------------------------------------------
 
-// if expression: if [|] cond => body [| cond => body]* [| else => body]
-if_expr: "if" PIPE? if_branch (PIPE if_branch)*
+// if expression: if [|] cond => body [| cond => body]* [|] else => body
+if_expr: "if" PIPE? if_cond_branch (PIPE if_cond_branch)* if_else_branch?
 
-if_branch: or_expr ARROW branch_body   -> if_cond_branch
-         | "else" ARROW branch_body    -> if_else_branch
+if_cond_branch: or_expr ARROW branch_body
+if_else_branch: PIPE? "else" ARROW branch_body
 
 // case expression: case val of | pat => body [| pat => body]*
 case_expr: "case" or_expr "of" (PIPE case_branch)+

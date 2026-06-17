@@ -30,7 +30,7 @@ do[3]
           | GiveUp(why) =>
               if why = "hopeless" =>
                 set status = "abandoned"
-              | else =>
+              else =>
                 set status = "deferred: ${why}"
 until status != "working"
 print status

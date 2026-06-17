@@ -37,5 +37,5 @@ print fetched.severity
 
 if fetched.severity >= min_severity =>
   print "escalate"
-| else =>
+else =>
   print "ignore"

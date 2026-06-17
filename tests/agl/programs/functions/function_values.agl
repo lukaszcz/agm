@@ -2,7 +2,7 @@
 # as an argument, lambdas with explicit and inferred return types.
 
 def classify(n: int) -> text =
-  if n > 0 => "pos" | n < 0 => "neg" | else => "zero"
+  if | n > 0 => "pos" | n < 0 => "neg" | else => "zero"
 
 def label(n: int) -> text =
   "val=" + classify(n)

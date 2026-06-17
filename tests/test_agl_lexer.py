@@ -745,7 +745,7 @@ class TestPipeContinuation:
 
     def test_catch_suppresses_newline(self) -> None:
         # ``catch`` at the start of a line suppresses the preceding _NEWLINE
-        # (§3.4 |/catch/until-continuation rule) so the ``try`` body and catch
+        # (§3.4 continuation rule) so the ``try`` body and catch
         # clause are lexically joined without an interior _NEWLINE.
         source = "try\n  pass\ncatch _ =>\n  pass"
         result = tok(source)
@@ -760,9 +760,23 @@ class TestPipeContinuation:
             if types[j] not in ("_DEDENT",):
                 break
 
+    def test_else_suppresses_newline(self) -> None:
+        # ``else`` may omit its leading pipe, so at the start of a line it
+        # continues the enclosing if expression like ``|`` does.
+        source = "if x =>\n  pass\nelse =>\n  pass"
+        result = tok(source)
+        types = [t for t, _ in result]
+        else_idx = next(i for i, t in enumerate(types) if t == "else")
+        for j in range(else_idx - 1, -1, -1):
+            assert types[j] != "_NEWLINE", (
+                f"_NEWLINE found at position {j} before 'else' at {else_idx}"
+            )
+            if types[j] not in ("_DEDENT",):
+                break
+
     def test_until_suppresses_newline(self) -> None:
         # ``until`` at the start of a line suppresses the preceding _NEWLINE
-        # (§3.4 |/catch/until-continuation rule) so the do body and condition
+        # (§3.4 continuation rule) so the do body and condition
         # are lexically joined without an interior _NEWLINE.
         source = "do[2]\n  pass\nuntil true"
         result = tok(source)

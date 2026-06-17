@@ -11,16 +11,17 @@ agent worker
 
 let first: Outcome = ask("Attempt the task.", agent: worker)
 
-if first is Done => print "done"
-| first is not Failed => print "not failed"
-| else => print "failed"
+if
+  | first is Done => print "done"
+  | first is not Failed => print "not failed"
+  | else => print "failed"
 
 case first of
   | Done => print "no work left"
   | Partial(left) => print "remaining ${left}"
   | Failed(reason, fatal) =>
       if fatal => print "fatal: ${reason}"
-      | else => print "retry later: ${reason}"
+      else => print "retry later: ${reason}"
 
 let made: Outcome = Partial(left: 2)
 print made

@@ -11,7 +11,7 @@ if true =>
   A "quoted" tail.
   """, agent: critic)
   print "block sent"
-| else =>
+else =>
   ()
 
 let mixed = ask("""

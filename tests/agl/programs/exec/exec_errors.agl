@@ -14,6 +14,6 @@ catch ExecError as e =>
 if mode = "uncaught" =>
   let _: text = exec "false"
   ()
-| else =>
+else =>
   print "skip"
 print "tail"

@@ -126,12 +126,13 @@ AgL uses significant indentation (Python-style).
    - Shallower → emit one `_DEDENT` per popped level; if the resulting top
      does not equal the new depth, a `LexError` ("misaligned dedent") is
      raised.
-4. **`|`/`catch`/`until`-continuation rule** — when the first significant
-   token on the next line is `|`, `catch`, or `until`, the `_NEWLINE` is
-   suppressed and only the `_DEDENT`s needed to pop the stack to levels
-   strictly greater than the keyword's column are emitted. This rule lets
-   branches, catch clauses, and `until` continuations align with their
-   enclosing keyword without triggering a new block.
+4. **`|`/`else`/`catch`/`until`-continuation rule** — when the first
+   significant token on the next line is `|`, `else`, `catch`, or `until`,
+   the `_NEWLINE` is suppressed and only the `_DEDENT`s needed to pop the stack
+   to levels strictly greater than the keyword's column are emitted. This rule
+   lets branches, pipe-less `else` clauses, catch clauses, and `until`
+   continuations align with their enclosing keyword without triggering a new
+   block.
 5. **At EOF** — remaining indent levels are unwound with `_DEDENT` tokens.
 
 ---

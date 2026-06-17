@@ -237,9 +237,9 @@ both).
 An `if` **expression** selects among branches by boolean condition:
 
 ```ebnf
-if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)*
+if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)* if_else_branch
 if_expr_branch ::= or_expr "=>" or_expr
-                 | "else" "=>" or_expr   (* must be last; required *)
+if_else_branch ::= "|"? "else" "=>" or_expr
 ```
 
 ```agl

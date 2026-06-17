@@ -851,19 +851,37 @@ class TestIfExpr:
         assert len(e.branches) == 2
         assert e.branches[-1].cond is ELSE
 
+    def test_if_with_else_without_pipe(self) -> None:
+        e = first(parse("if x > 0 => pos else => neg"))
+        assert isinstance(e, If)
+        assert len(e.branches) == 2
+        assert e.branches[-1].cond is ELSE
+
     def test_if_multiple_branches(self) -> None:
         e = first(parse("if n > 0 => pos | n < 0 => neg | else => zero"))
         assert isinstance(e, If)
         assert len(e.branches) == 3
+
+    def test_if_multiple_branches_with_else_without_pipe(self) -> None:
+        e = first(parse("if n > 0 => pos | n < 0 => neg else => zero"))
+        assert isinstance(e, If)
+        assert len(e.branches) == 3
+        assert e.branches[-1].cond is ELSE
 
     def test_if_with_leading_pipe(self) -> None:
         e = first(parse("if | n > 0 => pos | else => neg"))
         assert isinstance(e, If)
         assert len(e.branches) == 2
 
-    def test_if_else_must_be_last_raises(self) -> None:
-        with pytest.raises(AglSyntaxError, match="else"):
-            parse("if else => x | n > 0 => y")
+    def test_if_with_leading_pipe_and_else_without_pipe(self) -> None:
+        e = first(parse("if | n > 0 => pos else => neg"))
+        assert isinstance(e, If)
+        assert len(e.branches) == 2
+        assert e.branches[-1].cond is ELSE
+
+    def test_if_cannot_have_branch_after_else(self) -> None:
+        with pytest.raises(AglSyntaxError, match=r"\|"):
+            parse("if n > 0 => y else => x | n < 0 => z")
 
     def test_if_suite_branch_body(self) -> None:
         src = "if x =>\n  let y = 1\n  y\n| else => z"
@@ -872,6 +890,20 @@ class TestIfExpr:
         body = e.branches[0].body
         assert isinstance(body, Block)
         assert len(body.items) == 2
+
+    def test_if_suite_else_without_pipe(self) -> None:
+        src = "if x =>\n  let y = 1\n  y\nelse => z"
+        e = first(parse(src))
+        assert isinstance(e, If)
+        assert len(e.branches) == 2
+        assert e.branches[-1].cond is ELSE
+
+    def test_if_multiline_leading_pipe_else_without_pipe(self) -> None:
+        src = "if\n  | x => y\n  else => z"
+        e = first(parse(src))
+        assert isinstance(e, If)
+        assert len(e.branches) == 2
+        assert e.branches[-1].cond is ELSE
 
 
 # ---------------------------------------------------------------------------

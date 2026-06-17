@@ -19,6 +19,12 @@ from __future__ import annotations
 
 import decimal
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agm.agl.eval.scope import Scope
+    from agm.agl.syntax.nodes import Expr
+    from agm.agl.typecheck.types import Type
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers (used by JsonValue.__eq__)
@@ -242,6 +248,48 @@ class ExceptionValue:
 
 
 # ---------------------------------------------------------------------------
+# v2 value types: unit, agent handle, and closure
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class UnitValue:
+    """The single value of the ``unit`` type: ``()``."""
+
+
+UNIT_VALUE: UnitValue = UnitValue()
+
+
+@dataclass(frozen=True, slots=True)
+class AgentValue:
+    """A first-class agent handle — opaque; not renderable or comparable."""
+
+    name: str
+
+
+@dataclass(slots=True)
+class Closure:
+    """A first-class function value — a lambda or def closure.
+
+    ``env`` is the scope captured at closure creation time.
+    ``params`` is an ordered tuple of (name, default_expr_or_None) pairs.
+    ``body`` is the unevaluated body expression.
+    ``return_type`` is the declared return type (used for coercion).
+    """
+
+    env: "Scope"
+    params: "tuple[tuple[str, Expr | None], ...]"
+    body: "Expr"
+    return_type: "Type"
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __hash__(self) -> int:
+        return id(self)
+
+
+# ---------------------------------------------------------------------------
 # Closed Value union
 # ---------------------------------------------------------------------------
 
@@ -256,4 +304,7 @@ Value = (
     | RecordValue
     | EnumValue
     | ExceptionValue
+    | UnitValue
+    | AgentValue
+    | Closure
 )

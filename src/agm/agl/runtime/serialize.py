@@ -24,7 +24,9 @@ from decimal import Decimal
 from typing import assert_never
 
 from agm.agl.eval.values import (
+    AgentValue,
     BoolValue,
+    Closure,
     DecimalValue,
     DictValue,
     EnumValue,
@@ -34,6 +36,7 @@ from agm.agl.eval.values import (
     ListValue,
     RecordValue,
     TextValue,
+    UnitValue,
     Value,
 )
 
@@ -67,6 +70,12 @@ def value_to_json_obj(value: Value) -> object:
         return result
     if isinstance(value, ExceptionValue):
         return {k: value_to_json_obj(v) for k, v in value.fields.items()}
+    if isinstance(value, UnitValue):
+        raise TypeError("UnitValue has no JSON representation")
+    if isinstance(value, AgentValue):
+        raise TypeError("AgentValue has no JSON representation")
+    if isinstance(value, Closure):
+        raise TypeError("Closure has no JSON representation")
     assert_never(value)  # pragma: no cover
 
 

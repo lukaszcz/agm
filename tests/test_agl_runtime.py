@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import os
 import pathlib
+from typing import TYPE_CHECKING
 
 import pytest
 
 from agm.agl import AglError, SourceSpan, WorkflowRuntime
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.runtime import Diagnostic, RunResult
+
+if TYPE_CHECKING:
+    from agm.agl.runtime.codec import OutputCodec
 
 
 class TestWorkflowRuntimeConstructor:
@@ -49,7 +53,7 @@ class TestWorkflowRuntimeConstructor:
         rt.register_agent("reviewer", my_agent)  # should not raise
         # The source declares the registered agent so the source↔host contract
         # holds (M4); a valid program then returns ok=True.
-        result = rt.run("agent reviewer\nlet x = 1")
+        result = rt.run("agent reviewer\nlet x = 1\nx")
         assert result.ok is True
         assert result.error is None
 
@@ -102,7 +106,7 @@ class TestRunBehavior:
 
     def test_valid_program_ok(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert result.ok is True
 
     def test_static_error_not_ok(self) -> None:
@@ -140,7 +144,7 @@ class TestRunBehavior:
 
     def test_run_with_empty_inputs(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1", inputs={})
+        result = rt.run("let x = 1\nx", inputs={})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
@@ -163,13 +167,13 @@ class TestFallbackAgent:
 
     def test_with_default_agent_ask_call_succeeds(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('let x = ask "hi"\nx')
         assert result.ok is True
 
     def test_named_agent_registered_accepted(self) -> None:
         rt = WorkflowRuntime()
         rt.register_agent("impl", lambda req: "output")
-        result = rt.run('agent impl\nlet x = impl "do it"')
+        result = rt.run('agent impl\nask("do it", agent: impl)')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
@@ -183,7 +187,7 @@ class TestFallbackAgent:
     def test_default_agent_backs_declared_name(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         # A default_agent backs any declared name without a dedicated registration.
-        result = rt.run('agent any_agent_name\nlet x = any_agent_name "hi"')
+        result = rt.run('agent any_agent_name\nask("hi", agent: any_agent_name)')
         assert result.ok is True
 
     def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
@@ -233,7 +237,7 @@ class TestInputValidationRuntime:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run("input x\nlet y = ask \"Hi\"", inputs={})
+        rt.run('input x\nask("Hi")', inputs={})
         assert calls == []
 
     def test_int_input_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -276,7 +280,7 @@ class TestEmptyResponse:
 
     def test_empty_string_response_is_valid_text(self) -> None:
         rt = WorkflowRuntime(default_agent=lambda req: "")
-        result = rt.run('let x = ask "Say nothing."')
+        result = rt.run('let x = ask "Say nothing."\nx')
         assert result.ok is True
         from agm.agl.eval.values import TextValue
 
@@ -294,7 +298,7 @@ class TestAgentRequest:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('let x = ask "Hello world"')
+        rt.run('ask "Hello world"')
         assert received[0].prompt == "Hello world"
 
     def test_request_agent_name_for_default(self) -> None:
@@ -305,7 +309,7 @@ class TestAgentRequest:
             return "ok"
 
         rt = WorkflowRuntime(default_agent=agent)
-        rt.run('let x = ask "Hi"')
+        rt.run('ask "Hi"')
         assert received[0].agent == "ask"
 
     def test_request_agent_name_for_named(self) -> None:
@@ -317,7 +321,7 @@ class TestAgentRequest:
 
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", reviewer)
-        rt.run('agent reviewer\nlet x = reviewer "Review this"')
+        rt.run('agent reviewer\nask("Review this", agent: reviewer)')
         assert received[0].agent == "reviewer"
 
 
@@ -364,7 +368,7 @@ class TestUncaughtAgentCallErrorSpan:
             raise AglRaise(exc_val, span=existing)
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let a = 1\nlet x = ask "hi"')
+        result = rt.run('let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
         # The agent's own span (line 99) is kept, not replaced by the call site.
@@ -373,7 +377,7 @@ class TestUncaughtAgentCallErrorSpan:
     def test_uncaught_agent_call_error_reports_call_line(self) -> None:
         rt = self._failing_runtime()
         # The ``ask`` call is on line 2.
-        result = rt.run('let a = 1\nlet x = ask "hi"')
+        result = rt.run('let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "AgentCallError"
@@ -392,7 +396,7 @@ class TestUncaughtAgentCallErrorSpan:
         from agm.commands.exec import run as exec_run
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let a = 1\nlet x = ask "hi"\n')
+        agl_file.write_text('let a = 1\nask("hi")\n')
 
         def failing_agent(req: object) -> str:
             raise AgentCallHostError(
@@ -455,7 +459,7 @@ class TestRunResultType:
 
     def test_run_result_has_bindings(self) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert hasattr(result, "bindings")
         assert isinstance(result.bindings, dict)
 
@@ -628,8 +632,6 @@ class TestTokenConstants:
         assert tokens.KW_CATCH == "catch"
         assert tokens.KW_RAISE == "raise"
         assert tokens.KW_AS == "as"
-        assert tokens.KW_PASS == "pass"
-        assert tokens.KW_PRINT == "print"
         assert tokens.KW_AND == "and"
         assert tokens.KW_OR == "or"
         assert tokens.KW_NOT == "not"
@@ -659,7 +661,7 @@ class TestNoDefaultAgent:
 
     def test_ask_without_default_agent_is_static_error(self) -> None:
         rt = WorkflowRuntime()  # no default agent configured
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is False
         assert result.error is None  # static (pre-execution), not an AgL exception
         assert any("default agent" in d.message.lower() for d in result.diagnostics)
@@ -669,7 +671,7 @@ class TestNoDefaultAgent:
             return "answer"
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is True
         assert result.error is None
 
@@ -700,7 +702,7 @@ class TestDryRunCheckOnly:
             return "should not be called"
 
         rt = WorkflowRuntime(default_agent=agent)
-        result = rt.run('let x = ask "hi"', check_only=True)
+        result = rt.run('let x = ask "hi"\nx', check_only=True)
         assert result.ok is True
         # The agent must never be invoked during a dry run.
         assert calls == []
@@ -781,6 +783,7 @@ class TestWarningsThreadedOnFailurePaths:
                 call_sites=checked.call_sites,
                 warnings=(*checked.warnings, warning),
                 type_env=checked.type_env,
+                function_signatures=checked.function_signatures,
             )
 
         monkeypatch.setattr(tc_mod, "check", check_with_warning)
@@ -872,7 +875,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         tc, jc = TextCodec(), JsonCodec()
         assert tc.name == "text"
         assert jc.name == "json"
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is True
 
 
@@ -917,7 +920,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         rt = WorkflowRuntime()
         rt.register_codec(FooCodec())
         # The program just needs to run without capability errors.
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert result.ok is True
 
     def test_as_renderer_syntax_is_parse_error(self) -> None:
@@ -1085,6 +1088,57 @@ class TestRenderValue:
         assert "fatal" in out, f"Expected message value in output: {out!r}"
         assert "abc123" in out, f"Expected trace_id value in output: {out!r}"
         assert "<dsl-value" not in out, f"Expected no boundary tags: {out!r}"
+
+    def test_unit_value_renders_as_unit_literal(self) -> None:
+        """Unit value (``()``) renders as the literal text ``'()'``.
+
+        In v2, unit is a first-class value returned by expressions like
+        ``print(x)`` and unit-yielding if/do/try branches.  The renderer must
+        produce a stable, human-readable representation rather than crashing.
+        """
+        from agm.agl.eval.values import UnitValue
+        from agm.agl.runtime.render import render_value
+
+        assert render_value(UnitValue()) == "()"
+
+    def test_agent_value_renders_as_angle_bracket_form(self) -> None:
+        """AgentValue renders as ``<agent NAME>`` — no crash, no JSON attempt."""
+        from agm.agl.eval.values import AgentValue
+        from agm.agl.runtime.render import render_value
+
+        rendered = render_value(AgentValue(name="reviewer"))
+        assert rendered == "<agent reviewer>"
+
+    def test_closure_renders_as_function_surface_form(self) -> None:
+        """Closure renders as ``<function/N -> T>`` — no crash, no JSON attempt.
+
+        The surface form uses the arity (from ``params``) and the declared
+        return type (from ``return_type``), both of which every Closure carries.
+        """
+        from agm.agl.eval.values import Closure
+        from agm.agl.runtime.render import render_value
+
+        # Obtain a real Closure via an AgL program (fn expression bound to let).
+        rt = WorkflowRuntime()
+        result = rt.run("let f = fn(x: int, y: int) -> int => x + y\nf\n")
+        assert result.ok is True
+        closure = result.bindings["f"]
+        assert isinstance(closure, Closure)
+        rendered = render_value(closure)
+        # Arity 2, return type int.
+        assert rendered == "<function/2 -> int>"
+
+    def test_closure_zero_arity_renders_correctly(self) -> None:
+        """A zero-parameter closure renders as ``<function/0 -> T>``."""
+        from agm.agl.eval.values import Closure
+        from agm.agl.runtime.render import render_value
+
+        rt = WorkflowRuntime()
+        result = rt.run("let thunk = fn() -> int => 42\nthunk\n")
+        assert result.ok is True
+        closure = result.bindings["thunk"]
+        assert isinstance(closure, Closure)
+        assert render_value(closure) == "<function/0 -> int>"
 
 
 # ---------------------------------------------------------------------------
@@ -1296,7 +1350,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 
@@ -1314,7 +1368,7 @@ class TestRuntimeErrorPaths:
             )
 
         rt = WorkflowRuntime(default_agent=bad_agent)
-        result = rt.run('let x = ask "hi"')
+        result = rt.run('ask "hi"')
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "Abort"
@@ -1402,7 +1456,7 @@ class TestRuntimeErrorPaths:
 
         rt = WorkflowRuntime()
         with pytest.raises(RuntimeError, match="internal crash"):
-            rt.run("let x = 1")
+            rt.run("let x = 1\nx")
 
     def test_exception_value_to_run_error_maps_all_field_kinds(self) -> None:
         """exception_value_to_run_error converts every Value kind to JSON shape.
@@ -1497,7 +1551,7 @@ class TestRuntimeErrorPaths:
         monkeypatch.setattr(Interpreter, "execute", bad_execute)
 
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1")
+        result = rt.run("let x = 1\nx")
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "Abort"
@@ -1581,7 +1635,7 @@ class TestUniformRenderingInPrompts:
 
         rt = WorkflowRuntime(default_agent=agent)
         result = rt.run(
-            'input x\nlet y = ask "see: ${x}"',
+            'input x\nask("see: ${x}")',
             inputs={"x": "hello"},
         )
         assert result.ok is True
@@ -1599,7 +1653,7 @@ class TestUniformRenderingInPrompts:
 
         rt = WorkflowRuntime(default_agent=agent)
         result = rt.run(
-            'let items: list[text] = ["a", "b"]\nlet y = ask "items: ${items}"',
+            'let items: list[text] = ["a", "b"]\nask("items: ${items}")',
         )
         assert result.ok is True
         prompt = received[0].prompt
@@ -1650,7 +1704,8 @@ class TestMaxIterationsExceededSchema:
         rt = WorkflowRuntime()
         program = (
             "try\n"
-            "  do[1] pass until false\n"
+            "  do[1] ()\n"
+            "  until false\n"
             "catch MaxIterationsExceeded as e =>\n"
             "  print e.metadata\n"
         )
@@ -1667,7 +1722,8 @@ class TestMaxIterationsExceededSchema:
         program = (
             "let done = false\n"
             "try\n"
-            "  do[1] pass until done\n"
+            "  do[1] ()\n"
+            "  until done\n"
             "catch MaxIterationsExceeded as e =>\n"
             "  print e.condition\n"
             "  print e.last_condition_value\n"
@@ -1819,7 +1875,7 @@ class TestTabWarningsInRunResult:
 
     def test_tab_warning_does_not_affect_ok(self) -> None:
         # A tab warning must not cause ok to become False.
-        source = "let\tx = 1"
+        source = "let\tx = 1\nx"
         rt = WorkflowRuntime()
         result = rt.run(source)
         assert result.ok is True
@@ -1936,14 +1992,14 @@ class TestAgentReconciliation:
 
         rt = WorkflowRuntime()
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nlet x = impl "do it"')
+        result = rt.run('agent impl\nask("do it", agent: impl)')
         assert result.ok is True
         assert calls == ["do it"]
 
     def test_declared_with_default_agent_runs(self) -> None:
         # No dedicated registration, but a default agent backs the declared name.
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
-        result = rt.run('agent any_name\nlet x = any_name "hi"')
+        result = rt.run('agent any_name\nask("hi", agent: any_name)')
         assert result.ok is True
 
     def test_both_error_categories_reported_together(self) -> None:
@@ -1968,3 +2024,329 @@ class TestAgentReconciliation:
         rt.register_agent("ghost", agent)
         rt.run('print "side effect?"')
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Coverage: schema.py — derive_schema branches not exercised higher up
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveSchema:
+    """Unit tests for derive_schema covering all type branches."""
+
+    def test_bool_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import BoolType
+
+        assert derive_schema(BoolType()) == {"type": "boolean"}
+
+    def test_json_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import JsonType
+
+        assert derive_schema(JsonType()) == {}
+
+    def test_dict_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import DictType, IntType
+
+        result = derive_schema(DictType(value=IntType()))
+        assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
+
+    def test_record_type(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import RecordType, TextType
+
+        result = derive_schema(RecordType(name="Point", fields={"x": TextType()}))
+        assert result["type"] == "object"
+        assert result["required"] == ["x"]
+        assert result["additionalProperties"] is False
+
+    def test_enum_type_with_payload(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import EnumType, TextType
+
+        typ = EnumType(
+            name="Status",
+            variants={"Pass": {}, "Fail": {"reason": TextType()}},
+        )
+        result = derive_schema(typ)
+        assert "oneOf" in result
+        assert len(result["oneOf"]) == 2
+
+    def test_exception_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import ExceptionType
+
+        with pytest.raises(TypeError, match="ExceptionType"):
+            derive_schema(ExceptionType(name="MyErr", fields={}))
+
+    def test_unit_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import UnitType
+
+        with pytest.raises(TypeError, match="UnitType"):
+            derive_schema(UnitType())
+
+    def test_agent_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import AgentType
+
+        with pytest.raises(TypeError, match="AgentType"):
+            derive_schema(AgentType())
+
+    def test_function_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import FunctionType, TextType
+
+        with pytest.raises(TypeError, match="FunctionType"):
+            derive_schema(FunctionType(params=(TextType(),), result=TextType()))
+
+    def test_bottom_type_raises(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.typecheck.types import BottomType
+
+        with pytest.raises(TypeError, match="BottomType"):
+            derive_schema(BottomType())
+
+
+# ---------------------------------------------------------------------------
+# Coverage: serialize.py — v2 opaque value TypeError branches
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeV2OpaqueValues:
+    """UnitValue, AgentValue, and Closure have no JSON representation (D9)."""
+
+    def test_unit_value_raises(self) -> None:
+        from agm.agl.eval.values import UnitValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        with pytest.raises(TypeError, match="UnitValue"):
+            value_to_json_obj(UnitValue())
+
+    def test_agent_value_raises(self) -> None:
+        from agm.agl.eval.values import AgentValue
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        with pytest.raises(TypeError, match="AgentValue"):
+            value_to_json_obj(AgentValue(name="myagent"))
+
+    def test_closure_raises(self) -> None:
+        from agm.agl.eval.values import Closure
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        # Retrieve a real Closure from an AgL program (fn expression bound to let).
+        rt = WorkflowRuntime()
+        result = rt.run("let f = fn(x: int) -> int => x + 1\nf\n")
+        assert result.ok is True
+        closure = result.bindings["f"]
+        assert isinstance(closure, Closure)
+        with pytest.raises(TypeError, match="Closure"):
+            value_to_json_obj(closure)
+
+
+# ---------------------------------------------------------------------------
+# Coverage: runtime.py — uncovered branches and new v2 properties
+# ---------------------------------------------------------------------------
+
+
+class TestRunErrorToMessage:
+    """RunError.to_message with include_trace_id=True/False."""
+
+    def test_to_message_with_trace_id(self) -> None:
+        from agm.agl.runtime.runtime import RunError
+
+        err = RunError(
+            type_name="AgentParseError",
+            fields={"message": "bad output", "trace_id": "abc123"},
+            line=5,
+            col=3,
+        )
+        msg = err.to_message(include_trace_id=True)
+        assert "trace_id=abc123" in msg
+        assert "at line 5, col 3" in msg
+
+    def test_to_message_without_trace_id(self) -> None:
+        from agm.agl.runtime.runtime import RunError
+
+        err = RunError(
+            type_name="SomeError",
+            fields={"message": "oops"},
+            line=2,
+        )
+        msg = err.to_message(include_trace_id=False)
+        assert "trace_id" not in msg
+        assert "at line 2" in msg
+
+
+class TestHostEnvironmentCache:
+    """WorkflowRuntime.host_environment() caches and is invalidated on registration."""
+
+    def test_host_environment_returns_same_object_on_second_call(self) -> None:
+        rt = WorkflowRuntime()
+        env1 = rt.host_environment()
+        env2 = rt.host_environment()
+        assert env1 is env2
+
+    def test_register_agent_invalidates_cache(self) -> None:
+        rt = WorkflowRuntime()
+        env1 = rt.host_environment()
+        rt.register_agent("impl", lambda req: "ok")
+        env2 = rt.host_environment()
+        assert env1 is not env2
+
+
+class TestRegisterCodecErrors:
+    """register_codec raises for reserved names and duplicates."""
+
+    def _make_codec(self, name: str) -> OutputCodec:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
+        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.typecheck.types import TextType, Type
+
+        class _Codec(OutputCodec):
+            @property
+            def name(self) -> str:
+                return _name
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(self, type_ref: Type) -> OutputContract:
+                return OutputContract(
+                    target_type=type_ref,
+                    codec=TextCodec(),
+                    strict_json=None,
+                    format_instructions="",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+            ) -> ParseResult:
+                return ParseResult.success(TextValue(""))
+
+        _name = name
+        return _Codec()
+
+    def test_reserved_name_raises(self) -> None:
+        rt = WorkflowRuntime()
+        codec = self._make_codec("text")  # "text" is a builtin codec name
+        with pytest.raises(ValueError, match="reserved"):
+            rt.register_codec(codec)
+
+    def test_duplicate_name_raises(self) -> None:
+        rt = WorkflowRuntime()
+        codec1 = self._make_codec("mycodec")
+        codec2 = self._make_codec("mycodec")
+        rt.register_codec(codec1)
+        with pytest.raises(ValueError, match="already registered"):
+            rt.register_codec(codec2)
+
+
+class TestDefaultCallDepthLimit:
+    """default_call_depth_limit constructor parameter and property."""
+
+    def test_default_is_256(self) -> None:
+        rt = WorkflowRuntime()
+        assert rt.default_call_depth_limit == 256
+
+    def test_custom_value_is_observable(self) -> None:
+        rt = WorkflowRuntime(default_call_depth_limit=128)
+        assert rt.default_call_depth_limit == 128
+
+
+class TestConvertInputUnsupportedType:
+    """convert_input raises ValueError for unsupported types (e.g. ListType of records)."""
+
+    def test_unsupported_type_raises(self) -> None:
+        from agm.agl.runtime.runtime import convert_input
+        from agm.agl.typecheck.types import AgentType
+
+        with pytest.raises(ValueError, match="unsupported type"):
+            convert_input("x", "agent_val", AgentType())
+
+
+# ---------------------------------------------------------------------------
+# New v2 feature tests: user-defined functions, ExecResult, ask with AgentValue
+# ---------------------------------------------------------------------------
+
+
+class TestV2UserDefinedFunctions:
+    """v2 def expressions: first-class functions, recursion, call depth limit."""
+
+    def test_def_call_basic(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run(
+            "def add(a: int, b: int) -> int = a + b\n"
+            "add(1, 2)\n"
+        )
+        assert result.ok is True
+
+    def test_def_recursive_call(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run(
+            "def fact(n: int) -> int =\n"
+            "  if n <= 1 =>\n"
+            "    1\n"
+            "  | else =>\n"
+            "    n * fact(n - 1)\n"
+            "fact(5)\n"
+        )
+        assert result.ok is True
+
+    def test_def_call_depth_limit_enforced(self) -> None:
+        """Exceeding max_call_depth raises a RecursionError (D8)."""
+        rt = WorkflowRuntime(default_call_depth_limit=10)
+        result = rt.run(
+            "def inf(n: int) -> int =\n"
+            "  inf(n + 1)\n"
+            "inf(0)\n"
+        )
+        assert result.ok is False
+
+
+class TestV2ExecStructuredForm:
+    """v2 exec structured form: let x: T = exec ... raises on nonzero."""
+
+    def test_exec_text_form_captures_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('let out: text = exec "echo hello"\nprint out\n')
+        assert result.ok is True
+        captured = capsys.readouterr()
+        assert "hello" in captured.out
+
+    def test_exec_nonzero_raises_when_typed(self) -> None:
+        rt = WorkflowRuntime()
+        result = rt.run('let out: text = exec "false"\nprint out\n')
+        assert result.ok is False
+        # Uncaught AgL exception (exit 2 semantics): error is set
+        assert result.error is not None
+
+
+class TestV2AskWithAgentValue:
+    """ask(..., agent: <agent_value>) dispatches to the named agent."""
+
+    def test_ask_dispatches_to_named_agent(self) -> None:
+        received: list[str] = []
+
+        def agent(req: AgentRequest) -> str:
+            received.append(req.prompt)
+            return "answer"
+
+        rt = WorkflowRuntime()
+        rt.register_agent("helper", agent)
+        result = rt.run('agent helper\nask("question", agent: helper)\n')
+        assert result.ok is True
+        assert received == ["question"]

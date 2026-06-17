@@ -27,17 +27,21 @@ from __future__ import annotations
 from typing import assert_never
 
 from agm.agl.typecheck.types import (
+    AgentType,
     BoolType,
+    BottomType,
     DecimalType,
     DictType,
     EnumType,
     ExceptionType,
+    FunctionType,
     IntType,
     JsonType,
     ListType,
     RecordType,
     TextType,
     Type,
+    UnitType,
 )
 
 
@@ -76,6 +80,16 @@ def derive_schema(typ: Type) -> dict[str, object]:
             f"ExceptionType {typ.name!r} has no JSON Schema; exceptions are not "
             "wire-serialised by the JSON codec."
         )
+    if isinstance(typ, UnitType):
+        raise TypeError("UnitType has no JSON Schema; unit is not wire-serialised.")
+    if isinstance(typ, AgentType):
+        raise TypeError("AgentType has no JSON Schema; agent values are not wire-serialised.")
+    if isinstance(typ, FunctionType):
+        raise TypeError(
+            "FunctionType has no JSON Schema; function values are not wire-serialised."
+        )
+    if isinstance(typ, BottomType):
+        raise TypeError("BottomType has no JSON Schema; bottom type is not wire-serialised.")
     assert_never(typ)  # pragma: no cover
 
 

@@ -267,6 +267,10 @@ class WorkflowRuntime:
         §4.12, §11.13).  ``None`` means no timeout (the shell command may run
         indefinitely).  This is the ``[exec] timeout`` config value, threaded
         in from the CLI (plan §10.3).
+    default_call_depth_limit : int
+        Maximum call depth for recursive functions (design §D8).  Exceeding
+        this limit raises a ``RecursionError`` in the AgL program.  Default
+        is 256.
     """
 
     def __init__(
@@ -276,11 +280,13 @@ class WorkflowRuntime:
         default_strict_json: bool = False,
         default_agent: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
+        default_call_depth_limit: int = 256,
     ) -> None:
         self._default_loop_limit = default_loop_limit
         self._default_strict_json = default_strict_json
         self._default_agent = default_agent
         self._shell_exec_timeout = shell_exec_timeout
+        self._default_call_depth_limit = default_call_depth_limit
         self._agents: dict[str, AgentFn] = {}
         # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
@@ -574,7 +580,7 @@ class WorkflowRuntime:
         # diagnostic can report the declaration site (parity with the
         # type-invalid path, which already uses ``stmt.span``).
         declared_input_lines: dict[str, int] = {}  # name → declaration line
-        for stmt in program.body:
+        for stmt in program.body.items:
             if isinstance(stmt, InputDecl):
                 input_type = checked.type_env.get_binding_type(stmt.node_id)
                 if input_type is None:
@@ -647,7 +653,7 @@ class WorkflowRuntime:
         root_scope = Scope(parent=None)
         input_bind_errors: list[Diagnostic] = []
 
-        for stmt in program.body:
+        for stmt in program.body.items:
             if isinstance(stmt, InputDecl):
                 raw_val = inputs[stmt.name]
                 input_type_obj = declared_inputs[stmt.name]
@@ -721,6 +727,7 @@ class WorkflowRuntime:
             source=source,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
+            max_call_depth=self._default_call_depth_limit,
         )
 
         try:
@@ -777,6 +784,11 @@ class WorkflowRuntime:
     def shell_exec_timeout(self) -> float | None:
         """Idle timeout in seconds for ``exec`` shell calls (``None`` = no timeout)."""
         return self._shell_exec_timeout
+
+    @property
+    def default_call_depth_limit(self) -> int:
+        """Maximum call depth for recursive functions."""
+        return self._default_call_depth_limit
 
 
 # ---------------------------------------------------------------------------

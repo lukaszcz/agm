@@ -198,9 +198,9 @@ class TestMultiline:
         [
             ("record R", "  x: int", "R declared"),
             ("enum E", "| A", "E declared"),
-            ("if 1 = 1 =>", '  print "hi"', "hi"),
-            ("do", "  pass\nuntil 1 = 1", None),
-            ("try", "  pass\ncatch _ =>\n  pass", None),
+            ("if 1 = 1 =>", '  "hi"', "hi"),
+            ("do", "  ()\nuntil 1 = 1", None),
+            ("try", "  ()\ncatch _ =>\n  ()", None),
             ("case 1 of", "| _ => 7", None),
         ],
     )
@@ -694,7 +694,7 @@ class TestStyledLinesBucketing:
     us compare before/after without needing a full prompt_toolkit Document.
     """
 
-    _MULTILINE_TEXT = "let x = 42\nlet y = x + 1\nprint y"
+    _MULTILINE_TEXT = "let x = 42\nlet y = x + 1\nlet z = y + 1"
 
     def _get_styled_lines(self, text: str) -> list[list[tuple[str, str]]]:
         """Return per-line fragments as plain lists for easy comparison."""
@@ -717,7 +717,7 @@ class TestStyledLinesBucketing:
         # Line 0: 'let x = 42' — 'let' should be styled as keyword
         line0_styles = {style for style, _ in styled[0]}
         assert "class:agl.keyword" in line0_styles
-        # Line 2: 'print y' — 'print' should be styled as keyword
+        # Line 2: 'let z = y + 1' — 'let' should be styled as keyword
         line2_styles = {style for style, _ in styled[2]}
         assert "class:agl.keyword" in line2_styles
 

@@ -339,7 +339,7 @@ class TestExecCommandBehavior:
     ) -> None:
         """A valid .agl file with no agent calls exits 0 (success)."""
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
         from agm.commands.args import ExecArgs
 
         args = ExecArgs(
@@ -664,7 +664,7 @@ class TestExecParsesSourceOnce:
         agl_file = tmp_path / "prog.agl"
         # A declared+called agent: exec must read the inventory AND run the
         # static pipeline, the exact scenario that previously parsed twice.
-        agl_file.write_text('agent impl\nlet x = impl "do it"\n')
+        agl_file.write_text('agent impl\nask("do it", agent: impl)\n')
 
         real_parse = parser_mod.parse_program
         real_resolve = scope_mod.resolve
@@ -718,7 +718,7 @@ class TestExecCommandM1:
 
     def test_valid_program_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
         from agm.commands.args import ExecArgs
 
         args = ExecArgs(
@@ -779,7 +779,7 @@ class TestExecCommandM1:
         from agm.commands.args import ExecArgs
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask "hi"\n')
+        agl_file.write_text('ask("hi")\n')
 
         args = ExecArgs(
             file=str(agl_file),
@@ -924,7 +924,7 @@ class TestExecConfigWiring:
 
         home = self._config_home(tmp_path)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -955,7 +955,7 @@ class TestExecConfigWiring:
 
         home = self._config_home(tmp_path)  # config sets strict_json = true
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -990,7 +990,7 @@ class TestExecConfigWiring:
         (home / ".agm" / "config.toml").write_text("[exec]\ntimeout = 60\n")
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         monkeypatch.setattr(
             exec_command,
@@ -1141,7 +1141,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask "Hello"\n')
+        agl_file.write_text('let x = ask("Hello")\nx\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1152,7 +1152,7 @@ class TestDryRunInventory:
         assert "text" in captured.out
         # The entry surfaces both the source line and column as "line N:C:"
         # (F7: the captured call-site column is not dead).  `ask` starts at
-        # column 9 of `let x = ask "Hello"`.
+        # column 9 of `let x = ask("Hello")`.
         assert "line 1:9:" in captured.out
 
     def test_dry_run_inventory_named_agent(
@@ -1167,12 +1167,14 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent reviewer\nlet r = reviewer "Review this"\n')
+        agl_file.write_text('agent reviewer\nask("Review this", agent: reviewer)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
         captured = capsys.readouterr()
-        assert "reviewer" in captured.out
+        # In v2, named-agent calls use ask(..., agent: name); the inventory
+        # shows "ask" as the callee (the agent: arg is a routing hint, not the callee).
+        assert "ask" in captured.out
 
     def test_dry_run_inventory_abort_policy(
         self,
@@ -1186,7 +1188,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask[on_parse_error: abort] "Hello"\n')
+        agl_file.write_text('ask("Hello", on_parse_error: Abort)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1270,7 +1272,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(exec_command, "WorkflowRuntime", SpyRuntime)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x = ask "Hi"\n')
+        agl_file.write_text('ask("Hi")\n')
 
         assert exec_command.run(_exec_args(agl_file)) is None
         assert agent_calls == []
@@ -1431,7 +1433,7 @@ class TestUncaughtExceptionOutputFormat:
         """Exit-2 stderr must include the source line number of the raise site."""
         agl_file = tmp_path / "prog.agl"
         # Force an uncaught AgentParseError from an exec call on line 1.
-        agl_file.write_text('let x: int = exec "echo not-an-int"\n')
+        agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._exec_args_nolog(agl_file))
         assert exc_info.value.code == 2
@@ -1448,7 +1450,7 @@ class TestUncaughtExceptionOutputFormat:
         """Exit-2 stderr must include the trace_id when it is non-empty."""
         log_file = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('let x: int = exec "echo not-an-int"\n')
+        agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
         from agm.commands.args import ExecArgs
         args = ExecArgs(
             file=str(agl_file),
@@ -1892,7 +1894,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner %{PROMPT_FILE}"\n'
-            'let x = impl "do it"\n'
+            'let x = ask("do it", agent: impl)\n'
             "print x\n"
         )
 
@@ -1917,7 +1919,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         # ``impl`` is declared BARE (no ``= "runner"`` hint).
-        agl_file.write_text('agent impl\nlet x = impl "do it"\nprint x\n')
+        agl_file.write_text('agent impl\nlet x = ask("do it", agent: impl)\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -1945,9 +1947,9 @@ class TestExecAgentPrecedence:
             'agent a = "source-a %{PROMPT_FILE}"\n'  # config override → CONFIG-A
             'agent b = "source-b %{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
             "agent c\n"  # bare, no config entry → DEFAULT
-            'let ra = a "first"\n'
-            'let rb = b "second"\n'
-            'let rc = c "third"\n'
+            'let ra = ask("first", agent: a)\n'
+            'let rb = ask("second", agent: b)\n'
+            'let rc = ask("third", agent: c)\n'
             "print ra\n"
             "print rb\n"
             "print rc\n"
@@ -1977,7 +1979,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner %{PROMPT_FILE}"\n'
-            'let x = impl "do it"\n'
+            'let x = ask("do it", agent: impl)\n'
             "print x\n"
         )
 
@@ -1996,7 +1998,7 @@ class TestExecAgentPrecedence:
         _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent impl\nlet x = impl "do it"\nprint x\n')
+        agl_file.write_text('agent impl\nlet x = ask("do it", agent: impl)\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -2019,7 +2021,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner --file=%{PROMPT_FILE}"\n'
-            'let x = impl "do it"\n'
+            'let x = ask("do it", agent: impl)\n'
             "print x\n"
         )
 
@@ -2047,7 +2049,7 @@ class TestExecAgentPrecedence:
         agl_file.write_text(
             "agent impl\n"
             'let a = ask "first"\n'
-            'let b = impl "second"\n'
+            'let b = ask("second", agent: impl)\n'
             "print a\n"
             "print b\n"
         )
@@ -2221,7 +2223,7 @@ class TestExecPragmaPrecedence:
         """``config strict_json = true`` in source sets ``default_strict_json=True``
         on the WorkflowRuntime (observable via the spy pattern)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = true\nlet x = 1\n")
+        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2233,7 +2235,7 @@ class TestExecPragmaPrecedence:
     ) -> None:
         """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict_json = true``."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = true\nlet x = 1\n")
+        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file, strict_json=False))
@@ -2258,7 +2260,7 @@ class TestExecPragmaPrecedence:
         monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: strict_config)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = false\nlet x = 1\n")
+        agl_file.write_text("config strict_json = false\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2274,7 +2276,7 @@ class TestExecPragmaPrecedence:
     ) -> None:
         """``config timeout = "30s"`` in source sets shell_exec_timeout=30.0."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('config timeout = "30s"\nlet x = 1\n')
+        agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2286,7 +2288,7 @@ class TestExecPragmaPrecedence:
     ) -> None:
         """``config timeout = 60`` (integer) in source sets shell_exec_timeout=60.0."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config timeout = 60\nlet x = 1\n")
+        agl_file.write_text("config timeout = 60\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2311,7 +2313,7 @@ class TestExecPragmaPrecedence:
         monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: config_with_timeout)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('config timeout = "30s"\nlet x = 1\n')
+        agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2480,7 +2482,7 @@ class TestExecPragmaPrecedence:
         the subprocess world.
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('config runner = "my-runner"\nlet x = 1\n')
+        agl_file.write_text('config runner = "my-runner"\nlet x = 1\nx\n')
 
         captured_runner: list[str] = []
 
@@ -2512,7 +2514,7 @@ class TestExecPragmaPrecedence:
     ) -> None:
         """CLI ``--runner`` overrides ``config runner`` pragma."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('config runner = "pragma-runner"\nlet x = 1\n')
+        agl_file.write_text('config runner = "pragma-runner"\nlet x = 1\nx\n')
 
         captured_runner: list[str] = []
 

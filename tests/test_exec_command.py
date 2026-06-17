@@ -1648,7 +1648,9 @@ class TestExecPerAgentRunnerValidation:
             timeout=None,
             agents={"ghost": "bad 'quote"},  # malformed, but for an undeclared agent
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: bad_config)
+        monkeypatch.setattr(
+            exec_command, "exec_config_from_merged", lambda *_a, **_k: bad_config
+        )
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('print "ran"\n')
         # Must not raise (the inert ghost command is never validated/dispatched).
@@ -2725,3 +2727,44 @@ class TestExecParamOptionBeforeFile:
         args = recorded_runs[0]
         assert getattr(args, "file") is None
         assert getattr(args, "command") is not None
+
+
+class TestExecLoadsMergedConfigOnce:
+    """``agm exec`` merges the config-file stack exactly ONCE per invocation.
+
+    Regression guard: a program with ``param`` declarations needs both the
+    ``[exec]`` section and the ``[params.<key>]`` table.  Both must be derived
+    from a single merged-config load so the config files are not read and merged
+    twice on every invocation.
+    """
+
+    def test_param_program_loads_merged_config_exactly_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = _make_config_home(tmp_path, '[params.prog]\ngreeting = "world"\n')
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("param greeting: text\nprint greeting\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        real_load = exec_command.load_merged_config
+        merge_calls = 0
+
+        def counting_load(
+            *, home: Path, proj_dir: Path | None, cwd: Path
+        ) -> dict[str, object]:
+            nonlocal merge_calls
+            merge_calls += 1
+            return real_load(home=home, proj_dir=proj_dir, cwd=cwd)
+
+        monkeypatch.setattr(exec_command, "load_merged_config", counting_load)
+
+        assert exec_command.run(_exec_args_for_config(agl_file)) is None
+        assert capsys.readouterr().out == "world\n"
+        assert merge_calls == 1

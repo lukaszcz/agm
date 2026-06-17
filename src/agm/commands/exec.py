@@ -49,7 +49,11 @@ from agm.commands.param_options import (
     resolve_param_values,
 )
 from agm.config.context import current_config_context
-from agm.config.general import load_exec_config, load_params_config
+from agm.config.general import (
+    exec_config_from_merged,
+    load_merged_config,
+    params_config_from_merged,
+)
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log
@@ -69,10 +73,14 @@ def run(args: ExecArgs) -> None:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
 
-    # Load [exec] configuration; CLI flags override config values.
+    # Merge the config-file stack ONCE; both the [exec] section and the
+    # [params.<key>] table (and the default-runner [loop] lookup below) are
+    # derived from this single merged dict, so the files are read and merged
+    # only once per invocation.
     ctx = current_config_context()
     try:
-        config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+        merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+        config = exec_config_from_merged(merged_config)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -93,7 +101,7 @@ def run(args: ExecArgs) -> None:
     # Resolve the runner command: CLI flag > [exec] config > shared loop
     # default (the same default used by agm loop/review, per plan §9.5).
     # ----------------------------------------------------------------
-    runner_cmd = args.runner or config.runner or default_agent_runner()
+    runner_cmd = args.runner or config.runner or default_agent_runner(merged=merged_config)
 
     # Validate the resolved runner command eagerly: malformed quoting (e.g.
     # unclosed quote) and whitespace-only values are caught here via
@@ -215,12 +223,7 @@ def run(args: ExecArgs) -> None:
             param_config_key = None
 
         if param_config_key is not None:
-            config_param_values = load_params_config(
-                param_config_key,
-                home=ctx.home,
-                proj_dir=ctx.proj_dir,
-                cwd=ctx.cwd,
-            )
+            config_param_values = params_config_from_merged(merged_config, param_config_key)
         else:
             config_param_values = {}
 

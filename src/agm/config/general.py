@@ -329,6 +329,23 @@ def load_loop_config(
     require_command: bool = False,
 ) -> LoopConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    return loop_config_from_merged(
+        merged, command_name=command_name, require_command=require_command
+    )
+
+
+def loop_config_from_merged(
+    merged: TomlDict,
+    *,
+    command_name: str | None = None,
+    require_command: bool = False,
+) -> LoopConfig:
+    """Build :class:`LoopConfig` from an already-merged config dict.
+
+    Split out from :func:`load_loop_config` so a caller that already holds a
+    merged config (e.g. ``agm exec`` resolving its default runner) can derive
+    the ``[loop]`` section without re-reading and re-merging the files.
+    """
     selected_loop_table = _select_command_table(
         toml_dict(merged.get("loop")),
         section_name="loop",
@@ -534,6 +551,18 @@ def load_exec_config(
     per-command override sub-table.
     """
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    return exec_config_from_merged(merged, command_name=command_name)
+
+
+def exec_config_from_merged(
+    merged: TomlDict, *, command_name: str | None = None
+) -> ExecConfig:
+    """Build :class:`ExecConfig` from an already-merged config dict.
+
+    Split out from :func:`load_exec_config` so a caller that already holds a
+    merged config (e.g. ``agm exec``, which also needs ``[params.<key>]``) can
+    derive the ``[exec]`` section without re-reading and re-merging the files.
+    """
     # ``agents`` is a reserved structural sub-table, not a workflow override:
     # selecting it as a command would merge the agent map in as scalar config.
     selected_command = None if command_name == "agents" else command_name
@@ -625,6 +654,18 @@ def load_params_config(
     ``convert_input`` will parse them correctly via ``json.loads(parse_float=Decimal)``.
     """
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    return params_config_from_merged(merged, program_name)
+
+
+def params_config_from_merged(
+    merged: TomlDict, program_name: str
+) -> dict[str, object]:
+    """Return the ``[params.<program_name>]`` table from an already-merged config.
+
+    Split out from :func:`load_params_config` so ``agm exec`` can derive the
+    param table from the same merged config it already loaded for ``[exec]``,
+    rather than re-reading and re-merging every config file.
+    """
     params_section = toml_dict(merged.get("params"))
     program_table = params_section.get(program_name)
     if isinstance(program_table, dict):

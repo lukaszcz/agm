@@ -224,6 +224,25 @@ class TestOperators:
     def test_colon(self) -> None:
         assert tok(":") == [("COLON", ":")]
 
+    def test_dcolon(self) -> None:
+        # ``::`` is the type-argument introducer for typed calls
+        # (``ask-request::[Review](...)``); maximal munch wins over two COLONs.
+        assert tok("::") == [("DCOLON", "::")]
+
+    def test_dcolon_maximal_munch_before_colon(self) -> None:
+        # A single ``:`` still lexes as COLON even when adjacent to ``::``;
+        # the scanner consumes the ``::`` greedily, leaving a lone ``:``.
+        assert tok(":: :") == [("DCOLON", "::"), ("COLON", ":")]
+        assert tok(": ::") == [("COLON", ":"), ("DCOLON", "::")]
+
+    def test_dcolon_not_part_of_identifier(self) -> None:
+        # ``::`` breaks an identifier scan (``:`` is a stop character), so a
+        # ``name::`` tail does not glue into the identifier.
+        assert tok("ask-request::[Review]") == [
+            ("VAR_NAME", "ask-request"), ("DCOLON", "::"), ("LSQB", "["),
+            ("TYPE_NAME", "Review"), ("RSQB", "]"),
+        ]
+
     def test_comma(self) -> None:
         assert tok(",") == [("COMMA", ",")]
 

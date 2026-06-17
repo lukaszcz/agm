@@ -1386,6 +1386,26 @@ class TestVisitorWalk:
         for kind in type_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
 
+    def test_walk_visits_typed_call_type_arg(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        # A Call with ``type_arg`` set: walk must descend into the type_arg so
+        # the TypeExpr node is visited (covers the type_arg traversal branch).
+        callee = VarRef(name="ask-request", span=self._s(), node_id=700)
+        type_arg = NameT(name="Review", span=self._s(), node_id=701)
+        call = Call(
+            callee=callee,
+            args=(StringLit(value="q", span=self._s(), node_id=702),),
+            named_args=(),
+            type_arg=type_arg,
+            span=self._s(),
+            node_id=703,
+        )
+        visited: list[object] = []
+        walk(call, visited.append)
+        assert type_arg in visited
+        assert callee in visited
+
     def test_walk_visits_all_pattern_kinds(self) -> None:
         from agm.agl.syntax.visitor import walk
 

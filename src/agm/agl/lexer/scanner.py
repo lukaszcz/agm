@@ -42,6 +42,7 @@ from agm.agl.lexer.tokens import (
     ARROW,
     COLON,
     COMMA,
+    DCOLON,
     DECIMAL,
     DOT,
     EQ,
@@ -90,7 +91,7 @@ from agm.agl.lexer.tokens import (
 # and arbitrary Unicode letters/digits — is an identifier-continuation
 # character, so names like ``ask-prompt``, ``ask?``, ``do-it-now!``, ``a+b``
 # and ``foo"bar`` scan as a single token.  Operator tokens (``->``, ``=>``,
-# ``!=``, ``<=``, ``>=``, ``==``, field access ``.``, etc.) still lex as
+# ``::``, ``!=``, ``<=``, ``>=``, ``==``, field access ``.``, etc.) still lex as
 # operators whenever they appear as standalone, whitespace-delimited tokens:
 # spaces (or another stop character) break the identifier before the
 # operator's first character.  A leading ``"`` or ``'`` (or one after
@@ -807,6 +808,13 @@ class _Scanner:
             yield self._make_token(MINUS, "-", start_pos, start_line, start_col)
             return
 
+        # "::" is DCOLON (type-argument introducer for typed calls, e.g.
+        # ask-request::[Review](...)); bare ":" is COLON.  Maximal munch:
+        # check the next character before falling back to the single-char op.
+        if ch == ":" and self._peek() == ":":
+            self._advance()
+            yield self._make_token(DCOLON, "::", start_pos, start_line, start_col)
+            return
         # Single-char operators
         if ch in _SINGLE_OPS:
             yield self._make_token(_SINGLE_OPS[ch], ch, start_pos, start_line, start_col)

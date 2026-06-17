@@ -839,6 +839,114 @@ class TestAsk:
 
 
 # ---------------------------------------------------------------------------
+# ask-request() builtin
+# ---------------------------------------------------------------------------
+
+
+class TestAskRequest:
+    """``ask-request`` is the side-effect-free twin of ``ask``: it builds the
+    ``AgentRequest`` that ``ask`` would dispatch, without invoking the agent."""
+
+    def test_default_target_is_text(self) -> None:
+        r = accept_type('ask-request("Q")')
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        spec = r.contract_specs[call.node_id]
+        assert spec.target_type == TextType()
+        assert spec.codec_name == "text"
+
+    def test_explicit_type_arg_drives_contract(self) -> None:
+        r = accept_type("record R\n  x: int\nask-request::[R](\"Q\")")
+        call = r.resolved.program.body.items[1]
+        assert isinstance(call, Call)
+        spec = r.contract_specs[call.node_id]
+        assert spec.codec_name == "json"
+        assert spec.target_type == r.type_env.get_type("R")
+
+    def test_returns_agent_request_type(self) -> None:
+        r = accept_type('let r = ask-request::[text]("Q")\nr')
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        binding_type = r.type_env.get_binding_type(decl.node_id)
+        assert binding_type == r.type_env.get_type("AgentRequest")
+
+    def test_contextual_expected_type_ignored(self) -> None:
+        # Unlike ``ask``, the target type is NOT inferred from context: a
+        # contextual ``AgentRequest`` annotation does NOT make ask-request target
+        # AgentRequest; the explicit ``::[int]`` drives the contract instead.
+        r = accept_type('let r: AgentRequest = ask-request::[int]("Q")\nr')
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        call = decl.value
+        assert isinstance(call, Call)
+        spec = r.contract_specs[call.node_id]
+        assert spec.target_type == IntType()
+        assert spec.codec_name == "json"
+        assert r.node_types[call.node_id] == r.type_env.get_type("AgentRequest")
+
+    def test_no_prompt_raises(self) -> None:
+        err = reject_type("ask-request::[text]()")
+        assert "prompt" in str(err).lower() or "argument" in str(err).lower()
+
+    def test_too_many_positional_raises(self) -> None:
+        err = reject_type('ask-request::[text]("a", "b")')
+        assert "positional" in str(err).lower() or "argument" in str(err).lower()
+
+    def test_unknown_named_arg_raises(self) -> None:
+        err = reject_type('ask-request::[text]("Q", bogus: 1)')
+        assert "bogus" in str(err) or "argument" in str(err).lower()
+
+    def test_function_target_rejected(self) -> None:
+        err = reject_type('ask-request::[(int) -> int]("Q")')
+        assert "function" in str(err).lower() or "agent" in str(err).lower()
+
+    def test_agent_target_rejected(self) -> None:
+        err = reject_type('ask-request::[agent]("Q")')
+        assert "function" in str(err).lower() or "agent" in str(err).lower()
+
+    def test_with_explicit_agent(self) -> None:
+        r = accept_type('agent reviewer\nask-request::[text]("Q", agent: reviewer)')
+        assert r.resolved.program is not None
+
+    def test_wrong_agent_type_raises(self) -> None:
+        err = reject_type('let x = "no"\nask-request::[text]("Q", agent: x)')
+        assert "agent" in str(err).lower()
+
+    def test_strict_json_option(self) -> None:
+        r = accept_type('ask-request::[int]("Q", format: "json", strict_json: true)')
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        spec = r.contract_specs[call.node_id]
+        assert spec.strict_json is True
+
+    def test_on_parse_error_policy_recorded(self) -> None:
+        r = accept_type('ask-request::[int]("Q", on_parse_error: Retry(n: 3))')
+        assert len(r.call_sites) == 1
+        cs = r.call_sites[0]
+        assert cs.callee == "ask-request"
+        assert cs.parse_policy == "retry[3]"
+
+    def test_call_site_record(self) -> None:
+        r = accept_type('ask-request::[text]("Q")')
+        assert len(r.call_sites) == 1
+        cs = r.call_sites[0]
+        assert cs.callee == "ask-request"
+        assert cs.parse_policy == "default"
+        assert cs.line == 1
+
+    def test_unknown_type_in_type_arg_raises(self) -> None:
+        err = reject_type('ask-request::[NoSuchType]("Q")')
+        assert "NoSuchType" in str(err) or "type" in str(err).lower()
+
+    def test_does_not_require_default_agent(self) -> None:
+        # ask-request never dispatches, so it works without a default agent.
+        r = accept_type('ask-request::[text]("Q")', capabilities=no_agent_caps())
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        assert r.contract_specs[call.node_id].target_type == TextType()
+
+
+# ---------------------------------------------------------------------------
 # exec() builtin
 # ---------------------------------------------------------------------------
 

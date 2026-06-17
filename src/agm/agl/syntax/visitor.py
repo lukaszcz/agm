@@ -455,6 +455,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(call_arg, callback)
         for call_named in node.named_args:
             walk(call_named, callback)
+        if node.type_arg is not None:
+            walk(node.type_arg, callback)
 
     elif isinstance(node, Param):
         walk(node.type_expr, callback)

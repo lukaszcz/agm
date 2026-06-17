@@ -172,6 +172,34 @@ enum ParsePolicy
 `Abort` is the portable default. `Retry(n: N)` permits up to `N`
 corrective retries after the initial attempt.
 
+### `AgentRequest` and `OutputContract`
+
+The records surfaced by `ask-request` (see [Agent calls](agent-calls.md)).
+`AgentRequest` is the first-attempt request that the matching `ask` call would
+dispatch to its agent:
+
+```text
+record AgentRequest
+  agent:           text
+  prompt:          text
+  attempt:         int
+  output_contract: OutputContract
+```
+
+`OutputContract` carries the materialized contract for the call site:
+
+```text
+record OutputContract
+  target_type:         text
+  codec_name:          text
+  strict_json:         json   (* null when the codec is not JSON-based *)
+  format_instructions: text
+  json_schema:         json   (* null when no schema applies *)
+  structured_exec:     bool
+```
+
+`target_type` is the type's display name (e.g. `"Review"`, `"text"`).
+
 ## Record types
 
 A `record` declares a nominal product type. The fields are written in an

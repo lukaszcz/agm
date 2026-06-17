@@ -178,7 +178,7 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 
 ```text
 =>   ->   =   !=   <   <=   >   >=
-+   -   *   /
+::   +   -   *   /
 (   )   [   ]   {   }
 :   ,   .   |   ;
 ```
@@ -188,6 +188,10 @@ in function type annotations (`(int) -> text`), `def` return type annotations
 (`def f(x: int) -> text = …`), and `fn` lambda return types
 (`fn(x: int) -> text => …`). `=>` is the **branch/lambda-body arrow** — it
 separates a branch condition or pattern from its body.
+
+`::` is the **typed-call introducer**: `callee::[Type](args)` passes a static
+type argument to a built-in call (e.g. `ask-request::[Review](…)`). It is a
+maximal-munch token distinct from two `:` delimiters.
 
 `==` is recognized as a distinct token solely so it can be rejected with
 the targeted error **"Use `=` for equality."** — it is not part of the

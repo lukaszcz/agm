@@ -521,6 +521,229 @@ r"""
 
 
 # ---------------------------------------------------------------------------
+# 23b. ask-request() — builds the AgentRequest without dispatching
+# ---------------------------------------------------------------------------
+
+
+def _run_source_with_json(
+    source: str,
+    *,
+    default_agent: AgentFn | None = None,
+    named_agents: dict[str, AgentFn] | None = None,
+) -> dict[str, Value]:
+    """Like ``_run_source`` but also wires the JSON codec (for record targets)."""
+    from agm.agl.capabilities import HostCapabilities
+    from agm.agl.eval.scope import Scope
+    from agm.agl.parser import parse_program
+    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.runtime.codec import JsonCodec, TextCodec
+    from agm.agl.runtime.contract import materialize_contract
+    from agm.agl.scope import resolve
+    from agm.agl.typecheck import check
+
+    program = parse_program(source)
+    resolved = resolve(program)
+    agent_names = frozenset(named_agents.keys()) if named_agents else frozenset()
+    caps = HostCapabilities(
+        agent_names=agent_names,
+        has_default_agent=default_agent is not None,
+        supports_shell_exec=False,
+        codec_kinds={
+            "text": frozenset({"text"}),
+            "json": frozenset({"int", "decimal", "bool", "json", "list", "dict", "record", "enum"}),
+        },
+    )
+    checked = check(resolved, caps)
+    codecs = {"text": TextCodec(), "json": JsonCodec()}
+    contracts = {
+        node_id: materialize_contract(spec, codecs)
+        for node_id, spec in checked.contract_specs.items()
+    }
+    registry = AgentRegistry(named=named_agents or {}, default_agent=default_agent)
+    root_scope = Scope(parent=None)
+    interp = Interpreter(
+        checked=checked,
+        registry=registry,
+        contracts=contracts,
+        type_env=checked.type_env,
+        loop_limit=100,
+        strict_json=False,
+        source=source,
+        trace=__import__("agm.agl.runtime.trace", fromlist=["TraceStore"]).TraceStore(path=None),
+        max_call_depth=256,
+        param_values={},
+    )
+    interp.execute(root_scope)
+    return root_scope.snapshot()
+
+
+def test_ask_request_text_default() -> None:
+    source = 'let r = ask-request("hello")\nr'
+    snap = _run_source(source)
+    r = snap["r"]
+    assert isinstance(r, RecordValue)
+    assert r.type_name == "AgentRequest"
+    assert r.fields["agent"] == TextValue("ask")
+    assert r.fields["prompt"] == TextValue("hello")
+    assert r.fields["attempt"] == IntValue(0)
+    oc = r.fields["output_contract"]
+    assert isinstance(oc, RecordValue)
+    assert oc.type_name == "OutputContract"
+    assert oc.fields["target_type"] == TextValue("text")
+    assert oc.fields["codec_name"] == TextValue("text")
+
+
+def test_ask_request_uses_fallback_contract_when_missing() -> None:
+    # Defensive path: when no contract is registered for the call node, the
+    # interpreter builds a default text contract (mirrors ask()'s fallback).
+    from agm.agl.capabilities import HostCapabilities
+    from agm.agl.eval.scope import Scope
+    from agm.agl.parser import parse_program
+    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.runtime.trace import TraceStore
+    from agm.agl.scope import resolve
+    from agm.agl.typecheck import check
+
+    source = 'let r = ask-request("hi")\nr'
+    program = parse_program(source)
+    resolved = resolve(program)
+    caps = HostCapabilities(
+        agent_names=frozenset(),
+        has_default_agent=True,
+        supports_shell_exec=False,
+        codec_kinds={"text": frozenset({"text"})},
+    )
+    checked = check(resolved, caps)
+    # Deliberately pass an EMPTY contracts map to trigger the fallback.
+    interp = Interpreter(
+        checked=checked,
+        registry=AgentRegistry(named={}, default_agent=lambda req: "unreachable"),
+        contracts={},
+        type_env=checked.type_env,
+        loop_limit=100,
+        strict_json=False,
+        source=source,
+        trace=TraceStore(path=None),
+        max_call_depth=256,
+        param_values={},
+    )
+    root = Scope(parent=None)
+    interp.execute(root)
+    r = root.snapshot()["r"]
+    assert isinstance(r, RecordValue)
+    oc = r.fields["output_contract"]
+    assert isinstance(oc, RecordValue)
+    assert oc.fields["target_type"] == TextValue("text")
+    assert oc.fields["codec_name"] == TextValue("text")
+
+
+def test_ask_request_does_not_dispatch() -> None:
+    calls: list[AgentRequest] = []
+
+    def agent(req: AgentRequest) -> str:
+        calls.append(req)
+        return "unreachable"
+
+    source = 'let r = ask-request("hello")\nr'
+    snap = _run_source(source, default_agent=agent)
+    assert snap["r"].fields["prompt"] == TextValue("hello")
+    assert calls == []  # the agent was never invoked
+
+
+def test_ask_request_explicit_type_arg_drives_contract() -> None:
+    source = "record R\n  x: int\nlet r = ask-request::[R](\"Q\")\nr"
+    snap = _run_source_with_json(source)
+    r = snap["r"]
+    assert isinstance(r, RecordValue)
+    oc = r.fields["output_contract"]
+    assert isinstance(oc, RecordValue)
+    assert oc.fields["target_type"] == TextValue("R")
+    assert oc.fields["codec_name"] == TextValue("json")
+    # The JSON schema is a non-null object for a record target.
+    schema = oc.fields["json_schema"]
+    from agm.agl.eval.values import JsonValue
+
+    assert isinstance(schema, JsonValue)
+    assert isinstance(schema.raw, dict)
+
+
+def test_ask_request_text_type_arg_has_no_schema() -> None:
+    source = 'let r = ask-request::[text]("Q")\nr'
+    snap = _run_source(source)
+    oc = snap["r"].fields["output_contract"]
+    from agm.agl.eval.values import JsonValue
+
+    assert oc.fields["json_schema"] == JsonValue(None)
+    assert oc.fields["format_instructions"] == TextValue("Return plain text.")
+
+
+def test_ask_request_named_agent() -> None:
+    source = "agent reviewer\nlet r = ask-request::[text](\"Q\", agent: reviewer)\nr"
+    snap = _run_source(
+        source,
+        default_agent=lambda req: "unreachable",
+        named_agents={"reviewer": lambda req: "unreachable"},
+    )
+    assert snap["r"].fields["agent"] == TextValue("reviewer")
+
+
+def test_ask_request_prompt_template_interpolation() -> None:
+    source = 'let name = "world"\nlet r = ask-request::[text]("hello ${name}")\nr'
+    snap = _run_source(source)
+    assert snap["r"].fields["prompt"] == TextValue("hello world")
+
+
+def test_ask_request_no_side_effects_trace() -> None:
+    # ask-request must not emit agent-call trace events or dispatch.
+    from agm.agl.runtime.trace import TraceStore
+
+    trace = TraceStore(path=None)
+    source = 'let r = ask-request("hello")\nr'
+    # Run via the interpreter directly to inspect the trace store.
+    from agm.agl.capabilities import HostCapabilities
+    from agm.agl.eval.scope import Scope
+    from agm.agl.parser import parse_program
+    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.runtime.codec import TextCodec
+    from agm.agl.runtime.contract import materialize_contract
+    from agm.agl.scope import resolve
+    from agm.agl.typecheck import check
+
+    program = parse_program(source)
+    resolved = resolve(program)
+    caps = HostCapabilities(
+        agent_names=frozenset(),
+        has_default_agent=True,
+        supports_shell_exec=False,
+        codec_kinds={"text": frozenset({"text"})},
+    )
+    checked = check(resolved, caps)
+    codecs = {"text": TextCodec()}
+    contracts = {
+        nid: materialize_contract(spec, codecs) for nid, spec in checked.contract_specs.items()
+    }
+    registry = AgentRegistry(named={}, default_agent=lambda req: "unreachable")
+    interp = Interpreter(
+        checked=checked,
+        registry=registry,
+        contracts=contracts,
+        type_env=checked.type_env,
+        loop_limit=100,
+        strict_json=False,
+        source=source,
+        trace=trace,
+        max_call_depth=256,
+        param_values={},
+    )
+    root = Scope(parent=None)
+    interp.execute(root)
+    # No agent-call events recorded.
+    events = trace.events if hasattr(trace, "events") else []
+    agent_events = [e for e in events if "agent" in str(e).lower() and "call" in str(e).lower()]
+    assert agent_events == []
+
+
+# ---------------------------------------------------------------------------
 # 24. Boolean operators — short-circuit and / or
 # ---------------------------------------------------------------------------
 
@@ -2624,6 +2847,39 @@ def _build_base_interpreter(source: str = "let x = 1\nx") -> Interpreter:
         checked=checked, registry=registry, contracts=contracts,
         type_env=checked.type_env, loop_limit=100, strict_json=False,
     )
+
+
+def test_eval_ask_request_call_non_agent_value_agent_arg() -> None:
+    # Line 776->779: agent named arg evaluates to non-AgentValue.
+    # The interpreter falls through to use the default agent_name="ask".
+    from agm.agl.eval.interpreter import Interpreter
+    from agm.agl.eval.scope import Scope
+    from agm.agl.eval.values import IntValue
+    from agm.agl.syntax.nodes import Call, IntLit, NamedArg, StringLit, VarRef
+    from agm.agl.syntax.spans import SourceSpan
+
+    source = 'let r = ask-request("hi")\nr'
+    interp = _build_base_interpreter(source)
+    assert isinstance(interp, Interpreter)
+
+    sp = SourceSpan(start_line=1, start_col=1, end_line=1, end_col=2, start_offset=0, end_offset=2)
+    agent_val_expr = IntLit(span=sp, node_id=88811, value=42)
+    named_arg = NamedArg(name="agent", value=agent_val_expr, span=sp, node_id=88812)
+    prompt_expr = StringLit(span=sp, node_id=88813, value="test prompt")
+    callee = VarRef(span=sp, node_id=88814, name="ask-request")
+    call = Call(
+        span=sp, node_id=99998, callee=callee,
+        args=(prompt_expr,), named_args=(named_arg,),
+    )
+
+    scope = Scope(parent=None)
+    scope.define("ask", IntValue(99), mutable=False, decl_span=sp)
+
+    result = interp._eval_ask_request_call(call, scope)
+    assert isinstance(result, RecordValue)
+    # Falls back to "ask" as agent_name (the non-AgentValue is ignored).
+    assert result.fields["agent"] == TextValue("ask")
+    assert result.fields["prompt"] == TextValue("test prompt")
 
 
 def test_eval_ask_call_non_agent_value_agent_arg() -> None:

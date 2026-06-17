@@ -95,6 +95,15 @@ class TestRegisterAgent:
         with pytest.raises(ValueError, match="exec"):
             rt.register_agent("exec", my_agent)
 
+    def test_register_reserved_name_ask_request_raises(self) -> None:
+        rt = WorkflowRuntime()
+
+        def my_agent(request: object) -> str:
+            return "response"
+
+        with pytest.raises(ValueError, match="ask-request"):
+            rt.register_agent("ask-request", my_agent)
+
 
 class TestRunBehavior:
     """M1 run() behavior: valid programs run, static errors fail cleanly."""

@@ -400,6 +400,8 @@ class Interpreter:
             return self._eval_print_call(expr, scope)
         if builtin_kind is BuiltinKind.ASK:
             return self._eval_ask_call(expr, scope)
+        if builtin_kind is BuiltinKind.ASK_REQUEST:
+            return self._eval_ask_request_call(expr, scope)
         if builtin_kind is BuiltinKind.EXEC:
             return self._eval_exec_call(expr, scope)
 
@@ -755,6 +757,59 @@ class Interpreter:
             make_failure_message=make_failure_message,
             on_parsed=on_parsed,
             raise_span=call_span,
+        )
+
+    def _eval_ask_request_call(self, expr: Call, scope: Scope) -> Value:
+        """Evaluate ``ask-request(prompt, ...)`` — build the ``AgentRequest`` the
+        matching ``ask`` call would dispatch, without invoking the agent.
+
+        Side-effect-free: no registry dispatch, no trace events, no retries.
+        The agent name, rendered prompt, and materialized output contract are
+        assembled into an ``AgentRequest`` record value (first attempt: attempt
+        = 0, no retry context).
+        """
+        # Resolve agent name exactly as ``ask`` does (default "ask").
+        agent_name = "ask"
+        named_map: dict[str, Expr] = {na.name: na.value for na in expr.named_args}
+        if "agent" in named_map:
+            agent_val = self._eval_expr(named_map["agent"], scope)
+            if isinstance(agent_val, AgentValue):
+                agent_name = agent_val.name
+
+        prompt_text = self._eval_to_text(expr.args[0], scope)
+
+        contract = self._contracts.get(expr.node_id)
+        if contract is None:
+            from agm.agl.runtime.codec import TextCodec
+            from agm.agl.runtime.contract import OutputContract
+
+            contract = OutputContract(
+                target_type=TextType(),
+                codec=TextCodec(),
+                strict_json=None,
+                format_instructions="",
+                json_schema=None,
+            )
+
+        output_contract_value = RecordValue(
+            type_name="OutputContract",
+            fields={
+                "target_type": TextValue(repr(contract.target_type)),
+                "codec_name": TextValue(contract.codec.name),
+                "strict_json": JsonValue(contract.strict_json),
+                "format_instructions": TextValue(contract.format_instructions),
+                "json_schema": JsonValue(contract.json_schema),
+                "structured_exec": BoolValue(contract.structured_exec),
+            },
+        )
+        return RecordValue(
+            type_name="AgentRequest",
+            fields={
+                "agent": TextValue(agent_name),
+                "prompt": TextValue(prompt_text),
+                "attempt": IntValue(0),
+                "output_contract": output_contract_value,
+            },
         )
 
     def _eval_exec_call(self, expr: Call, scope: Scope) -> Value:

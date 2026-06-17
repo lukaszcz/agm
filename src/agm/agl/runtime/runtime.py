@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.types import Type as AglType
 
 # Reserved agent names: cannot be registered by callers.
-_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec"})
+_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"})
 
 
 @dataclass(frozen=True, slots=True)

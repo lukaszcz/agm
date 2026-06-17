@@ -164,6 +164,7 @@ RSQB = "RSQB"  # ]
 LBRACE = "LBRACE"  # {
 RBRACE = "RBRACE"  # }
 COLON = "COLON"  # :
+DCOLON = "DCOLON"  # :: (type-argument introducer for typed calls)
 COMMA = "COMMA"  # ,
 DOT = "DOT"  # .
 PIPE = "PIPE"  # |

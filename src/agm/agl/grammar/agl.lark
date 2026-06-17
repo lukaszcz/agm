@@ -83,7 +83,7 @@
 %declare EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
 %declare ARROW THIN_ARROW
-%declare LPAR RPAR LSQB RSQB LBRACE RBRACE COLON COMMA SEMICOLON PIPE DOT
+%declare LPAR RPAR LSQB RSQB LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
 %declare LOOP_BOUND
 
 // Note: EQ_EQ (==) is declared by the lexer but not used in any grammar rule.
@@ -435,6 +435,28 @@ juxt_arg: juxt_atom (DOT field_name)+ -> juxt_field_access
         | atom
 
 // ---------------------------------------------------------------------------
+// Typed call (explicit type-argument syntax)
+//
+// ``callee::[Type](args)`` — a call that carries a static type argument, used
+// by built-ins whose target type is NOT inferable from context (e.g.
+// ``ask-request::[Review](...)``).  The ``::`` introducer is unambiguous: it
+// is not a valid continuation of any expression, so the parser commits to the
+// typed-call form rather than reducing the callee to a plain ``var_ref``.
+//
+// Square brackets delimit the type argument (not angle brackets) because the
+// AgL lexer treats ``<`` and ``>`` as identifier-continuation characters, so
+// ``Review>`` would scan as a single token; ``[`` and ``]`` are identifier
+// stop characters and delimit cleanly.  ``type_expr`` uses ``[]`` only for
+// generics (``list[T]``), so nested brackets stay balanced.
+//
+// Only a bare ``VAR_NAME`` callee is admitted (atom-level), which keeps the
+// form conflict-free: ``DCOLON`` never appears in ``FOLLOW(var_ref)``, so
+// there is no shift/reduce collision with juxtaposition or list literals.
+// ---------------------------------------------------------------------------
+
+typed_call_atom: VAR_NAME DCOLON LSQB type_expr RSQB LPAR arg_list? RPAR
+
+// ---------------------------------------------------------------------------
 // Atom: primary non-operator expressions (transparent)
 // NOTE: lambda_expr is NOT here — it is a top-level expr form (see design note D).
 // ---------------------------------------------------------------------------
@@ -449,6 +471,7 @@ juxt_arg: juxt_atom (DOT field_name)+ -> juxt_field_access
      | lit_dict
      | constructor
      | var_ref
+     | typed_call_atom
      | paren_expr_or_unit
 
 // Parenthesized expression or unit literal.

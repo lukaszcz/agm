@@ -608,6 +608,38 @@ class TestBuiltinCallClassification:
         assert isinstance(let_node.value, Call)
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
 
+    def test_ask_request_call_classified(self) -> None:
+        r = parse_and_resolve('let x = ask-request::[Review]("Q")\nx')
+        let_node = r.program.body.items[0]
+        assert isinstance(let_node, LetDecl)
+        assert isinstance(let_node.value, Call)
+        assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK_REQUEST
+
+    def test_ask_request_without_type_arg_classified(self) -> None:
+        r = parse_and_resolve('let x = ask-request("Q")\nx')
+        let_node = r.program.body.items[0]
+        assert isinstance(let_node, LetDecl)
+        assert isinstance(let_node.value, Call)
+        assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK_REQUEST
+
+    def test_ask_request_callee_not_in_resolution(self) -> None:
+        r = parse_and_resolve('let x = ask-request::[text]("Q")\nx')
+        let_node = r.program.body.items[0]
+        assert isinstance(let_node, LetDecl)
+        call = let_node.value
+        assert isinstance(call, Call)
+        callee = call.callee
+        assert isinstance(callee, VarRef)
+        assert callee.node_id not in r.resolution
+
+    def test_ask_request_reserved_as_value(self) -> None:
+        # ``ask-request`` is a reserved contextual keyword: a bare reference
+        # (not in call position) is rejected.
+        with pytest.raises(AglScopeError) as exc_info:
+            parse_and_resolve('let x = ask-request\nx')
+        msg = str(exc_info.value)
+        assert "built-in" in msg.lower() or "reserved" in msg.lower()
+
     def test_user_def_call_not_classified(self) -> None:
         """A user-defined function call does NOT appear in builtin_calls."""
         r = parse_and_resolve("def f(x: int) -> int = x\nlet y = f(1)\ny")

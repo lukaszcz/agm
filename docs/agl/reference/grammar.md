@@ -178,12 +178,15 @@ postfix        ::= postfix "." VAR_NAME            (* field access *)
                | postfix "(" arg_list? ")"         (* call with parentheses *)
                | atom
 
+typed_call     ::= VAR_NAME "::" "[" type_expr "]" "(" arg_list? ")"  (* typed call *)
+
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" ")"                           (* unit literal *)
                | list_literal
                | dict_literal
                | TYPE_NAME                         (* bare constructor *)
                | VAR_NAME                          (* variable reference *)
+               | typed_call                        (* e.g. ask-request::[Review](…) *)
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | lambda_expr

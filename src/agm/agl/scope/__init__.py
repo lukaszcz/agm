@@ -7,7 +7,7 @@ Public API
 - :class:`ResolvedProgram` — frozen dataclass carrying the ``Program`` plus
   side tables keyed by ``node_id``.
 - :class:`BindingRef` — resolved reference to a scope binding.
-- :class:`BuiltinKind` — enum classifying a built-in Call node (print/exec/ask).
+- :class:`BuiltinKind` — enum classifying a built-in Call node (print/exec/ask/ask-request).
 - :class:`AglScopeError` — fatal scope error (span-aware ``AglError``
   subclass).
 """

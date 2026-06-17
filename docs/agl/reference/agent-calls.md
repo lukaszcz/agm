@@ -325,3 +325,59 @@ Each dispatch delivers to the host agent:
   its validation errors.
 
 See [Host environment](host-environment.md).
+
+## `ask-request` — the request builder
+
+`ask-request` is the side-effect-free twin of `ask`: it builds the
+`AgentRequest` that the corresponding `ask` call would dispatch to its agent
+on its first attempt, **without invoking the agent**. It never dispatches,
+never retries, never parses, and emits no trace events — it only assembles the
+request value.
+
+```agl
+let r = ask-request("Summarize ${topic}")
+let r = ask-request::[Review]("Review ${artifact}", agent: reviewer)
+```
+
+### Target type
+
+Unlike `ask`, `ask-request` cannot infer its target type from context (its
+result type is fixed to `AgentRequest`), so the target type is given
+**explicitly** with the typed-call syntax `::[Type]`:
+
+```agl
+let r = ask-request::[Review]("Review ${artifact}")
+let n = ask-request::[int]("How many?")
+```
+
+Omitting the type argument defaults the target to `text`:
+
+```agl
+let r = ask-request("Anything goes")   # target type is text
+```
+
+The target type drives the output contract exactly as it would for `ask`:
+a `Review` target selects the JSON codec, derives a JSON Schema, and produces
+format instructions; a `text` target selects the text codec. The contract is
+surfaced on the returned `AgentRequest.output_contract`.
+
+### Typed-call syntax
+
+`callee::[Type](args)` is a general typed-call form. The `::` introducer is
+unambiguous (it is not a valid continuation of any expression), and the type
+argument is delimited by square brackets because AgL identifiers may contain
+`<` and `>`, so `Review>` would otherwise scan as one token. Only a bare name
+callee is admitted at the atom level.
+
+### Arguments
+
+`ask-request` accepts the same named arguments as `ask` (`agent`, `format`,
+`strict_json`, `on_parse_error`). `agent:` labels the request's `agent` field
+but never dispatches; `on_parse_error` is accepted (it shapes the contract's
+parse policy) but has no runtime effect since no call is made.
+
+### Result
+
+The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
+set to `0`. Because no call is made, `ask-request` works even when no default
+agent is configured.

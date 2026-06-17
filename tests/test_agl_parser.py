@@ -722,6 +722,89 @@ class TestCalls:
             parse("f(a: 1, a: 2)")
 
 
+class TestTypedCalls:
+    """``callee::[Type](args)`` desugars to a Call with a static type_arg."""
+
+    def test_typed_call_basic(self) -> None:
+        call = first(parse('ask-request::[Review]("p")'))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "ask-request"
+        assert len(call.args) == 1
+        assert call.named_args == ()
+        assert call.type_arg is not None
+        assert isinstance(call.type_arg, NameT)
+        assert call.type_arg.name == "Review"
+
+    def test_typed_call_no_type_arg(self) -> None:
+        # ``ask-request("p")`` (no ``::[...]``) is an ordinary Call with no type_arg.
+        call = first(parse('ask-request("p")'))
+        assert isinstance(call, Call)
+        assert call.type_arg is None
+
+    def test_typed_call_primitive_type(self) -> None:
+        call = first(parse('ask-request::[text]("p")'))
+        assert isinstance(call, Call)
+        assert isinstance(call.type_arg, TextT)
+
+    def test_typed_call_agent_type(self) -> None:
+        call = first(parse('ask-request::[agent]("p")'))
+        assert isinstance(call, Call)
+        assert isinstance(call.type_arg, AgentT)
+
+    def test_typed_call_generic_type(self) -> None:
+        call = first(parse('ask-request::[list[Review]]("p")'))
+        assert isinstance(call, Call)
+        assert isinstance(call.type_arg, ListT)
+        assert isinstance(call.type_arg.elem, NameT)
+        assert call.type_arg.elem.name == "Review"
+
+    def test_typed_call_dict_type(self) -> None:
+        call = first(parse('ask-request::[dict[text, Review]]("p")'))
+        assert isinstance(call, Call)
+        assert isinstance(call.type_arg, DictT)
+        assert isinstance(call.type_arg.value, NameT)
+        assert call.type_arg.value.name == "Review"
+
+    def test_typed_call_with_named_args(self) -> None:
+        call = first(parse('ask-request::[Review]("p", agent: reviewer)'))
+        assert isinstance(call, Call)
+        assert len(call.named_args) == 1
+        assert call.named_args[0].name == "agent"
+        assert call.type_arg is not None
+
+    def test_typed_call_no_args(self) -> None:
+        # An empty arg list is syntactically valid (the checker rejects it).
+        call = first(parse("ask-request::[Review]()"))
+        assert isinstance(call, Call)
+        assert call.args == ()
+        assert call.type_arg is not None
+
+    def test_typed_call_trailing_comma(self) -> None:
+        call = first(parse('ask-request::[Review]("p",)'))
+        assert isinstance(call, Call)
+        assert len(call.args) == 1
+
+    def test_typed_call_preserves_list_literal_juxt(self) -> None:
+        # ``::`` introduces the typed form without disturbing list-literal
+        # juxtaposition (``print [1,2,3]`` still parses).
+        call = first(parse("print [1,2,3]"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "print"
+        assert isinstance(call.args[0], ListLit)
+
+    def test_typed_call_callee_must_be_name(self) -> None:
+        # ``f.g::[T]`` is a parse error (``::`` only follows a bare VAR_NAME).
+        with pytest.raises(AglSyntaxError):
+            parse("f.g::[T](x)")
+
+    def test_dcolon_without_type_brackets_is_not_a_call(self) -> None:
+        # ``ask-request::`` with no ``[...]`` is rejected.
+        with pytest.raises(AglSyntaxError):
+            parse('ask-request::"p"')
+
+
 # ---------------------------------------------------------------------------
 # Field access and qualified constructors
 # ---------------------------------------------------------------------------

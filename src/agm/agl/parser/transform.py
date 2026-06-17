@@ -836,6 +836,46 @@ class AstBuilder(Transformer):
         return cast(syntax.FieldAccess, result)
 
     # ------------------------------------------------------------------
+    # Typed call (callee::[Type](args))
+    # ------------------------------------------------------------------
+
+    def typed_call_atom(self, meta: Meta, args: _Args) -> syntax.Call:
+        """typed_call_atom: VAR_NAME DCOLON LSQB type_expr RSQB LPAR arg_list? RPAR
+
+        Builds a ``Call`` whose callee is a bare ``VarRef`` and whose
+        ``type_arg`` carries the static type expression.  The resolver /
+        checker / interpreter treat the callee name as a built-in (currently
+        only ``ask-request``); any other name is a scope error.
+        """
+        name_tok = next(
+            a for a in args if isinstance(a, Token) and a.type == "VAR_NAME"
+        )
+        type_expr = _find_type_expr(args)
+        assert type_expr is not None, "typed_call_atom: no type_expr found"
+
+        pos_args: list[syntax.Expr] = []
+        named_args: list[syntax.NamedArg] = []
+        for a in args:
+            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
+                pa, na = cast(tuple[list[syntax.Expr], list[syntax.NamedArg]], a)
+                pos_args = pa
+                named_args = na
+
+        callee = syntax.VarRef(
+            name=str(name_tok),
+            span=_span_from_token(name_tok),
+            node_id=self._next_id(),
+        )
+        return syntax.Call(
+            callee=callee,
+            args=tuple(pos_args),
+            named_args=tuple(named_args),
+            type_arg=type_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
     # Call arguments
     # ------------------------------------------------------------------
 

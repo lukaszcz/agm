@@ -213,6 +213,11 @@ class Call:
 
     Also produced by the single-arg juxtaposition sugar ``f x``
     (which desugars to ``Call(callee=f, args=(x,), named_args=())``.
+
+    ``type_arg`` is set by the typed-call syntax ``callee::[T](args)``
+    (e.g. ``ask-request::[Review](...)``); it is ``None`` for ordinary calls.
+    The type argument is a static ``TypeExpr`` resolved by the type checker —
+    it is never evaluated at runtime.
     """
 
     callee: Expr
@@ -220,6 +225,7 @@ class Call:
     named_args: tuple[NamedArg, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    type_arg: TypeExpr | None = None
 
 
 @dataclass(frozen=True, slots=True)

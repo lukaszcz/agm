@@ -631,6 +631,8 @@ class _Checker:
                 return self._check_print_call(node)
             if kind == BuiltinKind.ASK:
                 return self._check_ask_call(node, expected=expected)
+            if kind == BuiltinKind.ASK_REQUEST:
+                return self._check_ask_request_call(node)
             # EXEC
             return self._check_exec_call(node, expected=expected)
 
@@ -739,6 +741,94 @@ class _Checker:
             )
         )
         return target_type
+
+    # --- ask-request ---
+
+    def _check_ask_request_call(self, node: Call) -> Type:
+        """Type-check ``ask-request(prompt, ...)`` — the side-effect-free twin of ``ask``.
+
+        Like ``ask`` it builds an output contract from a target type and the
+        parse-shaping named args (``format`` / ``strict_json`` /
+        ``on_parse_error``), and accepts an ``agent:`` named arg.  But it never
+        dispatches to the agent: it yields the ``AgentRequest`` record that the
+        corresponding ``ask`` call would pass to ``AgentRegistry.dispatch`` on
+        its first attempt.
+
+        The target type is taken from the explicit type argument
+        (``ask-request::[Review](...)``) when present, and defaults to ``text``
+        otherwise (``ask-request(...)``).  Because the result type is fixed to
+        ``AgentRequest``, the contextual ``expected`` type is ignored — unlike
+        ``ask``, the target type is not inferred from context.
+        """
+        agent_request_type = self._env.get_type("AgentRequest")
+        assert agent_request_type is not None, "AgentRequest prelude type missing"
+
+        # Target type: explicit type argument, else text default.
+        if node.type_arg is not None:
+            target_type = self._env.resolve_type_expr(node.type_arg, span=node.span)
+        else:
+            target_type = TextType()
+
+        # D9: reject function/agent targets.
+        if isinstance(target_type, (FunctionType, AgentType)):
+            raise AglTypeError(
+                "cannot build an output contract for a function/agent target.",
+                span=node.span,
+            )
+
+        named = {na.name: na for na in node.named_args}
+
+        # Reject unknown named args (same set as ask, minus none — agent is
+        # accepted even though it only labels the request, never dispatches).
+        for arg_name, na in named.items():
+            if arg_name not in self._ASK_ALLOWED_NAMED_ARGS:
+                raise AglTypeError(
+                    f"ask-request: unknown argument '{arg_name}'.",
+                    span=na.span,
+                )
+
+        # Prompt (first positional arg — reject extra positionals).
+        if not node.args:
+            raise AglTypeError(
+                "ask-request() requires a prompt argument.", span=node.span
+            )
+        if len(node.args) > 1:
+            raise AglTypeError(
+                "ask-request: too many positional arguments (expected 1).",
+                span=node.span,
+            )
+        prompt_type = self._check_expr(node.args[0], expected=TextType())
+        self._assert_assignable(prompt_type, TextType(), node.args[0].span)
+
+        # agent: named arg — same validation as ask (must be an agent value).
+        if "agent" in named:
+            agent_na = named["agent"]
+            agent_type = self._check_expr(agent_na.value, expected=None)
+            if not isinstance(agent_type, AgentType):
+                raise AglTypeError(
+                    f"'agent:' argument must be of type agent; got '{agent_type!r}'.",
+                    span=agent_na.span,
+                )
+
+        # Build the same output contract spec an ``ask`` call would, so the
+        # materialized contract (and thus the returned request) matches exactly.
+        codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
+            node, target_type, named
+        )
+        spec = OutputContractSpec(
+            target_type=target_type, codec_name=codec_name, strict_json=effective_strict
+        )
+        self._contract_specs[node.node_id] = spec
+        self._call_sites.append(
+            CallSiteRecord(
+                node_id=node.node_id,
+                callee="ask-request",
+                parse_policy=parse_policy_str,
+                line=node.span.start_line,
+                col=node.span.start_col,
+            )
+        )
+        return agent_request_type
 
     # --- exec ---
 

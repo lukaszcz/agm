@@ -563,9 +563,42 @@ _PARSE_POLICY_TYPE = EnumType(
     },
 )
 
+# ``OutputContract`` — the materialized output contract of an agent/exec call
+# site, surfaced as an AgL value by ``ask-request``.  ``strict_json`` and
+# ``json_schema`` use ``json`` because they are nullable (``null`` when the
+# codec is not JSON-based / when no schema applies).
+_OUTPUT_CONTRACT_TYPE = RecordType(
+    name="OutputContract",
+    fields={
+        "target_type": TextType(),
+        "codec_name": TextType(),
+        "strict_json": JsonType(),
+        "format_instructions": TextType(),
+        "json_schema": JsonType(),
+        "structured_exec": BoolType(),
+    },
+)
+
+# ``AgentRequest`` — the request that the corresponding ``ask`` call would
+# dispatch to its agent, surfaced as an AgL value by ``ask-request``.  This is
+# the first-attempt request: ``attempt`` is always ``0`` and there is no
+# retry context (no ``previous_invalid_output`` / ``validation_errors``),
+# because ``ask-request`` never invokes the agent.
+_AGENT_REQUEST_TYPE = RecordType(
+    name="AgentRequest",
+    fields={
+        "agent": TextType(),
+        "prompt": TextType(),
+        "attempt": IntType(),
+        "output_contract": _OUTPUT_CONTRACT_TYPE,
+    },
+)
+
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,
     "ParsePolicy": _PARSE_POLICY_TYPE,
+    "OutputContract": _OUTPUT_CONTRACT_TYPE,
+    "AgentRequest": _AGENT_REQUEST_TYPE,
 }
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).

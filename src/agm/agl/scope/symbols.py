@@ -9,7 +9,7 @@ Data model
   tree for visibility analysis.
 - ``ResolvedProgram`` — the frozen output of the scope pass: the original
   ``Program`` plus side tables.
-- ``BuiltinKind`` — enum classifying a built-in Call node (print/exec/ask).
+- ``BuiltinKind`` — enum classifying a built-in Call node (print/exec/ask/ask-request).
 - ``AglScopeError`` — fatal scope error raised by the resolver.
 """
 
@@ -40,11 +40,16 @@ class BuiltinKind(enum.Enum):
         a context-typed value.
     ``ASK``
         ``ask(prompt, ...)`` — invokes an agent; yields a context-typed value.
+    ``ASK_REQUEST``
+        ``ask-request[prompt, ...)`` — builds the ``AgentRequest`` that the
+        corresponding ``ask`` call would dispatch, without invoking the agent;
+        yields an ``AgentRequest`` record.
     """
 
     PRINT = "PRINT"
     EXEC = "EXEC"
     ASK = "ASK"
+    ASK_REQUEST = "ASK_REQUEST"
 
 
 # The single source of truth for the built-in call names and their kinds.
@@ -54,6 +59,7 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "print": BuiltinKind.PRINT,
     "exec": BuiltinKind.EXEC,
     "ask": BuiltinKind.ASK,
+    "ask-request": BuiltinKind.ASK_REQUEST,
 }
 
 
@@ -177,7 +183,7 @@ class ResolvedProgram:
         ``BindingRef`` it resolved to.
     ``builtin_calls``
         Maps every ``Call.node_id`` whose callee is a built-in name
-        (``print``/``exec``/``ask``) to its ``BuiltinKind``.  Calls whose
+        (``print``/``exec``/``ask``/``ask-request``) to its ``BuiltinKind``.  Calls whose
         callee resolves to a user-defined binding have no entry here.
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via

@@ -4,7 +4,7 @@
 building the lexical scope chain and populating side tables:
 
 - ``resolution``:     ``VarRef.node_id`` / ``SetStmt.node_id`` → ``BindingRef``
-- ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for print/exec/ask)
+- ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for print/exec/ask/ask-request)
 
 Scope rules
 -----------
@@ -744,7 +744,7 @@ class _Resolver:
     def _resolve_varref(self, node: VarRef) -> None:
         """Resolve a name reference.
 
-        Built-in names (print/exec/ask) are only valid in call position; a
+        Built-in names (print/exec/ask/ask-request) are only valid in call position; a
         bare VarRef to them is an error (D6: they are not first-class values).
         """
         if node.name in _RESERVED_NAMES:
@@ -767,7 +767,7 @@ class _Resolver:
         """Resolve a ``Call`` node.
 
         If the callee is a bare ``VarRef`` whose name is a built-in
-        (print/exec/ask), classify the call in ``builtin_calls`` and skip
+        (print/exec/ask/ask-request), classify the call in ``builtin_calls`` and skip
         normal callee resolution.  For all other callees, resolve the callee
         expression normally (it must resolve to a binding).
         """

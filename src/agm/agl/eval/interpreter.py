@@ -260,9 +260,13 @@ class Interpreter:
     def _eval_block(self, block: Block, scope: Scope) -> Value:
         """Evaluate a Block in a new child scope; return last item's value."""
         block_scope = Scope(parent=scope)
+        return self._eval_block_items(block, block_scope)
+
+    def _eval_block_items(self, block: Block, scope: Scope) -> Value:
+        """Evaluate Block items directly in *scope*; return last item's value."""
         result: Value = UNIT_VALUE
         for item in block.items:
-            result = self._eval_item(item, block_scope)
+            result = self._eval_item(item, scope)
         return result
 
     # ------------------------------------------------------------------
@@ -433,7 +437,7 @@ class Interpreter:
         # Build a lookup of default expressions from the closure's param list.
         closure_defaults: dict[str, Expr | None] = dict(closure.params)
         pos_idx = 0
-        for param_name, _param_type, has_default in sig.params:
+        for param_name, param_type, has_default in sig.params:
             span = call.span
             if param_name in named:
                 val = self._eval_expr(named[param_name], call_scope)
@@ -452,7 +456,12 @@ class Interpreter:
                 raise RuntimeError(  # pragma: no cover
                     f"Missing required argument {param_name!r}"
                 )
-            fn_scope.define(param_name, val, mutable=False, decl_span=span)
+            fn_scope.define(
+                param_name,
+                _coerce(val, param_type),
+                mutable=False,
+                decl_span=span,
+            )
 
     def _bind_positional_args(
         self,
@@ -492,13 +501,15 @@ class Interpreter:
 
     def _eval_if(self, expr: If, scope: Scope) -> Value:
         """Evaluate an ``if`` expression; yield UNIT_VALUE when no branch matches."""
+        has_else = any(isinstance(branch.cond, ElseSentinel) for branch in expr.branches)
         for branch in expr.branches:
             take = isinstance(branch.cond, ElseSentinel) or self._require_bool(
                 self._eval_expr(branch.cond, scope)
             )
             if take:
                 branch_scope = Scope(parent=scope)
-                return self._eval_expr(branch.body, branch_scope)
+                result = self._eval_expr(branch.body, branch_scope)
+                return result if has_else else UNIT_VALUE
         # No matching branch and no else → unit (design §4.3).
         return UNIT_VALUE
 
@@ -523,7 +534,10 @@ class Interpreter:
         last_cond = False
         for _iteration in range(limit):
             iter_scope = Scope(parent=scope)
-            self._eval_expr(expr.body, iter_scope)
+            if isinstance(expr.body, Block):
+                self._eval_block_items(expr.body, iter_scope)
+            else:
+                self._eval_expr(expr.body, iter_scope)
             cond = self._eval_expr(expr.condition, iter_scope)
             last_cond = self._require_bool(cond)
             if last_cond:

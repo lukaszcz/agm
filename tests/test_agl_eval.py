@@ -20,6 +20,7 @@ from agm.agl.eval.values import (
     IntValue,
     RecordValue,
     TextValue,
+    UnitValue,
     Value,
 )
 from agm.agl.runtime.codec import OutputCodec
@@ -141,6 +142,11 @@ def test_if_without_else_false() -> None:
         assert not isinstance(v, IntValue)
 
 
+def test_if_without_else_true_discards_branch_value() -> None:
+    snap = _run_source("let u: unit = if true => 1\nu")
+    assert snap["u"] == UnitValue()
+
+
 # ---------------------------------------------------------------------------
 # 5. Case — matching branch
 # ---------------------------------------------------------------------------
@@ -190,6 +196,62 @@ until count = 3
 ()"""
     snap = _run_source(source)
     assert snap["count"] == IntValue(3)
+
+
+def test_do_block_bindings_visible_to_until_condition() -> None:
+    source = """\
+do[1]
+  let done = true
+  ()
+until done
+()"""
+    _run_source(source)
+
+
+def test_do_expression_body_still_runs_in_iteration_scope() -> None:
+    from agm.agl.capabilities import HostCapabilities
+    from agm.agl.eval.scope import Scope
+    from agm.agl.parser import parse_program
+    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.scope import resolve
+    from agm.agl.syntax.nodes import BoolLit, Do, UnitLit
+    from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.typecheck import check
+
+    checked = check(
+        resolve(parse_program("()")),
+        HostCapabilities(
+            agent_names=frozenset(),
+            has_default_agent=False,
+            supports_shell_exec=False,
+            codec_kinds={},
+        ),
+    )
+    span = SourceSpan(
+        start_line=1,
+        start_col=1,
+        end_line=1,
+        end_col=1,
+        start_offset=0,
+        end_offset=1,
+    )
+    expr = Do(
+        limit=1,
+        body=UnitLit(span=span, node_id=10),
+        condition=BoolLit(value=True, span=span, node_id=11),
+        span=span,
+        node_id=12,
+    )
+    interp = Interpreter(
+        checked=checked,
+        registry=AgentRegistry(named={}, default_agent=None),
+        contracts={},
+        type_env=checked.type_env,
+        loop_limit=100,
+        strict_json=False,
+    )
+
+    assert interp._eval_do(expr, Scope(parent=None)) == UnitValue()
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +578,24 @@ let r = compute()
 r"""
     snap = _run_source(source)
     assert snap["r"] == IntValue(7)
+
+
+def test_declared_function_arguments_are_coerced_before_binding() -> None:
+    source = """\
+def render(x: json) -> text = "${x}"
+let r = render("hi")
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == TextValue('"hi"')
+
+
+def test_declared_function_defaults_are_coerced_before_binding() -> None:
+    source = """\
+def render(x: json = "hi") -> text = "${x}"
+let r = render()
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == TextValue('"hi"')
 
 
 # ---------------------------------------------------------------------------

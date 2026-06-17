@@ -198,7 +198,7 @@ class TestMultiline:
         [
             ("record R", "  x: int", "R declared"),
             ("enum E", "| A", "E declared"),
-            ("if 1 = 1 =>", '  "hi"', "hi"),
+            ("if 1 = 1 =>", '  "hi"', None),
             ("do", "  ()\nuntil 1 = 1", None),
             ("try", "  ()\ncatch _ =>\n  ()", None),
             ("case 1 of", "| _ => 7", None),

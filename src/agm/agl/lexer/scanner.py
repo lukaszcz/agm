@@ -81,27 +81,32 @@ from agm.agl.lexer.tokens import (
 # ---------------------------------------------------------------------------
 
 # Characters that terminate an identifier scan.  An identifier starts with
-# an ASCII letter or ``_`` and then greedily consumes every character that is
-# NOT in this set.  Whitespace and the structural punctuators/operators that
-# must remain standalone delimiters (string quotes, brackets, field access
-# ``.``, separators ``,` `` ``;``, type/arg ``:``, ``|``, and ``+ * /``) are
-# listed here.  Everything else — including ``-``, ``?``, ``!``, ``<``, ``>``,
-# ``=`` and arbitrary Unicode letters/digits — is an identifier-continuation
-# character, so names like ``ask-prompt``, ``ask?`` and ``do-it-now!`` scan as
-# a single token.  Operator tokens (``->``, ``=>``, ``!=``, ``<=``, ``>=``,
-# ``==``) still lex as operators whenever they appear as standalone,
-# whitespace-delimited tokens: spaces (or another stop character) break the
-# identifier before the operator's first character.
+# a (Unicode) letter or ``_`` and then greedily consumes every character that
+# is NOT in this set.  Whitespace and the structural punctuators/operators
+# that must remain standalone delimiters (brackets, field access ``.``,
+# separators ``,` `` ``;``, type/arg ``:``, ``|``, and ``/``) are listed here.
+# Everything else — including ``-``, ``?``, ``!``, ``<``, ``>``, ``=``,
+# the string quotes ``"`` and ``'``, the arithmetic operators ``+`` and ``*``,
+# and arbitrary Unicode letters/digits — is an identifier-continuation
+# character, so names like ``ask-prompt``, ``ask?``, ``do-it-now!``, ``a+b``
+# and ``foo"bar`` scan as a single token.  Operator tokens (``->``, ``=>``,
+# ``!=``, ``<=``, ``>=``, ``==``, field access ``.``, etc.) still lex as
+# operators whenever they appear as standalone, whitespace-delimited tokens:
+# spaces (or another stop character) break the identifier before the
+# operator's first character.  A leading ``"`` or ``'`` (or one after
+# whitespace) still starts a string template because the identifier-start
+# predicate requires a letter or ``_``.
 _IDENT_STOP: frozenset[str] = frozenset({
     # whitespace
     " ", "\t", "\n", "\r",
-    # string/template delimiter (double quote only; a single quote may appear
-    # inside an identifier, e.g. ``foo'bar`` — use a space to start a string)
-    '"',
-    # structural punctuators / operators that stay standalone delimiters
+    # structural punctuators / operators that stay standalone delimiters.
+    # String quotes (" and ') and the operator characters + * are NOT stop
+    # characters: they may appear inside an identifier (e.g. ``foo"bar``,
+    # ``a+b``, ``n*x``).  A leading " or ' (or one after whitespace) still
+    # starts a string template because the identifier-start predicate requires
+    # a letter or _.
     "(", ")", "[", "]", "{", "}",
-    ":", ",", ".", "|", ";",
-    "+", "*", "/",
+    ":", ",", ".", "|", ";", "/",
 })
 
 _TAB_LEN = 4

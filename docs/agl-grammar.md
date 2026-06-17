@@ -69,10 +69,11 @@ mapped to type nodes in type-annotation positions.
 
 An identifier starts with a (Unicode) letter or `_` and then greedily
 consumes every character that is not whitespace and not a structural
-operator/punctuator delimiter (`( ) [ ] { } : , . | ; + * / "`).  Operator
-characters such as `- ? ! < > =` are identifier-continuation characters, so
-`ask-prompt`, `ask?`, and `do-it-now!` are single tokens; spaces (or a
-delimiter) around an operator make it parse as an operator.  See
+operator/punctuator delimiter (`( ) [ ] { } : , . | ; /`).  Operator
+characters such as `- ? ! < > = + *` and the string quotes `" '` are
+identifier-continuation characters, so `ask-prompt`, `ask?`, `do-it-now!`,
+`a+b`, and `foo"bar` are single tokens; spaces (or a delimiter) around an
+operator make it parse as an operator.  See
 [Lexical structure](agl/reference/lexical-structure.md) for the full
 disambiguation table.
 

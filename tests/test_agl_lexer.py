@@ -1436,10 +1436,12 @@ class TestIdentifierUnicodeAndSymbols:
         assert tok("do-it-now!") == [("VAR_NAME", "do-it-now!")]
 
     def test_operator_chars_in_identifier(self) -> None:
-        # <, >, = are identifier-continuation characters, so a run of them with
-        # no surrounding whitespace is one identifier.
+        # <, >, =, +, * are identifier-continuation characters, so a run of
+        # them with no surrounding whitespace is one identifier.
         assert tok("a->b") == [("VAR_NAME", "a->b")]
         assert tok("x!=3") == [("VAR_NAME", "x!=3")]
+        assert tok("a+b") == [("VAR_NAME", "a+b")]
+        assert tok("n*x") == [("VAR_NAME", "n*x")]
         assert tok("Pass=>()") == [("TYPE_NAME", "Pass=>"), ("LPAR", "("), ("RPAR", ")")]
 
     def test_spaces_break_identifier_before_operator(self) -> None:
@@ -1453,8 +1455,28 @@ class TestIdentifierUnicodeAndSymbols:
         assert tok("x != 3") == [
             ("VAR_NAME", "x"), ("NEQ", "!="), ("INT", "3"),
         ]
+        assert tok("a + b") == [
+            ("VAR_NAME", "a"), ("PLUS", "+"), ("VAR_NAME", "b"),
+        ]
+        assert tok("a * b") == [
+            ("VAR_NAME", "a"), ("STAR", "*"), ("VAR_NAME", "b"),
+        ]
         assert tok("Pass => ()") == [
             ("TYPE_NAME", "Pass"), ("ARROW", "=>"), ("LPAR", "("), ("RPAR", ")"),
+        ]
+
+    def test_string_quotes_inside_identifier(self) -> None:
+        # Both " and ' are identifier-continuation characters, not delimiters.
+        assert tok('foo"bar') == [("VAR_NAME", 'foo"bar')]
+        assert tok("foo'bar") == [("VAR_NAME", "foo'bar")]
+        # A leading quote (or one after whitespace) still starts a template.
+        assert tok('"hello"') == [
+            ("TEMPLATE_START", '"'), ("STRING_FRAGMENT", "hello"),
+            ("TEMPLATE_END", '"'),
+        ]
+        assert tok("ask 'x'") == [
+            ("VAR_NAME", "ask"),
+            ("TEMPLATE_START", "'"), ("STRING_FRAGMENT", "x"), ("TEMPLATE_END", "'"),
         ]
 
     def test_structural_punctuators_break_identifier(self) -> None:

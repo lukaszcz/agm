@@ -95,15 +95,17 @@ and **not** a structural operator/punctuator delimiter.  The delimiter
 characters that terminate an identifier are:
 
 ```
-(  )  [  ]  {  }  :  ,  .  |  ;  +  *  /  "
+(  )  [  ]  {  }  :  ,  .  |  ;  /
 ```
 
-The single quote `'` is **not** a delimiter: it may appear inside an
-identifier (e.g. `foo'bar`).  A single-quoted string is still started by a
-leading `'` (or one preceded by whitespace) and ended by a closing `'`.
+The string quotes `"` and `'`, and the arithmetic operators `+` and `*`, are
+**not** delimiters: they may appear inside an identifier (e.g. `foo"bar`,
+`a+b`, `n*x`).  A leading `"` or `'` (or one preceded by whitespace) still
+starts a string template because an identifier must begin with a letter or
+`_`.
 
 Every other character is an identifier-continuation character.  In particular
-the operator characters `-`, `?`, `!`, `<`, `>`, `=`, and `!` may appear *inside*
+the operator characters `-`, `?`, `!`, `<`, `>`, `=` may appear *inside*
 an identifier, so names like `ask-prompt`, `ask?`, and `do-it-now!` scan as a
 single token.
 
@@ -123,7 +125,7 @@ and `catch` positions it is interpreted as the wildcard
 
 ### Operator disambiguation
 
-Because the operator characters `-`, `<`, `>`, `=`, `!` are also
+Because the operator characters `-`, `<`, `>`, `=`, `!`, `+`, `*` are also
 identifier-continuation characters, whether such a run is an identifier or a
 sequence of operator tokens depends entirely on **whitespace** (or another
 delimiter).  Whitespace and the structural punctuators above are the only
@@ -138,6 +140,10 @@ characters that break an identifier scan.
 | `a->b` | `VAR_NAME "a->b"` | one identifier (no spaces) |
 | `x != 3` | `VAR_NAME "x"`, `NEQ "!="`, `INT "3"` | not-equal operator, whitespace-delimited |
 | `x!=3` | `VAR_NAME "x!=3"` | one identifier (no spaces) |
+| `a+b` | `VAR_NAME "a+b"` | one identifier (`+` is not a delimiter) |
+| `a + b` | `VAR_NAME "a"`, `PLUS "+"`, `VAR_NAME "b"` | spaces break the identifier, `+` is an operator |
+| `n*x` | `VAR_NAME "n*x"` | one identifier (`*` is not a delimiter) |
+| `foo"bar` | `VAR_NAME "foo\"bar"` | one identifier (`"` is not a delimiter) |
 
 This mirrors a Lisp-like maximal-munch identifier rule: scan for as long as
 possible until a disallowed character.  Use spaces around operators when you

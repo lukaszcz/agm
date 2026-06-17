@@ -40,6 +40,7 @@ from contextlib import contextmanager
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.scope.symbols import (
+    BUILTIN_CALL_NAMES,
     AglScopeError,
     BinderKind,
     BindingRef,
@@ -100,11 +101,8 @@ from agm.agl.syntax.spans import SourceSpan
 # ---------------------------------------------------------------------------
 
 # Built-in call names: recognised in call position, not bindable as values.
-_BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
-    "print": BuiltinKind.PRINT,
-    "exec": BuiltinKind.EXEC,
-    "ask": BuiltinKind.ASK,
-}
+# Sourced from ``symbols.BUILTIN_CALL_NAMES`` (the single source of truth).
+_BUILTIN_CALL_NAMES = BUILTIN_CALL_NAMES
 
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
@@ -568,30 +566,9 @@ class _Resolver:
                 f"not inside a nested block (found 'def {node.name}' here).",
                 span=node.span,
             )
-        # Resolve param defaults in the enclosing (root) scope — defaults are
+        # Defaults are resolved in the enclosing (root) scope — they are
         # evaluated in the function's DEFINITION scope (plan D5).
-        for param in node.params:
-            if param.default is not None:
-                self._resolve_expr(param.default)
-        # Open a child scope for params + body.
-        with self._child_scope(node.node_id) as param_scope:
-            for param in node.params:
-                self._check_not_reserved(param.name, param.span)
-                ref = BindingRef(
-                    name=param.name,
-                    mutable=False,
-                    decl_span=param.span,
-                    decl_node_id=param.node_id,
-                    kind=BinderKind.param_binding,
-                )
-                if param.name in param_scope.bindings:
-                    raise AglScopeError(
-                        f"Name '{param.name}' is already declared in this scope.",
-                        span=param.span,
-                    )
-                param_scope.define(param.name, ref)
-            # Resolve the body inside the param scope.
-            self._resolve_expr_or_block(node.body)
+        self._resolve_params_and_body(node)
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | TypeAlias) -> None:
         """Reject type declarations outside the program root."""
@@ -857,11 +834,18 @@ class _Resolver:
         inside its own body — non-self-recursive).  Then a child scope is
         opened for the params + body.
         """
-        # Resolve defaults in the current (enclosing) scope.
+        # Defaults are resolved in the current (enclosing) scope.
+        self._resolve_params_and_body(node)
+
+    def _resolve_params_and_body(self, node: FuncDef | Lambda) -> None:
+        """Resolve param defaults (enclosing scope), then params + body in a child scope.
+
+        Shared by ``def`` and ``fn`` — both evaluate defaults in their definition
+        scope and bind params into a fresh child scope for the body.
+        """
         for param in node.params:
             if param.default is not None:
                 self._resolve_expr(param.default)
-        # Open a child scope for params + body.
         with self._child_scope(node.node_id) as param_scope:
             for param in node.params:
                 self._check_not_reserved(param.name, param.span)

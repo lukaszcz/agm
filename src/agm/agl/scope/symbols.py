@@ -47,6 +47,16 @@ class BuiltinKind(enum.Enum):
     ASK = "ASK"
 
 
+# The single source of truth for the built-in call names and their kinds.
+# The resolver classifies calls by this mapping; the checker and any other
+# layer that needs the set of built-in names derives it from here.
+BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
+    "print": BuiltinKind.PRINT,
+    "exec": BuiltinKind.EXEC,
+    "ask": BuiltinKind.ASK,
+}
+
+
 # ---------------------------------------------------------------------------
 # BinderKind — how a binding was introduced
 # ---------------------------------------------------------------------------

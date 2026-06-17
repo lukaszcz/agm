@@ -41,7 +41,13 @@ from collections.abc import Sequence
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ResolvedProgram
+from agm.agl.scope.symbols import (
+    BUILTIN_CALL_NAMES,
+    BinderKind,
+    BindingRef,
+    BuiltinKind,
+    ResolvedProgram,
+)
 from agm.agl.syntax.nodes import (
     AgentDecl,
     BinaryOp,
@@ -135,8 +141,9 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
 
-# Built-in function names that user-defined defs may not shadow.
-_BUILTIN_FUNC_NAMES: frozenset[str] = frozenset({"print", "exec", "ask"})
+# Built-in function names that user-defined defs may not shadow. Derived from
+# the single source of truth in ``scope.symbols`` so the two never drift.
+_BUILTIN_FUNC_NAMES: frozenset[str] = frozenset(BUILTIN_CALL_NAMES)
 
 
 # ---------------------------------------------------------------------------
@@ -453,11 +460,8 @@ class _Checker:
             self._check_input(item)
             return UnitType()
         # --- Binders ---
-        if isinstance(item, LetDecl):
-            self._check_let_decl(item)
-            return UnitType()
-        if isinstance(item, VarDecl):
-            self._check_var_decl(item)
+        if isinstance(item, (LetDecl, VarDecl)):
+            self._check_binding(item)
             return UnitType()
         if isinstance(item, SetStmt):
             self._check_set_stmt(item)
@@ -493,22 +497,7 @@ class _Checker:
             typ = TextType()
         self._env.set_binding_type(stmt.node_id, typ)
 
-    def _check_let_decl(self, stmt: LetDecl) -> None:
-        ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
-        val_type = self._check_expr(stmt.value, expected=ann_type)
-        if ann_type is not None:
-            self._assert_assignable(val_type, ann_type, stmt.span)
-            declared_type = ann_type
-        else:
-            if isinstance(val_type, BottomType):
-                raise AglTypeError(
-                    "Cannot infer type of binding: value always raises. Add a type annotation.",
-                    span=stmt.span,
-                )
-            declared_type = val_type
-        self._env.set_binding_type(stmt.node_id, declared_type)
-
-    def _check_var_decl(self, stmt: VarDecl) -> None:
+    def _check_binding(self, stmt: LetDecl | VarDecl) -> None:
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         val_type = self._check_expr(stmt.value, expected=ann_type)
         if ann_type is not None:
@@ -713,56 +702,9 @@ class _Checker:
                     span=node.span,
                 )
 
-        # format: named arg.
-        if "format" in named:
-            format_na = named["format"]
-            fmt_expr = format_na.value
-            if not isinstance(fmt_expr, StringLit):
-                raise AglTypeError(
-                    "'format' must be a static text literal (codec name).",
-                    span=format_na.span,
-                )
-            codec_name = self._validate_format_option(fmt_expr.value, target_type, format_na.span)
-        else:
-            codec_name = self._select_codec(target_type, node.span)
-
-        # strict_json: named arg.
-        strict_json: bool | None = None
-        if "strict_json" in named:
-            sj_na = named["strict_json"]
-            sj_expr = sj_na.value
-            if not isinstance(sj_expr, BoolLit):
-                raise AglTypeError(
-                    "'strict_json' must be a static bool literal.",
-                    span=sj_na.span,
-                )
-            if codec_name != "json":
-                raise AglTypeError(
-                    f"'strict_json' is only valid when the codec is 'json'; "
-                    f"the selected codec for this call is '{codec_name}'.",
-                    span=sj_na.span,
-                )
-            strict_json = sj_expr.value
-
-        # on_parse_error: named arg.
-        parse_policy_str = "default"
-        if "on_parse_error" in named:
-            ope_na = named["on_parse_error"]
-            parse_policy_str = self._extract_parse_policy_str(ope_na.value, ope_na.span)
-            # Warn: no-op on text target.
-            if isinstance(target_type, TextType):
-                self._warnings.append(
-                    Diagnostic(
-                        message=(
-                            "'on_parse_error' has no effect on a text target: a text "
-                            "result never fails parsing, so the policy can never fire."
-                        ),
-                        line=node.span.start_line,
-                        severity="warning",
-                    )
-                )
-
-        effective_strict = strict_json if codec_name == "json" else None
+        codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
+            node, target_type, named
+        )
         spec = OutputContractSpec(
             target_type=target_type, codec_name=codec_name, strict_json=effective_strict
         )
@@ -828,7 +770,6 @@ class _Checker:
 
         # Determine codec.
         is_exec_result = exec_result_type is not None and target_type == exec_result_type
-        strict_json: bool | None = None
         parse_policy_str = "default"
 
         if is_exec_result:
@@ -848,51 +789,9 @@ class _Checker:
                 structured_exec=True,
             )
         else:
-            if "format" in named:
-                format_na = named["format"]
-                fmt_expr = format_na.value
-                if not isinstance(fmt_expr, StringLit):
-                    raise AglTypeError(
-                        "'format' must be a static text literal (codec name).",
-                        span=format_na.span,
-                    )
-                codec_name = self._validate_format_option(
-                    fmt_expr.value, target_type, format_na.span
-                )
-            else:
-                codec_name = self._select_codec(target_type, node.span)
-
-            if "strict_json" in named:
-                sj_na = named["strict_json"]
-                sj_expr = sj_na.value
-                if not isinstance(sj_expr, BoolLit):
-                    raise AglTypeError(
-                        "'strict_json' must be a static bool literal.", span=sj_na.span
-                    )
-                if codec_name != "json":
-                    raise AglTypeError(
-                        f"'strict_json' is only valid when the codec is 'json'; "
-                        f"the selected codec for this call is '{codec_name}'.",
-                        span=sj_na.span,
-                    )
-                strict_json = sj_expr.value
-
-            if "on_parse_error" in named:
-                ope_na = named["on_parse_error"]
-                parse_policy_str = self._extract_parse_policy_str(ope_na.value, ope_na.span)
-                if isinstance(target_type, TextType):
-                    self._warnings.append(
-                        Diagnostic(
-                            message=(
-                                "'on_parse_error' has no effect on a text target: a text "
-                                "result never fails parsing, so the policy can never fire."
-                            ),
-                            line=node.span.start_line,
-                            severity="warning",
-                        )
-                    )
-
-            effective_strict = strict_json if codec_name == "json" else None
+            codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
+                node, target_type, named
+            )
             spec = OutputContractSpec(
                 target_type=target_type,
                 codec_name=codec_name,
@@ -909,6 +808,64 @@ class _Checker:
             )
         )
         return target_type
+
+    # --- shared parse-option handling (ask / exec) ---
+
+    def _resolve_parse_options(
+        self, node: Call, target_type: Type, named: dict[str, NamedArg]
+    ) -> tuple[str, bool | None, str]:
+        """Resolve the format/strict_json/on_parse_error named args shared by ask and exec.
+
+        Returns ``(codec_name, effective_strict, parse_policy_str)``.
+        """
+        if "format" in named:
+            format_na = named["format"]
+            fmt_expr = format_na.value
+            if not isinstance(fmt_expr, StringLit):
+                raise AglTypeError(
+                    "'format' must be a static text literal (codec name).",
+                    span=format_na.span,
+                )
+            codec_name = self._validate_format_option(fmt_expr.value, target_type, format_na.span)
+        else:
+            codec_name = self._select_codec(target_type, node.span)
+
+        strict_json: bool | None = None
+        if "strict_json" in named:
+            sj_na = named["strict_json"]
+            sj_expr = sj_na.value
+            if not isinstance(sj_expr, BoolLit):
+                raise AglTypeError(
+                    "'strict_json' must be a static bool literal.",
+                    span=sj_na.span,
+                )
+            if codec_name != "json":
+                raise AglTypeError(
+                    f"'strict_json' is only valid when the codec is 'json'; "
+                    f"the selected codec for this call is '{codec_name}'.",
+                    span=sj_na.span,
+                )
+            strict_json = sj_expr.value
+
+        parse_policy_str = "default"
+        if "on_parse_error" in named:
+            ope_na = named["on_parse_error"]
+            parse_policy_str = self._extract_parse_policy_str(ope_na.value, ope_na.span)
+            # Warn: no-op on text target.
+            if isinstance(target_type, TextType):
+                self._warnings.append(
+                    Diagnostic(
+                        message=(
+                            "'on_parse_error' has no effect on a text target: a text "
+                            "result never fails parsing, so the policy can never fire."
+                        ),
+                        line=node.span.start_line,
+                        severity="warning",
+                    )
+                )
+
+        effective_strict = strict_json if codec_name == "json" else None
+        return codec_name, effective_strict, parse_policy_str
 
     # --- on_parse_error policy extraction ---
 
@@ -931,11 +888,7 @@ class _Checker:
                     )
                 return "abort"
             if arg.name == "Retry":
-                n_arg: NamedArg | None = None
-                for a in arg.args:
-                    if a.name == "n":
-                        n_arg = a
-                        break
+                n_arg = next((a for a in arg.args if a.name == "n"), None)
                 if n_arg is None or not isinstance(n_arg.value, IntLit):
                     raise AglTypeError(
                         "'on_parse_error' must be a static ParsePolicy constructor "

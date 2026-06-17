@@ -317,17 +317,8 @@ class AstBuilder(Transformer):
         # Grammar: field_inline (COMMA field_inline)* COMMA?
         return tuple(a for a in args if isinstance(a, syntax.FieldDef))
 
-    def field_inline(self, meta: Meta, args: _Args) -> syntax.FieldDef:
-        # Grammar: VAR_NAME COLON type_expr  (same as field_def)
-        name_tok = args[0]
-        assert isinstance(name_tok, Token)
-        type_expr = _find_type_expr(args[1:])
-        return syntax.FieldDef(
-            name=str(name_tok),
-            type_expr=type_expr,
-            span=_span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+    # Grammar: VAR_NAME COLON type_expr — identical shape to ``field_def``.
+    field_inline = field_def
 
     # ------------------------------------------------------------------
     # type_alias
@@ -352,16 +343,7 @@ class AstBuilder(Transformer):
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """func_def: "def" VAR_NAME LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body"""
         name_tok = next(a for a in args if isinstance(a, Token) and a.type == "VAR_NAME")
-        params: tuple[syntax.Param, ...] = ()
-        return_type: TypeExpr | None = None
-        body: syntax.Expr | None = None
-        for a in args:
-            if isinstance(a, tuple) and all(isinstance(x, syntax.Param) for x in a):
-                params = cast(tuple[syntax.Param, ...], a)
-            elif isinstance(a, _ALL_TYPE_EXPRS):
-                return_type = a
-            elif a is not None and not isinstance(a, Token) and not isinstance(a, tuple):
-                body = cast(syntax.Expr, a)
+        params, return_type, body = self._split_params_type_body(args)
         assert return_type is not None, "func_def: no return type"
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
@@ -570,9 +552,14 @@ class AstBuilder(Transformer):
     # Lambda expression
     # ------------------------------------------------------------------
 
-    def lambda_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
-        """lambda_expr: "fn" LPAR param_list? RPAR (THIN_ARROW type_expr)? ARROW expr"""
-        # Extract: params tuple, optional return type, body expr.
+    def _split_params_type_body(
+        self, args: _Args
+    ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None, syntax.Expr | None]:
+        """Classify a func/lambda arg list into ``(params, return_type, body)``.
+
+        Shared by ``func_def`` (return type required) and ``lambda_expr`` (return
+        type optional); callers assert on the parts they require.
+        """
         params: tuple[syntax.Param, ...] = ()
         return_type: TypeExpr | None = None
         body: syntax.Expr | None = None
@@ -583,6 +570,11 @@ class AstBuilder(Transformer):
                 return_type = a
             elif a is not None and not isinstance(a, Token) and not isinstance(a, tuple):
                 body = cast(syntax.Expr, a)
+        return params, return_type, body
+
+    def lambda_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
+        """lambda_expr: "fn" LPAR param_list? RPAR (THIN_ARROW type_expr)? ARROW expr"""
+        params, return_type, body = self._split_params_type_body(args)
         assert body is not None, "lambda_expr: no body"
         return syntax.Lambda(
             params=params,
@@ -815,24 +807,15 @@ class AstBuilder(Transformer):
         The first non-Token non-None arg is the base; the remaining name
         tokens (from DOT field_name repetitions) are the field chain.
         """
-        # The base atom is the first expr-like arg (not a Token or None).
-        base: syntax.Expr | None = None
-        field_names: list[str] = []
-        for a in args:
-            if a is None or isinstance(a, Token):
-                # Collect VAR_NAME or AGENT tokens that are field names
-                if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT"):
-                    field_names.append(str(a))
-            elif base is None:
-                base = cast(syntax.Expr, a)
-            else:  # pragma: no cover
-                # Should not occur: grammar guarantees exactly one base atom.
-                pass
-        # DOT tokens are also in args; we need to collect field name tokens.
-        # Re-collect: base is first non-token arg; field names are VAR_NAME/AGENT tokens.
-        assert base is not None, "juxt_field_access: no base atom"
+        # The base atom is the sole non-Token arg; the field chain is the
+        # VAR_NAME/AGENT tokens from the DOT repetitions.
+        field_names = [
+            str(a) for a in args if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT")
+        ]
+        non_tokens = [a for a in args if not isinstance(a, Token)]
+        assert non_tokens, "juxt_field_access: no base atom"
         assert field_names, "juxt_field_access: no field names"
-        result: syntax.Expr = base
+        result: syntax.Expr = cast(syntax.Expr, non_tokens[0])
         for fname in field_names:
             result = syntax.FieldAccess(
                 obj=result,
@@ -957,39 +940,34 @@ class AstBuilder(Transformer):
     # is / is not tests
     # ------------------------------------------------------------------
 
-    def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
+    def _make_is_test(
+        self, meta: Meta, args: _Args, *, qualified: bool, negated: bool
+    ) -> syntax.IsTest:
         left = cast(syntax.Expr, args[0])
-        variant_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
+        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
+        if qualified:
+            assert len(type_toks) == 2
+            qualifier: str | None = str(type_toks[0])
+            variant = str(type_toks[1])
+        else:
+            qualifier = None
+            variant = str(type_toks[0])
         return syntax.IsTest(
-            expr=left, qualifier=None, variant=str(variant_tok), negated=False,
+            expr=left, qualifier=qualifier, variant=variant, negated=negated,
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
+
+    def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
+        return self._make_is_test(meta, args, qualified=False, negated=False)
 
     def is_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        left = cast(syntax.Expr, args[0])
-        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
-        assert len(type_toks) == 2
-        return syntax.IsTest(
-            expr=left, qualifier=str(type_toks[0]), variant=str(type_toks[1]), negated=False,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
+        return self._make_is_test(meta, args, qualified=True, negated=False)
 
     def is_not_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        left = cast(syntax.Expr, args[0])
-        variant_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
-        return syntax.IsTest(
-            expr=left, qualifier=None, variant=str(variant_tok), negated=True,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
+        return self._make_is_test(meta, args, qualified=False, negated=True)
 
     def is_not_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        left = cast(syntax.Expr, args[0])
-        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
-        assert len(type_toks) == 2
-        return syntax.IsTest(
-            expr=left, qualifier=str(type_toks[0]), variant=str(type_toks[1]), negated=True,
-            span=_span_from_meta(meta), node_id=self._next_id(),
-        )
+        return self._make_is_test(meta, args, qualified=True, negated=True)
 
     # ------------------------------------------------------------------
     # Control flow: if_expr
@@ -998,7 +976,7 @@ class AstBuilder(Transformer):
     def if_cond_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
         """if_branch: or_expr ARROW branch_body -> if_cond_branch"""
         cond = cast(syntax.Expr, args[0])
-        body = _find_branch_body(args[1:])
+        body = _find_expr(args[1:])
         return syntax.IfBranch(
             cond=cond, body=body,
             span=_span_from_meta(meta), node_id=self._next_id(),
@@ -1006,7 +984,7 @@ class AstBuilder(Transformer):
 
     def if_else_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
         """if_branch: "else" ARROW branch_body -> if_else_branch"""
-        body = _find_branch_body(args)
+        body = _find_expr(args)
         return syntax.IfBranch(
             cond=ELSE, body=body,
             span=_span_from_meta(meta), node_id=self._next_id(),
@@ -1031,7 +1009,7 @@ class AstBuilder(Transformer):
             syntax.VarPattern, syntax.ConstructorPattern,
         )
         pat = next(a for a in args if isinstance(a, _pat_types))
-        body = _find_branch_body([a for a in args if not isinstance(a, _pat_types)])
+        body = _find_expr([a for a in args if not isinstance(a, _pat_types)])
         assert isinstance(pat, _pat_types)
         return syntax.CaseBranch(
             pattern=pat, body=body,
@@ -1476,14 +1454,6 @@ def _is_expr_obj(a: object) -> bool:
     return a is not None and not isinstance(a, Token)
 
 
-def _find_expr(args: _Args) -> syntax.Expr:
-    """Return the first Expr in *args* (skip Tokens and None placeholders)."""
-    for a in args:
-        if _is_expr_obj(a):
-            return cast(syntax.Expr, a)
-    raise AssertionError(f"_find_expr: no Expr found in {args!r}")  # pragma: no cover
-
-
 def _find_non_token(args: _Args) -> object:
     """Return the first non-None, non-Token element in args."""
     result = next(
@@ -1493,6 +1463,15 @@ def _find_non_token(args: _Args) -> object:
     if result is None:  # pragma: no cover
         raise AssertionError(f"_find_non_token: no non-token found in {args!r}")
     return result
+
+
+def _find_expr(args: _Args) -> syntax.Expr:
+    """Return the first Expr in *args* (skip Tokens and None placeholders).
+
+    Also used to extract single-Expr branch/suite bodies, which are likewise
+    the sole non-token element in *args*.
+    """
+    return cast(syntax.Expr, _find_non_token(args))
 
 
 def _extract_ann_and_value(
@@ -1517,18 +1496,6 @@ def _extract_ann_and_value(
 def syntax_error_from_meta(meta: Meta, message: str) -> AglSyntaxError:
     """Create an AglSyntaxError from a Meta object."""
     return AglSyntaxError(message, span=_span_from_meta(meta))
-
-
-def _find_branch_body(args: _Args) -> syntax.Expr:
-    """Extract the branch body Expr from transformer args.
-
-    ``branch_body`` returns a single ``Expr`` (either a ``Block`` from a suite
-    or an ``or_expr``-level expression inline).
-    """
-    for a in args:
-        if a is not None and not isinstance(a, Token):
-            return cast(syntax.Expr, a)
-    raise AssertionError(f"_find_branch_body: no Expr found in {args!r}")  # pragma: no cover
 
 
 def _validate_else_last(

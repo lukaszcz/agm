@@ -61,7 +61,6 @@ def _set_targets_in_program(program: "Program") -> frozenset[str]:
         Block,
         Case,
         Do,
-        Expr,
         If,
         Item,
         SetStmt,
@@ -77,21 +76,18 @@ def _set_targets_in_program(program: "Program") -> frozenset[str]:
             for sub in item.items:
                 _walk_item(sub)
         elif isinstance(item, Do):
-            _walk_expr(item.body)
-            _walk_expr(item.condition)
+            _walk_item(item.body)
+            _walk_item(item.condition)
         elif isinstance(item, If):
             for if_branch in item.branches:
-                _walk_expr(if_branch.body)
+                _walk_item(if_branch.body)
         elif isinstance(item, Case):
             for case_branch in item.branches:
-                _walk_expr(case_branch.body)
+                _walk_item(case_branch.body)
         elif isinstance(item, Try):
-            _walk_expr(item.body)
+            _walk_item(item.body)
             for handler in item.handlers:
-                _walk_expr(handler.body)
-
-    def _walk_expr(expr: Expr) -> None:
-        _walk_item(expr)
+                _walk_item(handler.body)
 
     for item in program.body.items:
         _walk_item(item)

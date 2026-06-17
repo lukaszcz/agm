@@ -2721,65 +2721,6 @@ def test_apply_closure_func_name_no_sig() -> None:
     assert snap["r"] == IntValue(7)
 
 
-def test_eval_lambda_return_type_resolve_exception() -> None:
-    # Lines 479-480: except clause in _eval_lambda when resolve_type_expr raises.
-    # We build an interpreter and mock resolve_type_expr to raise, then call
-    # _eval_lambda directly with a Lambda that has a return_type annotation.
-    from unittest.mock import MagicMock
-
-    from agm.agl.capabilities import HostCapabilities
-    from agm.agl.eval.interpreter import Interpreter
-    from agm.agl.eval.scope import Scope
-    from agm.agl.eval.values import Closure
-    from agm.agl.parser import parse_program
-    from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.runtime.codec import TextCodec
-    from agm.agl.runtime.contract import materialize_contract
-    from agm.agl.scope import resolve as scope_resolve
-    from agm.agl.syntax.nodes import Lambda, LetDecl
-    from agm.agl.typecheck import check
-    from agm.agl.typecheck.types import UnitType
-
-    source = "let f = fn(x: int) -> int => x + 1\nlet r = f(5)\nr"
-    program = parse_program(source)
-    resolved = scope_resolve(program)
-    caps = HostCapabilities(
-        agent_names=frozenset(), has_default_agent=False, supports_shell_exec=False,
-        codec_kinds={"text": frozenset({"text"})},
-    )
-    checked = check(resolved, caps)
-    codecs = {"text": TextCodec()}
-    contracts = {
-        node_id: materialize_contract(spec, codecs)
-        for node_id, spec in checked.contract_specs.items()
-    }
-    registry = AgentRegistry(named={}, default_agent=None)
-
-    interp = Interpreter(
-        checked=checked, registry=registry, contracts=contracts,
-        type_env=checked.type_env, loop_limit=100, strict_json=False,
-    )
-
-    # Mock resolve_type_expr to raise so the except clause (479-480) fires.
-    setattr(
-        interp._type_env,
-        "resolve_type_expr",
-        MagicMock(side_effect=Exception("simulated failure")),
-    )
-
-    # Find the Lambda node in the AST.
-    lambda_node: Lambda | None = None
-    for item in program.body.items:
-        if isinstance(item, LetDecl) and isinstance(item.value, Lambda):
-            lambda_node = item.value
-            break
-    assert lambda_node is not None
-
-    scope = Scope(parent=None)
-    result = interp._eval_lambda(lambda_node, scope)
-    # The except clause falls back to UnitType — no exception should propagate.
-    assert isinstance(result, Closure)
-    assert isinstance(result.return_type, UnitType)
 
 
 def test_bind_positional_args_with_default_via_direct_call() -> None:

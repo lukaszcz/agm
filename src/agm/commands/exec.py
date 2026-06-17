@@ -45,6 +45,7 @@ from typing import TypeVar
 from agm.agent.runner import split_command
 from agm.agl import WorkflowRuntime
 from agm.agl.runtime.agents import runner_backed_agent_factory
+from agm.agl.syntax.nodes import PragmaValue
 from agm.commands.agent_io import default_agent_runner
 from agm.commands.args import ExecArgs
 from agm.config.context import current_config_context
@@ -60,6 +61,12 @@ _T = TypeVar("_T")
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
+
+
+def _typed_pragma(pragmas: dict[str, PragmaValue], key: str, typ: type[_T]) -> _T | None:
+    """Return the pragma value for *key* if present and of type *typ*, else None."""
+    value = pragmas.get(key)
+    return value if isinstance(value, typ) else None
 
 
 def run(args: ExecArgs) -> None:
@@ -99,10 +106,9 @@ def run(args: ExecArgs) -> None:
     pragmas = prepared.config_pragmas
 
     # Resolve strict_json: CLI > pragma > config.
-    pragma_strict_json = pragmas.get("strict_json")
     strict_json = _first(
         args.strict_json,
-        pragma_strict_json if isinstance(pragma_strict_json, bool) else None,
+        _typed_pragma(pragmas, "strict_json", bool),
         config.strict_json,
     )
     # config.strict_json is always a bool, so _first always returns a bool here.
@@ -110,10 +116,9 @@ def run(args: ExecArgs) -> None:
     resolved_strict_json: bool = strict_json
 
     # Resolve loop limit: CLI > pragma > config.
-    pragma_max_iters = pragmas.get("max_iters")
     loop_limit = _first(
         args.max_iters,
-        pragma_max_iters if isinstance(pragma_max_iters, int) else None,
+        _typed_pragma(pragmas, "max_iters", int),
         config.default_loop_limit,
     )
     assert loop_limit is not None
@@ -133,8 +138,6 @@ def run(args: ExecArgs) -> None:
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
     # Pragma log/log_file values are wired here (Milestone 3).
-    pragma_log = pragmas.get("log")
-    pragma_log_file = pragmas.get("log_file")
     if dry_run.enabled():
         log_file = None
     else:
@@ -143,8 +146,8 @@ def run(args: ExecArgs) -> None:
             cli_no_log=args.no_log,
             cli_log=args.log,
             cli_log_file=args.log_file,
-            pragma_log=pragma_log if isinstance(pragma_log, bool) else None,
-            pragma_log_file=pragma_log_file if isinstance(pragma_log_file, str) else None,
+            pragma_log=_typed_pragma(pragmas, "log", bool),
+            pragma_log_file=_typed_pragma(pragmas, "log_file", str),
             config_log=config.log,
             config_log_file=config.log_file,
         )
@@ -153,10 +156,9 @@ def run(args: ExecArgs) -> None:
     # Resolve the runner command: CLI flag > pragma > [exec] config > shared
     # loop default (the same default used by agm loop/review, per plan §9.5).
     # ----------------------------------------------------------------
-    pragma_runner = pragmas.get("runner")
     runner_cmd = (
         args.runner
-        or (pragma_runner if isinstance(pragma_runner, str) else None)
+        or _typed_pragma(pragmas, "runner", str)
         or config.runner
         or default_agent_runner()
     )

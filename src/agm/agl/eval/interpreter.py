@@ -80,6 +80,7 @@ from agm.agl.typecheck.types import (
     DecimalType,
     DictType,
     EnumType,
+    FunctionType,
     JsonType,
     ListType,
     RecordType,
@@ -98,6 +99,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, FunctionSignature, TypeEnvironment
+    from agm.core.process import ProcessCaptureResult
 
 
 _Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
@@ -399,12 +401,13 @@ class Interpreter:
         # Build the function scope (closes over the closure's captured env).
         fn_scope = Scope(parent=closure.env)
 
-        if func_name is not None:
-            sig = self._checked.function_signatures.get(func_name)
-            if sig is not None:
-                self._bind_declared_args(fn_scope, closure, sig, call, call_scope)
-            else:
-                self._bind_positional_args(fn_scope, closure, call, call_scope)
+        sig = (
+            self._checked.function_signatures.get(func_name)
+            if func_name is not None
+            else None
+        )
+        if sig is not None:
+            self._bind_declared_args(fn_scope, closure, sig, call, call_scope)
         else:
             self._bind_positional_args(fn_scope, closure, call, call_scope)
 
@@ -472,12 +475,12 @@ class Interpreter:
 
     def _eval_lambda(self, expr: Lambda, scope: Scope) -> Closure:
         """Create a Closure from a Lambda expression, capturing the current scope."""
-        ret_type: Type = UnitType()
-        if expr.return_type is not None:
-            try:
-                ret_type = self._type_env.resolve_type_expr(expr.return_type)
-            except Exception:  # type resolution best-effort
-                ret_type = UnitType()
+        # The checker already inferred the lambda's full FunctionType (including
+        # the result type for annotation-free lambdas); reuse it instead of
+        # re-resolving the return-type annotation on every closure creation.
+        fn_type = self._checked.node_types.get(expr.node_id)
+        assert isinstance(fn_type, FunctionType), "lambda missing inferred FunctionType"
+        ret_type: Type = fn_type.result
         params: tuple[tuple[str, Expr | None], ...] = tuple(
             (p.name, p.default) for p in expr.params
         )
@@ -600,6 +603,18 @@ class Interpreter:
         # Absent or Abort() → single-attempt abort.
         return None
 
+    def _eval_to_text(self, expr: Expr, scope: Scope) -> str:
+        """Evaluate *expr* to plain text — a Template renders directly, any other
+        value is rendered (a bare ``text`` value yields its raw string)."""
+        if isinstance(expr, Template):
+            return self._eval_template(expr, scope)
+        val = self._eval_expr(expr, scope)
+        if isinstance(val, TextValue):
+            return val.value
+        from agm.agl.runtime.render import render_value
+
+        return render_value(val)
+
     def _eval_print_call(self, expr: Call, scope: Scope) -> Value:
         """Evaluate ``print(expr)`` — output and return unit."""
         from agm.agl.runtime.render import render_value
@@ -623,17 +638,7 @@ class Interpreter:
                 agent_name = agent_val.name
 
         # First positional arg is the prompt (Template or any expr).
-        prompt_expr = expr.args[0]
-        if isinstance(prompt_expr, Template):
-            prompt_text = self._eval_template(prompt_expr, scope)
-        else:
-            prompt_val = self._eval_expr(prompt_expr, scope)
-            if isinstance(prompt_val, TextValue):
-                prompt_text = prompt_val.value
-            else:
-                from agm.agl.runtime.render import render_value
-
-                prompt_text = render_value(prompt_val)
+        prompt_text = self._eval_to_text(expr.args[0], scope)
 
         call_span = expr.span
         contract = self._contracts.get(expr.node_id)
@@ -709,20 +714,8 @@ class Interpreter:
 
     def _eval_exec_call(self, expr: Call, scope: Scope) -> Value:
         """Evaluate an ``exec(command, ...)`` builtin call."""
-        from agm.core.process import run_capture_result
-
         # First arg is the command (Template or any expr).
-        cmd_expr = expr.args[0]
-        if isinstance(cmd_expr, Template):
-            command = self._eval_template(cmd_expr, scope)
-        else:
-            cmd_val = self._eval_expr(cmd_expr, scope)
-            if isinstance(cmd_val, TextValue):
-                command = cmd_val.value
-            else:
-                from agm.agl.runtime.render import render_value
-
-                command = render_value(cmd_val)
+        command = self._eval_to_text(expr.args[0], scope)
 
         exec_span = expr.span
         contract = self._contracts.get(expr.node_id)
@@ -730,146 +723,35 @@ class Interpreter:
         exec_parse_policy = self._extract_parse_policy(named_exec_map, scope)
 
         def execute_command() -> tuple[str, str]:
-            result = run_capture_result(
-                ["sh", "-c", command],
-                idle_timeout=self._shell_exec_timeout,
-                isolate_process_group=True,
-            )
-            if result.spawn_error is not None:
-                self._trace.exec_command(
-                    command=command,
-                    exit_code=-1,
-                    duration=result.elapsed,
-                    stdout="",
-                    stderr=result.spawn_error,
-                    timed_out=False,
-                    span=exec_span,
-                )
+            result, trace_id = self._run_shell_capture(command, exec_span)
+            if result.returncode is not None and result.returncode != 0:
+                exit_code = result.returncode
                 raise AglRaise(
                     _make_exc_value(
                         "ExecError",
-                        f"Failed to spawn shell: {result.spawn_error}",
-                        trace_id=self._trace.new_event_id(),
-                        command=TextValue(command),
-                        exit_code=IntValue(-1),
-                        stdout=TextValue(""),
-                        stderr=TextValue(""),
-                        timed_out=BoolValue(False),
-                    ),
-                    span=exec_span,
-                )
-            if result.timed_out or (
-                result.returncode is not None and result.returncode != 0
-            ):
-                exit_code = result.returncode if result.returncode is not None else -1
-                self._trace.exec_command(
-                    command=command,
-                    exit_code=exit_code,
-                    duration=result.elapsed,
-                    stdout=result.stdout.rstrip("\n"),
-                    stderr=result.stderr.rstrip("\n"),
-                    timed_out=result.timed_out,
-                    span=exec_span,
-                )
-                if result.timed_out:
-                    message = (
-                        f"Shell command timed out (idle timeout exceeded): {command!r}"
-                    )
-                else:
-                    message = f"Shell command exited with code {exit_code}: {command!r}"
-                raise AglRaise(
-                    _make_exc_value(
-                        "ExecError",
-                        message,
+                        f"Shell command exited with code {exit_code}: {command!r}",
                         trace_id=self._trace.new_event_id(),
                         command=TextValue(command),
                         exit_code=IntValue(exit_code),
                         stdout=TextValue(result.stdout.rstrip("\n")),
                         stderr=TextValue(result.stderr.rstrip("\n")),
-                        timed_out=BoolValue(result.timed_out),
-                    ),
-                    span=exec_span,
-                )
-            stdout = result.stdout.rstrip("\n")
-            trace_id = self._trace.exec_command(
-                command=command,
-                exit_code=result.returncode if result.returncode is not None else 0,
-                duration=result.elapsed,
-                stdout=stdout,
-                stderr=result.stderr.rstrip("\n"),
-                timed_out=False,
-                span=exec_span,
-            )
-            return stdout, trace_id
-
-        # Structured exec: return a raw ExecResult record without parsing.
-        if contract is not None and contract.structured_exec:
-            _sr = run_capture_result(
-                ["sh", "-c", command],
-                idle_timeout=self._shell_exec_timeout,
-                isolate_process_group=True,
-            )
-            if _sr.spawn_error is not None:
-                self._trace.exec_command(
-                    command=command,
-                    exit_code=-1,
-                    duration=_sr.elapsed,
-                    stdout="",
-                    stderr=_sr.spawn_error,
-                    timed_out=False,
-                    span=exec_span,
-                )
-                raise AglRaise(
-                    _make_exc_value(
-                        "ExecError",
-                        f"Failed to spawn shell: {_sr.spawn_error}",
-                        trace_id=self._trace.new_event_id(),
-                        command=TextValue(command),
-                        exit_code=IntValue(-1),
-                        stdout=TextValue(""),
-                        stderr=TextValue(""),
                         timed_out=BoolValue(False),
                     ),
                     span=exec_span,
                 )
-            if _sr.timed_out:
-                self._trace.exec_command(
-                    command=command,
-                    exit_code=_sr.returncode if _sr.returncode is not None else -1,
-                    duration=_sr.elapsed,
-                    stdout=_sr.stdout.rstrip("\n"),
-                    stderr=_sr.stderr.rstrip("\n"),
-                    timed_out=True,
-                    span=exec_span,
-                )
-                raise AglRaise(
-                    _make_exc_value(
-                        "ExecError",
-                        f"Shell command timed out (idle timeout exceeded): {command!r}",
-                        trace_id=self._trace.new_event_id(),
-                        command=TextValue(command),
-                        exit_code=IntValue(_sr.returncode if _sr.returncode is not None else -1),
-                        stdout=TextValue(_sr.stdout.rstrip("\n")),
-                        stderr=TextValue(_sr.stderr.rstrip("\n")),
-                        timed_out=BoolValue(True),
-                    ),
-                    span=exec_span,
-                )
-            self._trace.exec_command(
-                command=command,
-                exit_code=_sr.returncode if _sr.returncode is not None else 0,
-                duration=_sr.elapsed,
-                stdout=_sr.stdout.rstrip("\n"),
-                stderr=_sr.stderr.rstrip("\n"),
-                timed_out=False,
-                span=exec_span,
-            )
+            return result.stdout.rstrip("\n"), trace_id
+
+        # Structured exec: return a raw ExecResult record without parsing. A
+        # non-zero exit is data here (reported in the record), not an error.
+        if contract is not None and contract.structured_exec:
+            result, _ = self._run_shell_capture(command, exec_span)
+            exit_code = result.returncode if result.returncode is not None else 0
             return RecordValue(
                 type_name="ExecResult",
                 fields={
-                    "stdout": TextValue(_sr.stdout.rstrip("\n")),
-                    "exit_code": IntValue(_sr.returncode if _sr.returncode is not None else 0),
-                    "stderr": TextValue(_sr.stderr.rstrip("\n")),
+                    "stdout": TextValue(result.stdout.rstrip("\n")),
+                    "exit_code": IntValue(exit_code),
+                    "stderr": TextValue(result.stderr.rstrip("\n")),
                     "timed_out": BoolValue(False),
                 },
             )
@@ -905,6 +787,73 @@ class Interpreter:
             make_failure_message=make_exec_failure_message,
             raise_span=exec_span,
         )
+
+    def _run_shell_capture(
+        self, command: str, exec_span: "SourceSpan | None"
+    ) -> "tuple[ProcessCaptureResult, str]":
+        """Run *command* via the shell, emit the exec trace, and return ``(result, trace_id)``.
+
+        Raises ``ExecError`` on a spawn failure or idle timeout — these are
+        always errors. A non-zero exit code is *not* raised here: the caller
+        decides whether a failing exit should raise (text/parse exec) or be
+        returned as data (structured exec).
+        """
+        from agm.core.process import run_capture_result
+
+        result = run_capture_result(
+            ["sh", "-c", command],
+            idle_timeout=self._shell_exec_timeout,
+            isolate_process_group=True,
+        )
+        if result.spawn_error is not None:
+            self._trace.exec_command(
+                command=command,
+                exit_code=-1,
+                duration=result.elapsed,
+                stdout="",
+                stderr=result.spawn_error,
+                timed_out=False,
+                span=exec_span,
+            )
+            raise AglRaise(
+                _make_exc_value(
+                    "ExecError",
+                    f"Failed to spawn shell: {result.spawn_error}",
+                    trace_id=self._trace.new_event_id(),
+                    command=TextValue(command),
+                    exit_code=IntValue(-1),
+                    stdout=TextValue(""),
+                    stderr=TextValue(""),
+                    timed_out=BoolValue(False),
+                ),
+                span=exec_span,
+            )
+        # returncode is None only on a timeout (handled below), where -1 stands in.
+        exit_code = result.returncode if result.returncode is not None else -1
+        trace_id = self._trace.exec_command(
+            command=command,
+            exit_code=exit_code,
+            duration=result.elapsed,
+            stdout=result.stdout.rstrip("\n"),
+            stderr=result.stderr.rstrip("\n"),
+            timed_out=result.timed_out,
+            span=exec_span,
+        )
+        if result.timed_out:
+            raise AglRaise(
+                _make_exc_value(
+                    "ExecError",
+                    f"Shell command timed out (idle timeout exceeded): {command!r}",
+                    trace_id=self._trace.new_event_id(),
+                    command=TextValue(command),
+                    exit_code=IntValue(exit_code),
+                    stdout=TextValue(result.stdout.rstrip("\n")),
+                    stderr=TextValue(result.stderr.rstrip("\n")),
+                    timed_out=BoolValue(True),
+                ),
+                span=exec_span,
+            )
+        return result, trace_id
 
     def _run_parse_attempts(
         self,

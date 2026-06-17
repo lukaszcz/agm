@@ -1049,11 +1049,14 @@ class _Checker:
     def _check_if(self, node: If, *, expected: Type | None) -> Type:
         has_else = any(isinstance(b.cond, ElseSentinel) for b in node.branches)
         branch_types: list[Type] = []
+        body_expected = expected if has_else else UnitType()
         for branch in node.branches:
             if not isinstance(branch.cond, ElseSentinel):
                 cond_type = self._check_expr(branch.cond, expected=None)
                 self._require_bool_condition(cond_type, branch.cond.span, "if")
-            bt = self._check_expr(branch.body, expected=expected)
+            bt = self._check_expr(branch.body, expected=body_expected)
+            if not has_else:
+                self._assert_assignable(bt, UnitType(), branch.body.span)
             branch_types.append(bt)
 
         if not has_else:

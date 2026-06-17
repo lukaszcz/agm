@@ -596,10 +596,14 @@ class TestUnitPropagation:
         assert r.type_env.get_binding_type(let_decl.node_id) == UnitType()
 
     def test_if_no_else_yields_unit(self) -> None:
-        r = accept_type("let u: unit = if true => 1\nu")
+        r = accept_type("let u: unit = if true => ()\nu")
         let_decl = r.resolved.program.body.items[0]
         assert isinstance(let_decl, LetDecl)
         assert r.type_env.get_binding_type(let_decl.node_id) == UnitType()
+
+    def test_if_no_else_branch_body_must_be_unit(self) -> None:
+        err = reject_type("if true => 1\n()")
+        assert "unit" in str(err).lower()
 
     def test_unit_lit(self) -> None:
         r = accept_type("let u: unit = ()\nu")
@@ -1066,7 +1070,7 @@ class TestIf:
         assert t == IntType()
 
     def test_if_without_else_yields_unit(self) -> None:
-        r = accept_type("if true => 1")
+        r = accept_type("if true => ()")
         if_node = r.resolved.program.body.items[0]
         assert isinstance(if_node, If)
         t = r.node_types[if_node.node_id]

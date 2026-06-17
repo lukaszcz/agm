@@ -142,8 +142,8 @@ def test_if_without_else_false() -> None:
         assert not isinstance(v, IntValue)
 
 
-def test_if_without_else_true_discards_branch_value() -> None:
-    snap = _run_source("let u: unit = if true => 1\nu")
+def test_if_without_else_true_yields_unit() -> None:
+    snap = _run_source("let u: unit = if true => ()\nu")
     assert snap["u"] == UnitValue()
 
 

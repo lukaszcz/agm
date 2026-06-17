@@ -52,17 +52,16 @@ print(if status is Pass => "passed" else => "failed")
 
 ### `if` without `else`: type `unit`
 
-When `else` is absent, the `if` expression has type `unit`. The branch
-body's value is discarded:
+When `else` is absent, the `if` expression has type `unit`. All branch bodies
+must also have type `unit`:
 
 ```agl
 if res.exit_code != 0 =>
   print "command failed: ${res.stderr}"
 ```
 
-Because an `else`-less `if` always yields `unit`, a type mismatch between
-branches with no `else` is a static error at the point where a non-`unit`
-type is expected.
+Because an `else`-less `if` always yields `unit`, it is for effectful control
+flow. A branch body that produces a non-`unit` value is a static error.
 
 Branch bodies are suites (indented blocks) or single expressions at the
 `or_expr` level. Because branch bodies are `or_expr` positions, a `case` or

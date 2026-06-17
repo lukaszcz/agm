@@ -259,12 +259,12 @@ effect, not their value:
 |------|------|-------|
 | `print(e)` | `unit` | writes to stdout |
 | `set x = e` | `unit` | mutates `x` |
-| `if c => body` (no `else`) | `unit` | branch may not run |
+| `if c => body` (no `else`) | `unit` | branch body must be `unit` |
 | `do … until c` | `unit` | loops run for effect |
 | `()` | `unit` | the unit literal itself |
 
-An `if` without `else` always has type `unit`, and the branch body's value
-is discarded. A `case` or `do` loop likewise yields `unit`.
+An `if` without `else` always has type `unit`, and each branch body must also
+have type `unit`. A `case` or `do` loop likewise yields `unit`.
 
 `unit` values may appear anywhere in a block, including as the final
 expression. A function declared `-> unit` has its body checked against

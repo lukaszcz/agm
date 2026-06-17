@@ -126,7 +126,7 @@ Each former statement gets an expression type:
 | `let`/`var x = e; rest` | type of `rest` | binder over continuation |
 | `set x = e` | `unit` | mutation; followed by a continuation in a block |
 | `print(e)` | `unit` | |
-| `if c => a` (no else) | `unit` | branch value discarded |
+| `if c => a` (no else) | `unit` | branch body must be `unit` |
 | `if c => a \| else => b` | unified type of `a`,`b` | `int→decimal` widening, as `case` today |
 | `case … of …` | unified branch type | unchanged from current `case` expression |
 | `do … until c` | `unit` | a loop produces no useful value (recommended) |
@@ -624,4 +624,3 @@ Each milestone ends green (`just check`) and is committed (per repo policy).
    `README`, `commands.md`; new rejection programs; multi-scenario e2e. `just
    check` green.
 ```
-

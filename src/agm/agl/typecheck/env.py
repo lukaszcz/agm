@@ -19,15 +19,40 @@ from agm.agl.scope.symbols import BindingRef, ResolvedProgram
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.types import (
     BUILTIN_EXCEPTIONS,
+    BUILTIN_PRELUDE_TYPE_NAMES,
+    BUILTIN_PRELUDE_TYPES,
+    AgentType,
     BoolType,
     DecimalType,
     DictType,
+    FunctionType,
     IntType,
     JsonType,
     ListType,
     TextType,
     Type,
+    UnitType,
 )
+
+# ---------------------------------------------------------------------------
+# FunctionSignature — full declared signature of a top-level def
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionSignature:
+    """Full declared signature of a top-level ``def``.
+
+    Carries named/default information needed for declared-name call sites.
+    The value type (FunctionType) erases names/defaults (plan R7).
+
+    ``params`` — ordered list of (name, type, has_default).
+    ``result`` — the declared return type.
+    """
+
+    params: tuple[tuple[str, Type, bool], ...]  # (name, type, has_default)
+    result: Type
+
 
 # ---------------------------------------------------------------------------
 # AglTypeError
@@ -84,16 +109,25 @@ class OutputContractSpec:
         The resolved semantic type the agent's output will be parsed into.
     ``codec_name``
         The codec selected for this call (e.g. ``"text"`` in M1, ``"json"``
-        in M2).
+        in M2).  When ``structured_exec`` is ``True`` this field holds the
+        placeholder value ``"text"`` and is **unused** — S5 will branch on
+        ``structured_exec`` to skip codec lookup and return the raw
+        ``ExecResult`` handle instead.
     ``strict_json``
         The effective strict-JSON flag for this call (``None`` means the
         codec is not JSON-based and the flag is irrelevant; in M1 this is
         always ``None`` since the only codec is ``"text"``).
+    ``structured_exec``
+        ``True`` for the structured ``exec`` form (target is ``ExecResult``):
+        returns the raw result record, does not parse stdout, does not raise
+        on nonzero exit.  ``False`` (the default) for all other calls.  S5
+        must branch on this flag to skip the codec/parse pipeline entirely.
     """
 
     target_type: Type
     codec_name: str
     strict_json: bool | None
+    structured_exec: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +171,7 @@ class CheckedProgram:
     call_sites: tuple[CallSiteRecord, ...]
     warnings: tuple[Diagnostic, ...]
     type_env: TypeEnvironment
+    function_signatures: dict[str, FunctionSignature]
 
 
 # ---------------------------------------------------------------------------
@@ -162,9 +197,14 @@ class TypeEnvironment:
         self._alias_targets: dict[str, object] = {}  # stores raw TypeExpr until resolved
         # Binding node_id → Type (populated as declarations are checked).
         self._binding_types: dict[int, Type] = {}
+        # Function signatures — name → FunctionSignature (for declared-name calls).
+        self._function_signatures: dict[str, FunctionSignature] = {}
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
+        # Built-in prelude types (AgL v2: ExecResult, ParsePolicy) are always available.
+        for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
+            self._types[prelude_name] = prelude_type
 
     # --- Type namespace queries ---
 
@@ -189,11 +229,12 @@ class TypeEnvironment:
         Dropping the name from both tables before the new kind is registered
         keeps the two namespaces mutually exclusive for user names.
 
-        Built-in exception names are never removed: they are non-shadowable
-        (rejected earlier by ``_BUILTIN_TYPE_NAMES``), so the builder never calls
-        this for them, but the guard makes the helper safe to call defensively.
+        Built-in exception names and built-in prelude type names are never
+        removed: they are non-shadowable (rejected earlier by
+        ``_BUILTIN_TYPE_NAMES``), so the builder never calls this for them,
+        but the guard makes the helper safe to call defensively.
         """
-        if name in BUILTIN_EXCEPTIONS:
+        if name in BUILTIN_EXCEPTIONS or name in BUILTIN_PRELUDE_TYPE_NAMES:
             return
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
@@ -221,6 +262,17 @@ class TypeEnvironment:
             return self._resolve_name_type(name, span=None, _resolving=frozenset())
         except AglTypeError:
             return None
+
+    # --- Function signature table ---
+
+    def register_function_signature(self, name: str, sig: FunctionSignature) -> None:
+        self._function_signatures[name] = sig
+
+    def get_function_signature(self, name: str) -> FunctionSignature | None:
+        return self._function_signatures.get(name)
+
+    def all_function_signatures(self) -> dict[str, FunctionSignature]:
+        return dict(self._function_signatures)
 
     # --- Binding type table ---
 
@@ -259,14 +311,17 @@ class TypeEnvironment:
             detection).
         """
         from agm.agl.syntax.types import (
+            AgentT,
             BoolT,
             DecimalT,
             DictT,
+            FuncT,
             IntT,
             JsonT,
             ListT,
             NameT,
             TextT,
+            UnitT,
         )
 
         if _resolving is None:
@@ -282,6 +337,16 @@ class TypeEnvironment:
             return IntType()
         if isinstance(type_expr, DecimalT):
             return DecimalType()
+        if isinstance(type_expr, UnitT):
+            return UnitType()
+        if isinstance(type_expr, AgentT):
+            return AgentType()
+        if isinstance(type_expr, FuncT):
+            params = tuple(
+                self.resolve_type_expr(p, _resolving=_resolving) for p in type_expr.params
+            )
+            result = self.resolve_type_expr(type_expr.result, _resolving=_resolving)
+            return FunctionType(params=params, result=result)
         if isinstance(type_expr, ListT):
             elem = self.resolve_type_expr(type_expr.elem, _resolving=_resolving)
             return ListType(elem=elem)
@@ -338,13 +403,15 @@ class TypeEnvironment:
         """Copy *other*'s user-declared types, aliases, and binding types in.
 
         Used to pre-populate a fresh environment with a session's accumulated
-        state before checking a new entry.  Built-in exception types are already
-        present and are not copied.  Binding types are keyed by globally-unique
-        ``decl_node_id`` so they never collide across entries.
+        state before checking a new entry.  Built-in exception types and
+        built-in prelude types are already present in every fresh environment
+        and are not copied from the source.  Binding types are keyed by
+        globally-unique ``decl_node_id`` so they never collide across entries.
         """
-        builtin = frozenset(BUILTIN_EXCEPTIONS)
+        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         for name, typ in other._types.items():
             if name not in builtin:
                 self._types[name] = typ
         self._alias_targets.update(other._alias_targets)
         self._binding_types.update(other._binding_types)
+        self._function_signatures.update(other._function_signatures)

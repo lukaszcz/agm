@@ -1,4 +1,4 @@
-"""Type-checking pass (Component 5).
+"""Type-checking pass (Component 5) for AgL v2.
 
 ``check(resolved, capabilities)`` performs a bidirectional type pass over the
 ``ResolvedProgram``, using the ``HostCapabilities`` to validate codec and
@@ -8,33 +8,31 @@ Rules implemented
 -----------------
 1.  Type declaration validation: duplicate names, unknown referenced types,
     recursive records/enums, alias cycles, and built-in-name shadowing.
-2.  Binding type inference:
+2.  Function declarations: parameter/return types resolved; ordering enforced
+    (required before defaulted); FunctionSignature registered.
+3.  Binding type inference:
     - ``let/var name: T = e`` — check ``e`` against ``T``.
-    - Untyped agent-call binding defaults to ``text`` (design §2.4).
     - Other untyped initializers infer from the literal/expression.
     - ``input name[: T]`` — defaults to ``text`` when unannotated.
-3.  ``set name = e`` — expected type is the binding's declared type.
-4.  ``print expr`` — accepts any type.
-5.  Agent-call target typing (§11.4): from annotation / set-target / else
-    ``text``.  The target type's kind must be supported by some registered
-    codec ("no registered codec supports type T" otherwise).
-6.  ``strict_json`` is valid only when the selected codec is ``"json"``.
-7.  Renderer names in interpolation segments must exist in capabilities.
-8.  Agent names are NOT validated here: the scope pass owns name validity (an
-    undeclared named agent is a scope binding error).  The built-in ``ask``
-    call still requires ``has_default_agent`` to back it.
-9.  Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
-    accepts any JSON-shaped value (scalars and ``list``/``dict`` thereof, but
-    not records/enums/exceptions).  List/dict literals propagate the expected
-    element/value type and assert every element soundly.  Qualified enum
-    constructors, ``is`` tests, and patterns resolve their qualifier
-    alias-transparently (§5.4).
-10. Duplicate constructor argument names: the parser rejects these; the
-    checker repeats the check defensively for direct AST construction.
-11. Type declarations: duplicate fields, duplicate variants, duplicate
-    constructor args, duplicate dict keys.
+4.  ``set name = e`` — expected type is the binding's declared type.
+5.  ``print(expr)`` — accepts any non-function/non-agent type.
+6.  ``ask(prompt, ...)`` — named-agent or default-agent call with codec.
+7.  ``exec(cmd, ...)`` — shell call; requires ``supports_shell_exec``.
+8.  Declared-name calls — checked against the full ``FunctionSignature``.
+9.  Value calls — checked against the ``FunctionType``; named args disallowed.
+10. Lambdas — inferred or annotated return type.
+11. Block typing — last item is the block's value; LetDecl/VarDecl at end is error.
+12. ``if`` with no ``else`` yields ``unit``; with ``else`` branches must unify.
+13. ``case`` — exhaustiveness warning on enum scrutinees.
+14. ``do-until`` — yields ``unit``; condition must be bool.
+15. ``try/catch`` — body and handler types must unify.
+16. ``raise`` — yields ``BottomType`` (bottom, assignable to any target).
+17. Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
+    accepts any JSON-shaped value.  Bottom type is assignable to any target.
+18. Duplicate constructor argument names, duplicate dict keys, and all the
+    constructor checks carried over from v1.
 
-The checker raises ``AglTypeError`` on the first error (Q4 first-error abort).
+The checker raises ``AglTypeError`` on the first error (first-error abort).
 """
 
 from __future__ import annotations
@@ -43,53 +41,52 @@ from collections.abc import Sequence
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.scope.symbols import BindingRef, CallKind, ResolvedProgram
+from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ResolvedProgram
 from agm.agl.syntax.nodes import (
-    AbortPolicy,
-    AgentCall,
+    AgentDecl,
     BinaryOp,
     BinOp,
+    Block,
     BoolLit,
-    CaseExpr,
-    CaseStmt,
-    CaseStmtBranch,
+    Call,
+    Case,
     CatchClause,
     ConfigPragma,
     Constructor,
     ConstructorPattern,
     DecimalLit,
     DictLit,
-    DoUntil,
+    Do,
     ElseSentinel,
     EnumDef,
     Expr,
-    ExprStmt,
     FieldAccess,
     FieldDef,
-    IfExpr,
-    IfStmt,
+    FuncDef,
+    If,
     InputDecl,
     InterpSegment,
     IntLit,
     IsTest,
+    Item,
+    Lambda,
     LetDecl,
     ListLit,
     LiteralPattern,
+    NamedArg,
     NullLit,
     Pattern,
-    PrintStmt,
     Program,
     Raise,
     RecordDef,
-    RetryPolicy,
     SetStmt,
-    Stmt,
     StringLit,
     Template,
-    TryCatch,
+    Try,
     TypeAlias,
     UnaryNeg,
     UnaryNot,
+    UnitLit,
     VarDecl,
     VarPattern,
     VarRef,
@@ -101,22 +98,28 @@ from agm.agl.typecheck.env import (
     AglTypeError,
     CallSiteRecord,
     CheckedProgram,
+    FunctionSignature,
     OutputContractSpec,
     TypeEnvironment,
 )
 from agm.agl.typecheck.types import (
     BUILTIN_EXCEPTION_NAMES,
+    BUILTIN_PRELUDE_TYPE_NAMES,
+    AgentType,
     BoolType,
+    BottomType,
     DecimalType,
     DictType,
     EnumType,
     ExceptionType,
+    FunctionType,
     IntType,
     JsonType,
     ListType,
     RecordType,
     TextType,
     Type,
+    UnitType,
     comparable_types,
     is_assignable,
 )
@@ -126,18 +129,14 @@ from agm.agl.typecheck.types import (
 # ---------------------------------------------------------------------------
 
 # Built-in type names that the user may not shadow with a record/enum/alias.
-_BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
-    {"text", "json", "bool", "int", "decimal"}
-) | BUILTIN_EXCEPTION_NAMES
+_BUILTIN_TYPE_NAMES: frozenset[str] = (
+    frozenset({"text", "json", "bool", "int", "decimal", "unit", "agent"})
+    | BUILTIN_EXCEPTION_NAMES
+    | BUILTIN_PRELUDE_TYPE_NAMES
+)
 
-
-def _parse_policy_str(policy: AbortPolicy | RetryPolicy | None) -> str:
-    """Render a parse policy as the inventory string (``"abort"``/``"retry[N]"``/``"default"``)."""
-    if isinstance(policy, AbortPolicy):
-        return "abort"
-    if isinstance(policy, RetryPolicy):
-        return f"retry[{policy.extra}]"
-    return "default"
+# Built-in function names that user-defined defs may not shadow.
+_BUILTIN_FUNC_NAMES: frozenset[str] = frozenset({"print", "exec", "ask"})
 
 
 # ---------------------------------------------------------------------------
@@ -171,15 +170,6 @@ class _TypeBuilder:
     def __init__(self, env: TypeEnvironment) -> None:
         self._env = env
         # Track user-declared names → declaration span (excludes built-ins).
-        #
-        # Duplicate-name rejection keys off THIS per-entry table only, which is
-        # exactly the behaviour an incremental session needs: a type name that
-        # exists solely in a seeded ``env`` (copied via ``TypeEnvironment.seed_from``)
-        # is absent from ``self._declared``, so re-declaring it in a new entry
-        # simply overwrites the seeded shell — a shadow, not a duplicate error.
-        # A name declared twice WITHIN one entry still appears in ``self._declared``
-        # on the second pass and is rejected; built-in names remain non-shadowable
-        # via ``_BUILTIN_TYPE_NAMES``.
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum definitions for on-demand phase-2 building.
         self._record_defs: dict[str, RecordDef] = {}
@@ -194,39 +184,32 @@ class _TypeBuilder:
         # ----------------------------------------------------------------
         # Phase 1: Register names and empty shells (order-independent).
         # ----------------------------------------------------------------
-        for stmt in program.body:
-            if isinstance(stmt, RecordDef):
-                self._register_name(stmt.name, stmt.span)
-                # A legal redeclaration of a SEEDED name may change its kind;
-                # drop any stale seeded entry (e.g. an alias of the same name)
-                # so ``_types`` and ``_alias_targets`` stay mutually exclusive.
-                self._env.unregister_name(stmt.name)
-                # Register an empty shell so forward references resolve.
-                self._env.register_type(stmt.name, RecordType(name=stmt.name, fields={}))
-                self._record_defs[stmt.name] = stmt
-            elif isinstance(stmt, EnumDef):
-                self._register_name(stmt.name, stmt.span)
-                self._env.unregister_name(stmt.name)
-                # Register an empty shell so forward references resolve.
-                self._env.register_type(stmt.name, EnumType(name=stmt.name, variants={}))
-                self._enum_defs[stmt.name] = stmt
-            elif isinstance(stmt, TypeAlias):
-                self._register_name(stmt.name, stmt.span)
-                self._env.unregister_name(stmt.name)
-                self._env.register_alias(stmt.name, stmt.type_expr)
+        for item in program.body.items:
+            if isinstance(item, RecordDef):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_type(item.name, RecordType(name=item.name, fields={}))
+                self._record_defs[item.name] = item
+            elif isinstance(item, EnumDef):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_type(item.name, EnumType(name=item.name, variants={}))
+                self._enum_defs[item.name] = item
+            elif isinstance(item, TypeAlias):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_alias(item.name, item.type_expr)
 
         # ----------------------------------------------------------------
         # Phase 2: Resolve all field/variant types with recursion detection.
         # ----------------------------------------------------------------
-        for stmt in program.body:
-            if isinstance(stmt, RecordDef):
-                self._ensure_built_record(stmt.name)
-            elif isinstance(stmt, EnumDef):
-                self._ensure_built_enum(stmt.name)
-            elif isinstance(stmt, TypeAlias):
-                # Aliases are resolved lazily via TypeEnvironment.resolve_type_expr;
-                # validate them now to surface cycle/unknown errors early.
-                self._validate_alias(stmt)
+        for item in program.body.items:
+            if isinstance(item, RecordDef):
+                self._ensure_built_record(item.name)
+            elif isinstance(item, EnumDef):
+                self._ensure_built_enum(item.name)
+            elif isinstance(item, TypeAlias):
+                self._validate_alias(item)
 
     def _register_name(self, name: str, span: SourceSpan) -> None:
         if name in _BUILTIN_TYPE_NAMES:
@@ -285,7 +268,6 @@ class _TypeBuilder:
             seen_fields[fd.name] = fd.span
             field_type = self._resolve_field_type(fd, stmt.name)
             fields[fd.name] = field_type
-        # Replace the empty shell with the fully-resolved record type.
         self._env.register_type(stmt.name, RecordType(name=stmt.name, fields=fields))
 
     def _build_enum(self, stmt: EnumDef) -> None:
@@ -310,35 +292,17 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd, f"{stmt.name}.{vd.name}")
             variants[vd.name] = vfields
-        # Replace the empty shell with the fully-resolved enum type.
         self._env.register_type(stmt.name, EnumType(name=stmt.name, variants=variants))
 
     def _resolve_field_type(self, fd: FieldDef, owner: str) -> Type:
-        """Resolve a field's TypeExpr to a semantic Type.
-
-        Before resolving, ensure that any user-declared named type referenced
-        by this field has itself been fully built (triggering on-demand
-        topological ordering and cycle detection).
-        """
-        # Determine the named type(s) referenced, and ensure they are built.
-        # We only need to recurse into list/dict wrappers to find the NameT.
+        """Resolve a field's TypeExpr to a semantic Type."""
         self._ensure_referenced_type_built(fd.type_expr)
         return self._env.resolve_type_expr(fd.type_expr, span=fd.span)
 
     def _ensure_referenced_type_built(
         self, type_expr: object, _alias_seen: frozenset[str] = frozenset()
     ) -> None:
-        """Recursively ensure that all user-declared types in *type_expr* are built.
-
-        A ``NameT`` may name a record, an enum, or a ``type`` alias.  Aliases are
-        transparent, so recursion that hops through one — e.g. ``type T = R`` with
-        ``record R { t: T }`` — is still recursion into ``R`` and must trip the
-        ``_building`` guard.  When a ``NameT`` names an alias we therefore recurse
-        into the alias's raw target ``TypeExpr``.  ``_alias_seen`` guards against
-        pure alias-alias cycles (``type A = B``/``type B = A``), which are diagnosed
-        separately by ``_validate_alias``; here we simply stop following them so the
-        on-demand build cannot loop forever.
-        """
+        """Recursively ensure that all user-declared types in *type_expr* are built."""
         from agm.agl.syntax.types import DictT, ListT, NameT
 
         if isinstance(type_expr, NameT):
@@ -348,21 +312,15 @@ class _TypeBuilder:
             elif name in self._enum_defs:
                 self._ensure_built_enum(name)
             elif self._env.get_alias_target_expr(name) is not None:
-                # Transparent alias: follow its raw target so recursion routed
-                # through the alias still reaches the underlying record/enum and
-                # trips the ``_building`` cycle guard.
                 if name not in _alias_seen:
                     self._ensure_referenced_type_built(
                         self._env.get_alias_target_expr(name),
                         _alias_seen | {name},
                     )
-            # Built-in names (text, int, etc.) and unknown names are handled by
-            # resolve_type_expr; we only handle user declarations here.
         elif isinstance(type_expr, ListT):
             self._ensure_referenced_type_built(type_expr.elem, _alias_seen)
         elif isinstance(type_expr, DictT):
             self._ensure_referenced_type_built(type_expr.value, _alias_seen)
-        # Primitive types (TextT, IntT, etc.) have no nested declarations.
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles."""
@@ -375,11 +333,10 @@ class _TypeBuilder:
 
 
 class _Checker:
-    """Stateful type-checking visitor.
+    """Stateful type-checking visitor for AgL v2.
 
-    Walks the program's statements in order, maintaining a binding-type lookup
-    table (``node_id → Type``) populated by ``_TypeBuilder`` for declarations
-    and by inline inference for ``let``/``var``.
+    Walks the program's items in order, maintaining a binding-type lookup
+    table (``node_id → Type``) populated for declarations and inline inference.
 
     Uses expected-type propagation: ``_check_expr(node, expected)`` propagates
     an outer type context into the expression.  When ``expected`` is ``None``
@@ -401,59 +358,133 @@ class _Checker:
         self._warnings: list[Diagnostic] = []
 
     # ------------------------------------------------------------------
-    # Statement dispatch
+    # Pre-registration of function signatures
+    # ------------------------------------------------------------------
+
+    def _preregister_funcdef(self, node: FuncDef) -> None:
+        """Resolve and register the signature of a top-level ``def``."""
+        if node.name in _BUILTIN_TYPE_NAMES:
+            raise AglTypeError(
+                f"'{node.name}' is a built-in type name and cannot be used as a function name.",
+                span=node.span,
+            )
+        if node.name in _BUILTIN_FUNC_NAMES:
+            raise AglTypeError(
+                f"'{node.name}' is a built-in function name and cannot be redefined.",
+                span=node.span,
+            )
+        params: list[tuple[str, Type, bool]] = []
+        seen_required = True  # True until first defaulted param
+        for p in node.params:
+            pt = self._env.resolve_type_expr(p.type_expr, span=p.span)
+            has_default = p.default is not None
+            if seen_required and has_default:
+                # First defaulted param: switch to "defaulted" mode
+                seen_required = False
+            elif not seen_required and not has_default:
+                raise AglTypeError(
+                    f"Parameter '{p.name}' has no default but follows a defaulted parameter. "
+                    "Required parameters must come before parameters with defaults.",
+                    span=p.span,
+                )
+            params.append((p.name, pt, has_default))
+
+        result_type = self._env.resolve_type_expr(node.return_type, span=node.span)
+        sig = FunctionSignature(params=tuple(params), result=result_type)
+        self._env.register_function_signature(node.name, sig)
+        # Register the binding type as FunctionType (erases names/defaults).
+        func_type = FunctionType(
+            params=tuple(pt for _, pt, _ in params),
+            result=result_type,
+        )
+        self._env.set_binding_type(node.node_id, func_type)
+
+    # ------------------------------------------------------------------
+    # Program-level check
     # ------------------------------------------------------------------
 
     def check_program(self, program: Program) -> None:
-        for stmt in program.body:
-            self._check_stmt(stmt)
+        """Type-check the entire program."""
+        # Pre-pass: register all FuncDef signatures so calls can reference them
+        # in declaration order (mutual forward references are not supported but
+        # order-independence within the block is).
+        for item in program.body.items:
+            if isinstance(item, FuncDef):
+                self._preregister_funcdef(item)
 
-    def _check_stmt(self, stmt: Stmt) -> None:
-        if isinstance(stmt, (LetDecl, VarDecl)):
-            self._check_binding(stmt)
-        elif isinstance(stmt, SetStmt):
-            self._check_set(stmt)
-        elif isinstance(stmt, InputDecl):
-            self._check_input(stmt)
-        elif isinstance(stmt, PrintStmt):
-            # print accepts any type.
-            self._check_expr(stmt.value, expected=None)
-        elif isinstance(stmt, (RecordDef, EnumDef, TypeAlias)):
-            pass  # Handled by the pre-pass.
-        elif isinstance(stmt, DoUntil):
-            self._check_do_until(stmt)
-        elif isinstance(stmt, IfStmt):
-            self._check_if(stmt)
-        elif isinstance(stmt, CaseStmt):
-            self._check_case_stmt(stmt)
-        elif isinstance(stmt, TryCatch):
-            self._check_try_catch(stmt)
-        elif isinstance(stmt, Raise):
-            self._check_raise(stmt)
-        elif isinstance(stmt, ExprStmt):
-            self._check_expr(stmt.expr, expected=None)
-        elif isinstance(stmt, ConfigPragma):
-            pass  # Header pragma — no type-checking action needed.
-        else:
-            pass  # PassStmt — no-op
+        self._check_block(program.body, expected=None)
 
-    def _check_binding(self, stmt: LetDecl | VarDecl) -> None:
-        ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
-        val_type = self._check_expr(stmt.value, expected=ann_type)
-        if ann_type is not None:
-            self._assert_assignable(val_type, ann_type, stmt.span)
-            declared_type = ann_type
-        else:
-            declared_type = val_type
-        self._env.set_binding_type(stmt.node_id, declared_type)
+    # ------------------------------------------------------------------
+    # Block and item dispatch
+    # ------------------------------------------------------------------
 
-    def _check_set(self, stmt: SetStmt) -> None:
-        ref = self._resolved.resolution[stmt.node_id]
-        # resolve_binding always returns non-None for a VarDecl binding that
-        # has been type-checked; the scope pass and sequential ordering guarantee this.
-        target_type = self._require_binding_type(ref)
-        val_type = self._check_expr(stmt.value, expected=target_type)
-        self._assert_assignable(val_type, target_type, stmt.span)
+    def _check_block(self, block: Block, *, expected: Type | None) -> Type:
+        """Type-check a block and return the type of its last item."""
+        if not block.items:
+            return UnitType()
+
+        last = block.items[-1]
+        if isinstance(last, (LetDecl, VarDecl)):
+            raise AglTypeError(
+                "a 'let'/'var' declaration must be followed by an expression in a block.",
+                span=last.span,
+            )
+
+        result_type: Type = UnitType()
+        for item in block.items:
+            item_type = self._check_item(item, expected=expected if item is last else None)
+            if item is last:
+                result_type = item_type
+        return result_type
+
+    def _check_item(self, item: Item, *, expected: Type | None) -> Type:
+        """Dispatch a single block item, returning its type contribution."""
+        # --- Declarations ---
+        if isinstance(item, FuncDef):
+            # Signature already registered in pre-pass; check body now.
+            self._check_funcdef_body(item)
+            return UnitType()
+        if isinstance(item, (RecordDef, EnumDef, TypeAlias, ConfigPragma)):
+            return UnitType()
+        if isinstance(item, AgentDecl):
+            self._env.set_binding_type(item.node_id, AgentType())
+            return UnitType()
+        if isinstance(item, InputDecl):
+            self._check_input(item)
+            return UnitType()
+        # --- Binders ---
+        if isinstance(item, LetDecl):
+            self._check_let_decl(item)
+            return UnitType()
+        if isinstance(item, VarDecl):
+            self._check_var_decl(item)
+            return UnitType()
+        if isinstance(item, SetStmt):
+            self._check_set_stmt(item)
+            return UnitType()
+        # --- Expr ---
+        return self._check_expr(item, expected=expected)
+
+    # ------------------------------------------------------------------
+    # Declaration checkers
+    # ------------------------------------------------------------------
+
+    def _check_funcdef_body(self, node: FuncDef) -> None:
+        """Check the body of a ``def`` against its registered signature."""
+        sig = self._env.get_function_signature(node.name)
+        assert sig is not None, f"FuncDef '{node.name}' not pre-registered"
+        # Bind params in the env.
+        for p, (pname, ptype, has_default) in zip(node.params, sig.params):
+            self._env.set_binding_type(p.node_id, ptype)
+        # Check defaults against declared parameter types.
+        for p, (pname, ptype, has_default) in zip(node.params, sig.params):
+            if p.default is not None:
+                def_type = self._check_expr(p.default, expected=ptype)
+                self._assert_assignable(def_type, ptype, p.span)
+        # Check body against declared return type.
+        body_type = self._check_expr(node.body, expected=sig.result)
+        if not isinstance(body_type, BottomType):
+            self._assert_assignable(body_type, sig.result, node.span)
 
     def _check_input(self, stmt: InputDecl) -> None:
         if stmt.annotation is not None:
@@ -462,102 +493,56 @@ class _Checker:
             typ = TextType()
         self._env.set_binding_type(stmt.node_id, typ)
 
-    def _check_do_until(self, stmt: DoUntil) -> None:
-        for s in stmt.body:
-            self._check_stmt(s)
-        cond_type = self._check_expr(stmt.condition, expected=None)
-        self._require_bool_condition(cond_type, stmt.condition.span, "until")
-
-    def _check_if(self, stmt: IfStmt) -> None:
-        for branch in stmt.branches:
-            if not isinstance(branch.cond, ElseSentinel):
-                cond_type = self._check_expr(branch.cond, expected=None)
-                self._require_bool_condition(cond_type, branch.cond.span, "if")
-            for s in branch.body:
-                self._check_stmt(s)
-
-    def _require_bool_condition(self, cond_type: Type, span: SourceSpan, kw: str) -> None:
-        """Reject a non-bool ``if``/``until`` condition (design §4.3).
-
-        The span points at the condition expression so the diagnostic lands on
-        the offending operand rather than the enclosing statement.
-        """
-        if not isinstance(cond_type, BoolType):
-            raise AglTypeError(
-                f"'{kw}' condition must be bool; got '{cond_type!r}'.",
-                span=span,
-            )
-
-    def _check_case_stmt(self, stmt: CaseStmt) -> None:
-        subj_type = self._check_expr(stmt.subject, expected=None)
-        for branch in stmt.branches:
-            self._check_case_stmt_branch(branch, subj_type)
-        self._warn_non_exhaustive(
-            subj_type, [b.pattern for b in stmt.branches], stmt.span
-        )
-
-    def _check_case_stmt_branch(self, branch: CaseStmtBranch, subj_type: Type) -> None:
-        self._bind_pattern_types(branch.pattern, subj_type, branch)
-        for s in branch.body:
-            self._check_stmt(s)
-
-    def _check_try_catch(self, stmt: TryCatch) -> None:
-        for s in stmt.body:
-            self._check_stmt(s)
-        for clause in stmt.handlers:
-            self._check_catch_clause(clause)
-
-    def _check_catch_clause(self, clause: CatchClause) -> None:
-        # Determine the caught exception type.
-        if clause.exc_type is None or clause.exc_type == "_":
-            # Wildcard: bound as abstract Exception.
-            from agm.agl.typecheck.types import EXCEPTION_BASE
-
-            exc_type: ExceptionType = EXCEPTION_BASE
+    def _check_let_decl(self, stmt: LetDecl) -> None:
+        ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
+        val_type = self._check_expr(stmt.value, expected=ann_type)
+        if ann_type is not None:
+            self._assert_assignable(val_type, ann_type, stmt.span)
+            declared_type = ann_type
         else:
-            resolved = self._env.get_type(clause.exc_type)
-            if resolved is None or not isinstance(resolved, ExceptionType):
+            if isinstance(val_type, BottomType):
                 raise AglTypeError(
-                    f"'{clause.exc_type}' is not a known exception type.",
-                    span=clause.span,
+                    "Cannot infer type of binding: value always raises. Add a type annotation.",
+                    span=stmt.span,
                 )
-            exc_type = resolved
-        # Set binding type for the binder (if any).
-        if clause.binding is not None:
-            self._env.set_binding_type(clause.node_id, exc_type)
-        for s in clause.body:
-            self._check_stmt(s)
+            declared_type = val_type
+        self._env.set_binding_type(stmt.node_id, declared_type)
 
-    def _check_raise(self, stmt: Raise) -> None:
-        # The operand must be an exception value (design §8.3). Constructing the
-        # abstract ``Exception`` base is rejected at the constructor level
-        # (``_check_unqualified_constructor``); a *rethrow* of an
-        # ``Exception``-typed binder (e.g. ``catch _ as e => raise e``) is legal
-        # and must NOT be rejected here.
-        exc_type = self._check_expr(stmt.exc, expected=None)
-        if not isinstance(exc_type, ExceptionType):
-            raise AglTypeError(
-                f"'raise' requires an exception value; got '{exc_type!r}'.",
-                span=stmt.exc.span,
-            )
+    def _check_var_decl(self, stmt: VarDecl) -> None:
+        ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
+        val_type = self._check_expr(stmt.value, expected=ann_type)
+        if ann_type is not None:
+            self._assert_assignable(val_type, ann_type, stmt.span)
+            declared_type = ann_type
+        else:
+            if isinstance(val_type, BottomType):
+                raise AglTypeError(
+                    "Cannot infer type of binding: value always raises. Add a type annotation.",
+                    span=stmt.span,
+                )
+            declared_type = val_type
+        self._env.set_binding_type(stmt.node_id, declared_type)
+
+    def _check_set_stmt(self, stmt: SetStmt) -> None:
+        ref = self._resolved.resolution[stmt.node_id]
+        target_type = self._require_binding_type(ref)
+        val_type = self._check_expr(stmt.value, expected=target_type)
+        self._assert_assignable(val_type, target_type, stmt.span)
 
     # ------------------------------------------------------------------
     # Expression type inference
     # ------------------------------------------------------------------
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type:
-        """Infer/check the type of *expr*, recording it in ``_node_types``.
-
-        ``expected`` carries the outer type context (bidirectional typing).
-        Returns the inferred (or confirmed) type.
-        """
+        """Infer/check the type of *expr*, recording it in ``_node_types``."""
         typ = self._infer_expr(expr, expected=expected)
-        # Every Expr union member exposes an integer ``node_id``; record the type.
         self._node_types[expr.node_id] = typ
         return typ
 
     def _infer_expr(self, expr: Expr, *, expected: Type | None) -> Type:
         """Bottom-up inference with optional top-down ``expected`` context."""
+        if isinstance(expr, UnitLit):
+            return UnitType()
         if isinstance(expr, IntLit):
             return IntType()
         if isinstance(expr, DecimalLit):
@@ -572,8 +557,22 @@ class _Checker:
             return self._check_template(expr)
         if isinstance(expr, VarRef):
             return self._check_varref(expr)
-        if isinstance(expr, AgentCall):
-            return self._check_agent_call(expr, expected=expected)
+        if isinstance(expr, Call):
+            return self._check_call(expr, expected=expected)
+        if isinstance(expr, Lambda):
+            return self._check_lambda(expr, expected=expected)
+        if isinstance(expr, Block):
+            return self._check_block(expr, expected=expected)
+        if isinstance(expr, If):
+            return self._check_if(expr, expected=expected)
+        if isinstance(expr, Case):
+            return self._check_case(expr, expected=expected)
+        if isinstance(expr, Do):
+            return self._check_do(expr)
+        if isinstance(expr, Try):
+            return self._check_try(expr, expected=expected)
+        if isinstance(expr, Raise):
+            return self._infer_raise(expr)
         if isinstance(expr, BinaryOp):
             return self._check_binary_op(expr)
         if isinstance(expr, UnaryNot):
@@ -588,67 +587,613 @@ class _Checker:
             return self._check_unary_neg(expr)
         if isinstance(expr, IsTest):
             return self._check_is_test(expr)
-        if isinstance(expr, CaseExpr):
-            return self._check_case_expr(expr, expected=expected)
-        if isinstance(expr, IfExpr):
-            return self._check_if_expr(expr, expected=expected)
         if isinstance(expr, FieldAccess):
             return self._check_field_access(expr)
         if isinstance(expr, Constructor):
             return self._check_constructor(expr, expected=expected)
         if isinstance(expr, ListLit):
             return self._check_list_lit(expr, expected=expected)
-        # DictLit is the last member of the Expr union; all others are handled above.
+        # DictLit is the last Expr union member.
         assert isinstance(expr, DictLit), f"Unexpected expression kind: {type(expr).__name__}"
         return self._check_dict_lit(expr, expected=expected)
 
-    # --- Literals ---
+    # --- VarRef ---
+
+    def _check_varref(self, node: VarRef) -> Type:
+        ref = self._resolved.resolution[node.node_id]
+        return self._require_binding_type(ref)
+
+    def _require_binding_type(self, ref: BindingRef) -> Type:
+        typ = self._env.resolve_binding(ref)
+        if typ is None:
+            raise AssertionError(
+                f"Binding {ref!r} has no recorded type; checker invariant violated."
+            )
+        return typ
+
+    # --- Call dispatch ---
+
+    def _check_call(self, node: Call, *, expected: Type | None) -> Type:
+        """Dispatch a Call node to the appropriate checker."""
+        # Built-in?
+        if node.node_id in self._resolved.builtin_calls:
+            kind = self._resolved.builtin_calls[node.node_id]
+            if kind == BuiltinKind.PRINT:
+                return self._check_print_call(node)
+            if kind == BuiltinKind.ASK:
+                return self._check_ask_call(node, expected=expected)
+            # EXEC
+            return self._check_exec_call(node, expected=expected)
+
+        # Declared function by name?
+        # Take the declared-name (named/default) path ONLY when the callee is a
+        # bare VarRef that resolves to a top-level function_binding (a ``def``).
+        # A let/var-bound function value, a param, or a field access must all
+        # take the value-call path — they are not declared names and do not
+        # support named/defaulted arguments.
+        if isinstance(node.callee, VarRef):
+            callee_ref = self._resolved.resolution.get(node.callee.node_id)
+            if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
+                return self._check_declared_name_call(
+                    node, node.callee.name, expected=expected
+                )
+
+        # Value call (lambda or higher-order).
+        return self._check_value_call(node, expected=expected)
+
+    # --- print ---
+
+    def _check_print_call(self, node: Call) -> Type:
+        if len(node.args) != 1 or node.named_args:
+            raise AglTypeError(
+                "print() requires exactly one positional argument.",
+                span=node.span,
+            )
+        arg_type = self._check_expr(node.args[0], expected=None)
+        if isinstance(arg_type, (FunctionType, AgentType)):
+            raise AglTypeError(
+                "a function/agent value has no rendering and cannot be printed.",
+                span=node.args[0].span,
+            )
+        return UnitType()
+
+    # --- ask ---
+
+    _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
+        {"agent", "format", "strict_json", "on_parse_error"}
+    )
+
+    def _check_ask_call(self, node: Call, *, expected: Type | None) -> Type:
+        # Target type from context.
+        target_type: Type = expected if expected is not None else TextType()
+
+        # D9: reject function/agent targets.
+        if isinstance(target_type, (FunctionType, AgentType)):
+            raise AglTypeError(
+                "cannot parse agent output into a function/agent value.",
+                span=node.span,
+            )
+
+        named = {na.name: na for na in node.named_args}
+
+        # Reject unknown named args.
+        for arg_name, na in named.items():
+            if arg_name not in self._ASK_ALLOWED_NAMED_ARGS:
+                raise AglTypeError(
+                    f"ask: unknown argument '{arg_name}'.",
+                    span=na.span,
+                )
+
+        # Prompt (first positional arg — reject extra positionals).
+        if not node.args:
+            raise AglTypeError("ask() requires a prompt argument.", span=node.span)
+        if len(node.args) > 1:
+            raise AglTypeError(
+                "ask: too many positional arguments (expected 1).",
+                span=node.span,
+            )
+        prompt_type = self._check_expr(node.args[0], expected=TextType())
+        self._assert_assignable(prompt_type, TextType(), node.args[0].span)
+
+        # agent: named arg.
+        if "agent" in named:
+            agent_na = named["agent"]
+            agent_type = self._check_expr(agent_na.value, expected=None)
+            if not isinstance(agent_type, AgentType):
+                raise AglTypeError(
+                    f"'agent:' argument must be of type agent; got '{agent_type!r}'.",
+                    span=agent_na.span,
+                )
+        else:
+            if not self._caps.has_default_agent:
+                raise AglTypeError(
+                    "No default agent is configured; the built-in 'ask' call "
+                    "cannot run. Register a default agent, or run via `agm exec`, "
+                    "which provides one.",
+                    span=node.span,
+                )
+
+        # format: named arg.
+        if "format" in named:
+            format_na = named["format"]
+            fmt_expr = format_na.value
+            if not isinstance(fmt_expr, StringLit):
+                raise AglTypeError(
+                    "'format' must be a static text literal (codec name).",
+                    span=format_na.span,
+                )
+            codec_name = self._validate_format_option(fmt_expr.value, target_type, format_na.span)
+        else:
+            codec_name = self._select_codec(target_type, node.span)
+
+        # strict_json: named arg.
+        strict_json: bool | None = None
+        if "strict_json" in named:
+            sj_na = named["strict_json"]
+            sj_expr = sj_na.value
+            if not isinstance(sj_expr, BoolLit):
+                raise AglTypeError(
+                    "'strict_json' must be a static bool literal.",
+                    span=sj_na.span,
+                )
+            if codec_name != "json":
+                raise AglTypeError(
+                    f"'strict_json' is only valid when the codec is 'json'; "
+                    f"the selected codec for this call is '{codec_name}'.",
+                    span=sj_na.span,
+                )
+            strict_json = sj_expr.value
+
+        # on_parse_error: named arg.
+        parse_policy_str = "default"
+        if "on_parse_error" in named:
+            ope_na = named["on_parse_error"]
+            parse_policy_str = self._extract_parse_policy_str(ope_na.value, ope_na.span)
+            # Warn: no-op on text target.
+            if isinstance(target_type, TextType):
+                self._warnings.append(
+                    Diagnostic(
+                        message=(
+                            "'on_parse_error' has no effect on a text target: a text "
+                            "result never fails parsing, so the policy can never fire."
+                        ),
+                        line=node.span.start_line,
+                        severity="warning",
+                    )
+                )
+
+        effective_strict = strict_json if codec_name == "json" else None
+        spec = OutputContractSpec(
+            target_type=target_type, codec_name=codec_name, strict_json=effective_strict
+        )
+        self._contract_specs[node.node_id] = spec
+        self._call_sites.append(
+            CallSiteRecord(
+                node_id=node.node_id,
+                callee="ask",
+                parse_policy=parse_policy_str,
+                line=node.span.start_line,
+                col=node.span.start_col,
+            )
+        )
+        return target_type
+
+    # --- exec ---
+
+    _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
+        {"format", "strict_json", "on_parse_error"}
+    )
+
+    def _check_exec_call(self, node: Call, *, expected: Type | None) -> Type:
+        if not self._caps.supports_shell_exec:
+            raise AglTypeError(
+                "The host does not support 'exec' (shell) calls.", span=node.span
+            )
+
+        exec_result_type = self._env.get_type("ExecResult")
+        target_type: Type
+        if expected is not None:
+            target_type = expected
+        else:
+            assert exec_result_type is not None
+            target_type = exec_result_type
+
+        # D9: reject function/agent targets.
+        if isinstance(target_type, (FunctionType, AgentType)):
+            raise AglTypeError(
+                "cannot parse exec output into a function/agent value.",
+                span=node.span,
+            )
+
+        named = {na.name: na for na in node.named_args}
+
+        # Reject unknown named args (exec has no 'agent:' argument).
+        for arg_name, na in named.items():
+            if arg_name not in self._EXEC_ALLOWED_NAMED_ARGS:
+                raise AglTypeError(
+                    f"exec: unknown argument '{arg_name}'.",
+                    span=na.span,
+                )
+
+        # Command (first positional arg — reject extra positionals).
+        if not node.args:
+            raise AglTypeError("exec() requires a command argument.", span=node.span)
+        if len(node.args) > 1:
+            raise AglTypeError(
+                "exec: too many positional arguments (expected 1).",
+                span=node.span,
+            )
+        cmd_type = self._check_expr(node.args[0], expected=TextType())
+        self._assert_assignable(cmd_type, TextType(), node.args[0].span)
+
+        # Determine codec.
+        is_exec_result = exec_result_type is not None and target_type == exec_result_type
+        strict_json: bool | None = None
+        parse_policy_str = "default"
+
+        if is_exec_result:
+            # Structured form: reject parse-shaping options — they are meaningless
+            # when exec returns the raw ExecResult record.
+            for shaping_arg in ("format", "strict_json", "on_parse_error"):
+                if shaping_arg in named:
+                    raise AglTypeError(
+                        f"exec returning ExecResult does not accept '{shaping_arg}'; "
+                        "those options apply only when parsing stdout into a typed value.",
+                        span=named[shaping_arg].span,
+                    )
+            spec = OutputContractSpec(
+                target_type=target_type,
+                codec_name="text",
+                strict_json=None,
+                structured_exec=True,
+            )
+        else:
+            if "format" in named:
+                format_na = named["format"]
+                fmt_expr = format_na.value
+                if not isinstance(fmt_expr, StringLit):
+                    raise AglTypeError(
+                        "'format' must be a static text literal (codec name).",
+                        span=format_na.span,
+                    )
+                codec_name = self._validate_format_option(
+                    fmt_expr.value, target_type, format_na.span
+                )
+            else:
+                codec_name = self._select_codec(target_type, node.span)
+
+            if "strict_json" in named:
+                sj_na = named["strict_json"]
+                sj_expr = sj_na.value
+                if not isinstance(sj_expr, BoolLit):
+                    raise AglTypeError(
+                        "'strict_json' must be a static bool literal.", span=sj_na.span
+                    )
+                if codec_name != "json":
+                    raise AglTypeError(
+                        f"'strict_json' is only valid when the codec is 'json'; "
+                        f"the selected codec for this call is '{codec_name}'.",
+                        span=sj_na.span,
+                    )
+                strict_json = sj_expr.value
+
+            if "on_parse_error" in named:
+                ope_na = named["on_parse_error"]
+                parse_policy_str = self._extract_parse_policy_str(ope_na.value, ope_na.span)
+                if isinstance(target_type, TextType):
+                    self._warnings.append(
+                        Diagnostic(
+                            message=(
+                                "'on_parse_error' has no effect on a text target: a text "
+                                "result never fails parsing, so the policy can never fire."
+                            ),
+                            line=node.span.start_line,
+                            severity="warning",
+                        )
+                    )
+
+            effective_strict = strict_json if codec_name == "json" else None
+            spec = OutputContractSpec(
+                target_type=target_type,
+                codec_name=codec_name,
+                strict_json=effective_strict,
+            )
+        self._contract_specs[node.node_id] = spec
+        self._call_sites.append(
+            CallSiteRecord(
+                node_id=node.node_id,
+                callee="exec",
+                parse_policy=parse_policy_str,
+                line=node.span.start_line,
+                col=node.span.start_col,
+            )
+        )
+        return target_type
+
+    # --- on_parse_error policy extraction ---
+
+    def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
+        """Extract a static ``ParsePolicy`` constructor as an inventory string."""
+        if isinstance(arg, Constructor):
+            qualifier = arg.qualifier
+            if qualifier is not None and qualifier != "ParsePolicy":
+                raise AglTypeError(
+                    "'on_parse_error' must be a static ParsePolicy constructor "
+                    "(Abort or Retry(n: <int>)).",
+                    span=span,
+                )
+            if arg.name == "Abort":
+                if arg.args:
+                    raise AglTypeError(
+                        "'on_parse_error' must be a static ParsePolicy constructor "
+                        "(Abort or Retry(n: <int>)).",
+                        span=span,
+                    )
+                return "abort"
+            if arg.name == "Retry":
+                n_arg: NamedArg | None = None
+                for a in arg.args:
+                    if a.name == "n":
+                        n_arg = a
+                        break
+                if n_arg is None or not isinstance(n_arg.value, IntLit):
+                    raise AglTypeError(
+                        "'on_parse_error' must be a static ParsePolicy constructor "
+                        "(Abort or Retry(n: <int>)).",
+                        span=span,
+                    )
+                return f"retry[{n_arg.value.value}]"
+        raise AglTypeError(
+            "'on_parse_error' must be a static ParsePolicy constructor "
+            "(Abort or Retry(n: <int>)).",
+            span=span,
+        )
+
+    # --- codec helpers ---
+
+    def _select_codec(self, target_type: Type, span: SourceSpan) -> str:
+        kind = target_type.kind
+        for codec_name, supported_kinds in self._caps.codec_kinds.items():
+            if kind in supported_kinds:
+                return codec_name
+        raise AglTypeError(
+            f"No registered codec supports type '{target_type!r}'. "
+            f"(Type kind '{kind}' is not handled by any available codec.)",
+            span=span,
+        )
+
+    def _validate_format_option(
+        self, format_name: str, target_type: Type, span: SourceSpan
+    ) -> str:
+        if format_name not in self._caps.codec_kinds:
+            known = sorted(self._caps.codec_kinds)
+            raise AglTypeError(
+                f"Unknown codec '{format_name}' in 'format' option. "
+                f"Known codecs: {known}.",
+                span=span,
+            )
+        supported_kinds = self._caps.codec_kinds[format_name]
+        if target_type.kind not in supported_kinds:
+            raise AglTypeError(
+                f"Codec '{format_name}' does not support target type '{target_type!r}'. "
+                f"(Supported kinds: {sorted(supported_kinds)}.)",
+                span=span,
+            )
+        return format_name
+
+    # --- declared-name call ---
+
+    def _check_declared_name_call(
+        self, node: Call, func_name: str, *, expected: Type | None
+    ) -> Type:
+        sig = self._env.get_function_signature(func_name)
+        if sig is None:
+            return self._check_value_call(node, expected=expected)
+
+        if len(node.args) > len(sig.params):
+            raise AglTypeError(
+                f"Too many positional arguments: '{func_name}' takes "
+                f"{len(sig.params)} parameter(s), got {len(node.args)}.",
+                span=node.span,
+            )
+
+        positional_filled: set[str] = set()
+        for i, arg in enumerate(node.args):
+            pname, ptype, _ = sig.params[i]
+            at = self._check_expr(arg, expected=ptype)
+            self._assert_assignable(at, ptype, arg.span)
+            positional_filled.add(pname)
+
+        named_filled: set[str] = set()
+        for na in node.named_args:
+            match: tuple[str, Type, bool] | None = None
+            for p in sig.params:
+                if p[0] == na.name:
+                    match = p
+                    break
+            if match is None:
+                raise AglTypeError(
+                    f"Unknown parameter '{na.name}' in call to '{func_name}'.",
+                    span=na.span,
+                )
+            pname, ptype, has_def = match
+            if pname in positional_filled:
+                raise AglTypeError(
+                    f"Parameter '{pname}' supplied both positionally and by name.",
+                    span=na.span,
+                )
+            if pname in named_filled:
+                raise AglTypeError(
+                    f"Duplicate named argument '{pname}' in call to '{func_name}'.",
+                    span=na.span,
+                )
+            at = self._check_expr(na.value, expected=ptype)
+            self._assert_assignable(at, ptype, na.span)
+            named_filled.add(pname)
+
+        # Check all required params are supplied.
+        for pname, ptype, has_def in sig.params:
+            if not has_def and pname not in positional_filled and pname not in named_filled:
+                raise AglTypeError(
+                    f"Missing required argument '{pname}' in call to '{func_name}'.",
+                    span=node.span,
+                )
+
+        return sig.result
+
+    # --- value call (lambda / higher-order) ---
+
+    def _check_value_call(self, node: Call, *, expected: Type | None) -> Type:
+        if node.named_args:
+            raise AglTypeError(
+                "Named arguments are only allowed at declared-function call sites.",
+                span=node.span,
+            )
+        callee_type = self._check_expr(node.callee, expected=None)
+        if not isinstance(callee_type, FunctionType):
+            raise AglTypeError(
+                f"callee is not a function; got '{callee_type!r}'.",
+                span=node.callee.span,
+            )
+        if len(node.args) != len(callee_type.params):
+            raise AglTypeError(
+                f"Arity mismatch: function expects {len(callee_type.params)} argument(s), "
+                f"got {len(node.args)}.",
+                span=node.span,
+            )
+        for arg, ptype in zip(node.args, callee_type.params):
+            at = self._check_expr(arg, expected=ptype)
+            self._assert_assignable(at, ptype, arg.span)
+        return callee_type.result
+
+    # --- Lambda ---
+
+    def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
+        param_types: list[Type] = []
+        for p in node.params:
+            pt = self._env.resolve_type_expr(p.type_expr, span=p.span)
+            param_types.append(pt)
+            self._env.set_binding_type(p.node_id, pt)
+
+        if node.return_type is not None:
+            result_type = self._env.resolve_type_expr(node.return_type, span=node.span)
+            body_type = self._check_expr(node.body, expected=result_type)
+            if not isinstance(body_type, BottomType):
+                self._assert_assignable(body_type, result_type, node.span)
+        else:
+            body_type = self._check_expr(node.body, expected=None)
+            if isinstance(body_type, BottomType):
+                raise AglTypeError(
+                    "Cannot infer return type of lambda: body always raises.",
+                    span=node.span,
+                )
+            result_type = body_type
+
+        return FunctionType(params=tuple(param_types), result=result_type)
+
+    # --- if ---
+
+    def _check_if(self, node: If, *, expected: Type | None) -> Type:
+        has_else = any(isinstance(b.cond, ElseSentinel) for b in node.branches)
+        branch_types: list[Type] = []
+        for branch in node.branches:
+            if not isinstance(branch.cond, ElseSentinel):
+                cond_type = self._check_expr(branch.cond, expected=None)
+                self._require_bool_condition(cond_type, branch.cond.span, "if")
+            bt = self._check_expr(branch.body, expected=expected)
+            branch_types.append(bt)
+
+        if not has_else:
+            return UnitType()
+
+        return self._unify_branch_types(branch_types, node.span, "If expression")
+
+    # --- case ---
+
+    def _check_case(self, node: Case, *, expected: Type | None) -> Type:
+        subj_type = self._check_expr(node.subject, expected=None)
+        branch_types: list[Type] = []
+        for branch in node.branches:
+            self._bind_pattern_types(branch.pattern, subj_type, branch)
+            bt = self._check_expr(branch.body, expected=expected)
+            branch_types.append(bt)
+        self._warn_non_exhaustive(subj_type, [b.pattern for b in node.branches], node.span)
+
+        if not branch_types:
+            return expected if expected is not None else TextType()
+
+        return self._unify_branch_types(branch_types, node.span, "Case expression")
+
+    # --- do ---
+
+    def _check_do(self, node: Do) -> Type:
+        self._check_expr(node.body, expected=None)
+        cond_type = self._check_expr(node.condition, expected=None)
+        self._require_bool_condition(cond_type, node.condition.span, "do-until")
+        return UnitType()
+
+    # --- try ---
+
+    def _check_try(self, node: Try, *, expected: Type | None) -> Type:
+        body_type = self._check_expr(node.body, expected=expected)
+        handler_types: list[Type] = [body_type]
+        for clause in node.handlers:
+            ht = self._check_catch_clause(clause, expected=expected)
+            handler_types.append(ht)
+        return self._unify_branch_types(handler_types, node.span, "Try expression")
+
+    def _check_catch_clause(self, clause: CatchClause, *, expected: Type | None) -> Type:
+        if clause.exc_type is None or clause.exc_type == "_":
+            from agm.agl.typecheck.types import EXCEPTION_BASE
+
+            exc_type: ExceptionType = EXCEPTION_BASE
+        else:
+            resolved = self._env.get_type(clause.exc_type)
+            if resolved is None or not isinstance(resolved, ExceptionType):
+                raise AglTypeError(
+                    f"'{clause.exc_type}' is not a known exception type.",
+                    span=clause.span,
+                )
+            exc_type = resolved
+        if clause.binding is not None:
+            self._env.set_binding_type(clause.node_id, exc_type)
+        return self._check_expr(clause.body, expected=expected)
+
+    # --- raise ---
+
+    def _infer_raise(self, node: Raise) -> BottomType:
+        exc_type = self._check_expr(node.exc, expected=None)
+        if not isinstance(exc_type, ExceptionType):
+            raise AglTypeError(
+                f"'raise' requires an exception value; got '{exc_type!r}'.",
+                span=node.exc.span,
+            )
+        return BottomType()
+
+    # --- template ---
 
     def _check_template(self, node: Template) -> TextType:
         for seg in node.segments:
             if isinstance(seg, InterpSegment):
-                # Use the template-literal checking path for non-empty inline
-                # container literals so that mixed-value-kind structures (e.g.
-                # ``{kind: "demo", tags: xs}``) are accepted under design §5.8
-                # rule 3, but the fabricated json expectation is confined to
-                # literal STRUCTURE only and does NOT propagate into non-literal
-                # child expressions (AgentCall, VarRef, CaseExpr, etc.).
-                # Empty ``[]`` / ``{}`` and all other expression kinds receive
-                # ``expected=None`` so that:
-                # - empty literals emit the standard "needs annotation" diagnostic
-                #   (design §5.6);
-                # - agent calls default to the §11.4 text contract.
                 is_nonempty_container_literal = (
                     isinstance(seg.expr, DictLit) and bool(seg.expr.entries)
-                ) or (
-                    isinstance(seg.expr, ListLit) and bool(seg.expr.elements)
-                )
+                ) or (isinstance(seg.expr, ListLit) and bool(seg.expr.elements))
                 if is_nonempty_container_literal:
                     assert isinstance(seg.expr, (ListLit, DictLit))
                     seg_type = self._check_template_literal(seg.expr)
-                    # _check_expr is not called for the container itself in this
-                    # path; record the type manually so the side-table is complete.
                     self._node_types[seg.expr.node_id] = seg_type
                 else:
-                    self._check_expr(seg.expr, expected=None)
+                    seg_type = self._check_expr(seg.expr, expected=None)
+                    if isinstance(seg_type, (FunctionType, AgentType)):
+                        raise AglTypeError(
+                            "a function/agent value has no rendering and cannot be interpolated.",
+                            span=seg.expr.span,
+                        )
         return TextType()
 
     def _check_template_literal(self, expr: ListLit | DictLit) -> Type:
-        """Check a non-empty container literal in a ``${ … }`` context.
-
-        Propagates ``JsonType`` only to child nodes that are themselves literals
-        (scalars or container literals recursively).  Non-literal children
-        (``VarRef``, ``AgentCall``, ``FieldAccess``, ``CaseExpr``, ``BinaryOp``,
-        ``Constructor``, etc.) are checked with ``expected=None`` so that, in
-        particular, agent calls default to the §11.4 text contract instead of
-        acquiring a fabricated json contract.
-
-        After checking each non-literal child, its inferred type is validated
-        for json-assignability using the same ``is_assignable`` machinery as the
-        normal literal-against-json path.
-        """
+        """Check a non-empty container literal in a ``${ … }`` context."""
         if isinstance(expr, ListLit):
-            # Caller guarantees non-empty.
             for elem in expr.elements:
                 self._check_template_literal_child(elem)
             return ListType(elem=JsonType())
@@ -667,225 +1212,33 @@ class _Checker:
         return DictType(value=JsonType())
 
     def _check_template_literal_child(self, expr: Expr) -> Type:
-        """Check a single child expression of a template container literal.
-
-        Scalar literals and empty container literals receive ``expected=JsonType()``
-        (structurally sound and always json-shaped).  Non-empty container literals
-        are handled recursively by ``_check_template_literal`` to avoid propagating
-        the fabricated json expectation into their non-literal children.
-        Non-literal expressions are checked with ``expected=None`` and then their
-        inferred type is asserted to be json-assignable.
-        """
+        """Check a single child of a template container literal."""
         if isinstance(expr, (StringLit, IntLit, DecimalLit, BoolLit, NullLit)):
-            # Scalar literals: always json-shaped; check normally (expected is
-            # ignored by the literal inference rules but kept for consistency).
             return self._check_expr(expr, expected=JsonType())
         if isinstance(expr, ListLit):
             if not expr.elements:
-                # Empty list under json context: legal (→ list[json]).
                 return self._check_expr(expr, expected=JsonType())
-            # Non-empty: recurse via the template-literal path.
             result = self._check_template_literal(expr)
             self._node_types[expr.node_id] = result
             return result
         if isinstance(expr, DictLit):
             if not expr.entries:
-                # Empty dict under json context: legal (→ dict[text, json]).
                 return self._check_expr(expr, expected=JsonType())
-            # Non-empty: recurse via the template-literal path.
             result = self._check_template_literal(expr)
             self._node_types[expr.node_id] = result
             return result
-        # Non-literal: check without expectation, then assert json-assignable.
         child_type = self._check_expr(expr, expected=None)
         self._assert_assignable(child_type, JsonType(), expr.span)
         return child_type
 
-    # --- VarRef ---
-
-    def _check_varref(self, node: VarRef) -> Type:
-        # The scope pass guarantees every VarRef has a resolution entry.
-        ref = self._resolved.resolution[node.node_id]
-        # The sequential checker guarantees the binding type has been set.
-        return self._require_binding_type(ref)
-
-    def _require_binding_type(self, ref: BindingRef) -> Type:
-        """Return the resolved type for *ref*, asserting it has been set.
-
-        Every binding referenced from a reachable ``VarRef`` or ``set`` target
-        has its type recorded before the reference is checked: ``let``/``var``/
-        ``input`` set it eagerly, catch binders and *enum* pattern variables set
-        it when their branch is entered, and constructor patterns on non-enum
-        subjects are rejected by ``_bind_pattern_types`` before any body runs.
-        A ``None`` result therefore signals an internal invariant violation
-        rather than a user error.
-        """
-        typ = self._env.resolve_binding(ref)
-        if typ is None:
-            raise AssertionError(
-                f"Binding {ref!r} has no recorded type; checker invariant violated."
-            )
-        return typ
-
-    # --- Agent call ---
-
-    def _check_agent_call(self, node: AgentCall, *, expected: Type | None) -> Type:
-        kind = self._resolved.call_kinds.get(node.node_id, CallKind.agent)
-
-        # ``exec`` (shell) calls are rejected statically unless the host declares
-        # support.  ``WorkflowRuntime`` sets ``supports_shell_exec=True``; test
-        # harnesses that want to forbid shell execution may set it to ``False``.
-        if kind == CallKind.shell_exec and not self._caps.supports_shell_exec:
-            raise AglTypeError(
-                "The host does not support 'exec' (shell) calls.",
-                span=node.span,
-            )
-
-        # Determine target type from context, defaulting to text (design §2.4).
-        if expected is not None:
-            target_type: Type = expected
-        else:
-            target_type = TextType()
-
-        # Select codec: auto-select from capabilities, or honour an explicit
-        # ``format`` option.  Codec selection and option validation are structural
-        # properties of the call (independent of agent availability), so they are
-        # checked before the agent-capability checks below.
-        if node.options.format is not None:
-            codec_name = self._validate_format_option(
-                node.options.format, target_type, node.options.span
-            )
-        else:
-            codec_name = self._select_codec(target_type, node.span)
-
-        # Validate strict_json: only valid for JSON codec.
-        if node.options.strict_json is not None and codec_name != "json":
-            raise AglTypeError(
-                f"'strict_json' is only valid when the codec is 'json'; "
-                f"the selected codec for this call is '{codec_name}'.",
-                span=node.options.span,
-            )
-
-        # Named-agent name validity is owned by the scope pass (an undeclared
-        # named agent is a binding error there); the checker does not re-validate
-        # it.  Only the built-in ``ask`` call needs a backing here.
-        if kind == CallKind.default_agent:
-            # An ``ask`` call needs a default agent to back it.
-            if not self._caps.has_default_agent:
-                raise AglTypeError(
-                    "No default agent is configured; the built-in 'ask' call "
-                    "cannot run. Register a default agent, or run via `agm exec`, "
-                    "which provides one.",
-                    span=node.span,
-                )
-
-        # Resolve template (renderers validated inside _check_template).
-        self._check_template(node.template)
-
-        # Compute effective strict_json for the contract spec.
-        effective_strict = node.options.strict_json if codec_name == "json" else None
-
-        spec = OutputContractSpec(
-            target_type=target_type,
-            codec_name=codec_name,
-            strict_json=effective_strict,
-        )
-        self._contract_specs[node.node_id] = spec
-
-        # Warn about parse policies that can never take effect (design §7.2/§7.10).
-        self._warn_noop_parse_policy(node, kind, target_type)
-
-        # Record the static call-site descriptor for the §10.1 dry-run inventory.
-        # Everything the inventory needs about the call form (callee, parse policy,
-        # span) is in hand here; recording it now avoids a second AST walk at
-        # dry-run time.  Appending in check order preserves source order.
-        self._call_sites.append(
-            CallSiteRecord(
-                node_id=node.node_id,
-                callee=node.agent,
-                parse_policy=_parse_policy_str(node.options.parse_policy),
-                line=node.span.start_line,
-                col=node.span.start_col,
-            )
-        )
-
-        return target_type
-
-    def _warn_noop_parse_policy(
-        self, node: AgentCall, _kind: CallKind, target_type: Type
-    ) -> None:
-        """Warn when an ``on_parse_error`` policy can never fire (design §7.2/§7.10).
-
-        A policy on a *text* target is a no-op because text never fails parsing.
-        Typed agent and exec calls can both fail parsing and honor their policy.
-        """
-        if node.options.parse_policy is None:
-            return
-        if isinstance(target_type, TextType):
-            self._warnings.append(
-                Diagnostic(
-                    message=(
-                        "'on_parse_error' has no effect on a text target: a text "
-                        "result never fails parsing, so the policy can never fire."
-                    ),
-                    line=node.span.start_line,
-                    severity="warning",
-                )
-            )
-
-    def _select_codec(self, target_type: Type, span: SourceSpan) -> str:
-        """Select the codec name for *target_type* from capabilities.
-
-        Raises ``AglTypeError`` if no registered codec supports the type.
-        """
-        kind = target_type.kind
-        for codec_name, supported_kinds in self._caps.codec_kinds.items():
-            if kind in supported_kinds:
-                return codec_name
-        raise AglTypeError(
-            f"No registered codec supports type '{target_type!r}'. "
-            f"(Type kind '{kind}' is not handled by any available codec.)",
-            span=span,
-        )
-
-    def _validate_format_option(
-        self, format_name: str, target_type: Type, span: SourceSpan
-    ) -> str:
-        """Validate an explicit ``format`` call option and return the codec name.
-
-        Checks:
-        1. The named codec is registered in capabilities.
-        2. The codec supports the call's target type.
-
-        Raises ``AglTypeError`` on either violation.
-        """
-        if format_name not in self._caps.codec_kinds:
-            known = sorted(self._caps.codec_kinds)
-            raise AglTypeError(
-                f"Unknown codec '{format_name}' in 'format' option. "
-                f"Known codecs: {known}.",
-                span=span,
-            )
-        supported_kinds = self._caps.codec_kinds[format_name]
-        if target_type.kind not in supported_kinds:
-            raise AglTypeError(
-                f"Codec '{format_name}' does not support target type '{target_type!r}'. "
-                f"(Supported kinds: {sorted(supported_kinds)}.)",
-                span=span,
-            )
-        return format_name
-
-    # --- Binary operations ---
+    # --- binary ops ---
 
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
         right_type = self._check_expr(node.right, expected=None)
-
         op = node.op
 
         if op in (BinOp.AND, BinOp.OR):
-            # 'and'/'or' require bool operands (design §4.3). Report the span of
-            # the first offending operand.
             op_name = "and" if op is BinOp.AND else "or"
             if not isinstance(left_type, BoolType):
                 raise AglTypeError(
@@ -902,10 +1255,6 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.EQ, BinOp.NEQ):
-            # Operands must be the same type after int→decimal widening
-            # (design §5.8 rule 4).  ``json`` compares only with ``json``;
-            # ``json`` vs a non-``json`` type is a static error (``comparable_types``
-            # does not absorb JSON-shaped scalars the way ``is_assignable`` does).
             if not comparable_types(left_type, right_type):
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
@@ -915,8 +1264,6 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE):
-            # Ordering: numeric (int/decimal) or text; bool not allowed
-            # (design §4.3 — "compare two numbers or two text values lexicographically").
             numeric_pair = isinstance(left_type, (IntType, DecimalType)) and isinstance(
                 right_type, (IntType, DecimalType)
             )
@@ -943,7 +1290,6 @@ class _Checker:
             return self._check_numeric_binop(left_type, right_type, node.span, "*")
 
         if op == BinOp.DIV:
-            # Division always yields decimal (design §4.3).
             if not (
                 isinstance(left_type, (IntType, DecimalType))
                 and isinstance(right_type, (IntType, DecimalType))
@@ -961,10 +1307,8 @@ class _Checker:
         )
 
     def _check_add(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
-        # text + text → text (concatenation)
         if isinstance(left_type, TextType) and isinstance(right_type, TextType):
             return TextType()
-        # numeric + numeric → int if both int, else decimal
         if isinstance(left_type, (IntType, DecimalType)) and isinstance(
             right_type, (IntType, DecimalType)
         ):
@@ -994,10 +1338,8 @@ class _Checker:
         return DecimalType()
 
     def _check_in_op(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
-        # text in text → substring test
         if isinstance(left_type, TextType) and isinstance(right_type, TextType):
             return BoolType()
-        # T in list[T] → element test
         if isinstance(right_type, ListType):
             if not is_assignable(left_type, right_type.elem):
                 raise AglTypeError(
@@ -1005,7 +1347,6 @@ class _Checker:
                     span=span,
                 )
             return BoolType()
-        # text in dict[text, V] → key test
         if isinstance(right_type, DictType) and isinstance(left_type, TextType):
             return BoolType()
         raise AglTypeError(
@@ -1014,7 +1355,7 @@ class _Checker:
             span=span,
         )
 
-    # --- Unary ---
+    # --- unary ---
 
     def _check_unary_neg(self, node: UnaryNeg) -> Type:
         t = self._check_expr(node.operand, expected=None)
@@ -1025,7 +1366,7 @@ class _Checker:
             )
         return t
 
-    # --- is / is not ---
+    # --- is test ---
 
     def _check_is_test(self, node: IsTest) -> BoolType:
         expr_type = self._check_expr(node.expr, expected=None)
@@ -1035,11 +1376,8 @@ class _Checker:
                 f"got '{expr_type!r}'.",
                 span=node.span,
             )
-        # A qualifier (``status is Status.Pass``) is resolved alias-transparently
-        # and must name the same enum as the operand (design §5.4).
         if node.qualifier is not None:
             self._check_variant_qualifier(node.qualifier, expr_type, node.span)
-        # Check variant membership.
         if node.variant not in expr_type.variants:
             raise AglTypeError(
                 f"Variant '{node.variant}' does not belong to enum '{expr_type.name}'.",
@@ -1050,11 +1388,6 @@ class _Checker:
     def _check_variant_qualifier(
         self, qualifier: str, enum_type: EnumType, span: SourceSpan
     ) -> None:
-        """Validate an alias-transparent enum qualifier (design §5.4).
-
-        ``qualifier`` must resolve (through any alias chain) to ``enum_type``;
-        a non-enum or mismatched qualifier is a static error.
-        """
         resolved = self._env.resolve_named_type(qualifier)
         if not isinstance(resolved, EnumType):
             raise AglTypeError(
@@ -1068,89 +1401,10 @@ class _Checker:
                 span=span,
             )
 
-    # --- shared branch-type unification ---
-
-    def _unify_branch_types(
-        self,
-        branch_types: list[Type],
-        span: SourceSpan,
-        construct: str,
-    ) -> Type:
-        """Unify a non-empty list of branch-body types with int→decimal widening only.
-
-        ``construct`` is the human-readable name used in the error message
-        (e.g. ``"Case expression"`` or ``"If expression"``).  All types in
-        ``branch_types`` must be compatible; any pair that is not ``int``/``decimal``
-        (in either order) is rejected with an ``AglTypeError``.
-
-        Precondition: ``branch_types`` is non-empty (callers must guard on that).
-        """
-        result_type = branch_types[0]
-        for bt in branch_types[1:]:
-            if bt == result_type:
-                continue
-            # int + decimal (in either order) → widen to decimal.
-            if isinstance(result_type, IntType) and isinstance(bt, DecimalType):
-                result_type = DecimalType()
-            elif isinstance(result_type, DecimalType) and isinstance(bt, IntType):
-                pass  # already decimal; no change needed
-            else:
-                raise AglTypeError(
-                    f"{construct} branches have incompatible types: "
-                    f"'{result_type!r}' and '{bt!r}'.",
-                    span=span,
-                )
-        return result_type
-
-    # --- case expression ---
-
-    def _check_case_expr(self, node: CaseExpr, *, expected: Type | None) -> Type:
-        subj_type = self._check_expr(node.subject, expected=None)
-        branch_types: list[Type] = []
-        for branch in node.branches:
-            self._bind_pattern_types(branch.pattern, subj_type, branch)
-            bt = self._check_expr(branch.body, expected=expected)
-            branch_types.append(bt)
-        self._warn_non_exhaustive(
-            subj_type, [b.pattern for b in node.branches], node.span
-        )
-
-        if not branch_types:
-            return expected if expected is not None else TextType()
-
-        return self._unify_branch_types(branch_types, node.span, "Case expression")
-
-    # --- if expression ---
-
-    def _check_if_expr(self, node: IfExpr, *, expected: Type | None) -> Type:
-        """Type-check an ``IfExpr`` (if … => expr | else => expr).
-
-        Rules (design decisions §1 and §4):
-        - Each non-``else`` condition must be ``bool``.
-        - An ``else`` branch is required (makes the expression total).
-        - All branch-body types must unify via int→decimal widening only.
-        """
-        has_else = any(isinstance(b.cond, ElseSentinel) for b in node.branches)
-        if not has_else:
-            raise AglTypeError(
-                "an `if` used as an expression must have an `else` branch",
-                span=node.span,
-            )
-        branch_types: list[Type] = []
-        for branch in node.branches:
-            if not isinstance(branch.cond, ElseSentinel):
-                cond_type = self._check_expr(branch.cond, expected=None)
-                self._require_bool_condition(cond_type, branch.cond.span, "if")
-            bt = self._check_expr(branch.body, expected=expected)
-            branch_types.append(bt)
-        # branch_types is always non-empty (if_expr has ≥1 branch and else is present).
-        return self._unify_branch_types(branch_types, node.span, "If expression")
-
-    # --- Field access ---
+    # --- field access ---
 
     def _check_field_access(self, node: FieldAccess) -> Type:
         obj_type = self._check_expr(node.obj, expected=None)
-        # For catch binder access (e.g. `e.raw`) — check the exception type's fields.
         if isinstance(obj_type, ExceptionType):
             if node.field not in obj_type.fields:
                 raise AglTypeError(
@@ -1170,16 +1424,10 @@ class _Checker:
             span=node.span,
         )
 
-    # --- Constructor ---
+    # --- constructor ---
 
     def _check_constructor(self, node: Constructor, *, expected: Type | None) -> Type:
-        # Resolve the constructor.
         if node.qualifier is not None:
-            # Qualified: Enum.Variant — the qualifier is resolved
-            # alias-transparently (design §5.4), so ``Status.Pass`` works when
-            # ``type Status = Review``.  The resolved ``EnumType`` is recorded as
-            # this node's type (via the return value), so the interpreter reads
-            # the resolved enum rather than re-resolving the alias.
             enum_type = self._env.resolve_named_type(node.qualifier)
             if not isinstance(enum_type, EnumType):
                 raise AglTypeError(
@@ -1192,21 +1440,16 @@ class _Checker:
                     span=node.span,
                 )
             return self._check_constructor_call(node, enum_type, variant=node.name)
-        else:
-            # Unqualified: look up in all known types.
-            return self._check_unqualified_constructor(node, expected=expected)
+        return self._check_unqualified_constructor(node, expected=expected)
 
     def _check_unqualified_constructor(
         self, node: Constructor, *, expected: Type | None
     ) -> Type:
         name = node.name
-        # A single get_type lookup covers both record and exception types since
-        # each name maps to exactly one entry in the type namespace.
         named_type = self._env.get_type(name)
         if isinstance(named_type, RecordType):
             return self._check_constructor_call(node, named_type)
         if isinstance(named_type, ExceptionType):
-            # The abstract "Exception" base is not constructible.
             if named_type.abstract:
                 raise AglTypeError(
                     "The abstract 'Exception' base type is not constructible. "
@@ -1214,13 +1457,11 @@ class _Checker:
                     span=node.span,
                 )
             return self._check_constructor_call(node, named_type)
-        # Try enums (find a unique matching variant).
         candidates: list[tuple[EnumType, str]] = []
         for type_name in self._env.all_declared_type_names():
             t = self._env.get_type(type_name)
             if isinstance(t, EnumType) and name in t.variants:
                 candidates.append((t, name))
-        # If expected type is an enum, resolve ambiguity.
         if isinstance(expected, EnumType) and (expected, name) in candidates:
             return self._check_constructor_call(node, expected, variant=name)
         if len(candidates) == 1:
@@ -1245,24 +1486,6 @@ class _Checker:
         *,
         variant: str | None = None,
     ) -> RecordType | EnumType | ExceptionType:
-        """Type-check a constructor call for a record, enum variant, or exception.
-
-        ``owner``  The record/enum/exception type being constructed.
-        ``variant`` For enum types, the variant being constructed (required when
-                    *owner* is an ``EnumType``).
-
-        All three former helpers shared the same structure:
-        1. Duplicate-argument check (record/enum always; exception: same rule
-           applied for robustness — direct AST construction can bypass the parser
-           which normally rejects duplicates first).
-        2. Unknown-field check.
-        3. Missing-field check (exceptions skip ``trace_id`` — runtime-injected).
-        4. Argument type-check.
-
-        The ``trace_id`` skip applies only to ``ExceptionType``; records and enum
-        variants are checked for every declared field.
-        """
-        # Resolve the field map for the target.
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
             fields = owner.variants[variant]
@@ -1276,8 +1499,6 @@ class _Checker:
 
         provided = {arg.name: arg for arg in node.args}
 
-        # 1. Duplicate-argument check (mirrors the parser guard; defensive for
-        #    direct AST construction that bypasses the parser).
         seen_args: set[str] = set()
         for arg in node.args:
             if arg.name in seen_args:
@@ -1287,7 +1508,6 @@ class _Checker:
                 )
             seen_args.add(arg.name)
 
-        # 2. Unknown-field check.
         for arg_name in provided:
             if arg_name not in fields:
                 raise AglTypeError(
@@ -1295,10 +1515,9 @@ class _Checker:
                     span=provided[arg_name].span,
                 )
 
-        # 3. Missing-field check.
         for field_name in fields:
             if isinstance(owner, ExceptionType) and field_name == "trace_id":
-                continue  # injected by the runtime; not required in source
+                continue
             if field_name not in provided:
                 raise AglTypeError(
                     f"Missing field '{field_name}' in constructor call for "
@@ -1306,7 +1525,6 @@ class _Checker:
                     span=node.span,
                 )
 
-        # 4. Argument type-check.
         for arg in node.args:
             expected_field_type = fields[arg.name]
             arg_type = self._check_expr(arg.value, expected=expected_field_type)
@@ -1314,15 +1532,9 @@ class _Checker:
 
         return owner
 
-    # --- List / Dict literals ---
+    # --- list / dict literals ---
 
     def _expected_elem_type(self, expected: Type | None) -> Type | None:
-        """The element type a list literal must satisfy under *expected*.
-
-        ``list[T]`` propagates ``T``; ``json`` propagates ``json`` (a JSON list's
-        elements are themselves ``json``).  Any other context gives no
-        expectation (the literal infers its own element type).
-        """
         if isinstance(expected, ListType):
             return expected.elem
         if isinstance(expected, JsonType):
@@ -1330,10 +1542,6 @@ class _Checker:
         return None
 
     def _expected_value_type(self, expected: Type | None) -> Type | None:
-        """The value type a dict literal must satisfy under *expected*.
-
-        ``dict[text, V]`` propagates ``V``; ``json`` propagates ``json``.
-        """
         if isinstance(expected, DictType):
             return expected.value
         if isinstance(expected, JsonType):
@@ -1342,7 +1550,6 @@ class _Checker:
 
     def _check_list_lit(self, node: ListLit, *, expected: Type | None) -> Type:
         elem_expected = self._expected_elem_type(expected)
-        # Empty list: needs an expected element type to determine its type.
         if not node.elements:
             if elem_expected is None:
                 raise AglTypeError(
@@ -1352,19 +1559,11 @@ class _Checker:
                 )
             return ListType(elem=elem_expected)
         if elem_expected is not None:
-            # Expected-type propagation: every element must satisfy the target
-            # element type (design §5.7/§5.8).
             for elem in node.elements:
                 et = self._check_expr(elem, expected=elem_expected)
                 self._assert_assignable(et, elem_expected, elem.span)
             return ListType(elem=elem_expected)
-        # No expectation: unify all elements (int → decimal widening) and assert
-        # every element is assignable to the unified type (soundness).
-        unified = self._unify_elements(
-            node.elements,
-            kind="List",
-            span=node.span,
-        )
+        unified = self._unify_elements(node.elements, kind="List", span=node.span)
         return ListType(elem=unified)
 
     def _check_dict_lit(self, node: DictLit, *, expected: Type | None) -> Type:
@@ -1391,26 +1590,18 @@ class _Checker:
                 self._assert_assignable(et, val_expected, entry.span)
             return DictType(value=val_expected)
         unified = self._unify_elements(
-            [entry.value for entry in node.entries],
-            kind="Dict",
-            span=node.span,
+            [entry.value for entry in node.entries], kind="Dict", span=node.span
         )
         return DictType(value=unified)
 
     def _unify_elements(
         self, elements: Sequence[Expr], *, kind: str, span: SourceSpan
     ) -> Type:
-        """Unify literal element types with int → decimal widening.
-
-        Soundness: returns the common type and asserts every element is
-        assignable to it.  ``[1, 2.5]`` unifies to ``decimal``; mixed
-        incompatible element types are a static error.
-        """
+        """Unify literal element types with int → decimal widening."""
         types = [self._check_expr(e, expected=None) for e in elements]
         unified = types[0]
         for t in types[1:]:
             if is_assignable(unified, t):
-                # ``t`` is the wider type (e.g. int then decimal → decimal).
                 unified = t
             elif not is_assignable(t, unified):
                 raise AglTypeError(
@@ -1429,11 +1620,6 @@ class _Checker:
         if isinstance(pattern, WildcardPattern):
             pass
         elif isinstance(pattern, LiteralPattern):
-            # A literal pattern's type must be compatible with the scrutinee's
-            # static type (design §6.1/§11.9, F3/F5 ruling): same type after
-            # int→decimal widening.  An int literal against a text scrutinee, or
-            # any scalar literal against a json scrutinee, can never match and is
-            # a static error (consistent with equality rule 4).
             lit_type = self._check_expr(pattern.literal, expected=None)
             if not comparable_types(lit_type, subj_type):
                 raise AglTypeError(
@@ -1442,33 +1628,19 @@ class _Checker:
                     span=pattern.span,
                 )
         elif isinstance(pattern, VarPattern):
-            # Simple binding captures subject type.
-            # All callers (CaseStmtBranch, CaseExprBranch, PatternField) have node_id.
             self._env.set_binding_type(pattern.node_id, subj_type)
         else:
-            # The Pattern union is WildcardPattern | LiteralPattern | VarPattern |
-            # ConstructorPattern.  The first three are handled above, so this is
-            # always ConstructorPattern.
             assert isinstance(pattern, ConstructorPattern), (
                 f"Unexpected pattern kind: {type(pattern).__name__}"
             )
-            # Constructor patterns match enum variants (design §6.1). A non-enum
-            # subject can never match a constructor pattern, so it is a static
-            # error — and the resolver has already bound the pattern's field
-            # variables, which would otherwise be left untyped.
             if not isinstance(subj_type, EnumType):
                 raise AglTypeError(
                     f"Cannot match constructor pattern '{pattern.name}' against "
                     f"non-enum type '{subj_type!r}'.",
                     span=pattern.span,
                 )
-            # An alias-qualified pattern (``Status.Pass``) is resolved
-            # alias-transparently and must name the operand's enum (design §5.4).
             if pattern.qualifier is not None:
                 self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
-            # The variant name must belong to the scrutinee's enum (design §6.1,
-            # F4) — mirroring ``_check_is_test``.  A phantom variant is a static
-            # error, not a silently-dead arm that miscounts toward exhaustiveness.
             variant_name = pattern.name
             if variant_name not in subj_type.variants:
                 raise AglTypeError(
@@ -1476,9 +1648,7 @@ class _Checker:
                     f"'{subj_type.name}'.",
                     span=pattern.span,
                 )
-            # Look up variant field types and bind each sub-pattern.
             vfields = subj_type.variants[variant_name]
-            # Check for duplicate pattern fields (design §5.9).
             seen_pf: set[str] = set()
             for pf in pattern.fields:
                 if pf.name in seen_pf:
@@ -1499,27 +1669,13 @@ class _Checker:
     def _warn_non_exhaustive(
         self, subj_type: Type, patterns: list[Pattern], span: SourceSpan
     ) -> None:
-        """Emit a warning when an enum ``case`` leaves some variants uncovered.
-
-        Exhaustiveness is a *warning*, not an error (plan Q4): the program still
-        runs (an unmatched value raises ``MatchError`` at runtime).  Only enum
-        scrutinees are analysed — for any other type the set of inhabitants is
-        not enumerable, so no warning is produced.  A wildcard ``_`` or a bare
-        variable pattern covers the entire remainder, so its presence suppresses
-        the warning.  Otherwise the uncovered variants are the enum variants not
-        named by any constructor pattern.
-        """
+        """Emit a warning when an enum ``case`` leaves some variants uncovered."""
         if not isinstance(subj_type, EnumType):
             return
         covered: set[str] = set()
         for pattern in patterns:
             if isinstance(pattern, (WildcardPattern, VarPattern)):
-                # A catch-all binding covers every remaining variant.
                 return
-            # Only constructor patterns reach exhaustiveness analysis on an enum:
-            # ``_bind_pattern_types`` rejects a literal pattern against an enum
-            # scrutinee before this runs (F4/F5), so ``pattern`` is always a
-            # ``ConstructorPattern`` here.
             assert isinstance(pattern, ConstructorPattern), (
                 f"unexpected pattern kind on enum scrutinee: {type(pattern).__name__}"
             )
@@ -1540,21 +1696,57 @@ class _Checker:
         )
 
     # ------------------------------------------------------------------
+    # Branch unification
+    # ------------------------------------------------------------------
+
+    def _unify_branch_types(
+        self,
+        branch_types: list[Type],
+        span: SourceSpan,
+        construct: str,
+    ) -> Type:
+        """Unify branch types with int→decimal widening and BottomType filtering."""
+        non_bottom = [t for t in branch_types if not isinstance(t, BottomType)]
+        if not non_bottom:
+            return BottomType()
+        result_type = non_bottom[0]
+        for bt in non_bottom[1:]:
+            if bt == result_type:
+                continue
+            if isinstance(result_type, IntType) and isinstance(bt, DecimalType):
+                result_type = DecimalType()
+            elif isinstance(result_type, DecimalType) and isinstance(bt, IntType):
+                pass
+            else:
+                raise AglTypeError(
+                    f"{construct} branches have incompatible types: "
+                    f"'{result_type!r}' and '{bt!r}'.",
+                    span=span,
+                )
+        return result_type
+
+    # ------------------------------------------------------------------
+    # Bool condition helper
+    # ------------------------------------------------------------------
+
+    def _require_bool_condition(self, cond_type: Type, span: SourceSpan, kw: str) -> None:
+        if not isinstance(cond_type, BoolType):
+            raise AglTypeError(
+                f"'{kw}' condition must be bool; got '{cond_type!r}'.",
+                span=span,
+            )
+
+    # ------------------------------------------------------------------
     # Assignability helpers
     # ------------------------------------------------------------------
 
     def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None:
-        """Raise AglTypeError if value_type is not assignable to target_type."""
         if is_assignable(value_type, target_type):
             return
         raise AglTypeError(
             f"Type mismatch: expected '{target_type!r}', got '{value_type!r}'.",
             span=span,
         )
-
-    # ------------------------------------------------------------------
-    # Annotation resolution
-    # ------------------------------------------------------------------
 
     def _resolve_annotation(self, ann: TypeExpr | None, span: SourceSpan) -> Type | None:
         if ann is None:
@@ -1573,6 +1765,7 @@ class _Checker:
             call_sites=tuple(self._call_sites),
             warnings=tuple(self._warnings),
             type_env=self._env,
+            function_signatures=self._env.all_function_signatures(),
         )
 
 
@@ -1587,7 +1780,7 @@ def check(
     *,
     seed_env: TypeEnvironment | None = None,
 ) -> CheckedProgram:
-    """Run the full M1 type-checking pass.
+    """Run the full type-checking pass.
 
     Parameters
     ----------
@@ -1597,16 +1790,7 @@ def check(
         Immutable host capability catalog (agents, codecs, renderers).
     seed_env:
         When given, the working ``TypeEnvironment`` starts pre-populated with
-        the seed's user-declared types (records/enums/aliases) and prior binding
-        types (keyed by globally-unique ``decl_node_id``), so an incremental
-        session entry can reference earlier declarations and bindings.  A new
-        entry may shadow a seeded binding (fresh ``node_id`` → new entry) or
-        replace a seeded type declaration (override, not duplicate-name error).
-        Default ``None`` → today's behaviour byte-for-byte (``agm exec``).
-
-        The returned ``CheckedProgram.type_env`` contains the *union* (seed plus
-        this entry's new/overridden declarations and binding types), so the
-        session can read it to promote the updated state.
+        the seed's user-declared types and prior binding types.
 
     Returns
     -------
@@ -1623,11 +1807,9 @@ def check(
         env.seed_from(seed_env)
     program = resolved.program
 
-    # Pre-pass: collect and validate all type declarations.
     builder = _TypeBuilder(env)
     builder.collect(program)
 
-    # Main pass: type-check statements and expressions.
     checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
     checker.check_program(program)
 

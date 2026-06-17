@@ -66,7 +66,28 @@ All milestone acceptance criteria; 100% src coverage; `just check` green; docs
 updated and implementation-free; corpus migrated; new rejection programs per new
 static error.
 
+## Staging refinement (decided during execution)
+
+- The built-in typing rules for `exec`/`ask` need the prelude TYPES (`ExecResult`
+  record D10; `ParsePolicy` enum D11) to exist, so prelude **type definitions**
+  (ExecResult, ParsePolicy) + `RecursionError` exception are registered in the
+  type system in **S3** (typecheck/types.py + env.py), where the type
+  environment is built. Their runtime **semantics** stay later: exec two-form
+  (structured vs parsed, raise-on-nonzero) and ParsePolicy→retry in S5; closures
+  + UnitValue/AgentValue + depth-limit RecursionError enforcement in S4.
+- Option args `format`/`strict_json`/`on_parse_error` are statically extracted
+  from literal/constructor arguments for OutputContractSpec (faithful port of
+  v1 CallOptions, which were grammar-literals); a non-static such arg is a clear
+  static error for now (documented, extensible). `agent:` is a dynamic
+  agent-valued expression (resolved at eval; does not affect the static codec).
+- S3 split: **S3a** = type-system core (UnitType/FunctionType/AgentType +
+  assignability/opacity) + prelude registration + function-signature env; review;
+  then **S3b** = checker (block typing, def/lambda/call, built-in rules,
+  branch unification w/ unit).
+
 ## Status log
 
-- 2026-06-16: planning complete; codebase mapped (6 pipeline stages + runtime +
-  REPL). Starting S1.
+- 2026-06-16: planning complete; codebase mapped. S1 (front-end: AST contract,
+  lexer tokens, grammar, transformer) done + committed (588c548, dcec293). S2
+  (scope) done + committed (08cfe48). Both reviewed, fixes applied, 100% cov.
+- 2026-06-17: starting S3 (typecheck), split S3a/S3b.

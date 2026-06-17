@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from agm.agl.syntax.nodes import AgentCall, Program
-from agm.agl.syntax.visitor import walk
+from agm.agl.syntax.nodes import Program
 
 
 def all_node_ids(obj: object, seen: set[int] | None = None) -> set[int]:
@@ -33,19 +32,5 @@ def all_node_ids(obj: object, seen: set[int] | None = None) -> set[int]:
 
 
 def ambient_agents_for(program: Program) -> frozenset[str]:
-    """Return the named-agent call targets in *program* as an ambient set.
-
-    Walks the AST for every ``AgentCall`` and collects each ``agent`` name that
-    is a named agent (i.e. not the ``ask``/``exec`` contextual keywords).
-    The result is suitable to pass as ``resolve(..., ambient_agents=...)`` so a
-    non-scope unit test can resolve a program that calls named agents without
-    adding an explicit ``agent`` declaration to its source.
-    """
-    names: set[str] = set()
-
-    def collect(node: object) -> None:
-        if isinstance(node, AgentCall) and node.agent not in ("ask", "exec"):
-            names.add(node.agent)
-
-    walk(program, collect)
-    return frozenset(names)
+    """Return an empty frozenset — agent names must be declared via 'agent' in v2."""
+    return frozenset()

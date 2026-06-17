@@ -458,6 +458,18 @@ class ReplSession:
         from agm.agl.runtime.runtime import convert_input
         from agm.agl.syntax.nodes import ParamDecl, ProgramDecl
 
+        def _reject(
+            message: str, line: int
+        ) -> "tuple[EntryResult, dict[str, Value], None, dict[str, object]]":
+            # Every reject path leaves session state untouched: no param values,
+            # no new program name, current session config preserved.
+            return (
+                self._fail([Diagnostic(message=message, line=line)], warnings),
+                {},
+                None,
+                self._active_config,
+            )
+
         param_values: dict[str, Value] = {}
         # Local effective values — no mutation of self.* here.
         entry_program_name: str | None = None
@@ -468,23 +480,11 @@ class ReplSession:
                 new_name = stmt.name
                 if self._program_name is not None and self._program_name != new_name:
                     # Different program name: reject — no session mutation needed.
-                    return (
-                        self._fail(
-                            [
-                                Diagnostic(
-                                    message=(
-                                        f"Program name already set to {self._program_name!r}; "
-                                        f"cannot redeclare as {new_name!r} in the same session. "
-                                        f"Use :reset to start a new session."
-                                    ),
-                                    line=stmt.span.start_line,
-                                )
-                            ],
-                            warnings,
-                        ),
-                        {},
-                        None,
-                        self._active_config,
+                    return _reject(
+                        f"Program name already set to {self._program_name!r}; "
+                        f"cannot redeclare as {new_name!r} in the same session. "
+                        f"Use :reset to start a new session.",
+                        stmt.span.start_line,
                     )
                 if self._program_name is None:
                     # First program decl: record the new name and load config into
@@ -508,21 +508,9 @@ class ReplSession:
                     except (ValueError, TypeError) as exc:
                         # Conversion failure: reject the entry cleanly — no rollback
                         # needed because self.* was never mutated.
-                        return (
-                            self._fail(
-                                [
-                                    Diagnostic(
-                                        message=(
-                                            f"Config value for param {name!r} is invalid: {exc}"
-                                        ),
-                                        line=stmt.span.start_line,
-                                    )
-                                ],
-                                warnings,
-                            ),
-                            {},
-                            None,
-                            self._active_config,
+                        return _reject(
+                            f"Config value for param {name!r} is invalid: {exc}",
+                            stmt.span.start_line,
                         )
                 elif stmt.default is None:
                     # Required param with no config value and no default → reject.
@@ -536,22 +524,10 @@ class ReplSession:
                         if effective_program_name is not None
                         else ""
                     )
-                    return (
-                        self._fail(
-                            [
-                                Diagnostic(
-                                    message=(
-                                        f"Missing required param {name!r}: provide it"
-                                        f"{prog_hint} or a default expression."
-                                    ),
-                                    line=stmt.span.start_line,
-                                )
-                            ],
-                            warnings,
-                        ),
-                        {},
-                        None,
-                        self._active_config,
+                    return _reject(
+                        f"Missing required param {name!r}: provide it"
+                        f"{prog_hint} or a default expression.",
+                        stmt.span.start_line,
                     )
                 # else: has a default → interpreter evaluates it; not in param_values.
 

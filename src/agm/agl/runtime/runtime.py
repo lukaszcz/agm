@@ -702,6 +702,9 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         # [3] Type checking (reuse cached result from discover_params if provided)
         # ----------------------------------------------------------------
+        # When the caller supplies a pre-checked program (e.g. from
+        # discover_params), reuse it so typecheck runs exactly once across
+        # discover + run.
         if checked is None:
             checked, tc_diagnostics = _run_typecheck(resolved, capabilities)
             if checked is None:
@@ -711,10 +714,6 @@ class WorkflowRuntime:
                     error=None,
                     warnings=warnings,
                 )
-        else:
-            # Caller supplied a pre-checked program (e.g. from discover_params);
-            # reuse it — typecheck runs exactly once across discover + run.
-            tc_diagnostics = ()
 
         # Collect warnings from typecheck.
         warnings.extend(checked.warnings)
@@ -727,10 +726,10 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         from agm.agl.syntax.nodes import ParamDecl
 
-        # Build declared param map (name → type, has_default, decl_line).
+        # Build declared param map (name → type) and flag missing required
+        # params (no default + not in inputs) in a single pass over the body.
         declared_params: dict[str, AglType] = {}
-        declared_param_has_default: dict[str, bool] = {}
-        declared_param_lines: dict[str, int] = {}
+        input_errors: list[Diagnostic] = []
         for stmt in program.body:
             if isinstance(stmt, ParamDecl):
                 param_type = checked.type_env.get_binding_type(stmt.node_id)
@@ -740,19 +739,13 @@ class WorkflowRuntime:
                         "checker invariant violated."
                     )
                 declared_params[stmt.name] = param_type
-                declared_param_has_default[stmt.name] = stmt.default is not None
-                declared_param_lines[stmt.name] = stmt.span.start_line
-
-        # Check for missing required params (no default + not in inputs).
-        input_errors: list[Diagnostic] = []
-        for name, has_default in declared_param_has_default.items():
-            if not has_default and name not in inputs:
-                input_errors.append(
-                    Diagnostic(
-                        message=f"Missing required param: {name!r}",
-                        line=declared_param_lines[name],
+                if stmt.default is None and stmt.name not in inputs:
+                    input_errors.append(
+                        Diagnostic(
+                            message=f"Missing required param: {stmt.name!r}",
+                            line=stmt.span.start_line,
+                        )
                     )
-                )
 
         if input_errors:
             return RunResult(

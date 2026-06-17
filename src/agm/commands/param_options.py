@@ -40,6 +40,27 @@ def param_flag(name: str) -> str:
     return f"--{name}"
 
 
+def negative_param_flag(name: str) -> str:
+    """Return the negative CLI flag for a bool param (``--no-<name>``)."""
+    return f"--no-{name}"
+
+
+def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
+    """Discover declared params from AgL *source*, degrading to ``()`` on error.
+
+    Shared by the help and shell-completion paths, which both need only the
+    discovered params and must tolerate unreadable/unparsable sources.
+    """
+    try:
+        from agm.agl import WorkflowRuntime
+
+        prepared = WorkflowRuntime.prepare(source)
+        discovery = WorkflowRuntime().discover_params(prepared)
+        return discovery.params
+    except (Exception, SystemExit):
+        return ()
+
+
 def _normalize_flag(flag: str) -> str:
     """Normalize a flag by replacing underscores with hyphens for collision detection."""
     return flag.replace("_", "-")
@@ -65,7 +86,7 @@ def check_param_collisions(params: tuple[ParamDeclInfo, ...]) -> list[str]:
                 f"which collides with a built-in exec option; rename the param."
             )
         if isinstance(param.type, BoolType):
-            no_flag = f"--no-{param.name}"
+            no_flag = negative_param_flag(param.name)
             norm_no_flag = _normalize_flag(no_flag)
             if no_flag in RESERVED_FLAGS or norm_no_flag in _NORMALIZED_RESERVED:
                 errors.append(
@@ -100,7 +121,7 @@ def parse_param_tokens(
         if isinstance(p.type, BoolType):
             # Positive bool flag → True; negative → False.
             flag_to_param[param_flag(p.name)] = (p, True)
-            flag_to_param[f"--no-{p.name}"] = (p, False)
+            flag_to_param[negative_param_flag(p.name)] = (p, False)
         else:
             flag_to_param[param_flag(p.name)] = (p, None)
 
@@ -167,11 +188,11 @@ def render_param_help_section(params: tuple[ParamDeclInfo, ...]) -> str:
     for p in params:
         is_bool = isinstance(p.type, BoolType)
         if is_bool:
-            flag_str = f"--{p.name}/--no-{p.name}"
+            flag_str = f"{param_flag(p.name)}/{negative_param_flag(p.name)}"
             type_label = "bool"
         else:
             type_label = p.type.kind.upper()
-            flag_str = f"--{p.name} {type_label}"
+            flag_str = f"{param_flag(p.name)} {type_label}"
         req_str = "(required)" if not p.has_default else "(optional, has default)"
         lines.append(f"  {flag_str}  {req_str}")
     return "\n".join(lines) + "\n"

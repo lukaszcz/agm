@@ -815,8 +815,10 @@ def _exec_print_help(*, file: str | None, command: str | None) -> None:
     appends the discovered ``Program parameters:`` section.  Degrades silently
     on any error (syntax errors, unreadable files, etc.).
     """
-    from agm.agl import WorkflowRuntime
-    from agm.commands.param_options import render_param_help_section
+    from agm.commands.param_options import (
+        discover_params_from_source,
+        render_param_help_section,
+    )
     from agm.core.fs import read_text_arg
 
     print_help_for_command_path(["exec"])
@@ -831,15 +833,9 @@ def _exec_print_help(*, file: str | None, command: str | None) -> None:
             source = None
 
     if source is not None:
-        try:
-            prepared = WorkflowRuntime.prepare(source)
-            runtime = WorkflowRuntime()
-            discovery = runtime.discover_params(prepared)
-            if discovery.params:
-                section = render_param_help_section(discovery.params)
-                print(section, end="")
-        except (Exception, SystemExit):
-            pass
+        params = discover_params_from_source(source)
+        if params:
+            print(render_param_help_section(params), end="")
 
     raise SystemExit(0)
 
@@ -908,7 +904,7 @@ def exec_cmd(
     if file is not None and file.startswith("--") and command is None:
         exit_with_usage_error(
             ["exec"],
-            f"error: program parameter options must come after the FILE argument"
+            "error: program parameter options must come after the FILE argument"
             f" (got option '{file}' where a FILE was expected)",
         )
     if command is not None and file is not None:

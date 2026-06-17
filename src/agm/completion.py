@@ -379,83 +379,29 @@ def complete_agl_file(
         return []
 
 
-def _find_exec_source(args: list[str]) -> str | None:
-    """Find the AgL source from exec CLI args (FILE or -c/--command).
-
-    Returns the source string or ``None`` when not found or unreadable.
-    """
-    # Look for -c/--command with value.
-    for i, arg in enumerate(args):
-        if arg in ("-c", "--command") and i + 1 < len(args):
-            return args[i + 1]
-        if arg.startswith("--command="):
-            return arg[len("--command="):]
-    # Look for a FILE argument (non-option positional arg).
-    for arg in args:
-        if not arg.startswith("-"):
-            try:
-                return Path(arg).read_text()
-            except OSError:
-                return None
-    return None
-
-
-def complete_exec_param_options(
-    ctx: click.Context, args: list[str], incomplete: str
-) -> list[str]:
-    """Complete ``--<param>`` option names for ``agm exec``.
-
-    Locates the FILE or -c/--command in *args*, prepares the source,
-    discovers params, and returns matching option names.  Degrades
-    silently to ``[]`` on any error.
-    """
-    del ctx
-    try:
-        source = _find_exec_source(args)
-        if source is None:
-            return []
-        from agm.agl import WorkflowRuntime
-
-        prepared = WorkflowRuntime.prepare(source)
-        runtime = WorkflowRuntime()
-        discovery = runtime.discover_params(prepared)
-        from agm.agl.typecheck.types import BoolType
-
-        options: list[str] = []
-        for param in discovery.params:
-            options.append(f"--{param.name}")
-            if isinstance(param.type, BoolType):
-                options.append(f"--no-{param.name}")
-        return [o for o in options if o.startswith(incomplete)]
-    except (Exception, SystemExit):
-        return []
-
-
 def _exec_param_completion_items(source: str, incomplete: str) -> list[CompletionItem]:
     """Return ``CompletionItem`` objects for ``--<param>`` flags discovered in *source*.
 
     Used by :class:`ExecCommand` to augment the standard shell_complete results.
     Degrades silently to ``[]`` on any error.
     """
-    try:
-        from agm.agl import WorkflowRuntime
-        from agm.agl.typecheck.types import BoolType
+    from agm.agl.typecheck.types import BoolType
+    from agm.commands.param_options import (
+        discover_params_from_source,
+        negative_param_flag,
+        param_flag,
+    )
 
-        prepared = WorkflowRuntime.prepare(source)
-        runtime = WorkflowRuntime()
-        discovery = runtime.discover_params(prepared)
-        items: list[CompletionItem] = []
-        for param in discovery.params:
-            flag = f"--{param.name}"
-            if flag.startswith(incomplete):
-                items.append(CompletionItem(flag))
-            if isinstance(param.type, BoolType):
-                no_flag = f"--no-{param.name}"
-                if no_flag.startswith(incomplete):
-                    items.append(CompletionItem(no_flag))
-        return items
-    except (Exception, SystemExit):
-        return []
+    items: list[CompletionItem] = []
+    for param in discover_params_from_source(source):
+        flag = param_flag(param.name)
+        if flag.startswith(incomplete):
+            items.append(CompletionItem(flag))
+        if isinstance(param.type, BoolType):
+            no_flag = negative_param_flag(param.name)
+            if no_flag.startswith(incomplete):
+                items.append(CompletionItem(no_flag))
+    return items
 
 
 class ExecCommand(TyperCommand):

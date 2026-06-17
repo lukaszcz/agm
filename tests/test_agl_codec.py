@@ -1166,28 +1166,39 @@ class TestMakeContract:
         assert isinstance(schema, dict)
         assert "oneOf" in schema
 
-    def test_format_instructions_non_empty_for_record(self) -> None:
-        contract = _make_contract_for(_make_issue_type())
-        assert contract.format_instructions
-        assert "JSON" in contract.format_instructions or "json" in contract.format_instructions
-
-    def test_format_instructions_non_empty_for_enum(self) -> None:
-        contract = _make_contract_for(_make_review_type())
-        assert contract.format_instructions
-        assert "$case" in contract.format_instructions
-
-    def test_format_instructions_contain_field_names_for_record(self) -> None:
+    def test_format_instructions_include_schema_for_record(self) -> None:
         contract = _make_contract_for(_make_issue_type())
         instr = contract.format_instructions
+        assert instr
+        assert "conforming to the following JSON Schema" in instr
+        # The actual derived schema is embedded, not a hand-written paraphrase.
+        assert '"properties"' in instr
+        assert '"additionalProperties"' in instr
+        # Field names reach the agent via the schema.
         assert "title" in instr
         assert "severity" in instr
         assert "description" in instr
 
-    def test_format_instructions_contain_variant_names_for_enum(self) -> None:
+    def test_format_instructions_include_schema_for_enum(self) -> None:
         contract = _make_contract_for(_make_review_type())
         instr = contract.format_instructions
+        assert instr
+        assert "conforming to the following JSON Schema" in instr
+        assert '"oneOf"' in instr
+        assert '"$case"' in instr
+        # Variant names reach the agent via the schema consts.
         assert "Pass" in instr
         assert "Fail" in instr
+
+    def test_format_instructions_for_permissive_json_omit_schema_block(self) -> None:
+        # The ``json`` type derives a permissive ``{}`` schema; there is no
+        # shape to convey, so only the behavioural preamble is emitted.
+        contract = _make_contract_for(JsonType())
+        instr = contract.format_instructions
+        assert instr
+        assert "conforming to the following JSON Schema" not in instr
+        assert "```json" not in instr
+        assert "Return exactly one JSON value" in instr
 
     def test_codec_field_is_json_codec(self) -> None:
         contract = _make_contract_for(_make_issue_type())
@@ -1343,6 +1354,8 @@ class TestWorkflowRuntimeWireUp:
         req = received[0]
         assert req.output_contract is not None
         assert req.output_contract.format_instructions
+        # The derived JSON Schema is embedded in the instructions the agent sees.
+        assert '"properties"' in req.output_contract.format_instructions
         assert "title" in req.output_contract.format_instructions
 
     def test_lenient_fenced_json_works_end_to_end(self) -> None:
@@ -1875,54 +1888,7 @@ class TestSchemaExceptionType:
 
 
 # ---------------------------------------------------------------------------
-# 15. Coverage: _field_kind_label for nested types
-# ---------------------------------------------------------------------------
-
-
-class TestFieldKindLabel:
-    """Cover _field_kind_label for all Type kinds."""
-
-    def _label(self, typ: Type) -> str:
-        from agm.agl.runtime.codec import _field_kind_label
-
-        return _field_kind_label(typ)
-
-    def test_text(self) -> None:
-        assert self._label(TextType()) == "string"
-
-    def test_int(self) -> None:
-        assert self._label(IntType()) == "integer"
-
-    def test_decimal(self) -> None:
-        assert self._label(DecimalType()) == "number"
-
-    def test_bool(self) -> None:
-        assert self._label(BoolType()) == "boolean"
-
-    def test_json(self) -> None:
-        assert self._label(JsonType()) == "any JSON value"
-
-    def test_list(self) -> None:
-        assert self._label(ListType(elem=TextType())) == "array of string"
-
-    def test_dict(self) -> None:
-        assert self._label(DictType(value=IntType())) == "object with integer values"
-
-    def test_record(self) -> None:
-        assert self._label(RecordType(name="Foo", fields={})) == "Foo"
-
-    def test_enum(self) -> None:
-        assert self._label(EnumType(name="Bar", variants={})) == "Bar"
-
-    def test_exception_type_falls_back_to_repr(self) -> None:
-        from agm.agl.typecheck.types import ExceptionType
-
-        result = self._label(ExceptionType(name="Boom"))
-        assert "Boom" in result
-
-
-# ---------------------------------------------------------------------------
-# 16. Coverage: fenced malformed JSON (repair within fence)
+# 15. Coverage: fenced malformed JSON (repair within fence)
 # ---------------------------------------------------------------------------
 
 

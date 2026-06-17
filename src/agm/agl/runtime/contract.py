@@ -6,7 +6,8 @@ the live codec implementation to produce the format instructions that will be
 passed to agents and the parsing parameters for the codec.
 
 M2: contracts for JSON-typed targets carry a ``json_schema`` and
-``format_instructions`` built by ``JsonCodec.make_contract``.
+``format_instructions`` (the latter embedding the schema) built by
+``JsonCodec.make_contract``.
 """
 
 from __future__ import annotations
@@ -26,8 +27,10 @@ class OutputContract:
     ``target_type``         — the resolved semantic type for this call.
     ``codec``               — the live codec implementation.
     ``strict_json``         — effective strict-JSON flag (None if not JSON).
-    ``format_instructions`` — human-readable instructions for agents (empty
-                              for the text codec; populated by JsonCodec).
+    ``format_instructions`` — text instructions appended to the agent message
+                              (empty for the text codec and for structured
+                              exec; for JSON targets a behavioural preamble
+                              plus the pretty-printed JSON Schema).
     ``json_schema``         — JSON Schema dict for API-backed agents (None for
                               the text codec; populated by JsonCodec).
     """

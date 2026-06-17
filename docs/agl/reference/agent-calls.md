@@ -248,15 +248,25 @@ mechanically from the target type:
 ### Format instructions
 
 Alongside the prompt the agent receives instructions derived from the target
-type. For a record they are equivalent to:
+type. For a JSON-typed target the instructions embed the actual JSON Schema
+(the same schema used to validate the response), so the agent receives the
+precise, authoritative shape rather than a prose paraphrase. They are
+equivalent to:
 
 ```text
-Return exactly one JSON object.
+Return exactly one JSON value conforming to the following JSON Schema.
 Do not include Markdown, prose, or code fences.
-The JSON must have exactly these fields: …
+
+```json
+<derived JSON Schema>
+```
 ```
 
-For `text` targets: `Return plain text.`
+For the permissive `json` type (schema `{}`) only the behavioural preamble is
+emitted, since there is no shape to convey.
+
+For `text` targets the format instructions are absent (empty): a text
+target imposes no format on the agent's response.
 
 Format instructions always describe the **strict** shape, regardless of the
 parsing mode.

@@ -193,6 +193,10 @@ class TextCodec:
 
         The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
         never used by this implementation.
+
+        For ``text`` targets ``format_instructions`` is left empty (absent):
+        a text target imposes no format on the agent's response, so there are
+        no instructions to relay.
         """
         from agm.agl.runtime.contract import OutputContract
 
@@ -200,7 +204,7 @@ class TextCodec:
             target_type=type_ref,
             codec=self,
             strict_json=None,
-            format_instructions="Return plain text.",
+            format_instructions="",
             json_schema=None,
         )
 
@@ -669,69 +673,33 @@ def _path_sort_key(error: JsonschemaValidationError) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Format instructions builders
+# Format instructions builder
 # ---------------------------------------------------------------------------
 
 
-def _field_kind_label(typ: Type) -> str:
-    """Return a human-readable type label for a field in format instructions."""
-    if isinstance(typ, TextType):
-        return "string"
-    if isinstance(typ, IntType):
-        return "integer"
-    if isinstance(typ, DecimalType):
-        return "number"
-    if isinstance(typ, BoolType):
-        return "boolean"
-    if isinstance(typ, JsonType):
-        return "any JSON value"
-    if isinstance(typ, ListType):
-        return f"array of {_field_kind_label(typ.elem)}"
-    if isinstance(typ, DictType):
-        return f"object with {_field_kind_label(typ.value)} values"
-    if isinstance(typ, RecordType):
-        return typ.name
-    if isinstance(typ, EnumType):
-        return typ.name
-    return repr(typ)
+def _build_format_instructions(schema: dict[str, object]) -> str:
+    """Build format instructions embedding the JSON *schema* (design §7.3/§7.4).
 
+    A short behavioural preamble tells the agent to return exactly one JSON
+    value conforming to the schema, with no Markdown/prose/fences.  The schema
+    itself is appended pretty-printed so the agent receives the precise,
+    authoritative shape rather than a hand-maintained prose paraphrase that
+    can drift from the actual validation rules.
 
-def _build_format_instructions(typ: Type) -> str:
-    """Build human-readable format instructions for *typ* (design §7.3/§7.4)."""
-    if isinstance(typ, RecordType):
-        field_lines = "\n".join(
-            f"- {name}: {_field_kind_label(ftype)}" for name, ftype in typ.fields.items()
-        )
+    For the permissive ``json`` type (schema ``{}``) there is no shape to
+    convey, so only the behavioural preamble is emitted.
+    """
+    if not schema:
         return (
-            "Return exactly one JSON object.\n"
-            "Do not include Markdown, prose, or code fences.\n"
-            "The JSON must have exactly these fields:\n"
-            f"{field_lines}"
+            "Return exactly one JSON value.\n"
+            "Do not include Markdown, prose, or code fences."
         )
-    if isinstance(typ, EnumType):
-        variant_lines: list[str] = []
-        for variant_name, variant_fields in typ.variants.items():
-            if not variant_fields:
-                variant_lines.append(f'{{ "$case": "{variant_name}" }}')
-            else:
-                field_parts = ", ".join(
-                    f'"{fn}": [...]' if isinstance(ft, ListType) else f'"{fn}": ...'
-                    for fn, ft in variant_fields.items()
-                )
-                variant_lines.append(f'{{ "$case": "{variant_name}", {field_parts} }}')
-        valid_shapes = "\n".join(variant_lines)
-        return (
-            "Return exactly one JSON object.\n"
-            "Do not include Markdown, prose, or code fences.\n"
-            'Use "$case" to identify the selected variant.\n'
-            "\n"
-            "Valid shapes:\n"
-            f"{valid_shapes}"
-        )
-    # Scalar / list / dict / json: generic instructions.
+    schema_text = json.dumps(schema, indent=2, ensure_ascii=False)
     return (
-        "Return exactly one JSON value.\n"
-        "Do not include Markdown, prose, or code fences."
+        "Return exactly one JSON value conforming to the following JSON Schema.\n"
+        "Do not include Markdown, prose, or code fences.\n"
+        "\n"
+        f"```json\n{schema_text}\n```"
     )
 
 
@@ -797,7 +765,7 @@ class JsonCodec:
         from agm.agl.runtime.contract import OutputContract
 
         schema = derive_schema(type_ref)
-        instructions = _build_format_instructions(type_ref)
+        instructions = _build_format_instructions(schema)
         return OutputContract(
             target_type=type_ref,
             codec=self,

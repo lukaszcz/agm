@@ -3,8 +3,9 @@
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
 semantic :class:`~agm.agl.typecheck.types.Type`.  The derived schema is used:
 
-1. As ``OutputContract.json_schema`` so API-backed agents can request native
-   structured output.
+1. Embedded in ``OutputContract.format_instructions`` (pretty-printed) so the
+   agent receives the precise shape, and as ``OutputContract.json_schema`` so
+   API-backed agents can request native structured output.
 2. For schema validation via the ``jsonschema`` library inside
    :class:`~agm.agl.runtime.codec.JsonCodec`.
 

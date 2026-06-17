@@ -674,7 +674,7 @@ def test_ask_request_text_type_arg_has_no_schema() -> None:
     from agm.agl.eval.values import JsonValue
 
     assert oc.fields["json_schema"] == JsonValue(None)
-    assert oc.fields["format_instructions"] == TextValue("Return plain text.")
+    assert oc.fields["format_instructions"] == TextValue("")
 
 
 def test_ask_request_named_agent() -> None:

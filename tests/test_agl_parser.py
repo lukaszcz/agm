@@ -883,6 +883,12 @@ class TestIfExpr:
         with pytest.raises(AglSyntaxError, match=r"\|"):
             parse("if n > 0 => y else => x | n < 0 => z")
 
+    def test_if_else_missing_arrow_message(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("if true => false else true")
+
+        assert str(exc_info.value) == "Missing `=>` after `else`."
+
     def test_if_suite_branch_body(self) -> None:
         src = "if x =>\n  let y = 1\n  y\n| else => z"
         e = first(parse(src))

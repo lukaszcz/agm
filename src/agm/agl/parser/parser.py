@@ -62,14 +62,14 @@ def _parse_to_program(
     try:
         tree = _PARSER.parse(text)
     except LexError as exc:
-        raise syntax_error_from_lark(exc, filename=filename) from exc
+        raise syntax_error_from_lark(exc, filename=filename, source_text=text) from exc
     except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
-        raise syntax_error_from_lark(exc, filename=filename) from exc
+        raise syntax_error_from_lark(exc, filename=filename, source_text=text) from exc
     except LarkError as exc:  # pragma: no cover
         # Any other lark-level error (ParseError, GrammarError, etc.) is a
         # genuine syntax/parse problem.  Narrowing to LarkError lets internal
         # bugs (AssertionError and the like) surface instead of being masked.
-        raise syntax_error_from_lark(exc, filename=filename) from exc
+        raise syntax_error_from_lark(exc, filename=filename, source_text=text) from exc
 
     builder = AstBuilder(start_id=start_id)
     try:

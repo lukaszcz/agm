@@ -62,10 +62,19 @@ mapped to type nodes in type-annotation positions.
 
 ### Identifiers
 
-| Token | Pattern | Used for |
-|-------|---------|----------|
-| `TYPE_NAME` | `/[A-Z][A-Za-z0-9_]*/` | Record/enum types, qualified constructors, exception types |
-| `VAR_NAME` | `/[a-z_][A-Za-z0-9_]*/` | Variables, fields, agent names, function names, parameter names |
+| Token | Start | Used for |
+|-------|-------|----------|
+| `TYPE_NAME` | an uppercase letter | Record/enum types, qualified constructors, exception types |
+| `VAR_NAME` | a lowercase letter or `_` | Variables, fields, agent names, function names, parameter names |
+
+An identifier starts with a (Unicode) letter or `_` and then greedily
+consumes every character that is not whitespace and not a structural
+operator/punctuator delimiter (`( ) [ ] { } : , . | ; + * / "`).  Operator
+characters such as `- ? ! < > =` are identifier-continuation characters, so
+`ask-prompt`, `ask?`, and `do-it-now!` are single tokens; spaces (or a
+delimiter) around an operator make it parse as an operator.  See
+[Lexical structure](agl/reference/lexical-structure.md) for the full
+disambiguation table.
 
 `_` (the wildcard) lexes as a plain `VAR_NAME`; wildcard interpretation
 happens in the AST builder.

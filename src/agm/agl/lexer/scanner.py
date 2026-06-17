@@ -80,7 +80,36 @@ from agm.agl.lexer.tokens import (
 # Constants
 # ---------------------------------------------------------------------------
 
+# Characters that terminate an identifier scan.  An identifier starts with
+# an ASCII letter or ``_`` and then greedily consumes every character that is
+# NOT in this set.  Whitespace and the structural punctuators/operators that
+# must remain standalone delimiters (string quotes, brackets, field access
+# ``.``, separators ``,` `` ``;``, type/arg ``:``, ``|``, and ``+ * /``) are
+# listed here.  Everything else — including ``-``, ``?``, ``!``, ``<``, ``>``,
+# ``=`` and arbitrary Unicode letters/digits — is an identifier-continuation
+# character, so names like ``ask-prompt``, ``ask?`` and ``do-it-now!`` scan as
+# a single token.  Operator tokens (``->``, ``=>``, ``!=``, ``<=``, ``>=``,
+# ``==``) still lex as operators whenever they appear as standalone,
+# whitespace-delimited tokens: spaces (or another stop character) break the
+# identifier before the operator's first character.
+_IDENT_STOP: frozenset[str] = frozenset({
+    # whitespace
+    " ", "\t", "\n", "\r",
+    # string/template delimiter (double quote only; a single quote may appear
+    # inside an identifier, e.g. ``foo'bar`` — use a space to start a string)
+    '"',
+    # structural punctuators / operators that stay standalone delimiters
+    "(", ")", "[", "]", "{", "}",
+    ":", ",", ".", "|", ";",
+    "+", "*", "/",
+})
+
 _TAB_LEN = 4
+
+
+def _is_ascii_digit(ch: str) -> bool:
+    """Return True iff *ch* is an ASCII digit (``0``–``9``)."""
+    return "0" <= ch <= "9"
 
 # Single-char operator table (must not overlap with maximal-munch multi-char ops).
 # NOTE: "-" is intentionally absent — it is handled in the multi-char operator
@@ -682,11 +711,16 @@ class _Scanner:
         start_col = self._col
         ch = self._advance()
 
-        # Identifiers and keywords (ASCII-only: [A-Za-z_][A-Za-z0-9_]*)
-        if (ord(ch) < 128 and ch.isalpha()) or ch == "_":
-            while not self._at_end() and (
-                (ord(self._peek()) < 128 and self._peek().isalnum()) or self._peek() == "_"
-            ):
+        # Identifiers and keywords: start with a (Unicode) letter or ``_``,
+        # then greedily consume every character that is not whitespace and not
+        # an operator/punctuator delimiter (see ``_IDENT_STOP``).  This admits
+        # arbitrary Unicode letters/digits as well as the symbol characters
+        # ``-``, ``?``, ``!``, so names like ``ask-prompt`` or ``do-it-now!``
+        # scan as a single token.  Operator tokens (``->``, ``=>``, ``!=``,
+        # ``<=``, ``>=``, field access ``.``, etc.) still lex as operators when
+        # they appear as standalone, whitespace-delimited tokens.
+        if ch.isalpha() or ch == "_":
+            while not self._at_end() and self._peek() not in _IDENT_STOP:
                 self._advance()
             word = self._src[start_pos : self._pos]
             if word in KEYWORDS:
@@ -698,15 +732,20 @@ class _Scanner:
             yield self._make_token(typ, word, start_pos, start_line, start_col)
             return
 
-        # Numbers
-        if ch.isdigit():
-            while not self._at_end() and self._peek().isdigit():
+        # Numbers — ASCII digits only.  ``str.isdigit()`` admits non-ASCII
+        # digit characters (e.g. fullwidth ``２`` or Arabic-Indic ``٠``); the
+        # language defines numeric literals as ``[0-9]+`` / ``[0-9]+.[0-9]+``, so
+        # the scan is restricted to the ASCII range.  Non-ASCII digits therefore
+        # fall through to the ``Unexpected character`` path (or, when they follow
+        # a letter, become part of a greedy identifier — see _IDENT_STOP).
+        if _is_ascii_digit(ch):
+            while not self._at_end() and _is_ascii_digit(self._peek()):
                 self._advance()
             if self._peek() == "." and (
-                self._pos + 1 < len(self._src) and self._src[self._pos + 1].isdigit()
+                self._pos + 1 < len(self._src) and _is_ascii_digit(self._src[self._pos + 1])
             ):
                 self._advance()  # '.'
-                while not self._at_end() and self._peek().isdigit():
+                while not self._at_end() and _is_ascii_digit(self._peek()):
                     self._advance()
                 value = self._src[start_pos:self._pos]
                 yield self._make_token(DECIMAL, value, start_pos, start_line, start_col)

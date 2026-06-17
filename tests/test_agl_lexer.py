@@ -1385,60 +1385,103 @@ class TestTripleDedentPlaceholderCollision:
 
 
 # ---------------------------------------------------------------------------
-# Bug regression: Unicode letters in identifiers (Task 2)
+# Identifiers: Unicode and symbol characters (Task 2)
 # ---------------------------------------------------------------------------
 
 
-class TestIdentifierAsciiOnly:
-    """Identifiers must be restricted to ASCII.  Non-ASCII letters that are
-    accepted by str.isalpha()/isalnum() must be rejected with a span-aware
-    LexError, not silently tokenized as VAR_NAME or TYPE_NAME."""
+class TestIdentifierUnicodeAndSymbols:
+    """Identifiers start with a (Unicode) letter or ``_`` and then greedily
+    consume every character that is not whitespace and not a structural
+    operator/punctuator delimiter.  Non-ASCII letters, digits, and the symbol
+    characters ``-``, ``?``, ``!`` are all valid identifier-continuation
+    characters, so names like ``ask-prompt`` or ``do-it-now!`` scan as a single
+    token.  Operator tokens (``->``, ``=>``, ``!=``, field access ``.``, etc.)
+    still lex as operators when they appear as standalone, whitespace-delimited
+    tokens."""
 
-    def test_latin_extended_lowercase_rejected(self) -> None:
-        # é (U+00E9) looks like a letter but must not start a VAR_NAME.
-        with pytest.raises(LexError) as exc_info:
-            tok("é")
-        err = exc_info.value
-        assert err.span is not None
-        assert err.span.start_line == 1
+    def test_latin_extended_lowercase_accepted(self) -> None:
+        # é (U+00E9) is a Unicode letter — a valid VAR_NAME start.
+        assert tok("é") == [("VAR_NAME", "é")]
 
-    def test_greek_uppercase_rejected(self) -> None:
-        # Ω (U+03A9) — str.isupper() returns True, old code made it TYPE_NAME.
-        with pytest.raises(LexError) as exc_info:
-            tok("Ω")
-        err = exc_info.value
-        assert err.span is not None
+    def test_greek_uppercase_accepted(self) -> None:
+        # Ω (U+03A9) — str.isupper() returns True, so it is a TYPE_NAME.
+        assert tok("Ω") == [("TYPE_NAME", "Ω")]
 
-    def test_cjk_character_rejected(self) -> None:
-        # A CJK ideograph: not ASCII, not a valid token start.
-        with pytest.raises(LexError) as exc_info:
-            tok("中")
-        err = exc_info.value
-        assert err.span is not None
+    def test_cjk_identifier_accepted(self) -> None:
+        assert tok("中文变量") == [("VAR_NAME", "中文变量")]
 
     def test_ascii_lowercase_identifier_still_valid(self) -> None:
-        result = tok("foo_bar")
-        assert result == [("VAR_NAME", "foo_bar")]
+        assert tok("foo_bar") == [("VAR_NAME", "foo_bar")]
 
     def test_ascii_uppercase_identifier_still_valid(self) -> None:
-        result = tok("FooBar")
-        assert result == [("TYPE_NAME", "FooBar")]
+        assert tok("FooBar") == [("TYPE_NAME", "FooBar")]
 
     def test_identifier_with_digits_still_valid(self) -> None:
-        result = tok("x1")
-        assert result == [("VAR_NAME", "x1")]
+        assert tok("x1") == [("VAR_NAME", "x1")]
 
     def test_underscore_only_identifier_still_valid(self) -> None:
-        result = tok("_x")
-        assert result == [("VAR_NAME", "_x")]
+        assert tok("_x") == [("VAR_NAME", "_x")]
 
-    def test_unicode_letter_in_identifier_continuation_rejected(self) -> None:
-        # "aé" — starts with valid ASCII 'a', but continuation 'é' must stop the
-        # token at 'a' and then 'é' triggers a LexError.
-        with pytest.raises(LexError) as exc_info:
-            tok("aé")
-        err = exc_info.value
-        assert err.span is not None
+    def test_unicode_letter_in_identifier_continuation_accepted(self) -> None:
+        # "aé" — starts with ASCII 'a', continues with Unicode 'é'.
+        assert tok("aé") == [("VAR_NAME", "aé")]
+
+    def test_hyphen_in_identifier(self) -> None:
+        assert tok("ask-prompt") == [("VAR_NAME", "ask-prompt")]
+
+    def test_question_mark_in_identifier(self) -> None:
+        assert tok("ask?") == [("VAR_NAME", "ask?")]
+
+    def test_exclamation_in_identifier(self) -> None:
+        assert tok("do-it-now!") == [("VAR_NAME", "do-it-now!")]
+
+    def test_operator_chars_in_identifier(self) -> None:
+        # <, >, = are identifier-continuation characters, so a run of them with
+        # no surrounding whitespace is one identifier.
+        assert tok("a->b") == [("VAR_NAME", "a->b")]
+        assert tok("x!=3") == [("VAR_NAME", "x!=3")]
+        assert tok("Pass=>()") == [("TYPE_NAME", "Pass=>"), ("LPAR", "("), ("RPAR", ")")]
+
+    def test_spaces_break_identifier_before_operator(self) -> None:
+        # Whitespace is a stop character, so the operator tokens re-emerge.
+        assert tok("a - b") == [
+            ("VAR_NAME", "a"), ("MINUS", "-"), ("VAR_NAME", "b"),
+        ]
+        assert tok("a -> b") == [
+            ("VAR_NAME", "a"), ("THIN_ARROW", "->"), ("VAR_NAME", "b"),
+        ]
+        assert tok("x != 3") == [
+            ("VAR_NAME", "x"), ("NEQ", "!="), ("INT", "3"),
+        ]
+        assert tok("Pass => ()") == [
+            ("TYPE_NAME", "Pass"), ("ARROW", "=>"), ("LPAR", "("), ("RPAR", ")"),
+        ]
+
+    def test_structural_punctuators_break_identifier(self) -> None:
+        # `.` `:` `,` `(` `)` etc. are stop characters even without spaces.
+        assert tok("a.b") == [("VAR_NAME", "a"), ("DOT", "."), ("VAR_NAME", "b")]
+        assert tok("f(x)") == [
+            ("VAR_NAME", "f"), ("LPAR", "("), ("VAR_NAME", "x"), ("RPAR", ")"),
+        ]
+        assert tok("a:b") == [("VAR_NAME", "a"), ("COLON", ":"), ("VAR_NAME", "b")]
+
+    def test_hyphen_cannot_start_identifier(self) -> None:
+        # An identifier must start with a letter or _; a leading '-' is the
+        # MINUS / THIN_ARROW operator path.
+        assert tok("-a") == [("MINUS", "-"), ("VAR_NAME", "a")]
+
+    def test_digit_cannot_start_identifier(self) -> None:
+        # A leading digit begins a number, not an identifier.
+        assert tok("2") == [("INT", "2")]
+
+    def test_non_ascii_digit_rejected_as_number(self) -> None:
+        # Fullwidth and Arabic-Indic digits are not ASCII [0-9]; the language
+        # defines numeric literals as [0-9]+, so these are unexpected characters
+        # rather than INT tokens.
+        for ch in ("２", "٠"):
+            with pytest.raises(LexError) as exc_info:
+                tok(ch)
+            assert exc_info.value.span is not None
 
 
 # ---------------------------------------------------------------------------

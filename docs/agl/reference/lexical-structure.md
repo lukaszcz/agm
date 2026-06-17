@@ -89,19 +89,59 @@ contextually in type positions. `fn` is reserved (it introduces a lambda).
 
 ## Identifiers
 
-Identifiers are ASCII:
+An identifier starts with a letter (any Unicode letter, not just ASCII) or
+`_`, and then continues for as long as the next character is **not** whitespace
+and **not** a structural operator/punctuator delimiter.  The delimiter
+characters that terminate an identifier are:
 
-| Token | Pattern | Used for |
-| ----- | ------- | -------- |
-| `TYPE_NAME` | `[A-Z][A-Za-z0-9_]*` | Record, enum, alias, and exception type names; enum variant constructors |
-| `VAR_NAME` | `[a-z_][A-Za-z0-9_]*` | Variables, fields, agent names, function names, parameter names |
+```
+(  )  [  ]  {  }  :  ,  .  |  ;  +  *  /  "
+```
+
+The single quote `'` is **not** a delimiter: it may appear inside an
+identifier (e.g. `foo'bar`).  A single-quoted string is still started by a
+leading `'` (or one preceded by whitespace) and ended by a closing `'`.
+
+Every other character is an identifier-continuation character.  In particular
+the operator characters `-`, `?`, `!`, `<`, `>`, `=`, and `!` may appear *inside*
+an identifier, so names like `ask-prompt`, `ask?`, and `do-it-now!` scan as a
+single token.
+
+| Token | Start | Used for |
+| ----- | ----- | -------- |
+| `TYPE_NAME` | an uppercase letter (`A`–`Z` or any Unicode letter whose first character `.isupper()`) | Record, enum, alias, and exception type names; enum variant constructors |
+| `VAR_NAME` | a lowercase letter (`a`–`z`), any Unicode letter that is not uppercase, or `_` | Variables, fields, agent names, function names, parameter names |
 
 Capitalization is significant: a name starting with an uppercase letter is a
-type/constructor name; anything else is a value-level name.
+type/constructor name; anything else is a value-level name.  Scripts without
+case (e.g. CJK ideographs) have no uppercase form and therefore always lex as
+`VAR_NAME`.
 
 The single underscore `_` is lexically an ordinary `VAR_NAME`; in pattern
 and `catch` positions it is interpreted as the wildcard
 ([Pattern matching](pattern-matching.md)).
+
+### Operator disambiguation
+
+Because the operator characters `-`, `<`, `>`, `=`, `!` are also
+identifier-continuation characters, whether such a run is an identifier or a
+sequence of operator tokens depends entirely on **whitespace** (or another
+delimiter).  Whitespace and the structural punctuators above are the only
+characters that break an identifier scan.
+
+| Source | Tokens | |
+| ----- | ----- | - |
+| `ask-prompt` | `VAR_NAME "ask-prompt"` | one identifier |
+| `a - b` | `VAR_NAME "a"`, `MINUS "-"`, `VAR_NAME "b"` | spaces break the identifier, `-` is an operator |
+| `a.b` | `VAR_NAME "a"`, `DOT "."`, `VAR_NAME "b"` | `.` is a delimiter, always an operator |
+| `a -> b` | `VAR_NAME "a"`, `THIN_ARROW "->"`, `VAR_NAME "b"` | arrow operator, whitespace-delimited |
+| `a->b` | `VAR_NAME "a->b"` | one identifier (no spaces) |
+| `x != 3` | `VAR_NAME "x"`, `NEQ "!="`, `INT "3"` | not-equal operator, whitespace-delimited |
+| `x!=3` | `VAR_NAME "x!=3"` | one identifier (no spaces) |
+
+This mirrors a Lisp-like maximal-munch identifier rule: scan for as long as
+possible until a disallowed character.  Use spaces around operators when you
+want them parsed as operators.
 
 ## Numbers
 

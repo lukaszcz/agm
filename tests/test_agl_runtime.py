@@ -1141,6 +1141,64 @@ class TestRenderValue:
 
 
 # ---------------------------------------------------------------------------
+# Coverage: render.py — render_value_repl (REPL echo quotes text)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderValueRepl:
+    """Unit tests for the REPL echo renderer (:func:`render_value_repl`)."""
+
+    def test_text_value_is_quoted(self) -> None:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_value_repl
+
+        assert render_value_repl(TextValue("aaa")) == '"aaa"'
+
+    def test_text_value_escapes_special_chars(self) -> None:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_value_repl
+
+        assert render_value_repl(TextValue('a"b')) == '"a\\"b"'
+        assert render_value_repl(TextValue("a\\b")) == '"a\\\\b"'
+        assert render_value_repl(TextValue("a\nb")) == '"a\\nb"'
+        assert render_value_repl(TextValue("a\tb")) == '"a\\tb"'
+
+    def test_text_value_escapes_control_chars_as_unicode(self) -> None:
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_value_repl
+
+        assert render_value_repl(TextValue("a\x00b")) == '"a\\u0000b"'
+
+    def test_non_text_values_match_render_value(self) -> None:
+        from decimal import Decimal
+
+        from agm.agl.eval.values import (
+            BoolValue,
+            DecimalValue,
+            IntValue,
+            ListValue,
+            UnitValue,
+        )
+        from agm.agl.runtime.render import render_value, render_value_repl
+
+        for v in (
+            IntValue(42),
+            DecimalValue(Decimal("1.5")),
+            BoolValue(True),
+            UnitValue(),
+            ListValue([IntValue(1)]),
+        ):
+            assert render_value_repl(v) == render_value(v)
+
+    def test_nested_text_in_list_is_json_quoted(self) -> None:
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.render import render_value_repl
+
+        out = render_value_repl(ListValue([TextValue("v")]))
+        assert '"v"' in out
+
+
+# ---------------------------------------------------------------------------
 # Coverage: serialize.py — value_to_json_obj and dumps_exact branches
 # ---------------------------------------------------------------------------
 

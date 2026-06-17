@@ -78,6 +78,24 @@ class TestRenderEntryResult:
         )
         assert render_mod.render_entry_result(result, echo=True) == "3"
 
+    def test_expression_echo_quotes_text(self) -> None:
+        # Strings are shown quoted in the REPL echo (interpolation is unaffected).
+        result = _result(
+            kind="expression", value=TextValue("aaa"), value_type=TextType(), ok=True
+        )
+        assert render_mod.render_entry_result(result, echo=True) == '"aaa"'
+
+    def test_binding_echo_quotes_text(self) -> None:
+        result = _result(
+            kind="binding",
+            name="g",
+            value=TextValue("hi"),
+            value_type=TextType(),
+            ok=True,
+        )
+        rendered = render_mod.render_entry_result(result, echo=True)
+        assert rendered == 'g : text = "hi"'
+
     def test_binding_echo(self) -> None:
         result = _result(
             kind="binding",
@@ -433,7 +451,7 @@ class TestBindings:
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
         assert "x : int = 5" in outcome.text
-        assert 'g : text = hi' in outcome.text
+        assert 'g : text = "hi"' in outcome.text
 
     def test_env_alias_same_as_bindings(self) -> None:
         s = ReplSession()
@@ -474,7 +492,7 @@ class TestInputs:
         s.eval_entry('param name: text = "World"')
         out_set = meta_mod.dispatch_meta(":params", _session_ctx(s)).text
         assert out_set is not None
-        assert "name : text = World" in out_set
+        assert 'name : text = "World"' in out_set
 
 
 class TestSet:

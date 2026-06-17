@@ -37,9 +37,9 @@ def format_typed_value(name: str, value_type: "Type", value: "Value") -> str:
     the entry-echo path (:func:`_render_echo`) and the ``:bindings`` / ``:params``
     meta-commands, so the two never drift in how a value is rendered.
     """
-    from agm.agl.runtime.render import render_value
+    from agm.agl.runtime.render import render_value_repl
 
-    return f"{name} : {value_type!r} = {render_value(value)}"
+    return f"{name} : {value_type!r} = {render_value_repl(value)}"
 
 
 def render_entry_result(
@@ -108,13 +108,13 @@ def _render_check_only(result: "EntryResult") -> str | None:
 
 def _render_echo(result: "EntryResult") -> str | None:
     """Render the success echo line for *result*, or ``None`` for statements."""
-    from agm.agl.runtime.render import render_value
+    from agm.agl.runtime.render import render_value_repl
 
     if result.kind == "expression":
         # A bare expression always carries a value and type on success.
         assert result.value is not None
         assert result.value_type is not None
-        return render_value(result.value)
+        return render_value_repl(result.value)
     if result.kind == "binding":
         # A binding echoes ``name : Type = value`` (single-sourced helper so the
         # echo and ``:bindings`` listing never diverge).

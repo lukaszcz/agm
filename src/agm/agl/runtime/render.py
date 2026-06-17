@@ -32,6 +32,39 @@ from agm.agl.eval.values import (
 )
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 
+# Escape mapping mirroring AgL's JSON-style string-literal escape set, used by
+# :func:`_quote_text` to produce a REPL-echo surface form for ``text`` values.
+_TEXT_ESCAPES: dict[str, str] = {
+    '"': '\\"',
+    "\\": "\\\\",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
+}
+
+
+def _quote_text(s: str) -> str:
+    """Return *s* as a double-quoted AgL string literal surface form.
+
+    Mirrors the escape set AgL string literals accept (``\\"``, ``\\\\``,
+    ``\\n`` …, ``\\uXXXX``) so a ``text`` value round-trips visually in the
+    REPL echo.  This is a display concern only — it never affects template
+    interpolation, where ``text`` is always inserted verbatim.
+    """
+    out: list[str] = ['"']
+    for ch in s:
+        esc = _TEXT_ESCAPES.get(ch)
+        if esc is not None:
+            out.append(esc)
+        elif ch < " ":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
 
 def _pretty_json(value: Value) -> str:
     """Render *value* as pretty-printed JSON (2-space indent).
@@ -103,5 +136,20 @@ def render_value(value: Value) -> str:
         return _closure_surface(value)
     # Structured / json / exception: pretty JSON.
     return _pretty_json(value)
+
+
+def render_value_repl(value: Value) -> str:
+    """Render *value* for REPL echo (``agl>`` and ``:bindings`` / ``:params``).
+
+    Identical to :func:`render_value` except that a top-level ``text`` value is
+    shown quoted (as an AgL string literal surface form) so the REPL echo of
+    ``agl> \"aaa\"`` reads ``\"aaa\"``.  Text nested inside structured values
+    is already quoted by the JSON renderer, so only the bare ``text`` case
+    differs.  Template interpolation (``print`` / ``prompt`` / ``exec``) is
+    unaffected — it always uses :func:`render_value` verbatim.
+    """
+    if isinstance(value, TextValue):
+        return _quote_text(value.value)
+    return render_value(value)
 
 

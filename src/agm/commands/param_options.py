@@ -73,7 +73,9 @@ def _normalize_flag(flag: str) -> str:
 _NORMALIZED_RESERVED: frozenset[str] = frozenset(_normalize_flag(f) for f in RESERVED_FLAGS)
 
 
-def _format_param_collision(param: ParamDeclInfo, flag: str) -> str:
+def _format_param_collision(
+    param: ParamDeclInfo, flag: str, *, source_name: str | None
+) -> str:
     """Return a formatted diagnostic for a param flag collision."""
     return format_diagnostic(
         Diagnostic(
@@ -83,11 +85,14 @@ def _format_param_collision(param: ParamDeclInfo, flag: str) -> str:
             ),
             line=param.line,
             column=param.col,
-        )
+        ),
+        source_name=source_name,
     )
 
 
-def check_param_collisions(params: tuple[ParamDeclInfo, ...]) -> list[str]:
+def check_param_collisions(
+    params: tuple[ParamDeclInfo, ...], *, source_name: str | None = "<agl>"
+) -> list[str]:
     """Check for collisions between param-generated flags and reserved built-in flags.
 
     Returns a list of error messages (empty = no collisions).  A collision is
@@ -99,12 +104,14 @@ def check_param_collisions(params: tuple[ParamDeclInfo, ...]) -> list[str]:
         flag = param_flag(param.name)
         norm_flag = _normalize_flag(flag)
         if flag in RESERVED_FLAGS or norm_flag in _NORMALIZED_RESERVED:
-            errors.append(_format_param_collision(param, flag))
+            errors.append(_format_param_collision(param, flag, source_name=source_name))
         if isinstance(param.type, BoolType):
             no_flag = negative_param_flag(param.name)
             norm_no_flag = _normalize_flag(no_flag)
             if no_flag in RESERVED_FLAGS or norm_no_flag in _NORMALIZED_RESERVED:
-                errors.append(_format_param_collision(param, no_flag))
+                errors.append(
+                    _format_param_collision(param, no_flag, source_name=source_name)
+                )
     return errors
 
 

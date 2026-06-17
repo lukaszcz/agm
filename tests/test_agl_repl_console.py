@@ -221,7 +221,7 @@ class TestMultiline:
         # declaration is promoted).
         output = drive("record R\r\r\x04")
         assert "declared" not in output
-        assert "line" in output.lower()
+        assert ": error:" in output.lower()
 
     def test_blank_line_force_submits_incomplete(self) -> None:
         # A buffer still ending in an unfinished header is incomplete, but once
@@ -421,7 +421,7 @@ class TestEvalOutput:
 
     def test_error_entry_prints_diagnostic(self) -> None:
         output = drive("let = 5\r\x04")
-        assert "line" in output.lower()
+        assert ": error:" in output.lower()
 
 
 class TestDryRun:
@@ -453,7 +453,7 @@ class TestDryRun:
 
     def test_check_only_error_still_reports_diagnostic(self) -> None:
         output = drive("let = 5\r\x04", check_only=True)
-        assert "line" in output.lower()
+        assert ": error:" in output.lower()
 
     def test_help_meta_prints_commands(self) -> None:
         output = drive(":help\r\x04")

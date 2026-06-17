@@ -443,8 +443,9 @@ class TestDiagnosticType:
         assert d.column == 5
         assert d.end_line == 3
         assert d.end_column == 9
-        assert format_diagnostic_location(d) == "line 3:5-8"
-        assert format_diagnostic(d) == "line 3:5-8: some error"
+        assert format_diagnostic_location(d) == "<agl>:3:5-8"
+        assert format_diagnostic_location(d, source_name=None) == "3:5-8"
+        assert format_diagnostic(d) == "<agl>:3:5-8: error: some error"
 
     def test_diagnostic_defaults_to_error_severity(self) -> None:
         d = Diagnostic(message="some error", line=3)

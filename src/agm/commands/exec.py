@@ -8,9 +8,10 @@ print diagnostics to stderr, and exit per the exit-code contract.
 
 Warnings (``result.warnings``) and error diagnostics (``result.diagnostics``)
 are two separate channels: warnings are printed to stderr like errors but never
-affect the exit code; only error-severity diagnostics yield exit 1.  Warnings
-carry a ``warning:`` prefix (``warning: line N: message``) to disambiguate them
-from errors on the shared stderr channel.
+affect the exit code; only error-severity diagnostics yield exit 1.  The
+diagnostic severity is included in compiler-style output, e.g.
+``path.agl:1:5: warning: message`` or ``1:5: error: message`` for inline
+``-c/--command`` source.
 
 Exit-code contract (plan §10.1):
     0  success (or a clean ``--dry-run`` static check)
@@ -87,8 +88,10 @@ def run(args: ExecArgs) -> None:
     # defensive ``else`` keeps ``run`` safe when called directly.
     if args.command is not None:
         source = args.command
+        diagnostic_source_name: str | None = None
     elif args.file is not None:
         source = read_text_arg(Path(args.file))
+        diagnostic_source_name = args.file
     else:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
@@ -235,12 +238,14 @@ def run(args: ExecArgs) -> None:
 
     discovery = runtime.discover_params(prepared)
     for diag in discovery.warnings:
-        print(f"warning: {format_diagnostic(diag)}", file=sys.stderr)
+        print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
 
     external_params: dict[str, object] = {}
     checked = discovery.checked
     if checked is not None:
-        collision_errors = check_param_collisions(discovery.params)
+        collision_errors = check_param_collisions(
+            discovery.params, source_name=diagnostic_source_name
+        )
         if collision_errors:
             for err in collision_errors:
                 print(f"Error: {err}", file=sys.stderr)
@@ -307,7 +312,10 @@ def run(args: ExecArgs) -> None:
             diag.severity,
         )
         if warning_key not in printed_warnings:
-            print(f"warning: {format_diagnostic(diag)}", file=sys.stderr)
+            print(
+                format_diagnostic(diag, source_name=diagnostic_source_name),
+                file=sys.stderr,
+            )
 
     if result.ok:
         # Print the static call-site inventory when running under --dry-run.
@@ -328,7 +336,7 @@ def run(args: ExecArgs) -> None:
     # Pre-execution failure: print error diagnostics and exit 1.
     if result.error is None:
         for diag in result.diagnostics:
-            print(format_diagnostic(diag), file=sys.stderr)
+            print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
     # Uncaught AgL exception: print and exit 2 (design §12.6: include source

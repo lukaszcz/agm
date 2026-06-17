@@ -666,8 +666,7 @@ class TestExecCommandWarnings:
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
-        # F8: warnings carry a ``warning:`` prefix on stderr.
-        assert "warning: line 7:3-7: case is non-exhaustive" in captured.err
+        assert f"{agl_file}:7:3-7: warning: case is non-exhaustive" in captured.err
 
     def test_error_diagnostic_still_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -681,7 +680,30 @@ class TestExecCommandWarnings:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "undefined_name" in captured.err
-        assert "line 1:9-22:" in captured.err
+        assert f"{agl_file}:1:9-22: error:" in captured.err
+
+    def test_inline_error_diagnostic_has_no_filename(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        args = ExecArgs(
+            file=None,
+            command="let x = undefined_name\n",
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "undefined_name" in captured.err
+        assert "1:9-22: error:" in captured.err
+        assert "<command>" not in captured.err
+        assert "<agl>" not in captured.err
 
     def test_warning_and_error_together_exits_1_and_prints_both(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -729,10 +751,9 @@ class TestExecCommandWarnings:
             exec_command.run(_exec_args(agl_file))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        # F8: the warning carries a ``warning:`` prefix; the error does not.
-        assert "warning: line 2:1-3: unused binding" in captured.err
-        assert "line 5:9-12: unknown name" in captured.err
-        assert "warning: line 5:9-12: unknown name" not in captured.err
+        assert f"{agl_file}:2:1-3: warning: unused binding" in captured.err
+        assert f"{agl_file}:5:9-12: error: unknown name" in captured.err
+        assert f"{agl_file}:5:9-12: warning: unknown name" not in captured.err
 
 
 class TestExecParsesSourceOnce:

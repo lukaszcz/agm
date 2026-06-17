@@ -6,10 +6,11 @@ deliberately small and styling-free so M3 can enrich it (richer value
 formatting, the ``:set echo`` toggle already threads through the ``echo`` flag)
 without rewriting the loop.
 
-Channels mirror ``agm exec`` so REPL and batch output read identically:
+Channels mirror ``agm exec`` severity formatting; REPL diagnostics omit a
+source filename:
 
-- error diagnostics  → ``line N: message``
-- warnings           → ``warning: line N: message``
+- error diagnostics  → ``N:C: error: message``
+- warnings           → ``N:C: warning: message``
 - runtime raise      → ``AgL exception: <Type>: <message> at line L, col C``
 
 On success, when ``echo`` is on, an entry's outcome is echoed Python-REPL style:
@@ -59,7 +60,7 @@ def render_entry_result(
     # Warnings are advisory and always surfaced, on success or failure, ahead of
     # any error so the most actionable line (the error) is printed last.
     for diag in result.warnings:
-        lines.append(f"warning: {format_diagnostic(diag)}")
+        lines.append(format_diagnostic(diag, source_name=None))
 
     if not result.ok:
         lines.extend(_render_failure(result))
@@ -82,7 +83,7 @@ def _render_failure(result: "EntryResult") -> list[str]:
     """
     if result.error is not None:
         return [result.error.to_message()]
-    return [format_diagnostic(diag) for diag in result.diagnostics]
+    return [format_diagnostic(diag, source_name=None) for diag in result.diagnostics]
 
 
 def _render_check_only(result: "EntryResult") -> str | None:

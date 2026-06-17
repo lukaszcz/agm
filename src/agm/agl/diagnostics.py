@@ -55,28 +55,39 @@ def diagnostic_from_span(
     )
 
 
-def format_diagnostic_location(diagnostic: Diagnostic) -> str:
-    """Return a compact source location for a diagnostic."""
+def format_diagnostic_location(
+    diagnostic: Diagnostic, *, source_name: str | None = "<agl>"
+) -> str:
+    """Return a compiler-style source location for a diagnostic."""
+    prefix = f"{source_name}:" if source_name is not None else ""
     if diagnostic.column is None:
-        return f"line {diagnostic.line}"
+        return f"{prefix}{diagnostic.line}"
     if diagnostic.end_line is None or diagnostic.end_column is None:
-        return f"line {diagnostic.line}:{diagnostic.column}"
+        return f"{prefix}{diagnostic.line}:{diagnostic.column}"
     if (
         diagnostic.end_line == diagnostic.line
         and diagnostic.end_column > diagnostic.column + 1
     ):
-        return f"line {diagnostic.line}:{diagnostic.column}-{diagnostic.end_column - 1}"
+        return (
+            f"{prefix}{diagnostic.line}:"
+            f"{diagnostic.column}-{diagnostic.end_column - 1}"
+        )
     if diagnostic.end_line != diagnostic.line:
         return (
-            f"line {diagnostic.line}:{diagnostic.column}-"
+            f"{prefix}{diagnostic.line}:{diagnostic.column}-"
             f"{diagnostic.end_line}:{diagnostic.end_column}"
         )
-    return f"line {diagnostic.line}:{diagnostic.column}"
+    return f"{prefix}{diagnostic.line}:{diagnostic.column}"
 
 
-def format_diagnostic(diagnostic: Diagnostic) -> str:
-    """Return a user-visible diagnostic line without severity prefix."""
-    return f"{format_diagnostic_location(diagnostic)}: {diagnostic.message}"
+def format_diagnostic(
+    diagnostic: Diagnostic, *, source_name: str | None = "<agl>"
+) -> str:
+    """Return a user-visible diagnostic line with source and severity."""
+    return (
+        f"{format_diagnostic_location(diagnostic, source_name=source_name)}: "
+        f"{diagnostic.severity}: {diagnostic.message}"
+    )
 
 
 class AglError(Exception):

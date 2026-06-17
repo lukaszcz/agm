@@ -1,5 +1,5 @@
 try
-  pass
+  ()
 catch _ as err =>
-  pass
+  ()
 print err

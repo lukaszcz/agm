@@ -4,65 +4,35 @@
 
 The collected surface grammar. Lexical tokens (`NEWLINE`, `INDENT`,
 `DEDENT`, identifiers, numbers, template tokens) and the layout rules that
-produce them are specified in [Lexical structure](lexical-structure.md);
-the inline-form restrictions encoded by `do_body`, `try_body`,
-`branch_body`, `catch_body`, and `bar_expr` are explained in
-[Program structure](program-structure.md).
+produce them are specified in [Lexical structure](lexical-structure.md).
 
 Notation: `::=` defines a production; `|` separates alternatives; `?`, `*`,
 `+` mark optional and repeated elements; quoted strings are literal tokens.
 
-## Program and statements
+## Programs and blocks
 
 ```ebnf
-program     ::= stmt_list EOF
+program    ::= block EOF
 
-stmt_list   ::= stmt (stmt_sep stmt)* stmt_sep?
-stmt_sep    ::= NEWLINE | ";"
+block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
-stmt        ::= closed_stmt | open_stmt
-
-closed_stmt ::= record_def
-              | enum_def
-              | type_alias
-              | input_decl
-              | agent_decl
-              | let_decl
-              | var_decl
-              | set_stmt
-              | pass_stmt
-              | print_stmt
-              | raise_stmt
-              | expr_stmt
-              | do_until
-
-open_stmt   ::= if_stmt | case_stmt | try_stmt
-
-pass_stmt   ::= "pass"
-print_stmt  ::= "print" expr
-raise_stmt  ::= "raise" expr
-expr_stmt   ::= bar_expr            (* a statement-level bare case/if is a case_stmt/if_stmt *)
+item       ::= config_pragma                (* header position only *)
+             | record_def | enum_def | type_alias  (* root only *)
+             | input_decl                    (* root only *)
+             | agent_decl                    (* root only *)
+             | func_def                      (* root only *)
+             | let_decl | var_decl
+             | expr
 ```
 
-## Blocks and bodies
+A block's value is its last item. A `let_decl` or `var_decl` as the final
+item (with no continuation) is a static error.
+
+### Suites (indented blocks)
 
 ```ebnf
-suite        ::= NEWLINE INDENT stmt_list DEDENT
-
-do_body      ::= suite
-               | closed_stmt (";" closed_stmt)* (";" open_stmt)?
-               | open_stmt
-
-try_body     ::= suite
-               | closed_stmt (";" closed_stmt)*
-
-branch_body  ::= suite | bar_safe_stmt | try_stmt
-catch_body   ::= suite | bar_safe_stmt
+suite ::= NEWLINE INDENT block DEDENT
 ```
-
-A *bar-safe statement* is any closed-statement form whose trailing
-expression slots (`let`/`var`/`set` initializers, `print` and `raise`
-operands) contain only bar-safe expressions (`bar_expr`).
 
 ## Type declarations
 
@@ -90,54 +60,72 @@ The runner string of an `agent` declaration must be a literal string with no
 ## Type expressions
 
 ```ebnf
-type_expr ::= "text" | "json" | "bool" | "int" | "decimal"
+type_expr ::= "unit"
+            | "text" | "json" | "bool" | "int" | "decimal"
             | TYPE_NAME
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
+            | func_type
+
+func_type ::= "(" type_list? ")" "->" type_expr
+type_list ::= type_expr ("," type_expr)* ","?
 ```
+
+## Function declarations
+
+```ebnf
+func_def   ::= "def" VAR_NAME "(" params? ")" "->" type_expr "=" expr
+params     ::= param ("," param)* ","?
+param      ::= VAR_NAME ":" type_expr ("=" expr)?
+```
+
+The `def` body is a single expression (which may be a `block`). Defaulted
+parameters must follow all required parameters.
 
 ## Bindings and mutation
 
 ```ebnf
 let_decl ::= "let" VAR_NAME (":" type_expr)? "=" expr
 var_decl ::= "var" VAR_NAME (":" type_expr)? "=" expr
-set_stmt ::= "set" VAR_NAME "=" expr
+set_expr ::= "set" VAR_NAME "=" expr
 ```
+
+`set` yields `unit`.
 
 ## Loops
 
 ```ebnf
-do_until   ::= "do" loop_bound? do_body "until" bar_expr
+do_until   ::= "do" loop_bound? suite "until" or_expr
+             | "do" loop_bound? inline_body "until" or_expr
+
 loop_bound ::= "[" INT "]"            (* INT must be positive *)
+
+inline_body ::= item (";" item)*
 ```
 
 ## `if`
 
 ```ebnf
-if_stmt        ::= "if" "|"? if_branch ("|" if_branch)*
-if_branch      ::= bar_expr "=>" branch_body
-                 | "else" "=>" branch_body   (* must be last, if present *)
-
-if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)*
-if_expr_branch ::= bar_expr "=>" bar_expr
-                 | "else" "=>" bar_expr      (* must be last; required *)
+if_expr        ::= "if" "|"? if_branch ("|" if_branch)*
+if_branch      ::= or_expr "=>" (suite | or_expr)
+                 | "else" "=>" (suite | or_expr)   (* must be last, if present *)
 ```
+
+Without an `else` branch the `if` expression has type `unit`. With all
+branches returning a common type `T`, the `if` expression has type `T`.
 
 ## `case`
 
 ```ebnf
-case_stmt        ::= "case" expr "of" ("|" case_stmt_branch)+
-case_stmt_branch ::= pattern "=>" branch_body
-
-case_expr        ::= "case" expr "of" ("|" case_expr_branch)+
-case_expr_branch ::= pattern "=>" bar_expr
+case_expr    ::= "case" expr "of" ("|" case_branch)+
+case_branch  ::= pattern "=>" (suite | or_expr)
 ```
 
 ## `try` / `catch`
 
 ```ebnf
-try_stmt      ::= "try" try_body catch_clause+
-catch_clause  ::= "catch" catch_pattern "=>" catch_body
+try_expr      ::= "try" (suite | inline_body) catch_clause+
+catch_clause  ::= "catch" catch_pattern "=>" (suite | or_expr)
 catch_pattern ::= TYPE_NAME ("as" VAR_NAME)?
                 | "_" ("as" VAR_NAME)?
 ```
@@ -161,8 +149,7 @@ A `STRING` pattern may not contain interpolation.
 ## Expressions
 
 ```ebnf
-expr      ::= case_expr | if_expr | bar_expr
-bar_expr  ::= or_expr               (* case_expr / if_expr re-enter via "(" expr ")" *)
+expr      ::= case_expr | if_expr | or_expr
 
 or_expr   ::= and_expr ("or" and_expr)*
 and_expr  ::= not_expr ("and" not_expr)*
@@ -177,42 +164,60 @@ cmp_op     ::= "=" | "!=" | "<" | "<=" | ">" | ">=" | "in"
 
 additive       ::= multiplicative (("+" | "-") multiplicative)*
 multiplicative ::= unary (("*" | "/") unary)*
-unary          ::= "-" unary | access
+unary          ::= "-" unary | juxt
 
-access ::= access "." VAR_NAME          (* field access *)
-         | access "." TYPE_NAME         (* variant qualification *)
-         | access constructor_payload   (* constructor application *)
-         | atom
+juxt           ::= postfix juxt_arg     (* single-arg sugar; non-chaining *)
+               | postfix
 
-atom   ::= INT | DECIMAL | "true" | "false" | "null"
-         | list_literal
-         | dict_literal
-         | TYPE_NAME                    (* bare constructor *)
-         | VAR_NAME                     (* variable reference *)
-         | agent_call
-         | template
-         | "(" expr ")"
+juxt_arg       ::= atom_no_call        (* excludes "("-led forms and calls *)
+
+postfix        ::= postfix "." VAR_NAME            (* field access *)
+               | postfix "." TYPE_NAME             (* variant qualification *)
+               | postfix "(" arg_list? ")"         (* call with parentheses *)
+               | atom
+
+atom           ::= INT | DECIMAL | "true" | "false" | "null"
+               | "(" ")"                           (* unit literal *)
+               | list_literal
+               | dict_literal
+               | TYPE_NAME                         (* bare constructor *)
+               | VAR_NAME                          (* variable reference *)
+               | template
+               | "(" expr ")"                      (* parenthesized expr *)
+               | lambda_expr
+               | set_expr
+               | do_until
+               | raise_expr
+
+atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
+               INT | DECIMAL | "true" | "false" | "null"
+               | list_literal | dict_literal | TYPE_NAME | VAR_NAME
+               | template | postfix "." VAR_NAME | postfix "." TYPE_NAME
 
 qualified_constructor ::= TYPE_NAME ("." TYPE_NAME)?
-constructor_payload   ::= "(" constructor_args? ")"
-constructor_args      ::= named_arg ("," named_arg)* ","?
-named_arg             ::= VAR_NAME ":" expr
+
+raise_expr ::= "raise" expr
 ```
 
-## Agent calls
+## Lambda expressions
 
 ```ebnf
-agent_call   ::= VAR_NAME call_options? template
-                 (* VAR_NAME includes the contextual names ask and exec *)
-
-call_options ::= "[" call_option ("," call_option)* ","? "]"
-call_option  ::= "format" ":" format_name
-               | "strict_json" ":" ("true" | "false")
-               | "on_parse_error" ":" parse_policy
-
-format_name  ::= "text" | "json" | VAR_NAME
-parse_policy ::= "abort" | "retry" "[" INT "]"
+lambda_expr ::= "fn" "(" params? ")" ("->" type_expr)? "=>" expr
 ```
+
+The return type annotation is optional; when omitted, it is inferred from
+the body. Parameter types are always required.
+
+## Calls
+
+```ebnf
+arg_list  ::= arg ("," arg)* ","?
+arg       ::= expr                  (* positional *)
+            | VAR_NAME ":" expr     (* named *)
+```
+
+Named arguments are available at declared-name call sites (`def`s and
+built-ins). A function value is called with positional arguments only.
 
 ## Literals
 
@@ -230,21 +235,34 @@ dict_entry   ::= STRING ":" expr        (* no interpolation in keys *)
 template      ::= '"' (text_fragment | interpolation)* '"'
                 | '"""' (text_fragment | interpolation)* '"""'
 
-interpolation ::= "${" expr ("as" VAR_NAME)? "}"
+interpolation ::= "${" expr "}"
 ```
 
 Newlines are not permitted inside `${…}`. Triple-quoted templates are
 dedented as described in [Lexical structure](lexical-structure.md).
 
+## Config pragmas
+
+```ebnf
+config_pragma ::= "config" VAR_NAME "=" config_value
+config_value  ::= "true" | "false" | INT | DECIMAL | STRING
+```
+
 ## Deterministic-parse notes
 
 - `==` is not in the grammar; it is rejected with *"Use `=` for equality."*
 - Chained comparisons are unparseable by construction (one optional
-  comparison tail) and rejected with a targeted non-associativity message.
+  comparison tail) and rejected with a non-associativity message.
 - The `[N]` after `do` is a single lexical unit, so it never conflicts with
-  a list literal beginning a `do` body.
+  a list literal.
 - A `|`, `catch`, or `until` at the start of a line attaches to the
   innermost construct that can accept it; the layout rules guarantee each
   such token belongs to exactly one construct
-  ([Lexical structure](lexical-structure.md),
-  [Program structure](program-structure.md)).
+  ([Lexical structure](lexical-structure.md)).
+- `juxt` is a **concrete** (non-transparent) rule so that application does
+  not cascade shift/reduce conflicts into every operator rule.
+- `()` is both the unit literal and the empty argument list of a zero-arg
+  call — the two are syntactically unified.
+- The `bar_safe` stratification of v1 is **removed**. Branch bodies and
+  `until` conditions reference `or_expr` directly; a `case` or `if`
+  expression in those positions must be parenthesized.

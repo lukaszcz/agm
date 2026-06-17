@@ -12,11 +12,11 @@ try
   if mode = "abort" =>
     raise Abort(message: "stop now")
   | mode = "parse" =>
-    let r: Review = reviewer "Judge it."
+    let r: Review = ask("Judge it.", agent: reviewer)
     print "parsed ${r is Pass}"
   | mode = "match" =>
     case mode of
-      | "never" => pass
+      | "never" => ()
   | else =>
     print "calm"
   print "body end"

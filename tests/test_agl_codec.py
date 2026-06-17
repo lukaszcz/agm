@@ -55,7 +55,7 @@ from agm.agl.scope import resolve
 from agm.agl.syntax import nodes as ast
 from agm.agl.syntax import types as tast
 from agm.agl.syntax.nodes import (
-    Stmt,
+    Item,
     TemplateSegment,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -137,9 +137,27 @@ def _variant_schema_for_case(schema: dict[str, object], case: str) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
-def _check_program_with_json(body: tuple[Stmt, ...]) -> CheckedProgram:
+def _ensure_expr_tail(body: tuple[Item, ...]) -> tuple[Item, ...]:
+    """Append a unit literal when the last item is a binder.
+
+    In v2, a block must end with an expression (binders need a continuation).
+    Tests that end with ``let x = ...`` are migrated by appending ``()`` so
+    the block type is ``unit`` and all bound names are still in scope.
+    """
+    from agm.agl.syntax.nodes import LetDecl, VarDecl
+
+    if body and isinstance(body[-1], (LetDecl, VarDecl)):
+        return body + (ast.UnitLit(span=_sp(), node_id=_nid()),)
+    return body
+
+
+def _check_program_with_json(body: tuple[Item, ...]) -> CheckedProgram:
     """Run *body* through real resolve + check with both text and json codecs."""
-    program = ast.Program(body=tuple(body), span=_sp(), node_id=_nid())
+    program = ast.Program(
+        body=ast.Block(items=_ensure_expr_tail(body), span=_sp(), node_id=_nid()),
+        span=_sp(),
+        node_id=_nid(),
+    )
     resolved = resolve(program, ambient_agents=ambient_agents_for(program))
     caps = HostCapabilities(
         agent_names=frozenset(),
@@ -155,7 +173,7 @@ def _check_program_with_json(body: tuple[Stmt, ...]) -> CheckedProgram:
 
 
 def _run_with_json_codec(
-    body: tuple[Stmt, ...],
+    body: tuple[Item, ...],
     *,
     named: dict[str, AgentFn] | None = None,
     default_agent: AgentFn | None = None,
@@ -205,24 +223,30 @@ def _text_seg(text: str) -> ast.TextSegment:
     return ast.TextSegment(text=text, span=_sp(), node_id=_nid())
 
 
-def _agent_call(
-    agent: str,
+def _ask_call(
     text: str,
     *,
     strict_json: bool | None = None,
-) -> ast.AgentCall:
-    from agm.agl.syntax.nodes import CallOptions
+) -> ast.Call:
+    """Build a v2 ``ask(text)`` call expression using the default agent.
 
-    return ast.AgentCall(
-        agent=agent,
-        options=CallOptions(
-            format=None,
-            strict_json=strict_json,
-            parse_policy=None,
-            span=_sp(),
-            node_id=_nid(),
-        ),
-        template=_template(_text_seg(text)),
+    ``strict_json=True`` adds ``strict_json: true`` as a named argument.
+    The caller supplies the agent function as ``default_agent`` when running.
+    """
+    named_args: list[ast.NamedArg] = []
+    if strict_json is not None:
+        named_args.append(
+            ast.NamedArg(
+                name="strict_json",
+                value=ast.BoolLit(value=strict_json, span=_sp(), node_id=_nid()),
+                span=_sp(),
+                node_id=_nid(),
+            )
+        )
+    return ast.Call(
+        callee=ast.VarRef(name="ask", span=_sp(), node_id=_nid()),
+        args=(_template(_text_seg(text)),),
+        named_args=tuple(named_args),
         span=_sp(),
         node_id=_nid(),
     )
@@ -956,14 +980,14 @@ class TestValidationErrorsThroughRuntime:
         )
         let_x = _let(
             "x",
-            _agent_call("tracker", "Get issue."),
+            _ask_call("Get issue."),
             type_ann=_name_ty("Issue"),
         )
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (record_def, let_x),
                 # Valid JSON, but missing the required "severity" field.
-                named={"tracker": lambda req: '{"title": "Bug"}'},
+                default_agent=lambda req: '{"title": "Bug"}',
             )
         exc = exc_info.value.exc
         assert exc.type_name == "AgentParseError"
@@ -982,11 +1006,11 @@ class TestValidationErrorsThroughRuntime:
             _variant_def("Pass"),
             _variant_def("Fail", _field_def("issues", _list_ty(_text_ty()))),
         )
-        let_r = _let("r", _agent_call("rv", "Review."), type_ann=_name_ty("Review"))
+        let_r = _let("r", _ask_call("Review."), type_ann=_name_ty("Review"))
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (enum_def, let_r),
-                named={"rv": lambda req: '{"$case": "Nope"}'},
+                default_agent=lambda req: '{"$case": "Nope"}',
             )
         exc = exc_info.value.exc
         ve = exc.fields["validation_errors"]
@@ -1011,24 +1035,37 @@ class TestValidationErrorsThroughRuntime:
             _field_def("title", _text_ty()),
             _field_def("severity", _int_ty()),
         )
-        from agm.agl.syntax.nodes import CallOptions, RetryPolicy
-
-        retry_call = ast.AgentCall(
-            agent="tracker",
-            options=CallOptions(
-                format=None,
-                strict_json=None,
-                parse_policy=RetryPolicy(extra=1, span=_sp(), node_id=_nid()),
-                span=_sp(),
-                node_id=_nid(),
+        # v2: on_parse_error: Retry(n: 1) as a named arg to ask().
+        retry_call = ast.Call(
+            callee=ast.VarRef(name="ask", span=_sp(), node_id=_nid()),
+            args=(_template(_text_seg("Get issue.")),),
+            named_args=(
+                ast.NamedArg(
+                    name="on_parse_error",
+                    value=ast.Constructor(
+                        qualifier=None,
+                        name="Retry",
+                        args=(
+                            ast.NamedArg(
+                                name="n",
+                                value=ast.IntLit(value=1, span=_sp(), node_id=_nid()),
+                                span=_sp(),
+                                node_id=_nid(),
+                            ),
+                        ),
+                        span=_sp(),
+                        node_id=_nid(),
+                    ),
+                    span=_sp(),
+                    node_id=_nid(),
+                ),
             ),
-            template=_template(_text_seg("Get issue.")),
             span=_sp(),
             node_id=_nid(),
         )
         let_x = _let("x", retry_call, type_ann=_name_ty("Issue"))
         with pytest.raises(AglRaise):
-            _run_with_json_codec((record_def, let_x), named={"tracker": agent})
+            _run_with_json_codec((record_def, let_x), default_agent=agent)
         # Two attempts: first sees no prior errors, retry sees the missing_field.
         assert len(seen) == 2
         assert seen[0] == []
@@ -1192,35 +1229,35 @@ class TestWorkflowRuntimeWireUp:
 
     def test_json_target_type_accepted_via_direct_ast(self) -> None:
         """A call targeting json type should pass type checking and execute."""
-        let_x = _let("x", _agent_call("prompter", "Get data."), type_ann=_json_ty())
+        let_x = _let("x", _ask_call("Get data."), type_ann=_json_ty())
         scope = _run_with_json_codec(
-            (let_x,), named={"prompter": lambda req: '{"x": 1}'}
+            (let_x,), default_agent=lambda req: '{"x": 1}'
         )
         x = scope.snapshot()["x"]
         assert isinstance(x, JsonValue)
 
     def test_int_target_accepted_via_json_codec(self) -> None:
-        let_n = _let("n", _agent_call("fetcher", "Get number."), type_ann=_int_ty())
-        scope = _run_with_json_codec((let_n,), named={"fetcher": lambda req: "42"})
+        let_n = _let("n", _ask_call("Get number."), type_ann=_int_ty())
+        scope = _run_with_json_codec((let_n,), default_agent=lambda req: "42")
         assert scope.snapshot()["n"] == IntValue(42)
 
     def test_bool_target_accepted(self) -> None:
-        let_b = _let("b", _agent_call("oracle", "Is it true?"), type_ann=_bool_ty())
+        let_b = _let("b", _ask_call("Is it true?"), type_ann=_bool_ty())
         scope = _run_with_json_codec(
-            (let_b,), named={"oracle": lambda req: "true"}
+            (let_b,), default_agent=lambda req: "true"
         )
         assert scope.snapshot()["b"] == BoolValue(True)
 
     def test_decimal_target_accepted(self) -> None:
-        let_d = _let("d", _agent_call("ratioer", "Get ratio."), type_ann=_dec_ty())
-        scope = _run_with_json_codec((let_d,), named={"ratioer": lambda req: "1.5"})
+        let_d = _let("d", _ask_call("Get ratio."), type_ann=_dec_ty())
+        scope = _run_with_json_codec((let_d,), default_agent=lambda req: "1.5")
         d = scope.snapshot()["d"]
         assert isinstance(d, DecimalValue)
         assert d.value == Decimal("1.5")
 
     def test_record_target_accepted_via_json_codec(self) -> None:
         # record Issue; title: text; severity: int
-        # let x: Issue = tracker "Get issue."
+        # let x: Issue = ask "Get issue."
         record_def = _record_def(
             "Issue",
             _field_def("title", _text_ty()),
@@ -1228,12 +1265,12 @@ class TestWorkflowRuntimeWireUp:
         )
         let_x = _let(
             "x",
-            _agent_call("tracker", "Get issue."),
+            _ask_call("Get issue."),
             type_ann=_name_ty("Issue"),
         )
         scope = _run_with_json_codec(
             (record_def, let_x),
-            named={"tracker": lambda req: '{"title": "Bug", "severity": 5}'},
+            default_agent=lambda req: '{"title": "Bug", "severity": 5}',
         )
         x = scope.snapshot()["x"]
         assert isinstance(x, RecordValue)
@@ -1241,7 +1278,7 @@ class TestWorkflowRuntimeWireUp:
 
     def test_enum_target_accepted_via_json_codec(self) -> None:
         # enum Review | Pass | Fail(issues: list[text])
-        # let r: Review = reviewer "Review."
+        # let r: Review = ask "Review."
         enum_def = _enum_def(
             "Review",
             _variant_def("Pass"),
@@ -1249,12 +1286,12 @@ class TestWorkflowRuntimeWireUp:
         )
         let_r = _let(
             "r",
-            _agent_call("reviewer", "Review."),
+            _ask_call("Review."),
             type_ann=_name_ty("Review"),
         )
         scope = _run_with_json_codec(
             (enum_def, let_r),
-            named={"reviewer": lambda req: '{"$case": "Pass"}'},
+            default_agent=lambda req: '{"$case": "Pass"}',
         )
         r = scope.snapshot()["r"]
         assert isinstance(r, EnumValue)
@@ -1263,11 +1300,11 @@ class TestWorkflowRuntimeWireUp:
     def test_list_target_accepted(self) -> None:
         let_xs = _let(
             "xs",
-            _agent_call("lister", "List items."),
+            _ask_call("List items."),
             type_ann=_list_ty(_text_ty()),
         )
         scope = _run_with_json_codec(
-            (let_xs,), named={"lister": lambda req: '["a", "b"]'}
+            (let_xs,), default_agent=lambda req: '["a", "b"]'
         )
         xs = scope.snapshot()["xs"]
         assert isinstance(xs, ListValue)
@@ -1276,11 +1313,11 @@ class TestWorkflowRuntimeWireUp:
     def test_dict_target_accepted(self) -> None:
         let_d = _let(
             "d",
-            _agent_call("dicter", "Dict."),
+            _ask_call("Dict."),
             type_ann=_dict_ty(_text_ty()),
         )
         scope = _run_with_json_codec(
-            (let_d,), named={"dicter": lambda req: '{"k": "v"}'}
+            (let_d,), default_agent=lambda req: '{"k": "v"}'
         )
         d = scope.snapshot()["d"]
         assert isinstance(d, DictValue)
@@ -1294,14 +1331,14 @@ class TestWorkflowRuntimeWireUp:
             received.append(req)
             return '{"title": "X", "severity": 1}'
 
-        # record Issue; title: text; severity: int; let x: Issue = tracker "Fetch."
+        # record Issue; title: text; severity: int; let x: Issue = ask "Fetch."
         record_def = _record_def(
             "Issue",
             _field_def("title", _text_ty()),
             _field_def("severity", _int_ty()),
         )
-        let_x = _let("x", _agent_call("tracker", "Fetch."), type_ann=_name_ty("Issue"))
-        _run_with_json_codec((record_def, let_x), named={"tracker": agent})
+        let_x = _let("x", _ask_call("Fetch."), type_ann=_name_ty("Issue"))
+        _run_with_json_codec((record_def, let_x), default_agent=agent)
         assert received, "agent was not called"
         req = received[0]
         assert req.output_contract is not None
@@ -1315,12 +1352,10 @@ class TestWorkflowRuntimeWireUp:
             _field_def("title", _text_ty()),
             _field_def("severity", _int_ty()),
         )
-        let_x = _let("x", _agent_call("tracker", "Get."), type_ann=_name_ty("Issue"))
+        let_x = _let("x", _ask_call("Get."), type_ann=_name_ty("Issue"))
         scope = _run_with_json_codec(
             (record_def, let_x),
-            named={
-                "tracker": lambda req: '```json\n{"title": "Flaky", "severity": 2}\n```'
-            },
+            default_agent=lambda req: '```json\n{"title": "Flaky", "severity": 2}\n```',
         )
         x = scope.snapshot()["x"]
         assert isinstance(x, RecordValue)
@@ -1330,52 +1365,53 @@ class TestWorkflowRuntimeWireUp:
         """strict_json=True: fenced JSON → AgentParseError."""
         let_n = _let(
             "n",
-            _agent_call("counter", "Count.", strict_json=True),
+            _ask_call("Count.", strict_json=True),
             type_ann=_int_ty(),
         )
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                named={"counter": lambda req: "```json\n6\n```"},
+                default_agent=lambda req: "```json\n6\n```",
             )
         exc = exc_info.value.exc
         assert exc.type_name == "AgentParseError"
 
     def test_runtime_default_strict_json_applies(self) -> None:
         """default_strict_json=True on runtime applies to calls without explicit option."""
-        let_n = _let("n", _agent_call("counter", "Count."), type_ann=_int_ty())
+        let_n = _let("n", _ask_call("Count."), type_ann=_int_ty())
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                named={"counter": lambda req: "```json\n5\n```"},
+                default_agent=lambda req: "```json\n5\n```",
                 strict_json=True,
             )
         exc = exc_info.value.exc
         assert exc.type_name == "AgentParseError"
 
     def test_parse_error_becomes_agent_parse_error(self) -> None:
-        let_n = _let("n", _agent_call("fetcher", "Num."), type_ann=_int_ty())
+        let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                named={"fetcher": lambda req: "not json at all"},
+                default_agent=lambda req: "not json at all",
             )
         exc = exc_info.value.exc
         assert exc.type_name == "AgentParseError"
-        assert exc.fields.get("agent") == TextValue("fetcher")
+        # In v2 the agent field reflects the built-in "ask" call site (default agent path).
+        assert exc.fields.get("agent") == TextValue("ask")
 
     def test_agent_parse_error_has_target_type_field(self) -> None:
-        let_n = _let("n", _agent_call("badfetch", "Num."), type_ann=_int_ty())
+        let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())
         with pytest.raises(AglRaise) as exc_info:
-            _run_with_json_codec((let_n,), named={"badfetch": lambda req: "bad"})
+            _run_with_json_codec((let_n,), default_agent=lambda req: "bad")
         exc = exc_info.value.exc
         assert exc.type_name == "AgentParseError"
         assert "target_type" in exc.fields
 
     def test_decimal_exactness_end_to_end(self) -> None:
         """Decimal stays exact through the full runtime pipeline."""
-        let_d = _let("d", _agent_call("src", "Get ratio."), type_ann=_dec_ty())
-        scope = _run_with_json_codec((let_d,), named={"src": lambda req: "1.5"})
+        let_d = _let("d", _ask_call("Get ratio."), type_ann=_dec_ty())
+        scope = _run_with_json_codec((let_d,), default_agent=lambda req: "1.5")
         d = scope.snapshot()["d"]
         assert isinstance(d, DecimalValue)
         assert d.value == Decimal("1.5")
@@ -1497,7 +1533,7 @@ class TestRecordEnumInputs:
     def test_record_input_parsed_from_json_string(self) -> None:
         # record Issue; title: text; severity: int; input issue: Issue; print issue.title
         # Use direct-AST since record decl needs M2a parser.
-        from agm.agl.syntax.nodes import InputDecl, PrintStmt
+        from agm.agl.syntax.nodes import InputDecl, VarRef
 
         record_def = _record_def(
             "Issue",
@@ -1507,15 +1543,22 @@ class TestRecordEnumInputs:
         input_decl = InputDecl(
             name="issue", annotation=_name_ty("Issue"), span=_sp(), node_id=_nid()
         )
-        from agm.agl.syntax.nodes import VarRef
-
-        print_stmt = PrintStmt(
-            value=VarRef(name="issue", span=_sp(), node_id=_nid()),
+        # In v2 print is a Call expression, not a PrintStmt.
+        print_call = ast.Call(
+            callee=VarRef(name="print", span=_sp(), node_id=_nid()),
+            args=(VarRef(name="issue", span=_sp(), node_id=_nid()),),
+            named_args=(),
             span=_sp(),
             node_id=_nid(),
         )
         program = ast.Program(
-            body=(record_def, input_decl, print_stmt), span=_sp(), node_id=_nid()
+            body=ast.Block(
+                items=(record_def, input_decl, print_call),
+                span=_sp(),
+                node_id=_nid(),
+            ),
+            span=_sp(),
+            node_id=_nid(),
         )
         resolved = resolve(program, ambient_agents=ambient_agents_for(program))
         caps = HostCapabilities(
@@ -1563,7 +1606,7 @@ class TestRecordEnumInputs:
         assert parse_result.ok and parse_result.value is not None
         from agm.agl.syntax.nodes import InputDecl as ID
 
-        for stmt in program.body:
+        for stmt in program.body.items:
             if isinstance(stmt, ID):
                 root.define(stmt.name, parse_result.value, mutable=False, decl_span=stmt.span)
         interp.execute(root)
@@ -2285,7 +2328,7 @@ class TestRegisterCodec:
     def test_custom_codec_make_contract_and_parse_exercised_in_pipeline(self) -> None:
         """F3 (M3b): a custom codec selected via ``format:`` is genuinely used.
 
-        The codec is chosen with ``ask[format: tagcodec]`` on a ``text``
+        The codec is chosen with ``ask("Q", format: "tagcodec")`` on a ``text``
         target.  Both its ``make_contract`` (observable via the format
         instructions threaded into the agent request) and its ``parse``
         (observable as a distinctive prefix on the resulting binding) are
@@ -2336,7 +2379,8 @@ class TestRegisterCodec:
 
         rt = WorkflowRuntime(default_agent=agent)
         rt.register_codec(TagCodec())
-        result = rt.run('let y: text = ask[format: tagcodec] "Q"')
+        # v2: format: arg takes the codec name as a string; let needs a continuation.
+        result = rt.run('let y: text = ask("Q", format: "tagcodec")\ny')
         assert result.ok is True
         # parse() ran: the binding carries the codec's distinctive prefix.
         assert result.bindings["y"] == TextValue("PARSED::hello")
@@ -2363,7 +2407,8 @@ class TestRuntimeBuildsCodecKinds:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
 
-        src = 'let x: text = ask[format: altcodec] "Q"'
+        # v2: format: arg takes the codec name as a string; let needs a continuation.
+        src = 'let x: text = ask("Q", format: "altcodec")\nx'
 
         rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
         unreg = rt_unreg.run(src)

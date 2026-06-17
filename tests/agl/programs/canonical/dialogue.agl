@@ -8,21 +8,22 @@ input problem
 agent researcher
 agent critic
 
-var proposal: Turn = researcher[on_parse_error: retry[2]] "Propose a solution for ${problem}."
+var proposal: Turn = ask("Propose a solution for ${problem}.", agent: researcher, on_parse_error: Retry(n: 2))
 var final_answer: text = ""
 
 do[6]
   case proposal of
     | Continue(message) =>
-        let critique: Turn = critic[on_parse_error: retry[2]] "Critique this proposal:\n${message}"
-        set proposal = researcher[on_parse_error: retry[2]] "Revise using critique:\n${critique}"
+        let critique: Turn = ask("Critique this proposal:\n${message}", agent: critic, on_parse_error: Retry(n: 2))
+        set proposal = ask("Revise using critique:\n${critique}", agent: researcher, on_parse_error: Retry(n: 2))
 
-    | _ => pass
+    | _ => ()
 
 until proposal is Done
 
 case proposal of
-  | Done(answer) => set final_answer = answer
-  | _ => pass
+  | Done(answer) =>
+      set final_answer = answer
+  | _ => ()
 
 print final_answer

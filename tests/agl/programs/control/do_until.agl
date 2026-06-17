@@ -9,11 +9,11 @@ var rounds: int = 0
 
 do[4]
   set rounds = rounds + 1
-  let verdict = oracle "Round ${rounds}: have ${hits} of ${target}."
+  let verdict = ask("Round ${rounds}: have ${hits} of ${target}.", agent: oracle)
   if verdict = "hit" =>
     set hits = hits + 1
   | else =>
-    pass
+    ()
 until hits >= target
 print rounds
 print hits

@@ -91,3 +91,12 @@ static error.
   lexer tokens, grammar, transformer) done + committed (588c548, dcec293). S2
   (scope) done + committed (08cfe48). Both reviewed, fixes applied, 100% cov.
 - 2026-06-17: starting S3 (typecheck), split S3a/S3b.
+- 2026-06-17: S3 (typecheck) done + committed (40a0d2d). S4 (eval) done +
+  committed (6c64017). S5 (runtime+REPL) done + committed (0899a58). All
+  reviewed (Opus), findings fixed (incl. a BLOCKER in S3b call dispatch, a
+  BLOCKER in S4 structured-exec, 2 BLOCKERs in S5b REPL render).
+- 2026-06-17: S6 (corpus + e2e + docs) done — 38 programs + 80 rejections + new
+  functions/ category migrated to v2; remaining unit tests migrated; full
+  reference + arch + README + commands + grammar docs rewritten. Corpus review
+  caught 13 green-faking masked type/ rejections (fixed). **`just check` GREEN:
+  4782 tests, 100% coverage, ruff + mypy clean.** Plan complete.

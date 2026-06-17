@@ -12,10 +12,13 @@ print (if | score >= 90 => "high" | else => "low")
 let threshold: decimal = if score >= 50 => 1 | else => 0
 print threshold
 
-# leading-pipe if-statement (multi-line aligned form)
+# leading-pipe if-statement (multi-line aligned form) with indented set bodies
 var status: text = ""
 if
-| score >= 90 => set status = "excellent"
-| score >= 50 => set status = "ok"
-| else => set status = "needs work"
+| score >= 90 =>
+    set status = "excellent"
+| score >= 50 =>
+    set status = "ok"
+| else =>
+    set status = "needs work"
 print status

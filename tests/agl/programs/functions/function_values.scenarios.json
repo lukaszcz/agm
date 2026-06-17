@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "all_function_value_forms",
+      "expect": {
+        "stdout": "pos\nneg\nzero\n8\n10\npos\nval=neg\n"
+      }
+    }
+  ]
+}

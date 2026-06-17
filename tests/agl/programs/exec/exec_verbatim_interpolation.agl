@@ -4,8 +4,8 @@
 input arg
 input k: int
 
-let quoted = exec "printf '%s|' ${arg}"
+let quoted: text = exec "printf '%s|' ${arg}"
 print quoted
 
-let digits = exec "printf '%s' ${k}"
+let digits: text = exec "printf '%s' ${k}"
 print digits

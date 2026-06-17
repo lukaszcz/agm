@@ -1,0 +1,17 @@
+# Optional arguments via default values; named-argument calls.
+input msg: text
+
+def tag_text(text_val: text, prefix: text = "INFO", suffix: text = "") -> text =
+  "[" + prefix + "] " + text_val + suffix
+
+# Called with only required arg — both defaults apply.
+print(tag_text(msg))
+
+# Override just prefix by name.
+print(tag_text(msg, prefix: "WARN"))
+
+# Override both optional args by name.
+print(tag_text(msg, prefix: "ERR", suffix: "!"))
+
+# Fixed text, explicit prefix only.
+print(tag_text("done", prefix: "OK"))

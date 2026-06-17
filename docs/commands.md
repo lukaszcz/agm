@@ -410,7 +410,7 @@ Options:
   declared type's schema. A missing or undeclared input, or one that fails to parse/validate,
   is a host invocation error reported before any agent runs.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences, prose, or
-  repair). Overridable per call site with the `strict_json` call option.
+  repair). Overridable per call site with the `strict_json:` named argument to `ask`.
 - `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers exactly
   one JSON value from chatty output (stripping fences/prose, repairing trivially malformed
   JSON), then validates it strictly against the schema. The recovered (normalized) value is
@@ -426,7 +426,7 @@ Options:
   `[exec] log = true` config setting.
   `--log`, `--log-file`, and `--no-log` are mutually exclusive (at most one may be given).
 - `--dry-run`: Run the full static pipeline, input validation, and contract
-  materialization, then stop before executing any statement (static errors exit 1; a clean
+  materialization, then stop before evaluating any expression (static errors exit 1; a clean
   check exits 0 with no program output).  When the check succeeds and one or more agent-call
   or `exec` sites exist, the static call-site inventory is printed to stdout:
 
@@ -510,7 +510,7 @@ and is never treated as a per-command override.
 #### Source-level config pragmas
 
 An AgL program may set exec options as **config pragmas** in the header (before any
-other statement). Pragmas override config-file settings; CLI flags override pragmas.
+other item). Pragmas override config-file settings; CLI flags override pragmas.
 
 ```agl
 config log = true             # enable trace logging for this program
@@ -573,7 +573,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 | `:inputs` | List declared inputs and their current values |
 | `:set name=value` | Supply a host input value; `:set echo on\|off` toggles echoing |
 | `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
-| `:load FILE` | Run an `.agl` file's statements into the session, one per entry |
+| `:load FILE` | Run an `.agl` file's items into the session, one per entry |
 | `:save FILE` | Write the accumulated session source to a file |
 
 Press Ctrl-C to cancel the current entry without exiting. During a live agent

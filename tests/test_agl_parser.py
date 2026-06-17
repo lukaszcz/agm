@@ -1488,3 +1488,122 @@ class TestParserErrorCoverage:
         """A character the lexer cannot tokenize raises AglSyntaxError."""
         with pytest.raises(AglSyntaxError):
             parse("@@@")
+
+
+# ---------------------------------------------------------------------------
+# errors.py coverage gap tests
+# ---------------------------------------------------------------------------
+
+
+class TestAglSyntaxErrorSourceSpan:
+    """Covers AglSyntaxError.source_span (lines 71-72)."""
+
+    def test_source_span_returns_span(self) -> None:
+        """source_span returns the same SourceSpan object as .span."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("x == y")
+        err = exc_info.value
+        assert err.span is not None
+        assert err.source_span is err.span
+
+    def test_source_span_is_1based(self) -> None:
+        """source_span on a parse error has a valid 1-based line and column."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("x == y")
+        span = exc_info.value.source_span
+        assert span.start_line >= 1
+        assert span.start_col >= 1
+
+
+class TestInlineCompoundElseBranch:
+    """Covers _make_inline_compound_error else branch (line 148).
+
+    Line 148 is the else of the ``if stmt_context / elif keyword=='case'``
+    dispatch.  It fires when the unexpected inline-blocked token is NOT
+    ``case`` AND the parser is in an *expression* context (stmt_context=False),
+    i.e. ``if`` appearing as an operand inside an arithmetic or unary
+    expression.  The message is identical to the stmt_context=True branch
+    but reaches a different code path.
+    """
+
+    def test_inline_if_in_arithmetic_expression(self) -> None:
+        """`1 + if x => y` triggers the else branch with stmt_context=False."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("1 + if x => y")
+        msg = str(exc_info.value)
+        assert "`if` is not allowed inline here" in msg
+        assert "indented block" in msg
+
+    def test_inline_if_after_unary_not(self) -> None:
+        """`not if x => y` also gives stmt_context=False for the `if` token."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("not if x => y")
+        msg = str(exc_info.value)
+        assert "`if` is not allowed inline here" in msg
+
+
+class TestSyntaxErrorFromLarkDirect:
+    """Covers syntax_error_from_lark handlers not reachable via parse_program.
+
+    The custom AglLexer pre-empts Lark's character-level lexer, so
+    UnexpectedCharacters, UnexpectedEOF, and generic LarkError are never
+    raised through the normal parse path.  We call the pure mapping helper
+    directly with minimally-constructed Lark exception instances.
+    """
+
+    def test_unexpected_characters_message(self) -> None:
+        """UnexpectedCharacters maps to 'Unexpected character.' with a 1-based span."""
+        from lark.exceptions import UnexpectedCharacters
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        # seq='hello', lex_pos=2, line=3, column=5
+        exc = UnexpectedCharacters("hello", 2, 3, 5)
+        err = syntax_error_from_lark(exc)
+        assert str(err) == "Unexpected character."
+        assert err.span is not None
+        assert err.span.start_line == 3
+        assert err.span.start_col == 5
+
+    def test_unexpected_characters_span_width_one(self) -> None:
+        """The span produced for UnexpectedCharacters is exactly one character wide."""
+        from lark.exceptions import UnexpectedCharacters
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        exc = UnexpectedCharacters("abc", 1, 1, 2)
+        err = syntax_error_from_lark(exc)
+        span = err.span
+        assert span is not None
+        assert span.end_col == span.start_col + 1
+        assert span.end_offset == span.start_offset + 1
+
+    def test_unexpected_eof_message(self) -> None:
+        """UnexpectedEOF maps to 'Unexpected end of input.' with (1,1) fallback span."""
+        from lark.exceptions import UnexpectedEOF
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        exc = UnexpectedEOF([])
+        err = syntax_error_from_lark(exc)
+        assert str(err) == "Unexpected end of input."
+        span = err.span
+        assert span is not None
+        assert span.start_line == 1
+        assert span.start_col == 1
+        assert span.start_offset == 0
+
+    def test_generic_lark_error_fallback(self) -> None:
+        """A plain LarkError falls back to str(exc) as the message with (1,1) span."""
+        from lark.exceptions import LarkError
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        message = "some unexpected grammar state"
+        exc = LarkError(message)
+        err = syntax_error_from_lark(exc)
+        assert str(err) == message
+        span = err.span
+        assert span is not None
+        assert span.start_line == 1
+        assert span.start_col == 1

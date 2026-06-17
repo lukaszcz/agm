@@ -10,7 +10,7 @@ if mode = "shadow" =>
 | mode = "plain" =>
   set trail = "branch kept ${x}"
 | else =>
-  pass
+  ()
 
 print trail
 print "after ${x}"

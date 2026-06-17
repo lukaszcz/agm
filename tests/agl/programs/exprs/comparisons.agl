@@ -11,21 +11,21 @@ input x: int
 input y: decimal
 input word
 
-print x = 3
-print x != 3
-print x < 4
-print x <= 3
-print x > 2
-print x >= 4
-print x = y
-print word < "mango"
-print word = "kiwi"
-print [1, 2] = [1, 2]
-print {a: 1} = {a: 1}
-print true != false
-print P(n: 1) = P(n: 1)
-print P(n: 1) != P(n: 2)
-print E.A = E.A
-print E.B(t: "x") = E.B(t: "y")
+print(x = 3)
+print(x != 3)
+print(x < 4)
+print(x <= 3)
+print(x > 2)
+print(x >= 4)
+print(x = y)
+print(word < "mango")
+print(word = "kiwi")
+print([1, 2] = [1, 2])
+print({a: 1} = {a: 1})
+print(true != false)
+print(P(n: 1) = P(n: 1))
+print(P(n: 1) != P(n: 2))
+print(E.A = E.A)
+print(E.B(t: "x") = E.B(t: "y"))
 let same = (x = 3)
 print same

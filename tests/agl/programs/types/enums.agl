@@ -9,7 +9,7 @@ input fallback
 
 agent worker
 
-let first: Outcome = worker "Attempt the task."
+let first: Outcome = ask("Attempt the task.", agent: worker)
 
 if first is Done => print "done"
 | first is not Failed => print "not failed"

@@ -7,11 +7,11 @@ input k: int
 let words = ["alpha", "beta", "gamma"]
 let scores = {alpha: 1, beta: 2}
 
-print needle in words
-print k in numbers
-print needle in scores
-print needle in "alphabet soup"
-print not (needle in words)
-print needle in words and k in numbers
-print needle in words or k in numbers
-print not k in numbers or (k > 0 and k < 10)
+print(needle in words)
+print(k in numbers)
+print(needle in scores)
+print(needle in "alphabet soup")
+print(not (needle in words))
+print(needle in words and k in numbers)
+print(needle in words or k in numbers)
+print(not k in numbers or (k > 0 and k < 10))

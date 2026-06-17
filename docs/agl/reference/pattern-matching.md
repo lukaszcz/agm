@@ -28,7 +28,7 @@ Matches anything, binds nothing:
 ```agl
 case result of
   | Complete(output) => set artifact = output
-  | _ => pass
+  | _ => ()
 ```
 
 ### Variable binder
@@ -128,6 +128,6 @@ when you need the payload:
 until review is Pass
 
 case review of
-  | Fail(issues) => set artifact = impl "Fix ${issues}"
-  | Pass => pass
+  | Fail(issues) => set artifact = ask("Fix ${issues}", agent: impl)
+  | Pass => ()
 ```

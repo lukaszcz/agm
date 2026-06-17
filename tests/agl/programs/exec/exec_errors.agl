@@ -3,7 +3,7 @@
 input mode
 
 try
-  let out = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
+  let out: text = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
   print out
 catch ExecError as e =>
   print "failed code ${e.exit_code}"
@@ -12,7 +12,8 @@ catch ExecError as e =>
   print "timed ${e.timed_out}"
 
 if mode = "uncaught" =>
-  exec "false"
+  let _: text = exec "false"
+  ()
 | else =>
   print "skip"
 print "tail"

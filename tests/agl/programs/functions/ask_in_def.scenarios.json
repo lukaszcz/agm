@@ -1,0 +1,53 @@
+{
+  "scenarios": [
+    {
+      "name": "both_calls_pass_first_try",
+      "inputs": {"topic": "docs"},
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "true\ntrue\n-1\n",
+        "calls": {"reviewer": 2},
+        "prompts": [
+          {"agent": "reviewer", "call": 0, "contains": ["Review this document:", "docs"]},
+          {"agent": "reviewer", "call": 1, "contains": ["Review this document:", "docs"]}
+        ]
+      }
+    },
+    {
+      "name": "first_call_aborts_on_bad_response",
+      "inputs": {"topic": "chapter"},
+      "agents": {
+        "reviewer": ["not valid json at all"]
+      },
+      "expect": {
+        "stdout": "",
+        "calls": {"reviewer": 1},
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {"agent": "reviewer", "attempts": 1, "target_type": "Verdict"}
+        }
+      }
+    },
+    {
+      "name": "retry_call_recovers_after_two_bad_responses",
+      "inputs": {"topic": "spec"},
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "bad response 1",
+          "bad response 2",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "true\ntrue\n-1\n",
+        "calls": {"reviewer": 4}
+      }
+    }
+  ]
+}

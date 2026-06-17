@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 1}}
+{"diagnostic": {"line": 1, "message_contains": ["Type mismatch", "int"]}}

@@ -3,5 +3,5 @@ enum R
   | Fail(issues: list[text])
 let r: R = Pass
 case r of
-  | Fail(x) => pass
-  | Pass => pass
+  | Fail(x) => ()
+  | Pass => ()

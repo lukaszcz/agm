@@ -2,3 +2,4 @@ record P
   n: int
   t: text
 let p = P(n: 1)
+p

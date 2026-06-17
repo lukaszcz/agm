@@ -31,7 +31,7 @@ print issue.weight
 print issue.author.name
 print issue.author.active
 
-let fetched: Issue = tracker "Fetch the top issue."
+let fetched: Issue = ask("Fetch the top issue.", agent: tracker)
 print fetched.title
 print fetched.severity
 

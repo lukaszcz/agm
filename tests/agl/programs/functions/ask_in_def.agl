@@ -1,0 +1,32 @@
+# ask(agent:) called from inside a user-defined function body.
+# Also exercises on_parse_error: Retry and the RecursionError depth limit
+# (caught with try/catch).
+input topic: text
+
+agent reviewer
+
+enum Verdict
+  | Pass
+  | Fail(issues: list[text])
+
+def review_once(doc: text) -> Verdict =
+  ask("Review this document: " + doc, agent: reviewer)
+
+def review_with_retry(doc: text) -> Verdict =
+  ask("Review this document: " + doc, agent: reviewer, on_parse_error: Retry(n: 2))
+
+# Direct call via function — result printed.
+let v1: Verdict = review_once(topic)
+print(v1 is Pass)
+
+# Retry-enabled call.
+let v2: Verdict = review_with_retry(topic)
+print(v2 is Pass)
+
+# RecursionError caught inside try/catch.
+def infinite(n: int) -> int = infinite(n + 1)
+let depth_result = try
+  infinite(0)
+catch RecursionError =>
+  -1
+print depth_result

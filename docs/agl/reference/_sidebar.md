@@ -3,6 +3,7 @@
 - [Types](types.md)
 - [Bindings and scope](bindings-and-scope.md)
 - [Expressions](expressions.md)
+- [Functions](functions.md)
 - [Pattern matching](pattern-matching.md)
 - [Control flow](control-flow.md)
 - [Strings and interpolation](strings-and-interpolation.md)

@@ -8,10 +8,10 @@ agent builder
 agent critic
 
 try
-  let s: Spec = builder[on_parse_error: retry[1]] "Build the spec."
+  let s: Spec = ask("Build the spec.", agent: builder, on_parse_error: Retry(n: 1))
   print s.name
 catch AgentParseError as e =>
-  let advice = critic """
+  let advice = ask("""
   Agent ${e.agent} failed for type ${e.target_type} after ${e.attempts} attempts.
 
   Raw:
@@ -22,6 +22,6 @@ catch AgentParseError as e =>
 
   Schema:
   ${e.expected_schema}
-  """
+  """, agent: critic)
   print "advised"
   raise e

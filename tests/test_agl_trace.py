@@ -93,7 +93,7 @@ class TestTraceFileCreated:
         """RunResult.trace_path is the Path of the written JSONL file."""
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        result = rt.run('let x = 1', log_file=log_path)
+        result = rt.run('let x = 1\nx', log_file=log_path)
         assert result.ok
         assert result.trace_path == log_path
 
@@ -157,7 +157,7 @@ class TestExecCommandRecord:
     def test_exec_produces_exec_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run('let x: text = exec "echo hi"', log_file=log_path)
+        rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "exec_command" in kinds
@@ -165,7 +165,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_exit_code(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run('let x: text = exec "echo hi"', log_file=log_path)
+        rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -175,7 +175,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_stdout(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run('let x: text = exec "echo captured"', log_file=log_path)
+        rt.run('let x: text = exec "echo captured"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -185,7 +185,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_command(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run('let x: text = exec "echo hello"', log_file=log_path)
+        rt.run('let x: text = exec "echo hello"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -194,7 +194,7 @@ class TestExecCommandRecord:
     def test_exec_record_has_duration(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run('let x: text = exec "echo hello"', log_file=log_path)
+        rt.run('let x: text = exec "echo hello"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -208,7 +208,10 @@ class TestAgentCallRecord:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("reviewer", _agent_returning("good"))
-        rt.run('agent reviewer\nlet x: text = reviewer "check this"', log_file=log_path)
+        rt.run(
+            'agent reviewer\nlet x: text = ask("check this", agent: reviewer)\nx',
+            log_file=log_path,
+        )
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "agent_call_attempt" in kinds
@@ -217,7 +220,10 @@ class TestAgentCallRecord:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("critic", _agent_returning("ok"))
-        rt.run('agent critic\nlet x: text = critic "review"', log_file=log_path)
+        rt.run(
+            'agent critic\nlet x: text = ask("review", agent: critic)\nx',
+            log_file=log_path,
+        )
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -227,7 +233,10 @@ class TestAgentCallRecord:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("impl", _agent_returning("result"))
-        rt.run('agent impl\nlet x: text = impl "do work"', log_file=log_path)
+        rt.run(
+            'agent impl\nlet x: text = ask("do work", agent: impl)\nx',
+            log_file=log_path,
+        )
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -256,7 +265,7 @@ class TestRetryRecords:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'agent impl\nlet x: int = impl[on_parse_error: retry[2]] "get int"',
+            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -279,7 +288,7 @@ class TestRetryRecords:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'agent impl\nlet x: int = impl[on_parse_error: retry[2]] "get int"',
+            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -296,11 +305,9 @@ class TestRetryRecords:
             return AgentResponse(content="not json at all")
 
         rt.register_agent("impl", agent)
+        src = 'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 1))\nx'
         try:
-            rt.run(
-                'agent impl\nlet x: int = impl[on_parse_error: retry[1]] "get int"',
-                log_file=log_path,
-            )
+            rt.run(src, log_file=log_path)
         except SystemExit:
             pass
 
@@ -323,7 +330,9 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
+        result = rt.run(
+            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+        )
         assert not result.ok
         assert result.error is not None
 
@@ -339,7 +348,9 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
+        result = rt.run(
+            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+        )
         assert not result.ok
 
         records = _load_jsonl(log_path)
@@ -354,7 +365,9 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
+        result = rt.run(
+            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+        )
         assert not result.ok
 
         records = _load_jsonl(log_path)
@@ -372,7 +385,9 @@ class TestExceptionRecord:
             return AgentResponse(content="not json")
 
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nlet x: int = impl "get int"', log_file=log_path)
+        result = rt.run(
+            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+        )
         assert not result.ok
         assert result.error is not None
 
@@ -403,9 +418,10 @@ class TestExceptionRecord:
         result = rt.run(
             'agent impl\n'
             'try\n'
-            '  let x: int = impl "get int"\n'
+            '  let x: int = ask("get int", agent: impl)\n'
+            '  x\n'
             'catch AgentParseError as e =>\n'
-            '  let x = 0\n',
+            '  0\n',
             log_file=log_path,
         )
         assert result.ok
@@ -431,7 +447,7 @@ class TestBuiltinExceptionTraceId:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         # Uncaught division by zero → ArithmeticError escapes the program.
-        result = rt.run("let x = 1 / 0", log_file=log_path)
+        result = rt.run("let x = 1 / 0\nx", log_file=log_path)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "ArithmeticError"
@@ -451,7 +467,7 @@ class TestBuiltinExceptionTraceId:
         rt = WorkflowRuntime()
         # With logging OFF the trace_id still exists (references nothing; §8.1
         # only requires the field be present).
-        result = rt.run("let x = 1 / 0", log_file=None)
+        result = rt.run("let x = 1 / 0\nx", log_file=None)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "ArithmeticError"
@@ -462,7 +478,7 @@ class TestBuiltinExceptionTraceId:
         rt = WorkflowRuntime()
         # A case statement with no matching pattern raises MatchError.
         result = rt.run(
-            "case 5 of\n  | 0 => pass\n",
+            "case 5 of\n  | 0 => ()\n",
             log_file=None,
         )
         assert not result.ok
@@ -501,7 +517,7 @@ class TestRunBoundaryRecords:
     def test_run_start_record_present(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run("let x = 1", log_file=log_path)
+        rt.run("let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "run_start" in kinds
@@ -509,7 +525,7 @@ class TestRunBoundaryRecords:
     def test_run_end_record_present(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run("let x = 1", log_file=log_path)
+        rt.run("let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "run_end" in kinds
@@ -517,7 +533,7 @@ class TestRunBoundaryRecords:
     def test_run_start_before_run_end(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run("let x = 1", log_file=log_path)
+        rt.run("let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         start_idx = kinds.index("run_start")
@@ -554,13 +570,13 @@ class TestNoLog:
 
     def test_no_log_result_trace_path_is_none(self, tmp_path: Path) -> None:
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1", log_file=None)
+        result = rt.run("let x = 1\nx", log_file=None)
         assert result.trace_path is None
 
     def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
         rt = WorkflowRuntime()
         rt.register_agent("a", _agent_returning("hello"))
-        result = rt.run('agent a\nlet x: text = a "hi"', log_file=None)
+        result = rt.run('agent a\nlet x: text = ask("hi", agent: a)\nx', log_file=None)
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
         assert not jsonl_files
@@ -629,7 +645,7 @@ class TestDryRunNoTrace:
         """check_only=True (--dry-run) must produce no trace output."""
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1", log_file=log_path, check_only=True)
+        result = rt.run("let x = 1\nx", log_file=log_path, check_only=True)
         assert result.ok
         # No trace file created for dry-run.
         assert not log_path.exists()
@@ -637,7 +653,7 @@ class TestDryRunNoTrace:
     def test_dry_run_trace_path_is_none(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        result = rt.run("let x = 1", log_file=log_path, check_only=True)
+        result = rt.run("let x = 1\nx", log_file=log_path, check_only=True)
         assert result.trace_path is None
 
 
@@ -674,7 +690,7 @@ class TestSourceSpans:
     def test_exec_record_has_source_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run('let x: text = exec "echo hi"', log_file=log_path)
+        rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
         assert exec_recs
@@ -687,7 +703,7 @@ class TestSourceSpans:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
         rt.register_agent("impl", _agent_returning("hello"))
-        rt.run('agent impl\nlet x: text = impl "do work"', log_file=log_path)
+        rt.run('agent impl\nlet x: text = ask("do work", agent: impl)\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -888,7 +904,7 @@ class TestUnparseableFeedback:
 
         rt.register_agent("impl", agent)
         result = rt.run(
-            'agent impl\nlet x: int = impl[on_parse_error: retry[1]] "get int"',
+            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 1))\nx',
             log_file=log_path,
         )
         assert result.ok
@@ -915,7 +931,7 @@ class TestUnparseableFeedback:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'agent impl\nlet x: int = impl[on_parse_error: retry[1]] "get int"',
+            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 1))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -946,7 +962,7 @@ class TestUnparseableFeedback:
         bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
         with patch("agm.agl.runtime.codec.JsonCodec.parse", return_value=bare_fail):
             result = rt.run(
-                'agent impl\nlet x: int = impl[on_parse_error: abort] "q"'
+                'agent impl\nlet x: int = ask("q", agent: impl, on_parse_error: Abort())\nx'
             )
         # The program raises AgentParseError; run returns ok=False.
         assert not result.ok

@@ -4,3 +4,4 @@ enum Q
   | Other
 let r: R = Pass
 let b = r is Other
+b

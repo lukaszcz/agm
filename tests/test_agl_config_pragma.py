@@ -26,7 +26,7 @@ from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.runtime.runtime import WorkflowRuntime
 from agm.agl.scope import AglScopeError, resolve
 from agm.agl.scope.symbols import ResolvedProgram
-from agm.agl.syntax.nodes import ConfigPragma, PrintStmt
+from agm.agl.syntax.nodes import Call, ConfigPragma
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -91,8 +91,8 @@ class TestParserPragmaValues:
     def test_pragma_true(self) -> None:
         """config KEY = true parses to ConfigPragma with bool True."""
         prog = parse_program("config log = true")
-        assert len(prog.body) == 1
-        stmt = prog.body[0]
+        assert len(prog.body.items) == 1
+        stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigPragma)
         assert stmt.key == "log"
         assert stmt.value is True
@@ -101,7 +101,7 @@ class TestParserPragmaValues:
     def test_pragma_false(self) -> None:
         """config KEY = false parses to ConfigPragma with bool False."""
         prog = parse_program("config log = false")
-        stmt = prog.body[0]
+        stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigPragma)
         assert stmt.value is False
         assert isinstance(stmt.value, bool)
@@ -109,7 +109,7 @@ class TestParserPragmaValues:
     def test_pragma_int(self) -> None:
         """config KEY = N parses to ConfigPragma with int value."""
         prog = parse_program("config max_iters = 10")
-        stmt = prog.body[0]
+        stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigPragma)
         assert stmt.key == "max_iters"
         assert stmt.value == 10
@@ -119,7 +119,7 @@ class TestParserPragmaValues:
     def test_pragma_decimal(self) -> None:
         """config KEY = D parses to ConfigPragma with Decimal value."""
         prog = parse_program("config timeout = 30.5")
-        stmt = prog.body[0]
+        stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigPragma)
         assert stmt.key == "timeout"
         assert stmt.value == decimal.Decimal("30.5")
@@ -128,7 +128,7 @@ class TestParserPragmaValues:
     def test_pragma_string(self) -> None:
         """config KEY = "str" parses to ConfigPragma with str value."""
         prog = parse_program('config runner = "claude"')
-        stmt = prog.body[0]
+        stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigPragma)
         assert stmt.key == "runner"
         assert stmt.value == "claude"
@@ -141,17 +141,18 @@ class TestParserPragmaValues:
             "config max_iters = 5\n"
             'config runner = "local"\n'
         )
-        assert len(prog.body) == 3
-        assert all(isinstance(s, ConfigPragma) for s in prog.body)
-        keys = [s.key for s in prog.body if isinstance(s, ConfigPragma)]
+        assert len(prog.body.items) == 3
+        assert all(isinstance(s, ConfigPragma) for s in prog.body.items)
+        keys = [s.key for s in prog.body.items if isinstance(s, ConfigPragma)]
         assert keys == ["log", "max_iters", "runner"]
 
     def test_pragma_then_statement(self) -> None:
-        """Pragmas followed by a non-pragma statement parse correctly."""
+        """Pragmas followed by a non-pragma expression parse correctly."""
         prog = parse_program("config log = true\nprint 1")
-        assert len(prog.body) == 2
-        assert isinstance(prog.body[0], ConfigPragma)
-        assert isinstance(prog.body[1], PrintStmt)
+        assert len(prog.body.items) == 2
+        assert isinstance(prog.body.items[0], ConfigPragma)
+        # In v2, ``print 1`` is a Call expression (not a PrintStmt).
+        assert isinstance(prog.body.items[1], Call)
 
     def test_interpolated_template_pragma_value_rejected(self) -> None:
         """An interpolated template as a pragma value is a syntax error."""
@@ -163,7 +164,7 @@ class TestParserPragmaValues:
     def test_config_pragma_spans_recorded(self) -> None:
         """ConfigPragma nodes carry non-trivial source spans."""
         prog = parse_program("config log = true")
-        stmt = prog.body[0]
+        stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigPragma)
         assert stmt.span.start_line == 1
         assert stmt.span.start_col == 1
@@ -199,9 +200,9 @@ class TestScopeHeaderOnly:
         _, msg = diag(err)
         assert "config" in msg
 
-    def test_pragma_after_pass_rejected(self) -> None:
-        """A pragma that follows a pass statement is a scope error."""
-        err = reject_scope('pass\nconfig log = true')
+    def test_pragma_after_unit_expr_rejected(self) -> None:
+        """A pragma that follows a unit expression (()) is a scope error."""
+        err = reject_scope('()\nconfig log = true')
         _, msg = diag(err)
         assert "config" in msg
 

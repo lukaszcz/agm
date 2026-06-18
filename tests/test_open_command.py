@@ -86,7 +86,6 @@ class TestQueueSetupAndFocusSession:
             pane_count=None,
             session_name="s",
             repo_path=tmp_path,
-            env={},
         )
 
         out = capsys.readouterr().out
@@ -98,9 +97,10 @@ class TestQueueSetupAndFocusSession:
         assert "tmux switch-client" not in out
 
     def test_not_detached_raises_system_exit(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         dry_run.set_enabled(True)
+        monkeypatch.delenv("TMUX", raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             queue_setup_and_focus_workspace_session(
@@ -108,7 +108,6 @@ class TestQueueSetupAndFocusSession:
                 pane_count=None,
                 session_name="s",
                 repo_path=tmp_path,
-                env={},
             )
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
@@ -130,7 +129,6 @@ class TestQueueSetupAndFocusSession:
                 pane_count=None,
                 session_name="s",
                 repo_path=tmp_path,
-                env={},
             )
 
 

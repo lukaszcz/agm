@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from agm.core import dry_run
@@ -49,16 +50,22 @@ def create_tmux_session(
     """Create a tmux session matching tmux.sh semantics."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
-    resolved_env = dict(os.environ if env is None else env)
+    if env is None:
+        resolved_env: dict[str, str] | None = None
+        process_env: Mapping[str, str] = os.environ
+    else:
+        resolved_env = dict(env)
+        process_env = resolved_env
     pane_total = validate_pane_count(["tmux", "open"], pane_count)
 
     tmux_env_args: list[str] = []
-    for name, value in _filter_env(resolved_env):
-        tmux_env_args.extend(["-e", f"{name}={value}"])
+    if resolved_env is not None:
+        for name, value in _filter_env(resolved_env):
+            tmux_env_args.extend(["-e", f"{name}={value}"])
 
     create_detached_session = detach
     switch_to_session = False
-    if resolved_env.get("TMUX") and not detach:
+    if process_env.get("TMUX") and not detach:
         create_detached_session = True
         switch_to_session = True
 

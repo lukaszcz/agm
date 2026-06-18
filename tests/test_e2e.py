@@ -6143,7 +6143,18 @@ class TestOpen:
         log = tmux_log.read_text()
         expected_dep_path = project / "deps" / "vyper-automation" / "main"
         assert expected_dep_path.is_dir()
-        assert f"-e VYPER_AUTOMATION={expected_dep_path}" in log
+        assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
+        result = subprocess.run(
+            [str(project / "worktrees" / "feat/test" / ".agent-files" / "agm-shell" / "shell")],
+            input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
+            cwd=project / "worktrees" / "feat/test",
+            env=_agm_env(env),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        assert str(expected_dep_path) in result.stdout
 
     def test_open_missing_branch_preserves_existing_dependency_config(
         self, tmp_path: Path, env: dict[str, str]
@@ -6165,7 +6176,18 @@ class TestOpen:
 
         log = tmux_log.read_text()
         expected_dep_path = project / "deps" / "vyper-automation" / "main"
-        assert f"-e VYPER_AUTOMATION={expected_dep_path}" in log
+        assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
+        result = subprocess.run(
+            [str(project / "worktrees" / "feat/test" / ".agent-files" / "agm-shell" / "shell")],
+            input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
+            cwd=project / "worktrees" / "feat/test",
+            env=_agm_env(env),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        assert str(expected_dep_path) in result.stdout
 
     def test_open_dry_run_prints_planned_commands_without_side_effects(
         self, tmp_path: Path, env: dict[str, str]
@@ -6339,9 +6361,19 @@ class TestOpen:
 
         run_agm(["open", "repo"], env=env, cwd=str(project))
 
+        subprocess.run(
+            [str(project / "repo" / ".agent-files" / "agm-shell" / "shell")],
+            input="exit\n",
+            cwd=project / "repo",
+            env=_agm_env(env),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
         assert (project / "env-sourced").exists()
 
-    def test_open_exports_config_override_for_existing_env_to_tmux(
+    def test_open_uses_current_env_for_tmux_and_workspace_shell_refreshes_config_env(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -6361,7 +6393,19 @@ class TestOpen:
         run_agm(["open", "repo"], env=env, cwd=str(project))
 
         log = tmux_log.read_text()
-        assert f"-e HOLDIR={project}/hold" in log
+        assert " -e " not in log
+        assert f"-e HOLDIR={project}/hold" not in log
+        result = subprocess.run(
+            [str(project / "repo" / ".agent-files" / "agm-shell" / "shell")],
+            input='printf "%s\\n" "$HOLDIR"\nexit\n',
+            cwd=project / "repo",
+            env=_agm_env(env),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        assert f"{project}/hold" in result.stdout
 
     def test_sources_branch_env_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)

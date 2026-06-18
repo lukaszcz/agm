@@ -138,7 +138,6 @@ def create_configured_workspace_session(
     pane_count: str | None,
     session_name: str,
     repo_path: Path,
-    env: dict[str, str],
     run_setup: bool,
 ) -> None:
     validate_pane_count(pane_count)
@@ -147,7 +146,6 @@ def create_configured_workspace_session(
         pane_count=pane_count,
         session_name=session_name,
         cwd=repo_path,
-        env=env,
         shell_command=str(ensure_workspace_shell(repo_path)),
     )
     if created_session is None:
@@ -157,11 +155,10 @@ def create_configured_workspace_session(
             session_name=created_session,
             command=["agm", "workspace", "setup"],
             cwd=repo_path,
-            env=env,
         )
     if detached:
         return
-    raise SystemExit(focus_tmux_session(session_name=created_session, cwd=repo_path, env=env))
+    raise SystemExit(focus_tmux_session(session_name=created_session, cwd=repo_path))
 
 
 def queue_setup_and_focus_workspace_session(
@@ -170,14 +167,12 @@ def queue_setup_and_focus_workspace_session(
     pane_count: str | None,
     session_name: str,
     repo_path: Path,
-    env: dict[str, str],
 ) -> None:
     create_configured_workspace_session(
         detached=detached,
         pane_count=pane_count,
         session_name=session_name,
         repo_path=repo_path,
-        env=env,
         run_setup=True,
     )
 
@@ -207,8 +202,8 @@ def open_workspace(
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
         ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
-    env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
     if branch is not None:
+        env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
         commit_config_dir_changes(
             proj_dir, f"chore: update config for {branch}",
             add_paths=[project_config_dir(proj_dir) / branch], env=env,
@@ -218,7 +213,6 @@ def open_workspace(
         pane_count=pane_count,
         session_name=session_name,
         repo_path=repo_path,
-        env=env,
         run_setup=False,
     )
 
@@ -261,7 +255,6 @@ def create_workspace(
         pane_count=pane_count,
         session_name=branch_session_name(proj_dir, branch),
         repo_path=repo_path,
-        env=env,
     )
 
 
@@ -300,7 +293,6 @@ def checkout_workspace(
         pane_count=pane_count,
         session_name=branch_session_name(proj_dir, branch),
         repo_path=repo_path,
-        env=env,
     )
 
 

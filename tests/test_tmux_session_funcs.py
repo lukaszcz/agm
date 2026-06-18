@@ -83,6 +83,25 @@ class TestCreateTmuxSessionWithEnvArgs:
         assert "-e" in out
         assert result == "s"
 
+    def test_detached_dry_run_with_env_none_does_not_expand_current_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _enable_dry_run()
+        monkeypatch.setenv("MY_CUSTOM_VAR", "value123")
+
+        result = create_tmux_session(
+            detach=True,
+            pane_count=None,
+            session_name="s",
+            cwd=tmp_path,
+            env=None,
+        )
+
+        out = capsys.readouterr().out
+        assert " -e " not in out
+        assert "MY_CUSTOM_VAR=value123" not in out
+        assert result == "s"
+
 
 # ===========================================================================
 # focus_tmux_session

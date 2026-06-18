@@ -17,6 +17,8 @@ Tests deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
@@ -30,18 +32,30 @@ from agm.agl.syntax.nodes import (
     Call,
     Case,
     Constructor,
+    DictEntry,
+    DictLit,
     Do,
+    FieldAccess,
     FuncDef,
     If,
+    IndexAccess,
+    IndexTarget,
     IntLit,
+    Item,
     Lambda,
     LetDecl,
+    ListLit,
     NamedArg,
     Param,
     ParamDecl,
     Program,
     Raise,
+    SetStmt,
+    SetTarget,
+    StringLit,
     Try,
+    UnitLit,
+    VarDecl,
     VarRef,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -2504,6 +2518,446 @@ class TestMisc:
             "    raise Abort(message: msg)"
         )
         assert r.resolved.program is not None
+
+
+class TestIndexTypechecking:
+    def _binding_ref(
+        self,
+        name: str,
+        *,
+        mutable: bool,
+        decl_node_id: int,
+        kind: BinderKind,
+    ) -> BindingRef:
+        return BindingRef(
+            name=name,
+            mutable=mutable,
+            decl_span=mk_span(),
+            decl_node_id=decl_node_id,
+            kind=kind,
+        )
+
+    def _check_items(
+        self,
+        items: tuple[Item, ...],
+        resolution: dict[int, BindingRef],
+    ) -> CheckedProgram:
+        sp = mk_span()
+        block = Block(items=items, span=sp, node_id=_mk_node_id())
+        program = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = _ResolvedProgram(
+            program=program,
+            resolution=resolution,
+            builtin_calls={},
+            root_scope=ScopeNode(node_id=program.node_id),
+        )
+        return check(resolved, default_capabilities())
+
+    def _list_decl_and_ref(
+        self, *, mutable: bool = False
+    ) -> tuple[LetDecl | VarDecl, VarRef, BindingRef]:
+        sp = mk_span()
+        decl_cls = VarDecl if mutable else LetDecl
+        decl = decl_cls(
+            name="xs",
+            type_ann=ListT(
+                elem=IntT(span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=ListLit(
+                elements=(
+                    IntLit(value=10, span=sp, node_id=_mk_node_id()),
+                    IntLit(value=20, span=sp, node_id=_mk_node_id()),
+                ),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        ref_expr = VarRef(name="xs", span=sp, node_id=_mk_node_id())
+        ref = self._binding_ref(
+            "xs",
+            mutable=mutable,
+            decl_node_id=decl.node_id,
+            kind=BinderKind.var_binding if mutable else BinderKind.let_binding,
+        )
+        return decl, ref_expr, ref
+
+    def _dict_decl_and_ref(
+        self, *, mutable: bool = False
+    ) -> tuple[LetDecl | VarDecl, VarRef, BindingRef]:
+        sp = mk_span()
+        decl_cls = VarDecl if mutable else LetDecl
+        decl = decl_cls(
+            name="d",
+            type_ann=DictT(
+                value=IntT(span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=DictLit(
+                entries=(
+                    DictEntry(
+                        key=StringLit(value="a", span=sp, node_id=_mk_node_id()),
+                        value=IntLit(value=1, span=sp, node_id=_mk_node_id()),
+                        span=sp,
+                        node_id=_mk_node_id(),
+                    ),
+                ),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        ref_expr = VarRef(name="d", span=sp, node_id=_mk_node_id())
+        ref = self._binding_ref(
+            "d",
+            mutable=mutable,
+            decl_node_id=decl.node_id,
+            kind=BinderKind.var_binding if mutable else BinderKind.let_binding,
+        )
+        return decl, ref_expr, ref
+
+    def test_list_index_returns_element_type(self) -> None:
+        sp = mk_span()
+        decl, obj, ref = self._list_decl_and_ref()
+        index = IndexAccess(
+            obj=obj,
+            index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        result = self._check_items((decl, cast(Item, index)), {obj.node_id: ref})
+        assert result.node_types[index.node_id] == IntType()
+
+    def test_dict_index_returns_value_type(self) -> None:
+        sp = mk_span()
+        decl, obj, ref = self._dict_decl_and_ref()
+        index = IndexAccess(
+            obj=obj,
+            index=StringLit(value="a", span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        result = self._check_items((decl, cast(Item, index)), {obj.node_id: ref})
+        assert result.node_types[index.node_id] == IntType()
+
+    def test_bad_index_operands_and_non_container_rejected(self) -> None:
+        sp = mk_span()
+        list_decl, list_obj, list_ref = self._list_decl_and_ref()
+        list_index = IndexAccess(
+            obj=list_obj,
+            index=StringLit(value="a", span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="expected 'int'"):
+            self._check_items((list_decl, cast(Item, list_index)), {list_obj.node_id: list_ref})
+
+        dict_decl, dict_obj, dict_ref = self._dict_decl_and_ref()
+        dict_index = IndexAccess(
+            obj=dict_obj,
+            index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="expected 'text'"):
+            self._check_items((dict_decl, cast(Item, dict_index)), {dict_obj.node_id: dict_ref})
+
+        decl = LetDecl(
+            name="n",
+            type_ann=IntT(span=sp, node_id=_mk_node_id()),
+            value=IntLit(value=1, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        obj = VarRef(name="n", span=sp, node_id=_mk_node_id())
+        ref = self._binding_ref(
+            "n",
+            mutable=False,
+            decl_node_id=decl.node_id,
+            kind=BinderKind.let_binding,
+        )
+        non_container = IndexAccess(
+            obj=obj,
+            index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="list or dict"):
+            self._check_items((decl, cast(Item, non_container)), {obj.node_id: ref})
+
+    def test_parsed_indexed_assignment_accepts_var_list(self) -> None:
+        result = accept_type("var xs = [1]\nset xs[0] = 2\nxs")
+        program = result.resolved.program
+        assert program is not None
+        final_expr = program.body.items[2]
+        assert isinstance(final_expr, VarRef)
+        assert result.node_types[final_expr.node_id] == ListType(elem=IntType())
+
+    def test_parsed_chained_indexed_assignment_records_intermediate_target_type(self) -> None:
+        result = accept_type("var matrix = [[1, 2]]\nset matrix[0][1] = 3\nmatrix")
+        program = result.resolved.program
+        assert program is not None
+
+        set_stmt = program.body.items[1]
+        assert isinstance(set_stmt, SetStmt)
+        target = set_stmt.target
+        assert isinstance(target, IndexTarget)
+        intermediate = target.obj
+        assert isinstance(intermediate, IndexAccess)
+        assert result.node_types[intermediate.node_id] == ListType(elem=IntType())
+
+        final_expr = program.body.items[2]
+        assert isinstance(final_expr, VarRef)
+        assert result.node_types[final_expr.node_id] == ListType(elem=ListType(elem=IntType()))
+
+    def test_parsed_indexed_assignment_rejects_non_container_root(self) -> None:
+        err = reject_type("var n = 1\nset n[0] = 2\nn")
+        assert "list or dict" in str(err)
+
+    def test_indexed_assignment_accepts_var_list_and_dict(self) -> None:
+        sp = mk_span()
+        list_decl, list_obj, list_ref = self._list_decl_and_ref(mutable=True)
+        list_set = SetStmt(
+            target=IndexTarget(
+                obj=list_obj,
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        self._check_items(
+            (list_decl, list_set),
+            {list_obj.node_id: list_ref, list_set.node_id: list_ref},
+        )
+
+        dict_decl, dict_obj, dict_ref = self._dict_decl_and_ref(mutable=True)
+        dict_set = SetStmt(
+            target=IndexTarget(
+                obj=dict_obj,
+                index=StringLit(value="a", span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        self._check_items(
+            (dict_decl, dict_set),
+            {dict_obj.node_id: dict_ref, dict_set.node_id: dict_ref},
+        )
+
+    def test_indexed_assignment_rejects_immutable_and_invalid_roots(self) -> None:
+        sp = mk_span()
+        decl, obj, ref = self._list_decl_and_ref()
+        let_set = SetStmt(
+            target=IndexTarget(
+                obj=obj,
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="mutable 'var'"):
+            self._check_items((decl, let_set), {obj.node_id: ref, let_set.node_id: ref})
+
+        mutable_decl, mutable_obj, mutable_ref = self._list_decl_and_ref(mutable=True)
+        field_set = SetStmt(
+            target=IndexTarget(
+                obj=FieldAccess(
+                    obj=mutable_obj,
+                    field="field",
+                    span=sp,
+                    node_id=_mk_node_id(),
+                ),
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="variable list or dict root"):
+            self._check_items(
+                (mutable_decl, field_set),
+                {
+                    mutable_obj.node_id: mutable_ref,
+                    field_set.node_id: mutable_ref,
+                },
+            )
+
+        temporary_set = SetStmt(
+            target=IndexTarget(
+                obj=ListLit(
+                    elements=(IntLit(value=1, span=sp, node_id=_mk_node_id()),),
+                    span=sp,
+                    node_id=_mk_node_id(),
+                ),
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="variable list or dict root"):
+            self._check_items(
+                (mutable_decl, temporary_set),
+                {temporary_set.node_id: mutable_ref},
+            )
+
+    def test_indexed_assignment_rejects_param_function_arg_and_non_container(self) -> None:
+        sp = mk_span()
+        param = ParamDecl(
+            name="xs",
+            annotation=ListT(
+                elem=IntT(span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            default=None,
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        param_obj = VarRef(name="xs", span=sp, node_id=_mk_node_id())
+        param_ref = self._binding_ref(
+            "xs",
+            mutable=False,
+            decl_node_id=param.node_id,
+            kind=BinderKind.param_binding,
+        )
+        param_set = SetStmt(
+            target=IndexTarget(
+                obj=param_obj,
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="mutable 'var'"):
+            self._check_items(
+                (param, param_set),
+                {param_obj.node_id: param_ref, param_set.node_id: param_ref},
+            )
+
+        fn_param = Param(
+            name="arg",
+            type_expr=ListT(
+                elem=IntT(span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            default=None,
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        arg_obj = VarRef(name="arg", span=sp, node_id=_mk_node_id())
+        arg_ref = self._binding_ref(
+            "arg",
+            mutable=False,
+            decl_node_id=fn_param.node_id,
+            kind=BinderKind.param_binding,
+        )
+        arg_set = SetStmt(
+            target=IndexTarget(
+                obj=arg_obj,
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        fn = FuncDef(
+            name="f",
+            params=(fn_param,),
+            return_type=UnitT(span=sp, node_id=_mk_node_id()),
+            body=Block(
+                items=(arg_set, UnitLit(span=sp, node_id=_mk_node_id())),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="mutable 'var'"):
+            self._check_items((fn,), {arg_obj.node_id: arg_ref, arg_set.node_id: arg_ref})
+
+        var_decl = VarDecl(
+            name="n",
+            type_ann=IntT(span=sp, node_id=_mk_node_id()),
+            value=IntLit(value=1, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        var_obj = VarRef(name="n", span=sp, node_id=_mk_node_id())
+        var_ref = self._binding_ref(
+            "n",
+            mutable=True,
+            decl_node_id=var_decl.node_id,
+            kind=BinderKind.var_binding,
+        )
+        non_container_set = SetStmt(
+            target=IndexTarget(
+                obj=var_obj,
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="list or dict"):
+            self._check_items(
+                (var_decl, non_container_set),
+                {var_obj.node_id: var_ref, non_container_set.node_id: var_ref},
+            )
+
+    def test_indexed_assignment_value_type_mismatch_rejected(self) -> None:
+        sp = mk_span()
+        decl, obj, ref = self._list_decl_and_ref(mutable=True)
+        stmt = SetStmt(
+            target=IndexTarget(
+                obj=obj,
+                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                span=sp,
+                node_id=_mk_node_id(),
+            ),
+            value=StringLit(value="nope", span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="expected 'int'"):
+            self._check_items((decl, stmt), {obj.node_id: ref, stmt.node_id: ref})
+
+    def test_invalid_direct_ast_set_target_rejected(self) -> None:
+        sp = mk_span()
+        stmt = SetStmt(
+            target=cast(SetTarget, UnitLit(span=sp, node_id=_mk_node_id())),
+            value=IntLit(value=1, span=sp, node_id=_mk_node_id()),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        with pytest.raises(AglTypeError, match="set target"):
+            self._check_items((stmt,), {})
 
 
 # ---------------------------------------------------------------------------

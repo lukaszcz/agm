@@ -11,6 +11,8 @@ deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from agm.agl.parser import parse_program
@@ -38,10 +40,12 @@ from agm.agl.syntax.nodes import (
     Item,
     Lambda,
     LetDecl,
+    NameTarget,
     Param,
     PatternField,
     Program,
     SetStmt,
+    SetTarget,
     StringLit,
     Template,
     Try,
@@ -125,7 +129,13 @@ def _make_var(name: str, value: Expr, line: int = 1) -> VarDecl:
 
 
 def _make_set(target: str, value: Expr, line: int = 1) -> SetStmt:
-    return SetStmt(target=target, value=value, span=_sp(line), node_id=_nid())
+    span = _sp(line)
+    return SetStmt(
+        target=NameTarget(name=target, span=span, node_id=_nid()),
+        value=value,
+        span=span,
+        node_id=_nid(),
+    )
 
 
 def _make_block(*items: Item, line: int = 1) -> Block:
@@ -377,6 +387,17 @@ class TestSetErrors:
         err = reject_program(funcdef, call_f)
         _, msg = diag(err)
         assert "parameter binding" in msg
+
+    def test_invalid_direct_ast_set_target_rejected(self) -> None:
+        set_bad = SetStmt(
+            target=cast(SetTarget, _make_unitlit()),
+            value=_make_intlit(1),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        err = reject_program(set_bad, _make_unitlit())
+        _, msg = diag(err)
+        assert "indexed assignment requires a variable list or dict root" in msg
 
     def test_set_on_function_binding_names_function(self) -> None:
         """Setting a def name is rejected."""

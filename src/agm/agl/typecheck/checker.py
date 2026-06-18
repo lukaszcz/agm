@@ -39,6 +39,7 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TypeGuard
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -71,6 +72,8 @@ from agm.agl.syntax.nodes import (
     FieldDef,
     FuncDef,
     If,
+    IndexAccess,
+    IndexTarget,
     InterpSegment,
     IntLit,
     IsTest,
@@ -80,6 +83,7 @@ from agm.agl.syntax.nodes import (
     ListLit,
     LiteralPattern,
     NamedArg,
+    NameTarget,
     NullLit,
     ParamDecl,
     Pattern,
@@ -146,6 +150,13 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
 # Built-in function names that user-defined defs may not shadow. Derived from
 # the single source of truth in ``scope.symbols`` so the two never drift.
 _BUILTIN_FUNC_NAMES: frozenset[str] = frozenset(BUILTIN_CALL_NAMES)
+
+
+_IndexLike = IndexAccess | IndexTarget
+
+
+def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
+    return isinstance(node, (IndexAccess, IndexTarget))
 
 
 # ---------------------------------------------------------------------------
@@ -533,10 +544,51 @@ class _Checker:
         self._env.set_binding_type(stmt.node_id, declared_type)
 
     def _check_set_stmt(self, stmt: SetStmt) -> None:
+        if isinstance(stmt.target, NameTarget):
+            ref = self._resolved.resolution[stmt.node_id]
+            target_type = self._require_binding_type(ref)
+            val_type = self._check_expr(stmt.value, expected=target_type)
+            self._assert_assignable(val_type, target_type, stmt.span)
+            return
+
+        if isinstance(stmt.target, IndexTarget):
+            self._check_indexed_set_stmt(stmt, stmt.target)
+            return
+
+        raise AglTypeError(
+            "set target must be a mutable variable or indexed mutable variable.",
+            span=stmt.span,
+        )
+
+    def _check_indexed_set_stmt(self, stmt: SetStmt, target: IndexTarget) -> None:
         ref = self._resolved.resolution[stmt.node_id]
-        target_type = self._require_binding_type(ref)
-        val_type = self._check_expr(stmt.value, expected=target_type)
-        self._assert_assignable(val_type, target_type, stmt.span)
+        if not ref.mutable:
+            raise AglTypeError(
+                f"Cannot assign through index of '{ref.name}': "
+                "indexed assignment requires a mutable 'var' binding.",
+                span=target.span,
+            )
+        root_type = self._require_binding_type(ref)
+        elem_type = self._check_index_target_type(target, root_type)
+        value_type = self._check_expr(stmt.value, expected=elem_type)
+        self._assert_assignable(value_type, elem_type, stmt.span)
+
+    def _check_index_target_type(self, target: IndexTarget, root_type: Type) -> Type:
+        container_type = self._check_index_target_container_type(target.obj, root_type)
+        return self._check_index_operand(container_type, target.index, span=target.span)
+
+    def _check_index_target_container_type(self, obj: Expr, root_type: Type) -> Type:
+        if isinstance(obj, VarRef):
+            return root_type
+        if isinstance(obj, IndexAccess):
+            container_type = self._check_index_target_container_type(obj.obj, root_type)
+            indexed_type = self._check_index_operand(container_type, obj.index, span=obj.span)
+            self._node_types[obj.node_id] = indexed_type
+            return indexed_type
+        raise AglTypeError(
+            "indexed assignment requires a variable list or dict root.",
+            span=obj.span,
+        )
 
     # ------------------------------------------------------------------
     # Expression type inference
@@ -598,6 +650,8 @@ class _Checker:
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
             return self._check_field_access(expr)
+        if _is_index_like(expr):
+            return self._check_index_access(expr)
         if isinstance(expr, Constructor):
             return self._check_constructor(expr, expected=expected)
         if isinstance(expr, ListLit):
@@ -1491,6 +1545,34 @@ class _Checker:
         raise AglTypeError(
             f"Field access requires a record or exception value; got '{obj_type!r}'.",
             span=node.span,
+        )
+
+    # --- index access ---
+
+    def _check_index_access(self, node: _IndexLike) -> Type:
+        obj_type = self._check_expr(node.obj, expected=None)
+        return self._check_index_operand(obj_type, node.index, span=node.span)
+
+    def _check_index_operand(
+        self,
+        obj_type: Type,
+        index: Expr,
+        *,
+        span: SourceSpan,
+    ) -> Type:
+        if isinstance(obj_type, ListType):
+            index_type = self._check_expr(index, expected=IntType())
+            self._assert_assignable(index_type, IntType(), index.span)
+            return obj_type.elem
+
+        if isinstance(obj_type, DictType):
+            index_type = self._check_expr(index, expected=TextType())
+            self._assert_assignable(index_type, TextType(), index.span)
+            return obj_type.value
+
+        raise AglTypeError(
+            f"indexing requires a list or dict; got '{obj_type!r}'.",
+            span=span,
         )
 
     # --- constructor ---

@@ -475,6 +475,23 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "scrutinee": JsonType(),
         },
     ),
+    "IndexError": ExceptionType(
+        name="IndexError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "index": IntType(),
+            "length": IntType(),
+        },
+    ),
+    "KeyError": ExceptionType(
+        name="KeyError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "key": TextType(),
+        },
+    ),
     "TypeError": ExceptionType(
         name="TypeError",
         fields={

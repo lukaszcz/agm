@@ -181,6 +181,25 @@ def test_load_workspace_env_exposes_repo_dir_to_sourced_scripts(
     assert loaded_env["CAPTURE_REPO_DIR"] == str(workspace_dir)
 
 
+def test_load_workspace_env_overrides_existing_env_from_env_sh(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    project = tmp_path / "proj"
+    config_dir = project / "config"
+    config_dir.mkdir(parents=True)
+    workspace_dir = project / "repo"
+    workspace_dir.mkdir()
+    env["HOLDIR"] = "/before"
+    (config_dir / "env.sh").write_text(
+        'export HOLDIR="$PROJ_DIR/hold"\n',
+        encoding="utf-8",
+    )
+
+    loaded_env = load_workspace_env(project, None, workspace_dir=workspace_dir, env=env)
+
+    assert loaded_env["HOLDIR"] == f"{project}/hold"
+
+
 def test_current_config_branch_ignores_cwd_from_other_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

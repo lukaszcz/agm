@@ -31,13 +31,14 @@ from agm.tmux.session import (
     create_tmux_session,
     focus_tmux_session,
     queue_command_in_session,
+    queue_shell_command_in_session,
 )
 from agm.tmux.session import validate_pane_count as validate_tmux_pane_count
 
 
-def validate_pane_count(pane_count: str | None) -> None:
+def validate_pane_count(pane_count: str | None) -> int:
     try:
-        validate_tmux_pane_count(["open"], pane_count)
+        return validate_tmux_pane_count(["open"], pane_count)
     except SystemExit as exc:
         if exc.code != 1:
             raise
@@ -52,14 +53,33 @@ def branch_path(proj_dir: Path, branch: str) -> Path:
     )
 
 
-def queue_setup_and_focus_workspace_session(
+def queue_env_refresh_in_session(
+    *,
+    pane_count: int,
+    session_name: str,
+    repo_path: Path,
+    env: dict[str, str],
+) -> None:
+    for pane_index in range(pane_count):
+        queue_shell_command_in_session(
+            session_name=session_name,
+            pane_index=pane_index,
+            shell_command='eval "$(agm config env)"',
+            cwd=repo_path,
+            env=env,
+        )
+
+
+def create_configured_workspace_session(
     *,
     detached: bool,
     pane_count: str | None,
     session_name: str,
     repo_path: Path,
     env: dict[str, str],
+    run_setup: bool,
 ) -> None:
+    pane_total = validate_pane_count(pane_count)
     created_session = create_tmux_session(
         detach=True,
         pane_count=pane_count,
@@ -69,15 +89,40 @@ def queue_setup_and_focus_workspace_session(
     )
     if created_session is None:
         raise AssertionError("detached tmux session creation did not return a session name")
-    queue_command_in_session(
+    queue_env_refresh_in_session(
+        pane_count=pane_total,
         session_name=created_session,
-        command=["agm", "workspace", "setup"],
-        cwd=repo_path,
+        repo_path=repo_path,
         env=env,
     )
+    if run_setup:
+        queue_command_in_session(
+            session_name=created_session,
+            command=["agm", "workspace", "setup"],
+            cwd=repo_path,
+            env=env,
+        )
     if detached:
         return
     raise SystemExit(focus_tmux_session(session_name=created_session, cwd=repo_path, env=env))
+
+
+def queue_setup_and_focus_workspace_session(
+    *,
+    detached: bool,
+    pane_count: str | None,
+    session_name: str,
+    repo_path: Path,
+    env: dict[str, str],
+) -> None:
+    create_configured_workspace_session(
+        detached=detached,
+        pane_count=pane_count,
+        session_name=session_name,
+        repo_path=repo_path,
+        env=env,
+        run_setup=True,
+    )
 
 
 def open_workspace(
@@ -111,12 +156,13 @@ def open_workspace(
             proj_dir, f"chore: update config for {branch}",
             add_paths=[project_config_dir(proj_dir) / branch], env=env,
         )
-    create_tmux_session(
-        detach=detached,
+    create_configured_workspace_session(
+        detached=detached,
         pane_count=pane_count,
         session_name=session_name,
-        cwd=repo_path,
+        repo_path=repo_path,
         env=env,
+        run_setup=False,
     )
 
 

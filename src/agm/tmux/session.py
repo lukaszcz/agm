@@ -216,6 +216,35 @@ def create_tmux_session(
     raise SystemExit(subprocess.run(args, cwd=current, env=resolved_env, check=False).returncode)
 
 
+def queue_shell_command_in_session(
+    *,
+    session_name: str,
+    shell_command: str,
+    pane_index: int = 0,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Queue a shell command in one pane of a tmux session."""
+
+    current = Path.cwd() if cwd is None else cwd.resolve()
+    resolved_env = dict(os.environ if env is None else env)
+    target = f"{session_name}:0.{pane_index}"
+    if dry_run.enabled():
+        dry_run.print_command(
+            ["tmux", "send-keys", "-t", target, shell_command, "C-m"],
+            cwd=current,
+        )
+        return
+    status = subprocess.run(
+        ["tmux", "send-keys", "-t", target, shell_command, "C-m"],
+        cwd=current,
+        env=resolved_env,
+        check=False,
+    ).returncode
+    if status != 0:
+        raise SystemExit(status)
+
+
 def queue_command_in_session(
     *,
     session_name: str,
@@ -223,25 +252,14 @@ def queue_command_in_session(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> None:
-    """Queue a shell command in the first pane of a tmux session."""
+    """Queue a command in the first pane of a tmux session."""
 
-    current = Path.cwd() if cwd is None else cwd.resolve()
-    resolved_env = dict(os.environ if env is None else env)
-    shell_command = " ".join(shlex.quote(part) for part in command)
-    if dry_run.enabled():
-        dry_run.print_command(
-            ["tmux", "send-keys", "-t", f"{session_name}:0.0", shell_command, "C-m"],
-            cwd=current,
-        )
-        return
-    status = subprocess.run(
-        ["tmux", "send-keys", "-t", f"{session_name}:0.0", shell_command, "C-m"],
-        cwd=current,
-        env=resolved_env,
-        check=False,
-    ).returncode
-    if status != 0:
-        raise SystemExit(status)
+    queue_shell_command_in_session(
+        session_name=session_name,
+        shell_command=" ".join(shlex.quote(part) for part in command),
+        cwd=cwd,
+        env=env,
+    )
 
 
 def focus_tmux_session(

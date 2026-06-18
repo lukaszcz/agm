@@ -14,6 +14,7 @@ from agm.commands.workspace.open import (
     create_workspace,
     open_or_create_workspace,
     open_workspace,
+    queue_env_refresh_in_session,
     queue_setup_and_focus_workspace_session,
     validate_pane_count,
 )
@@ -88,7 +89,9 @@ class TestQueueSetupAndFocusSession:
 
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
+        assert 'tmux send-keys -t s:0.0 \'eval "$(agm config env)"\' C-m' in out
         assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
+        assert out.index('eval "$(agm config env)"') < out.index("agm workspace setup")
         assert "tmux attach-session" not in out
         assert "tmux switch-client" not in out
 
@@ -108,7 +111,9 @@ class TestQueueSetupAndFocusSession:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
+        assert 'tmux send-keys -t s:0.0 \'eval "$(agm config env)"\' C-m' in out
         assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
+        assert out.index('eval "$(agm config env)"') < out.index("agm workspace setup")
         assert "tmux attach-session -t s" in out
 
     def test_raises_assertion_when_session_name_is_none(
@@ -125,6 +130,26 @@ class TestQueueSetupAndFocusSession:
                 repo_path=tmp_path,
                 env={},
             )
+
+
+class TestQueueEnvRefreshInSession:
+    def test_queues_config_env_refresh_for_each_pane(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        dry_run.set_enabled(True)
+
+        queue_env_refresh_in_session(
+            pane_count=3,
+            session_name="s",
+            repo_path=tmp_path,
+            env={},
+        )
+
+        out = capsys.readouterr().out
+        assert out.count('eval "$(agm config env)"') == 3
+        assert "tmux send-keys -t s:0.0" in out
+        assert "tmux send-keys -t s:0.1" in out
+        assert "tmux send-keys -t s:0.2" in out
 
 
 # ===========================================================================
@@ -254,6 +279,11 @@ class TestOpenSession:
             open_module,
             "load_workspace_env",
             lambda pd, branch, workspace_dir: worktree_env,
+        )
+        monkeypatch.setattr(
+            open_module,
+            "create_configured_workspace_session",
+            lambda **kw: None,
         )
 
         open_workspace(detached=True, pane_count=None, branch="feature", cwd=tmp_path)

@@ -1104,6 +1104,50 @@ def test_discover_current_project_dir_uses_proj_dir_env(tmp_path: Path) -> None:
     assert discover_current_project_dir(tmp_path, env={"PROJ_DIR": str(project)}) == project
 
 
+def test_current_workspace_or_project_root_prefers_cwd_project_over_stale_proj_dir_env(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    stale_project = tmp_path / "stale"
+    stale_repo = stale_project / "repo"
+    stale_repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=stale_repo, env=env, check=True)
+
+    current_project = tmp_path / "current"
+    current_repo = current_project / "repo"
+    current_repo.mkdir(parents=True)
+    (current_project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=current_repo, env=env, check=True)
+
+    result = current_workspace_or_project_root(
+        current_project,
+        env={"PROJ_DIR": str(stale_project)},
+    )
+
+    assert result == current_project
+
+
+def test_discover_current_project_dir_prefers_cwd_project_over_stale_proj_dir_env(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    stale_project = tmp_path / "stale"
+    stale_repo = stale_project / "repo"
+    stale_repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=stale_repo, env=env, check=True)
+
+    current_project = tmp_path / "current"
+    current_repo = current_project / "repo"
+    current_repo.mkdir(parents=True)
+    (current_project / "worktrees").mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=current_repo, env=env, check=True)
+
+    result = discover_current_project_dir(
+        current_project / "repo",
+        env={"PROJ_DIR": str(stale_project)},
+    )
+
+    assert result == current_project
+
+
 def test_current_workspace_or_project_root_uses_proj_dir_env_with_agm_dir(
     tmp_path: Path,
 ) -> None:

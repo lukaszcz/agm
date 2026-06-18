@@ -101,16 +101,27 @@ def _project_dir_from_env(env: Mapping[str, str] | None = None) -> Path | None:
     return Path(raw_project_dir)
 
 
+def _valid_project_dir_from_cwd(cwd: Path) -> Path | None:
+    for candidate in (cwd, *cwd.parents):
+        project_dir = _project_dir_from_workspace(candidate)
+        if project_dir is not None and is_project_dir(project_dir):
+            return project_dir
+    return None
+
+
 def current_workspace_or_project_root(
     cwd: Path | None = None, *, env: Mapping[str, str] | None = None
 ) -> Path:
     """Return the current AGM project, Git checkout root, or current directory."""
 
+    current = _resolved_cwd(cwd)
+    cwd_project_dir = _valid_project_dir_from_cwd(current)
+    if cwd_project_dir is not None:
+        return cwd_project_dir
+
     env_project_dir = _project_dir_from_env(env)
     if env_project_dir is not None:
         return env_project_dir
-
-    current = _resolved_cwd(cwd)
 
     for candidate in (current, *current.parents):
         project_dir = _project_dir_from_workspace(candidate)
@@ -129,11 +140,16 @@ def discover_current_project_dir(
 ) -> Path | None:
     """Return the current valid AGM project directory, if one can be discovered."""
 
+    current = _resolved_cwd(cwd)
+    cwd_project_dir = _valid_project_dir_from_cwd(current)
+    if cwd_project_dir is not None:
+        return cwd_project_dir
+
     env_project_dir = _project_dir_from_env(env)
     if env_project_dir is not None:
         return env_project_dir
 
-    candidate = current_workspace_or_project_root(cwd, env=env)
+    candidate = current_workspace_or_project_root(current, env=env)
     return candidate if is_project_dir(candidate) else None
 
 

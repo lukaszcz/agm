@@ -6102,6 +6102,7 @@ class TestOpen:
         assert "-dP" in log
         assert "attach-session" in log
         assert "send-keys" in log
+        assert log.index('eval "$(agm config env)"') < log.index("agm workspace setup")
         assert "-s proj/feat/test" in log
         _wait_for_path(project / "worktrees" / "feat/test" / ".setup-ran")
         assert "Detached tmux session proj/feat/test created" in result.stdout
@@ -6338,6 +6339,28 @@ class TestOpen:
         run_agm(["open", "repo"], env=env, cwd=str(project))
 
         assert (project / "env-sourced").exists()
+
+    def test_open_exports_config_override_for_existing_env_to_tmux(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        stale_bare = make_bare_repo(tmp_path / "stale-origin.git", env)
+        stale_project = _make_project(tmp_path, stale_bare, env, name="stale")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        env["HOLDIR"] = "/before"
+        env["PROJ_DIR"] = str(stale_project)
+
+        (project / "config" / "env.sh").write_text(
+            'export HOLDIR="$PROJ_DIR/hold"\n',
+            encoding="utf-8",
+        )
+
+        run_agm(["open", "repo"], env=env, cwd=str(project))
+
+        log = tmux_log.read_text()
+        assert f"-e HOLDIR={project}/hold" in log
 
     def test_sources_branch_env_file(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)

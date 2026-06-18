@@ -407,9 +407,11 @@ suite_expr: _INDENT block _DEDENT
 juxt: postfix juxt_arg -> juxt_call
     | postfix
 
-// juxt_arg: a restricted atom optionally followed by .field accesses.
-juxt_arg: juxt_atom (DOT field_name)+ -> juxt_field_access
-        | juxt_atom                   -> juxt_bare
+// juxt_arg: a restricted atom optionally followed by field/index suffixes.
+juxt_arg: juxt_atom juxt_suffix*
+
+juxt_suffix: DOT field_name       -> juxt_field_suffix
+           | INDEX_LSQB expr RSQB -> juxt_index_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
 ?juxt_atom: lit_int

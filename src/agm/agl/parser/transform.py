@@ -53,6 +53,7 @@ from agm.agl.syntax.types import (
 
 # Types used internally
 _NamedArgList = list[syntax.NamedArg]
+_JuxtSuffix = tuple[str, str] | tuple[str, syntax.Expr]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -845,35 +846,42 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def juxt_bare(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """juxt_arg: juxt_atom -> juxt_bare — pass through the atom."""
-        (inner,) = [a for a in args if a is not None and not isinstance(a, Token)]
-        return cast(syntax.Expr, inner)
+    def juxt_arg(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """juxt_arg: juxt_atom juxt_suffix*
 
-    def juxt_field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
-        """juxt_arg: juxt_atom (DOT field_name)+ -> juxt_field_access
-
-        Builds a chain of FieldAccess nodes for `print res.stdout`.
-        The first non-Token non-None arg is the base; the remaining name
-        tokens (from DOT field_name repetitions) are the field chain.
+        Builds the restricted postfix chain allowed by single-arg call sugar,
+        such as ``print res.stdout`` and ``print xs[0]``.
         """
-        # The base atom is the sole non-Token arg; the field chain is the
-        # VAR_NAME/AGENT tokens from the DOT repetitions.
-        field_names = [
-            str(a) for a in args if isinstance(a, Token) and a.type in ("VAR_NAME", "AGENT")
-        ]
-        non_tokens = [a for a in args if not isinstance(a, Token)]
-        assert non_tokens, "juxt_field_access: no base atom"
-        assert field_names, "juxt_field_access: no field names"
-        result: syntax.Expr = cast(syntax.Expr, non_tokens[0])
-        for fname in field_names:
-            result = syntax.FieldAccess(
-                obj=result,
-                field=fname,
-                span=_span_from_meta(meta),
-                node_id=self._next_id(),
-            )
-        return cast(syntax.FieldAccess, result)
+        non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
+        assert non_tokens, "juxt_arg: no base atom"
+        result = cast(syntax.Expr, non_tokens[0])
+        for suffix_obj in non_tokens[1:]:
+            kind, value = cast(_JuxtSuffix, suffix_obj)
+            if kind == "field":
+                result = syntax.FieldAccess(
+                    obj=result,
+                    field=cast(str, value),
+                    span=_span_from_meta(meta),
+                    node_id=self._next_id(),
+                )
+            else:
+                result = syntax.IndexAccess(
+                    obj=result,
+                    index=cast(syntax.Expr, value),
+                    span=_span_from_meta(meta),
+                    node_id=self._next_id(),
+                )
+        return result
+
+    def juxt_field_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
+        """juxt_suffix: DOT field_name -> juxt_field_suffix."""
+        field_tok = _find_name_token(args)
+        return ("field", str(field_tok))
+
+    def juxt_index_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
+        """juxt_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix."""
+        index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
+        return ("index", index_expr)
 
     # ------------------------------------------------------------------
     # Typed call (callee::[Type](args))

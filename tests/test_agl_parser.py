@@ -712,6 +712,20 @@ class TestCalls:
         assert isinstance(arg.obj, FieldAccess)
         assert arg.obj.field == "b"
 
+    def test_juxt_call_index_access(self) -> None:
+        """print xs[0] desugars to Call(print, (IndexAccess(xs, 0),), ())."""
+        call = first(parse("print xs[0]"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "print"
+        assert len(call.args) == 1
+        arg = call.args[0]
+        assert isinstance(arg, IndexAccess)
+        assert isinstance(arg.obj, VarRef)
+        assert arg.obj.name == "xs"
+        assert isinstance(arg.index, IntLit)
+        assert arg.index.value == 0
+
     def test_paren_call_with_call_result(self) -> None:
         """print(classify(x)) — nested call in paren form."""
         call = first(parse("print(classify(x))"))

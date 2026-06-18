@@ -76,7 +76,6 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
-    NameTarget,
     NullLit,
     ParamDecl,
     Pattern,
@@ -97,6 +96,7 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VarPattern,
     VarRef,
+    set_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 
@@ -136,18 +136,6 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 def _immutable_binder_phrase(kind: BinderKind) -> str:
     """Return the ``set``-rejection phrase naming *kind*'s binder."""
     return _IMMUTABLE_BINDER_PHRASES[kind]
-
-
-def _target_root_name(target: object) -> str:
-    """Return the variable name at the root of an assignment target."""
-    if isinstance(target, (IndexTarget, IndexAccess)):
-        return _target_root_name(target.obj)
-    if isinstance(target, (NameTarget, VarRef)):
-        return target.name
-    raise AglScopeError(
-        "indexed assignment requires a variable list or dict root.",
-        span=target.span if isinstance(target, IndexAccess) else None,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -640,7 +628,12 @@ class _Resolver:
         self._define(node.name, ref)
 
     def _resolve_set(self, node: SetStmt) -> None:
-        name = _target_root_name(node.target)
+        name = set_target_root_name(node.target)
+        if name is None:
+            raise AglScopeError(
+                "indexed assignment requires a variable list or dict root.",
+                span=node.target.span,
+            )
         ref = self._current_scope().lookup(name)
         if ref is None:
             raise AglScopeError(

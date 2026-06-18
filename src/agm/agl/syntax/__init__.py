@@ -77,6 +77,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    set_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
@@ -132,6 +133,7 @@ __all__ = [
     "NameTarget",
     "IndexTarget",
     "SetTarget",
+    "set_target_root_name",
     # expressions
     "Block",
     "VarRef",

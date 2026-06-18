@@ -1118,7 +1118,7 @@ class TestIndexedSetTargets:
         assert vals["xs"].elements[0].elements[1] == IntValue(2)
 
     def test_unknown_direct_set_target_has_no_root_name(self) -> None:
-        from agm.agl.repl.session import _root_name_for_set_target, _set_targets_in_program
+        from agm.agl.repl.session import _set_targets_in_program
         from agm.agl.syntax.nodes import (
             Block,
             IndexAccess,
@@ -1128,6 +1128,7 @@ class TestIndexedSetTargets:
             SetStmt,
             UnitLit,
             VarRef,
+            set_target_root_name,
         )
 
         span = SourceSpan(
@@ -1139,7 +1140,7 @@ class TestIndexedSetTargets:
             end_offset=1,
         )
         target = UnitLit(span=span, node_id=9001)
-        assert _root_name_for_set_target(target) is None
+        assert set_target_root_name(target) is None
         nested_target = IndexTarget(
             obj=IndexAccess(
                 obj=VarRef(name="xs", span=span, node_id=9005),
@@ -1151,7 +1152,7 @@ class TestIndexedSetTargets:
             span=span,
             node_id=9009,
         )
-        assert _root_name_for_set_target(nested_target) == "xs"
+        assert set_target_root_name(nested_target) == "xs"
         bad_nested_target = IndexTarget(
             obj=IndexAccess(
                 obj=target,
@@ -1163,7 +1164,7 @@ class TestIndexedSetTargets:
             span=span,
             node_id=9013,
         )
-        assert _root_name_for_set_target(bad_nested_target) is None
+        assert set_target_root_name(bad_nested_target) is None
         stmt = SetStmt(target=target, value=target, span=span, node_id=9002)
         program = Program(
             body=Block(items=(stmt,), span=span, node_id=9003),

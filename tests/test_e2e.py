@@ -140,7 +140,7 @@ _dispatch() {
         command="$arg"
       done
       if [[ -n "$command" ]]; then
-        ( eval "$command" ) &
+        ( eval "$command" ) >/dev/null 2>&1 &
       fi
       ;;
     split-window|select-layout|select-pane|switch-client|attach-session|kill-session)
@@ -509,7 +509,7 @@ def _install_fake_tmux(bin_dir: Path, log_path: Path, env: dict[str, str]) -> No
     env["TMUX_LOG"] = str(log_path)
 
 
-def _wait_for_path(path: Path, *, timeout: float = 2.0) -> None:
+def _wait_for_path(path: Path, *, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if path.exists():

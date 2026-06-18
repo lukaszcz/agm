@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Generator
 from pathlib import Path
 
@@ -33,6 +34,7 @@ def env(tmp_path: Path) -> dict[str, str]:
     e["GIT_COMMITTER_NAME"] = "Test"
     e["GIT_COMMITTER_EMAIL"] = "test@test.com"
     e["GIT_CONFIG_NOSYSTEM"] = "1"
+    e["SHELL"] = shutil.which("bash") or "/bin/sh"
     e.pop("PROJ_DIR", None)
     e.pop("REPO_DIR", None)
     e.pop("TMUX", None)

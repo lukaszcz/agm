@@ -84,3 +84,14 @@ class TestSourceEnvFiles:
             source_env_files([env_file])
         assert exc_info.value.code == 42
 
+    def test_ignores_stdout_from_sourced_files(self, tmp_path: Path) -> None:
+        env_file = tmp_path / "env.sh"
+        env_file.write_text(
+            f'printf "%s\\n" "{tmp_path}"\nexport VALUE=from-env\n',
+            encoding="utf-8",
+        )
+
+        result = source_env_files([env_file], env={})
+
+        assert result["VALUE"] == "from-env"
+        assert all(str(tmp_path) not in key for key in result)

@@ -1321,7 +1321,7 @@ class TestVisitorWalk:
         indexed_set_stmt = SetStmt(target=index_target, value=int_lit, span=s, node_id=607)
 
         # Param decl without annotation (exercises None branch in walk)
-        input_no_ann = ParamDecl(name="bare", annotation=None, default=None, span=s, node_id=608)
+        input_no_ann = ParamDecl(name="bare", annotation=None, default=None, span=s, node_id=609)
 
         # Param with default (exercises the default branch in walk(Param))
         # Already covered in func_def (p_func has a default).
@@ -1331,7 +1331,8 @@ class TestVisitorWalk:
             items=(
                 record_def, enum_def, type_alias, param_decl, input_no_ann,
                 agent_decl, config_pragma, func_def,
-                let_decl, let_with_type, var_decl, var_with_type, set_stmt, indexed_set_stmt,
+                let_decl, let_with_type, var_decl, var_with_type,
+                set_stmt, indexed_set_stmt,
                 # expressions directly in block
                 var_ref, field_access, index_access, constructor,
                 binary_op, unary_not, unary_neg, is_test,

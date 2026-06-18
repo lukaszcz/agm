@@ -16,8 +16,10 @@ from agm.agl.eval.interpreter import Interpreter
 from agm.agl.eval.values import (
     BoolValue,
     DecimalValue,
+    DictValue,
     EnumValue,
     IntValue,
+    ListValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -113,6 +115,146 @@ def test_let_block_value() -> None:
 def test_var_set_unit() -> None:
     snap = _run_source("var x = 1\nset x = 2\n()")
     assert snap["x"] == IntValue(2)
+
+
+def test_list_indexing_returns_selected_value() -> None:
+    snap = _run_source("let xs = [10, 20, 30]\nlet x = xs[1]\nx")
+    assert snap["x"] == IntValue(20)
+
+
+def test_negative_list_indexing_selects_from_end() -> None:
+    snap = _run_source("let xs = [10, 20, 30]\nlet x = xs[-1]\nx")
+    assert snap["x"] == IntValue(30)
+
+
+def test_dict_indexing_returns_selected_value() -> None:
+    snap = _run_source('let d = {"a": 10, "b": 20}\nlet x = d["b"]\nx')
+    assert snap["x"] == IntValue(20)
+
+
+def test_nested_and_chained_indexing() -> None:
+    source = """\
+let matrix = [[1, 2], [3, 4]]
+let nested = {"outer": {"inner": 9}}
+let x = matrix[1][0]
+let y = nested["outer"]["inner"]
+y"""
+    snap = _run_source(source)
+    assert snap["x"] == IntValue(3)
+    assert snap["y"] == IntValue(9)
+
+
+def test_var_list_index_assignment_copy_on_write() -> None:
+    snap = _run_source("var xs = [1, 2, 3]\nset xs[1] = 20\nxs")
+    assert snap["xs"] == ListValue((IntValue(1), IntValue(20), IntValue(3)))
+
+
+def test_var_dict_index_assignment_copy_on_write() -> None:
+    snap = _run_source('var d = {"a": 1, "b": 2}\nset d["b"] = 20\nd')
+    assert snap["d"] == DictValue({"a": IntValue(1), "b": IntValue(20)})
+
+
+def test_nested_list_index_assignment_copy_on_write() -> None:
+    snap = _run_source("var xs = [[1, 2], [3, 4]]\nset xs[0][1] = 20\nxs")
+    assert snap["xs"] == ListValue(
+        (
+            ListValue((IntValue(1), IntValue(20))),
+            ListValue((IntValue(3), IntValue(4))),
+        )
+    )
+
+
+def test_nested_dict_index_assignment_copy_on_write() -> None:
+    snap = _run_source('var d = {"a": {"b": 1}}\nset d["a"]["b"] = 2\nd')
+    assert snap["d"] == DictValue({"a": DictValue({"b": IntValue(2)})})
+
+
+def test_out_of_range_list_access_raises_catchable_index_error() -> None:
+    source = """\
+let r = try
+  [1, 2][3]
+catch IndexError as e =>
+  e.index + e.length
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == IntValue(5)
+
+
+def test_out_of_range_list_assignment_raises_catchable_index_error() -> None:
+    source = """\
+var xs = [1, 2]
+let r = try
+  set xs[2] = 3
+  0
+catch IndexError as e =>
+  e.index + e.length
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == IntValue(4)
+    assert snap["xs"] == ListValue((IntValue(1), IntValue(2)))
+
+
+def test_index_assignment_target_failure_precedes_rhs_evaluation() -> None:
+    source = """\
+var xs = [1, 2]
+let r = try
+  set xs[9] = raise ArithmeticError(message: "rhs", operation: "+")
+  0
+catch IndexError as e =>
+  e.index
+catch ArithmeticError =>
+  -1
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == IntValue(9)
+    assert snap["xs"] == ListValue((IntValue(1), IntValue(2)))
+
+
+def test_nested_index_assignment_outer_target_failure_precedes_inner_index() -> None:
+    source = """\
+var xs = [[1], [2]]
+let r = try
+  set xs[9][raise ArithmeticError(message: "inner", operation: "+")] = 2
+  0
+catch IndexError as e =>
+  e.index
+catch ArithmeticError =>
+  -1
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == IntValue(9)
+    assert snap["xs"] == ListValue(
+        (
+            ListValue((IntValue(1),)),
+            ListValue((IntValue(2),)),
+        )
+    )
+
+
+def test_missing_dict_key_access_raises_catchable_key_error() -> None:
+    source = """\
+let r = try
+  {"a": 1}["b"]
+  ""
+catch KeyError as e =>
+  e.key
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == TextValue("b")
+
+
+def test_missing_dict_key_assignment_raises_catchable_key_error() -> None:
+    source = """\
+var d = {"a": 1}
+let r = try
+  set d["b"] = 2
+  ""
+catch KeyError as e =>
+  e.message
+r"""
+    snap = _run_source(source)
+    assert snap["r"] == TextValue("Dict key 'b' is missing")
+    assert snap["d"] == DictValue({"a": IntValue(1)})
 
 
 # ---------------------------------------------------------------------------

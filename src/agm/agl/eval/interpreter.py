@@ -8,6 +8,7 @@ Control flow for AgL exceptions uses Python exceptions (``AglRaise``).
 from __future__ import annotations
 
 import decimal
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, assert_never, cast
 
 from agm.agl._text import normalize_newlines
@@ -51,12 +52,15 @@ from agm.agl.syntax.nodes import (
     FieldAccess,
     FuncDef,
     If,
+    IndexAccess,
+    IndexTarget,
     InterpSegment,
     IntLit,
     IsTest,
     Lambda,
     LetDecl,
     ListLit,
+    NameTarget,
     NullLit,
     ParamDecl,
     Pattern,
@@ -64,6 +68,7 @@ from agm.agl.syntax.nodes import (
     Raise,
     RecordDef,
     SetStmt,
+    SetTarget,
     StringLit,
     Template,
     TextSegment,
@@ -109,6 +114,13 @@ _Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
 # depend on the host's ambient ``decimal`` context — a host that lowered
 # ``getcontext().prec`` would otherwise change results such as ``1 / 3``.
 _AGL_DECIMAL_CONTEXT = decimal.Context(prec=28, rounding=decimal.ROUND_HALF_EVEN)
+
+
+@dataclass(frozen=True)
+class _IndexedAssignmentTarget:
+    containers: tuple[tuple[Value, Value], ...]
+    container: Value
+    index: Value
 
 
 def _make_exc_value(
@@ -248,12 +260,29 @@ class Interpreter:
             )
             return UNIT_VALUE
         if isinstance(item, SetStmt):
-            value = self._eval_expr(item.value, scope)
             ref = self._checked.resolved.resolution[item.node_id]
             target_type = self._binding_type_for(ref.decl_node_id)
-            coerced = _coerce(value, target_type)
-            scope.set_value(item.target, coerced)
-            self._trace.mutation(name=item.target, value=coerced, span=item.span)
+            slot_type = _set_target_slot_type(item.target, target_type)
+            if isinstance(item.target, NameTarget):
+                value = self._eval_expr(item.value, scope)
+                coerced = _coerce(value, slot_type)
+                updated = coerced
+            else:
+                root = scope.lookup(ref.name)
+                if root is None:  # pragma: no cover
+                    raise RuntimeError(f"Undefined variable at runtime: {ref.name!r}")
+                prepared = self._eval_index_assignment_target(
+                    item.target, root.value, scope, span=item.span
+                )
+                value = self._eval_expr(item.value, scope)
+                coerced = _coerce(value, slot_type)
+                updated = self._assign_prepared_index_target(
+                    prepared,
+                    coerced,
+                    span=item.span,
+                )
+            scope.set_value(ref.name, updated)
+            self._trace.mutation(name=ref.name, value=updated, span=item.span)
             return UNIT_VALUE
         # --- Declarations (already handled in pre-pass or have no runtime action) ---
         if isinstance(item, (FuncDef, AgentDecl, ParamDecl)):
@@ -323,6 +352,8 @@ class Interpreter:
             return self._eval_var_ref(expr, scope)
         if isinstance(expr, FieldAccess):
             return self._eval_field_access(expr, scope)
+        if isinstance(expr, IndexAccess):
+            return self._eval_index_access(expr, scope)
         # --- Compound expressions ---
         if isinstance(expr, Template):
             return TextValue(self._eval_template(expr, scope))
@@ -370,6 +401,138 @@ class Interpreter:
             return obj.fields[expr.field]
         raise RuntimeError(  # pragma: no cover
             f"Field access on non-record/exception: {type(obj).__name__}"
+        )
+
+    def _eval_index_access(self, expr: IndexAccess, scope: Scope) -> Value:
+        obj = self._eval_expr(expr.obj, scope)
+        index = self._eval_expr(expr.index, scope)
+        return self._index_value(obj, index, span=expr.span)
+
+    def _index_value(self, obj: Value, index: Value, *, span: SourceSpan) -> Value:
+        if isinstance(obj, ListValue):
+            if not isinstance(index, IntValue):
+                raise RuntimeError(  # pragma: no cover
+                    f"List index must be IntValue, got {type(index).__name__}"
+                )
+            return obj.elements[self._normalize_list_index(index.value, len(obj.elements), span)]
+        if isinstance(obj, DictValue):
+            if not isinstance(index, TextValue):
+                raise RuntimeError(  # pragma: no cover
+                    f"Dict index must be TextValue, got {type(index).__name__}"
+                )
+            if index.value not in obj.entries:
+                raise self._key_error(index.value, span)
+            return obj.entries[index.value]
+        raise RuntimeError(  # pragma: no cover
+            f"Index access on non-list/dict: {type(obj).__name__}"
+        )
+
+    def _normalize_list_index(self, index: int, length: int, span: SourceSpan) -> int:
+        normalized = index if index >= 0 else length + index
+        if normalized < 0 or normalized >= length:
+            raise self._index_error(index, length, span)
+        return normalized
+
+    def _index_error(self, index: int, length: int, span: SourceSpan) -> AglRaise:
+        return AglRaise(
+            _make_exc_value(
+                "IndexError",
+                f"List index {index} out of range for length {length}",
+                trace_id=self._trace.new_event_id(),
+                index=IntValue(index),
+                length=IntValue(length),
+            ),
+            span=span,
+        )
+
+    def _key_error(self, key: str, span: SourceSpan) -> AglRaise:
+        return AglRaise(
+            _make_exc_value(
+                "KeyError",
+                f"Dict key {key!r} is missing",
+                trace_id=self._trace.new_event_id(),
+                key=TextValue(key),
+            ),
+            span=span,
+        )
+
+    def _index_target_expr_path(self, target: IndexTarget) -> tuple[Expr, ...]:
+        path: list[Expr] = []
+        self._append_index_target_expr_path(target.obj, path)
+        path.append(target.index)
+        return tuple(path)
+
+    def _append_index_target_expr_path(self, expr: Expr, path: list[Expr]) -> None:
+        if isinstance(expr, VarRef):
+            return
+        if isinstance(expr, IndexAccess):
+            self._append_index_target_expr_path(expr.obj, path)
+            path.append(expr.index)
+            return
+        raise RuntimeError(  # pragma: no cover
+            "Indexed assignment requires a variable list or dict root."
+        )
+
+    def _eval_index_assignment_target(
+        self,
+        target: IndexTarget,
+        root: Value,
+        scope: Scope,
+        *,
+        span: SourceSpan,
+    ) -> _IndexedAssignmentTarget:
+        path = self._index_target_expr_path(target)
+        containers: list[tuple[Value, Value]] = []
+        current = root
+        for index_expr in path[:-1]:
+            index = self._eval_expr(index_expr, scope)
+            containers.append((current, index))
+            current = self._index_value(current, index, span=span)
+        if not path:  # pragma: no cover
+            raise RuntimeError("Indexed assignment requires at least one index.")
+        index = self._eval_expr(path[-1], scope)
+        self._index_value(current, index, span=span)
+        return _IndexedAssignmentTarget(tuple(containers), current, index)
+
+    def _assign_prepared_index_target(
+        self,
+        target: _IndexedAssignmentTarget,
+        value: Value,
+        *,
+        span: SourceSpan,
+    ) -> Value:
+        updated = self._replace_index_value(target.container, target.index, value, span=span)
+        for container, index in reversed(target.containers):
+            updated = self._replace_index_value(container, index, updated, span=span)
+        return updated
+
+    def _replace_index_value(
+        self,
+        obj: Value,
+        index: Value,
+        value: Value,
+        *,
+        span: SourceSpan,
+    ) -> Value:
+        if isinstance(obj, ListValue):
+            if not isinstance(index, IntValue):
+                raise RuntimeError(  # pragma: no cover
+                    f"List index must be IntValue, got {type(index).__name__}"
+                )
+            normalized = self._normalize_list_index(index.value, len(obj.elements), span)
+            elements = list(obj.elements)
+            elements[normalized] = value
+            return ListValue(tuple(elements))
+        if isinstance(obj, DictValue):
+            if not isinstance(index, TextValue):
+                raise RuntimeError(  # pragma: no cover
+                    f"Dict index must be TextValue, got {type(index).__name__}"
+                )
+            entries = dict(obj.entries)
+            entries[index.value] = value
+            return DictValue(entries)
+        raise RuntimeError(  # pragma: no cover
+            f"Indexed assignment on non-list/dict: {type(obj).__name__}"
         )
 
     def _eval_template(self, expr: Template, scope: Scope) -> str:
@@ -1359,6 +1522,34 @@ def _matches_catch(handler: CatchClause, exc: ExceptionValue) -> bool:
     if handler.exc_type == "_" or handler.exc_type == "Exception":
         return True
     return handler.exc_type == exc.type_name
+
+
+def _set_target_slot_type(target: SetTarget, root_type: Type) -> Type:
+    """Return the type assigned by *target*, starting from *root_type*."""
+    if isinstance(target, NameTarget):
+        return root_type
+    container_type = _index_target_container_type(target.obj, root_type)
+    if isinstance(container_type, ListType):
+        return container_type.elem
+    if isinstance(container_type, DictType):
+        return container_type.value
+    raise RuntimeError(  # pragma: no cover
+        f"Indexed assignment on non-list/dict type: {container_type!r}"
+    )
+
+
+def _index_target_container_type(obj: Expr, root_type: Type) -> Type:
+    if isinstance(obj, VarRef):
+        return root_type
+    if isinstance(obj, IndexAccess):
+        container_type = _index_target_container_type(obj.obj, root_type)
+        if isinstance(container_type, ListType):
+            return container_type.elem
+        if isinstance(container_type, DictType):
+            return container_type.value
+    raise RuntimeError(  # pragma: no cover
+        "Indexed assignment requires a variable list or dict root."
+    )
 
 
 def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Value]]:

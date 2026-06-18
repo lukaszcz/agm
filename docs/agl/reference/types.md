@@ -99,9 +99,10 @@ enum MaybeText
 
 ### `list[T]` and `dict[text, T]`
 
-Homogeneous containers. There is no indexing, no `len`, and no element
-access syntax in v1; lists and dictionaries are consumed via interpolation,
-membership tests (`in`), equality, and agent prompts.
+Homogeneous containers. Elements and values are read with indexing
+(`xs[0]`, `metadata["key"]`). A mutable `var` binding can be updated through
+an index with `set`; this replaces the binding with a new list or dictionary
+value. There is no `len` operator.
 
 ### `agent`
 

@@ -44,7 +44,8 @@ var artifact: text = ask("Implement ${spec}", agent: impl)
 ## `set` — mutation
 
 ```ebnf
-set_stmt ::= "set" VAR_NAME "=" expr
+set_stmt ::= "set" set_target "=" expr
+set_target ::= VAR_NAME ("[" expr "]")*
 ```
 
 `set` updates the nearest visible **mutable** binding and yields `unit`. It
@@ -55,6 +56,28 @@ declared type of the binding being updated:
 var proposal: Turn = ask("Initial proposal.", agent: researcher)
 set proposal = ask("Revise proposal.", agent: researcher)   # target type: Turn
 ```
+
+`set` can also update an element of a mutable list or an existing key of a
+mutable dictionary:
+
+```agl
+var xs = [1, 2]
+set xs[0] = 10
+
+var metadata = {"status": "draft"}
+set metadata["status"] = "ready"
+```
+
+Assignment indexes are adjacency-sensitive: the opening `[` must be adjacent
+to the target name or preceding index, as in `xs[0]`. A spaced form such as
+`xs [0]` is not an indexed assignment target.
+
+Indexed assignment is copy-on-write: the binding is updated with a new list or
+dictionary value containing the changed element. The root must be a `var`
+binding. Assigning through `let`, `param`, function arguments, function return
+temporaries, or fields is a static error. List assignment uses the same
+negative-index and `IndexError` rules as list access. Dictionary assignment
+updates existing keys only; assigning to a missing key raises `KeyError`.
 
 Static rules, all checked before execution:
 

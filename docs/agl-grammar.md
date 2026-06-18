@@ -119,6 +119,7 @@ No float type in AgL. Decimal arithmetic is exact fixed-point.
 |-------|--------|---------|
 | `EQ_EQ` | `==` | Error token; not in any grammar rule. The parser emits *"Use `=` for equality."* |
 | `LOOP_BOUND` | `[N]` after `do` | Merged from `LSQB INT RSQB` by the lexer to eliminate the LALR(1) conflict with list literals. The token's value is the integer string `N`. |
+| `INDEX_LSQB` | adjacent `[` after an expression | Distinguishes indexing (`xs[0]`) from spaced list-literal call sugar (`f [0]`). |
 
 ---
 
@@ -162,7 +163,7 @@ Listed from **lowest** to **highest** binding power (bottom binds tightest).
 | multiplicative | `*` `/` | left |
 | unary minus | `-` (unary prefix) | right (unary) |
 | **application** | single-arg sugar `f x` (non-chaining) | — |
-| postfix | `.field`, `.Type`, `f(args)` call | left |
+| postfix | `.field`, `.Type`, `f(args)` call, `[index]` | left |
 | atom | literals, names, `()`, `(expr)`, templates, lambdas | — |
 
 **Application (juxtaposition sugar)** is a new precedence level in v2. It

@@ -188,6 +188,24 @@ operation: text    # the operator, e.g. "/"
 (base fields only)
 ```
 
+### `IndexError`
+
+Raised by out-of-range list indexing or indexed list assignment.
+
+```text
+index: int
+length: int
+```
+
+### `KeyError`
+
+Raised by missing dictionary keys during indexing or indexed dictionary
+assignment.
+
+```text
+key: text
+```
+
 ### `UndefinedVariableError`
 
 ```text
@@ -218,6 +236,8 @@ The general-purpose user abort; carries only the base fields.
 
 | Source | Exception |
 | ------ | --------- |
+| Out-of-range list index access or assignment | `IndexError` |
+| Missing dictionary key access or assignment | `KeyError` |
 | Agent transport failure | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
 | Failing/timed-out shell command (parsed form) | `ExecError` |

@@ -89,10 +89,13 @@ parameters must follow all required parameters.
 ```ebnf
 let_decl ::= "let" VAR_NAME (":" type_expr)? "=" expr
 var_decl ::= "var" VAR_NAME (":" type_expr)? "=" expr
-set_expr ::= "set" VAR_NAME "=" expr
+set_expr ::= "set" set_target "=" expr
+set_target ::= VAR_NAME ("[" expr "]")*
 ```
 
-`set` yields `unit`.
+`set` yields `unit`. In an indexed assignment target, each opening `[` must be
+adjacent to the target name or preceding index: `xs[0]` is indexed assignment,
+while `xs [0]` is not.
 
 ## Loops
 
@@ -176,6 +179,7 @@ juxt_arg       ::= atom_no_call        (* excludes "("-led forms and calls *)
 postfix        ::= postfix "." VAR_NAME            (* field access *)
                | postfix "." TYPE_NAME             (* variant qualification *)
                | postfix "(" arg_list? ")"         (* call with parentheses *)
+               | postfix "[" expr "]"              (* adjacent bracket only *)
                | atom
 
 typed_call     ::= VAR_NAME "::" "[" type_expr "]" "(" arg_list? ")"  (* typed call *)

@@ -202,6 +202,10 @@ Multi-character operators are matched greedily.
 The loop bound `[N]` immediately after `do` is lexed as a single unit so it
 never conflicts with a list literal.
 
+An adjacent `[` after an expression-ending token starts indexing. Whitespace
+keeps the bracket as a list literal, so `xs[0]` indexes while `f [0]` is the
+single-argument call sugar `f([0])`.
+
 ## Operator precedence
 
 From loosest to tightest binding (the bottom binds tightest):
@@ -216,7 +220,7 @@ From loosest to tightest binding (the bottom binds tightest):
 | 6 | `*` `/` | left |
 | 7 | `-` (unary prefix) | — |
 | 8 | function application (single-arg sugar) | **non-chaining** |
-| 9 | `.field` access, `.Variant` qualification, `( args )` call | left |
+| 9 | `.field` access, `.Variant` qualification, `[index]`, `( args )` call | left |
 | 10 | atoms: literals, names, `( expr )`, `()` unit, templates | — |
 
 **Application (level 8)** is the single-argument call sugar (`print x`,

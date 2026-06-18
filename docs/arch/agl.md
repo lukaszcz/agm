@@ -39,6 +39,11 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
   (user `def`s, built-ins `print`/`exec`/`ask`, function values). Both the
   parenthesized form `f(a, b, name: v)` and the single-arg sugar `f x` desugar
   to `Call`.
+- `IndexAccess` — postfix list/dictionary indexing. The lexer emits a distinct
+  adjacent-bracket token so `xs[0]` indexes while `f [0]` remains call sugar
+  with a list literal argument.
+- `SetStmt` targets are either a name or an indexed mutable-root target; later
+  passes require indexed assignment to resolve to a `var` list/dictionary root.
 - `FuncDef` / `Lambda` / `Param` — named function declarations (top-level only)
   and anonymous function expressions.
 - `UnitLit` — the `()` unit-value literal; also the empty argument list of a
@@ -113,8 +118,9 @@ Built-in typing rules (in `agm.agl.typecheck.checker`) consult `builtin_calls`:
 
 The prelude types `ExecResult` (a record with `stdout`, `stderr`, `exit_code`,
 `timed_out`) and `ParsePolicy` (enum `Abort | Retry(n: int)`) are registered as
-built-in types available without user declarations. `RecursionError` is added as
-a built-in exception alongside the existing set.
+built-in types available without user declarations. Runtime failures such as
+`RecursionError`, `IndexError`, and `KeyError` are built-in catchable
+exceptions.
 
 Function and agent types are **not JSON-shaped**: the codec-selection and
 `is_json_shaped` logic rejects them; interpolating or `print`-ing a function

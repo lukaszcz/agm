@@ -108,6 +108,34 @@ let code = res.exit_code
 Field access is statically checked. It does not apply to enums (use pattern
 matching to extract variant payloads), dictionaries, or lists.
 
+## Indexing
+
+`expr[index]` reads from a list or dictionary:
+
+```agl
+let third = xs[2]
+let last = xs[-1]
+let value = metadata["source"]
+```
+
+Indexing is a postfix operator and may be chained with calls and field access:
+
+```agl
+let cell = matrix[0][1]
+let name = rows[0].name
+let item = make_items()[0]
+```
+
+Whitespace matters. `xs[0]` is indexing because the `[` is adjacent to `xs`.
+`f [0]` remains the single-argument call sugar `f([0])`.
+
+List indexes must be `int`. Negative indexes count from the end, as in
+Python: `xs[-1]` selects the last element. An out-of-range list index raises
+catchable `IndexError` with `index`, `length`, and `message` fields.
+
+Dictionary indexes must be `text`. Missing keys raise catchable `KeyError`
+with `key` and `message` fields.
+
 ## Calls
 
 All calls use the same uniform parenthesized syntax. This applies equally to

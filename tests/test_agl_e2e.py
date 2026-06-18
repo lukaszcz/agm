@@ -160,8 +160,14 @@ def _assert_output(out: str, expect: dict[str, Any]) -> None:
 def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> None:
     for name, agent in agents.items():
         assert not agent.overflowed, f"agent {name!r} was called more times than scripted"
-    for name, count in expect.get("calls", {}).items():
-        actual = len(agents[name].prompts)
+    expected_calls = expect.get("calls", {})
+    assert set(expected_calls) == set(agents), (
+        "every scripted agent must have an exact call-count assertion; "
+        f"expected entries for {sorted(agents)}, got {sorted(expected_calls)}"
+    )
+    for name, agent in agents.items():
+        count = expected_calls[name]
+        actual = len(agent.prompts)
         assert actual == count, f"agent {name!r}: expected {count} calls, got {actual}"
     for spec in expect.get("prompts", []):
         prompts = agents[spec["agent"]].prompts

@@ -5,7 +5,6 @@ Perform a thorough review of the test suite. Evaluate the general robustness and
   - Are complex user workflows tested?
   - Is real behavior actually tested, not mocked?
   - Do the tests exercise real bussiness logic requirements instead of overfitting to implementation details?
-  - Do e2e tests test the actual `agm` CLI?
 
 Iterate on fixing all found issues until the test suite satisfies ALL of the
 requirements above.

@@ -7560,6 +7560,135 @@ class TestExecCommand:
         assert result.returncode == 0
         assert "pong" in result.stdout
 
+    def test_exec_runs_multi_agent_review_fix_workflow(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "review.agl"
+        program.write_text(
+            "param task: text\n"
+            "record Issue\n"
+            "  description: text\n"
+            "enum Review\n"
+            "  | Pass\n"
+            "  | Fail(issues: list[Issue])\n"
+            "enum Fix\n"
+            "  | Complete(output: text)\n"
+            'agent impl = "impl-runner"\n'
+            'agent reviewer = "review-runner"\n'
+            'var artifact: text = ask("Implement ${task}", agent: impl)\n'
+            "var review: Review = Pass\n"
+            "do[3]\n"
+            '  review := ask("Review ${artifact}", agent: reviewer)\n'
+            "  case review of\n"
+            "    | Pass => ()\n"
+            "    | Fail(issues) =>\n"
+            '        let fix: Fix = ask("Fix ${issues} in ${artifact}", agent: impl)\n'
+            "        case fix of\n"
+            "          | Complete(output) =>\n"
+            "              artifact := output\n"
+            "until review is Pass\n"
+            "print artifact\n",
+            encoding="utf-8",
+        )
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        impl_count = tmp_path / "impl-count"
+        review_count = tmp_path / "review-count"
+        impl_runner = bin_dir / "impl-runner"
+        impl_runner.write_text(
+            "#!/bin/bash\n"
+            'count=$(cat "$IMPL_COUNT" 2>/dev/null || echo 0)\n'
+            'count=$((count + 1)); echo "$count" > "$IMPL_COUNT"\n'
+            "if [[ $count -eq 1 ]]; then printf 'v1'; "
+            "else printf '{\"$case\":\"Complete\",\"output\":\"v2\"}'; fi\n"
+        )
+        review_runner = bin_dir / "review-runner"
+        review_runner.write_text(
+            "#!/bin/bash\n"
+            'count=$(cat "$REVIEW_COUNT" 2>/dev/null || echo 0)\n'
+            'count=$((count + 1)); echo "$count" > "$REVIEW_COUNT"\n'
+            "if [[ $count -eq 1 ]]; then "
+            "printf '{\"$case\":\"Fail\",\"issues\":[{\"description\":\"add tests\"}]}'; "
+            "else printf '{\"$case\":\"Pass\"}'; fi\n"
+        )
+        for runner in (impl_runner, review_runner):
+            runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["IMPL_COUNT"] = str(impl_count)
+        env["REVIEW_COUNT"] = str(review_count)
+
+        result = run_agm(
+            ["exec", str(program), "--task", "CSV parser", "--no-log"],
+            env=env,
+            cwd=work,
+        )
+
+        assert result.returncode == 0
+        assert result.stdout == "v2\n"
+        assert impl_count.read_text().strip() == "2"
+        assert review_count.read_text().strip() == "2"
+
+    def test_exec_retries_invalid_agent_response_with_corrective_prompt(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "retry.agl"
+        program.write_text(
+            "enum Review\n"
+            "  | Pass\n"
+            'agent reviewer = "review-runner"\n'
+            'let review: Review = ask("Review now", agent: reviewer, '
+            "on_parse_error: Retry(n: 1))\n"
+            "case review of\n"
+            '  | Pass => print "accepted"\n',
+            encoding="utf-8",
+        )
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        count_file = tmp_path / "count"
+        prompt_log = tmp_path / "prompts"
+        runner = bin_dir / "review-runner"
+        runner.write_text(
+            "#!/bin/bash\n"
+            'count=$(cat "$COUNT_FILE" 2>/dev/null || echo 0)\n'
+            'count=$((count + 1)); echo "$count" > "$COUNT_FILE"\n'
+            'for arg in "$@"; do [[ "$arg" == @* ]] && cat "${arg#@}" >> "$PROMPT_LOG"; done\n'
+            "if [[ $count -eq 1 ]]; then printf 'not json'; "
+            "else printf '{\"$case\":\"Pass\"}'; fi\n"
+        )
+        runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["COUNT_FILE"] = str(count_file)
+        env["PROMPT_LOG"] = str(prompt_log)
+
+        result = run_agm(["exec", str(program), "--no-log"], env=env, cwd=work)
+
+        assert result.returncode == 0
+        assert result.stdout == "accepted\n"
+        assert count_file.read_text().strip() == "2"
+        prompts = prompt_log.read_text()
+        assert prompts.count("Review now") == 2
+        assert "previous response did not match" in prompts
+        assert "not json" in prompts
+
+    def test_exec_uncaught_language_exception_exits_two(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "abort.agl"
+        program.write_text('raise Abort(message: "stop now")\n', encoding="utf-8")
+
+        result = run_agm(["exec", str(program)], env=env, cwd=work, check=False)
+
+        assert result.returncode == 2
+        assert "Abort" in result.stderr
+        assert "stop now" in result.stderr
+
 
 class TestReplCommand:
     """agm repl: interactive AgL read-eval-print loop."""

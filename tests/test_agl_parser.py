@@ -57,6 +57,8 @@ from agm.agl.syntax import (
     FuncDef,
     If,
     IfBranch,
+    IndexAccess,
+    IndexTarget,
     InterpSegment,
     IntLit,
     IsTest,
@@ -65,6 +67,7 @@ from agm.agl.syntax import (
     ListLit,
     LiteralPattern,
     NamedArg,
+    NameTarget,
     NullLit,
     Param,
     ParamDecl,
@@ -314,8 +317,19 @@ class TestBinders:
     def test_set_stmt(self) -> None:
         s = first(parse("set x = 10"))
         assert isinstance(s, SetStmt)
-        assert s.target == "x"
+        assert isinstance(s.target, NameTarget)
+        assert s.target.name == "x"
         assert isinstance(s.value, IntLit)
+
+    def test_set_index_target(self) -> None:
+        s = first(parse('set xs[0] = "first"'))
+        assert isinstance(s, SetStmt)
+        assert isinstance(s.target, IndexTarget)
+        assert isinstance(s.target.obj, VarRef)
+        assert s.target.obj.name == "xs"
+        assert isinstance(s.target.index, IntLit)
+        assert s.target.index.value == 0
+        assert isinstance(s.value, StringLit)
 
     def test_let_continuation(self) -> None:
         """let-continuation: let x = 1; x parses as two block items."""
@@ -709,6 +723,28 @@ class TestCalls:
         assert isinstance(inner.callee, VarRef)
         assert inner.callee.name == "classify"
 
+    def test_juxt_call_list_literal_preserved(self) -> None:
+        call = first(parse("f [2]"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "f"
+        assert len(call.args) == 1
+        assert isinstance(call.args[0], ListLit)
+
+    def test_print_list_literal_juxt_preserved(self) -> None:
+        call = first(parse("print [1,2,3]"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "print"
+        assert isinstance(call.args[0], ListLit)
+
+    def test_spaced_lsqb_does_not_index(self) -> None:
+        call = first(parse("l [2]"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "l"
+        assert isinstance(call.args[0], ListLit)
+
     def test_chained_paren_calls(self) -> None:
         """f(x).g(y) chains fine via postfix."""
         call = first(parse("f(x).g(y)"))
@@ -735,6 +771,18 @@ class TestTypedCalls:
         assert call.type_arg is not None
         assert isinstance(call.type_arg, NameT)
         assert call.type_arg.name == "Review"
+
+    def test_typed_call_type_brackets_survive_index_bracket_remap(self) -> None:
+        call = first(parse('ask-request::[Review]("p")'))
+        assert isinstance(call, Call)
+        assert isinstance(call.type_arg, NameT)
+        assert call.type_arg.name == "Review"
+
+        generic = first(parse('ask-request::[list[Review]]("p")'))
+        assert isinstance(generic, Call)
+        assert isinstance(generic.type_arg, ListT)
+        assert isinstance(generic.type_arg.elem, NameT)
+        assert generic.type_arg.elem.name == "Review"
 
     def test_typed_call_no_type_arg(self) -> None:
         # ``ask-request("p")`` (no ``::[...]``) is an ordinary Call with no type_arg.
@@ -849,6 +897,53 @@ class TestFieldAccessAndConstructors:
     def test_bad_qualification_raises(self) -> None:
         with pytest.raises(AglSyntaxError):
             parse("x.Done")
+
+
+class TestIndexAccess:
+    def test_list_index_access(self) -> None:
+        idx = first(parse("l[2]"))
+        assert isinstance(idx, IndexAccess)
+        assert isinstance(idx.obj, VarRef)
+        assert idx.obj.name == "l"
+        assert isinstance(idx.index, IntLit)
+        assert idx.index.value == 2
+
+    def test_dict_index_access(self) -> None:
+        idx = first(parse('d["a"]'))
+        assert isinstance(idx, IndexAccess)
+        assert isinstance(idx.obj, VarRef)
+        assert idx.obj.name == "d"
+        assert isinstance(idx.index, StringLit)
+        assert idx.index.value == "a"
+
+    def test_chained_indexes(self) -> None:
+        idx = first(parse("matrix[0][1]"))
+        assert isinstance(idx, IndexAccess)
+        assert isinstance(idx.index, IntLit)
+        assert idx.index.value == 1
+        assert isinstance(idx.obj, IndexAccess)
+        assert isinstance(idx.obj.obj, VarRef)
+        assert idx.obj.obj.name == "matrix"
+
+    def test_index_then_field(self) -> None:
+        fa = first(parse("rows[0].name"))
+        assert isinstance(fa, FieldAccess)
+        assert fa.field == "name"
+        assert isinstance(fa.obj, IndexAccess)
+        assert isinstance(fa.obj.obj, VarRef)
+        assert fa.obj.obj.name == "rows"
+
+    def test_call_result_index(self) -> None:
+        idx = first(parse("make()[0]"))
+        assert isinstance(idx, IndexAccess)
+        assert isinstance(idx.obj, Call)
+        assert isinstance(idx.obj.callee, VarRef)
+        assert idx.obj.callee.name == "make"
+
+    def test_list_literal_index(self) -> None:
+        idx = first(parse("[1, 2, 3][0]"))
+        assert isinstance(idx, IndexAccess)
+        assert isinstance(idx.obj, ListLit)
 
 
 # ---------------------------------------------------------------------------

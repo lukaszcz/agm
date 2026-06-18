@@ -64,6 +64,8 @@ from agm.agl.syntax import (
     FuncT,
     If,
     IfBranch,
+    IndexAccess,
+    IndexTarget,
     InterpSegment,
     IntLit,
     IntT,
@@ -77,6 +79,7 @@ from agm.agl.syntax import (
     LiteralPattern,
     NamedArg,
     NameT,
+    NameTarget,
     NullLit,
     Param,
     ParamDecl,
@@ -87,6 +90,7 @@ from agm.agl.syntax import (
     Raise,
     RecordDef,
     SetStmt,
+    SetTarget,
     # spans
     SourceSpan,
     StringLit,
@@ -415,6 +419,13 @@ class TestExpressions:
         node = FieldAccess(obj=obj, field="attr", span=self._s(), node_id=1)
         assert node.field == "attr"
         assert node.obj is obj
+
+    def test_index_access(self) -> None:
+        obj = VarRef(name="xs", span=self._s(), node_id=2)
+        index = IntLit(value=0, span=self._s(), node_id=3)
+        node = IndexAccess(obj=obj, index=index, span=self._s(), node_id=1)
+        assert node.obj is obj
+        assert node.index is index
 
     def test_constructor(self) -> None:
         arg = NamedArg(
@@ -911,8 +922,20 @@ class TestBinders:
 
     def test_set_stmt(self) -> None:
         val = IntLit(value=5, span=self._s(), node_id=2)
-        node = SetStmt(target="count", value=val, span=self._s(), node_id=1)
-        assert node.target == "count"
+        target = NameTarget(name="count", span=self._s(), node_id=3)
+        node = SetStmt(target=target, value=val, span=self._s(), node_id=1)
+        assert node.target is target
+
+    def test_name_target(self) -> None:
+        node = NameTarget(name="count", span=self._s(), node_id=1)
+        assert node.name == "count"
+
+    def test_index_target(self) -> None:
+        obj = VarRef(name="xs", span=self._s(), node_id=2)
+        index = IntLit(value=0, span=self._s(), node_id=3)
+        node = IndexTarget(obj=obj, index=index, span=self._s(), node_id=1)
+        assert node.obj is obj
+        assert node.index is index
 
     def test_raise_is_expr(self) -> None:
         # Raise is in the Expr union (bottom type).
@@ -1202,6 +1225,7 @@ class TestVisitorWalk:
         constructor = Constructor(
             qualifier=None, name="Point", args=(named_arg,), span=s, node_id=403
         )
+        index_access = IndexAccess(obj=var_ref, index=int_lit, span=s, node_id=417)
 
         binary_op = BinaryOp(op=BinOp.ADD, left=int_lit, right=int_lit, span=s, node_id=404)
         unary_not = UnaryNot(operand=bool_lit, span=s, node_id=405)
@@ -1291,10 +1315,13 @@ class TestVisitorWalk:
         let_with_type = LetDecl(name="c", type_ann=bool_t, value=bool_lit, span=s, node_id=601)
         var_decl = VarDecl(name="b", type_ann=None, value=str_lit, span=s, node_id=602)
         var_with_type = VarDecl(name="d", type_ann=json_t, value=null_lit, span=s, node_id=603)
-        set_stmt = SetStmt(target="b", value=int_lit, span=s, node_id=604)
+        name_target = NameTarget(name="b", span=s, node_id=604)
+        index_target = IndexTarget(obj=var_ref, index=int_lit, span=s, node_id=605)
+        set_stmt = SetStmt(target=name_target, value=index_access, span=s, node_id=606)
+        indexed_set_stmt = SetStmt(target=index_target, value=int_lit, span=s, node_id=607)
 
         # Param decl without annotation (exercises None branch in walk)
-        input_no_ann = ParamDecl(name="bare", annotation=None, default=None, span=s, node_id=605)
+        input_no_ann = ParamDecl(name="bare", annotation=None, default=None, span=s, node_id=608)
 
         # Param with default (exercises the default branch in walk(Param))
         # Already covered in func_def (p_func has a default).
@@ -1304,9 +1331,9 @@ class TestVisitorWalk:
             items=(
                 record_def, enum_def, type_alias, param_decl, input_no_ann,
                 agent_decl, config_pragma, func_def,
-                let_decl, let_with_type, var_decl, var_with_type, set_stmt,
+                let_decl, let_with_type, var_decl, var_with_type, set_stmt, indexed_set_stmt,
                 # expressions directly in block
-                var_ref, field_access, constructor,
+                var_ref, field_access, index_access, constructor,
                 binary_op, unary_not, unary_neg, is_test,
                 call_node, lam, lam_no_ret,
                 case_node, if_node, do_node, try_node, raise_node,
@@ -1362,7 +1389,7 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         expr_kinds = {
-            VarRef, FieldAccess, Constructor, NamedArg,
+            VarRef, FieldAccess, IndexAccess, Constructor, NamedArg,
             BinaryOp, UnaryNot, UnaryNeg, IsTest,
             Call, Lambda, Block, If, IfBranch, Case, CaseBranch,
             Do, Try, CatchClause, Raise,
@@ -1821,6 +1848,11 @@ class TestUnionAliases:
         args = typing.get_args(Expr)
         assert Call in args
 
+    def test_index_access_is_expr(self) -> None:
+        import typing
+        args = typing.get_args(Expr)
+        assert IndexAccess in args
+
     def test_lambda_is_expr(self) -> None:
         import typing
         args = typing.get_args(Expr)
@@ -1847,6 +1879,12 @@ class TestUnionAliases:
         assert LetDecl in args
         assert VarDecl in args
         assert SetStmt in args
+
+    def test_set_target_union_members(self) -> None:
+        import typing
+        args = typing.get_args(SetTarget)
+        assert NameTarget in args
+        assert IndexTarget in args
 
     def test_declaration_union_members(self) -> None:
         import typing

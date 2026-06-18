@@ -234,6 +234,18 @@ class TestAtomicOnError:
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["v"] == 1  # rolled back, NOT 99
 
+    def test_runtime_raise_rolls_back_indexed_set_to_prior_var(self) -> None:
+        from agm.agl.eval.values import IntValue, ListValue
+
+        s = ReplSession()
+        r1 = s.eval_entry("var xs = [1, 2, 3]")
+        assert r1.ok
+        r2 = s.eval_entry("set xs[0] = 99\nlet z: decimal = 1 / 0")
+        assert not r2.ok
+        assert r2.error is not None
+        vals = {n: v for n, _t, v in s.bindings()}
+        assert vals["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
+
     def test_successful_set_to_prior_var_persists(self) -> None:
         # The positive counterpart: a successful ``set`` in a later entry DOES
         # persist into the session.

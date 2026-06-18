@@ -133,6 +133,16 @@ class FieldAccess:
 
 
 @dataclass(frozen=True, slots=True)
+class IndexAccess:
+    """``obj[index]`` — index access on a list or dict value."""
+
+    obj: Expr
+    index: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Template:
     """A template string: a sequence of text and interpolation segments."""
 
@@ -484,6 +494,7 @@ class DictLit:
 Expr = (
     VarRef
     | FieldAccess
+    | IndexAccess
     | Template
     | Constructor
     | BinaryOp
@@ -593,10 +604,32 @@ class VarDecl:
 
 
 @dataclass(frozen=True, slots=True)
-class SetStmt:
-    """``set target = expr`` — assignment to a mutable variable.  Yields ``unit``."""
+class NameTarget:
+    """Assignment target for ``set name = expr``."""
 
-    target: str
+    name: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class IndexTarget:
+    """Assignment target for ``set root[index] = expr``."""
+
+    obj: Expr
+    index: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+SetTarget = NameTarget | IndexTarget
+
+
+@dataclass(frozen=True, slots=True)
+class SetStmt:
+    """``set target = expr`` — assignment to a mutable target.  Yields ``unit``."""
+
+    target: SetTarget
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)

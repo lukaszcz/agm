@@ -50,6 +50,21 @@ EntryKind = Literal["expression", "binding", "declaration", "statement"]
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 
 
+def _root_name_for_set_target(target: object) -> str | None:
+    """Return the mutable root binding name for a ``set`` target."""
+    from agm.agl.syntax.nodes import IndexAccess, IndexTarget, NameTarget, VarRef
+
+    if isinstance(target, NameTarget):
+        return target.name
+    if isinstance(target, IndexTarget):
+        obj = target.obj
+        while isinstance(obj, IndexAccess):
+            obj = obj.obj
+        if isinstance(obj, VarRef):
+            return obj.name
+    return None
+
+
 def _set_targets_in_program(program: "Program") -> frozenset[str]:
     """Return the set of variable names targeted by ``set`` statements in *program*.
 
@@ -73,7 +88,9 @@ def _set_targets_in_program(program: "Program") -> frozenset[str]:
 
     def _walk_item(item: Item) -> None:
         if isinstance(item, SetStmt):
-            targets.add(item.target)
+            target_name = _root_name_for_set_target(item.target)
+            if target_name is not None:
+                targets.add(target_name)
         elif isinstance(item, Block):
             for sub in item.items:
                 _walk_item(sub)

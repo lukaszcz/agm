@@ -51,6 +51,8 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     If,
     IfBranch,
+    IndexAccess,
+    IndexTarget,
     InterpSegment,
     IntLit,
     IsTest,
@@ -59,6 +61,7 @@ from agm.agl.syntax.nodes import (
     ListLit,
     LiteralPattern,
     NamedArg,
+    NameTarget,
     NullLit,
     Param,
     ParamDecl,
@@ -164,6 +167,8 @@ class Visitor:
     def visit_LetDecl(self, node: LetDecl) -> None: ...
     def visit_VarDecl(self, node: VarDecl) -> None: ...
     def visit_SetStmt(self, node: SetStmt) -> None: ...
+    def visit_NameTarget(self, node: NameTarget) -> None: ...
+    def visit_IndexTarget(self, node: IndexTarget) -> None: ...
 
     # Literal nodes
     def visit_UnitLit(self, node: UnitLit) -> None: ...
@@ -184,6 +189,7 @@ class Visitor:
     # Expression nodes
     def visit_VarRef(self, node: VarRef) -> None: ...
     def visit_FieldAccess(self, node: FieldAccess) -> None: ...
+    def visit_IndexAccess(self, node: IndexAccess) -> None: ...
     def visit_NamedArg(self, node: NamedArg) -> None: ...
     def visit_Constructor(self, node: Constructor) -> None: ...
     def visit_BinaryOp(self, node: BinaryOp) -> None: ...
@@ -251,6 +257,8 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         LetDecl,
         VarDecl,
         SetStmt,
+        NameTarget,
+        IndexTarget,
         # literal nodes
         UnitLit,
         IntLit,
@@ -268,6 +276,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         # expression nodes
         VarRef,
         FieldAccess,
+        IndexAccess,
         NamedArg,
         Constructor,
         BinaryOp,
@@ -393,7 +402,15 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.value, callback)
 
     elif isinstance(node, SetStmt):
+        walk(node.target, callback)
         walk(node.value, callback)
+
+    elif isinstance(node, NameTarget):
+        pass
+
+    elif isinstance(node, IndexTarget):
+        walk(node.obj, callback)
+        walk(node.index, callback)
 
     # --- Literal nodes ---
     elif isinstance(node, (UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit)):
@@ -428,6 +445,10 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, FieldAccess):
         walk(node.obj, callback)
+
+    elif isinstance(node, IndexAccess):
+        walk(node.obj, callback)
+        walk(node.index, callback)
 
     elif isinstance(node, NamedArg):
         walk(node.value, callback)

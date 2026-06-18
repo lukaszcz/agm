@@ -37,7 +37,30 @@ from lark.lexer import Lexer, LexerState, Token
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
-from agm.agl.lexer.tokens import GRAMMAR_TOKEN_REMAP, INT, LOOP_BOUND, LSQB, RSQB
+from agm.agl.lexer.tokens import (
+    GRAMMAR_TOKEN_REMAP,
+    INDEX_LSQB,
+    INT,
+    LOOP_BOUND,
+    LSQB,
+    RSQB,
+)
+
+_INDEX_PREDECESSORS = frozenset(
+    {
+        "VAR_NAME",
+        "TYPE_NAME",
+        INT,
+        "DECIMAL",
+        "TRUE",
+        "FALSE",
+        "NULL",
+        "TEMPLATE_END",
+        "RPAR",
+        RSQB,
+        "RBRACE",
+    }
+)
 
 # Ambient sink for TAB advisories produced during a Lark-driven parse.  The
 # lexer scans the source exactly once (no separate TAB pass); when a sink is
@@ -123,6 +146,32 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
     yield from buf
 
 
+def _remap_index_brackets(tokens: list[Token]) -> list[Token]:
+    """Turn adjacent expression brackets into INDEX_LSQB for the parser."""
+    result: list[Token] = []
+    previous: Token | None = None
+    for tok in tokens:
+        if (
+            tok.type == LSQB
+            and previous is not None
+            and previous.type in _INDEX_PREDECESSORS
+            and previous.end_pos == tok.start_pos
+        ):
+            tok = Token(
+                INDEX_LSQB,
+                str(tok),
+                start_pos=tok.start_pos,
+                line=tok.line,
+                column=tok.column,
+                end_line=tok.end_line,
+                end_column=tok.end_column,
+                end_pos=tok.end_pos,
+            )
+        result.append(tok)
+        previous = tok
+    return result
+
+
 class AglLexer(Lexer):
     """Custom Lark lexer for AgL.
 
@@ -162,7 +211,7 @@ class AglLexer(Lexer):
         # ``finally`` deposits whatever was collected, including on a LexError.
         scanner = _Scanner(source)
         try:
-            tokens = list(_remap(layout(scanner.scan())))
+            tokens = _remap_index_brackets(list(_remap(layout(scanner.scan()))))
         finally:
             sink = _TAB_WARNING_SINK.get()
             if sink is not None:

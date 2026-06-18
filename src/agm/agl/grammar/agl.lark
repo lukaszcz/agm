@@ -83,7 +83,7 @@
 %declare EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
 %declare ARROW THIN_ARROW
-%declare LPAR RPAR LSQB RSQB LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
+%declare LPAR RPAR LSQB INDEX_LSQB RSQB LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
 %declare LOOP_BOUND
 
 // Note: EQ_EQ (==) is declared by the lexer but not used in any grammar rule.
@@ -206,7 +206,9 @@ func_body: suite_expr | expr
 
 let_decl: "let" VAR_NAME type_ann? EQ expr
 var_decl: "var" VAR_NAME type_ann? EQ expr
-set_stmt: "set" VAR_NAME EQ expr
+set_stmt: "set" set_target EQ expr
+
+set_target: VAR_NAME (INDEX_LSQB expr RSQB)*
 
 // Type annotation: COLON followed by a type_expr.
 type_ann: COLON type_expr
@@ -224,12 +226,14 @@ type_ann: COLON type_expr
 // func_type: (A, B) -> C — the unit func type () -> C uses empty type_list.
 // ---------------------------------------------------------------------------
 
-type_expr: LPAR type_list? RPAR THIN_ARROW type_expr  -> func_type
-         | VAR_NAME LSQB type_expr RSQB               -> generic_type_1
-         | VAR_NAME LSQB VAR_NAME COMMA type_expr RSQB -> dict_type
+type_expr: LPAR type_list? RPAR THIN_ARROW type_expr       -> func_type
+         | VAR_NAME type_lsqb type_expr RSQB               -> generic_type_1
+         | VAR_NAME type_lsqb VAR_NAME COMMA type_expr RSQB -> dict_type
          | VAR_NAME                                    -> prim_type_or_name
          | TYPE_NAME                                   -> named_type
          | AGENT                                       -> agent_type
+
+type_lsqb: LSQB | INDEX_LSQB
 
 // Comma-separated type list for function-type parameters.
 type_list: type_expr (COMMA type_expr)* COMMA?
@@ -432,6 +436,7 @@ juxt_arg: juxt_atom (DOT field_name)+ -> juxt_field_access
 ?postfix: postfix LPAR arg_list? RPAR  -> call
         | postfix DOT field_name       -> field_access
         | postfix DOT TYPE_NAME        -> type_access
+        | postfix INDEX_LSQB expr RSQB -> index_access
         | atom
 
 // ---------------------------------------------------------------------------

@@ -430,14 +430,43 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def set_stmt(self, meta: Meta, args: _Args) -> syntax.SetStmt:
-        # Grammar: "set" VAR_NAME EQ expr
+    def set_target(self, meta: Meta, args: _Args) -> syntax.SetTarget:
         name_tok = args[0]
         assert isinstance(name_tok, Token)
-        value = _find_expr(args[1:])
+        indexes = [cast(syntax.Expr, a) for a in args[1:] if _is_expr_node(a)]
+        if not indexes:
+            return syntax.NameTarget(
+                name=str(name_tok),
+                span=_span_from_token(name_tok),
+                node_id=self._next_id(),
+            )
+
+        obj: syntax.Expr = syntax.VarRef(
+            name=str(name_tok),
+            span=_span_from_token(name_tok),
+            node_id=self._next_id(),
+        )
+        for index in indexes[:-1]:
+            obj = syntax.IndexAccess(
+                obj=obj,
+                index=index,
+                span=_span_from_meta(meta),
+                node_id=self._next_id(),
+            )
+        return syntax.IndexTarget(
+            obj=obj,
+            index=indexes[-1],
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def set_stmt(self, meta: Meta, args: _Args) -> syntax.SetStmt:
+        # Grammar: "set" set_target EQ expr
+        target = next(a for a in args if _is_set_target(a))
+        value = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
         span = _span_from_meta(meta)
         return syntax.SetStmt(
-            target=str(name_tok),
+            target=cast(syntax.SetTarget, target),
             value=value,
             span=span,
             node_id=self._next_id(),
@@ -723,6 +752,17 @@ class AstBuilder(Transformer):
         return syntax.FieldAccess(
             obj=obj_expr,
             field=str(field_tok),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def index_access(self, meta: Meta, args: _Args) -> syntax.IndexAccess:
+        """postfix INDEX_LSQB expr RSQB — list/dict index access."""
+        exprs = [a for a in args if _is_expr_node(a)]
+        obj_expr, index_expr = exprs
+        return syntax.IndexAccess(
+            obj=cast(syntax.Expr, obj_expr),
+            index=cast(syntax.Expr, index_expr),
             span=_span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -1501,6 +1541,16 @@ def _require_literal_string(node: object, message: str) -> syntax.StringLit:
 def _is_expr_obj(a: object) -> bool:
     """Return True if *a* is an Expr (AST node, not a Token or None)."""
     return a is not None and not isinstance(a, Token)
+
+
+def _is_expr_node(a: object) -> bool:
+    """Return True if *a* is an expression AST node."""
+    return isinstance(a, syntax.Expr)
+
+
+def _is_set_target(a: object) -> bool:
+    """Return True if *a* is an assignment target AST node."""
+    return isinstance(a, (syntax.NameTarget, syntax.IndexTarget))
 
 
 def _find_non_token(args: _Args) -> object:

@@ -22,6 +22,13 @@ def tok(source: str) -> list[tuple[str, str]]:
     return [(t.type, str(t)) for t in tokenize(source)]
 
 
+def lark_tok(source: str) -> list[tuple[str, str]]:
+    """Return parser-facing ``(type, value)`` pairs for every token in *source*."""
+    lexer = AglLexer(None)
+    state = LexerState(source)
+    return [(t.type, str(t)) for t in lexer.lex(state, None)]
+
+
 # ---------------------------------------------------------------------------
 # Keywords vs identifiers
 # ---------------------------------------------------------------------------
@@ -277,6 +284,79 @@ class TestOperators:
     def test_maximal_munch_neq_vs_bang(self) -> None:
         result = tok("!=")
         assert result == [("NEQ", "!=")]
+
+
+class TestIndexBracketRemap:
+    def test_adjacent_lsqb_after_expression_ending_token_is_index_lsqb(self) -> None:
+        assert lark_tok('xs[0] d["a"] make()[0] [1][0] {"a": 1}["a"]') == [
+            ("VAR_NAME", "xs"),
+            ("INDEX_LSQB", "["),
+            ("INT", "0"),
+            ("RSQB", "]"),
+            ("VAR_NAME", "d"),
+            ("INDEX_LSQB", "["),
+            ("TEMPLATE_START", '"'),
+            ("STRING_FRAGMENT", "a"),
+            ("TEMPLATE_END", '"'),
+            ("RSQB", "]"),
+            ("VAR_NAME", "make"),
+            ("LPAR", "("),
+            ("RPAR", ")"),
+            ("INDEX_LSQB", "["),
+            ("INT", "0"),
+            ("RSQB", "]"),
+            ("LSQB", "["),
+            ("INT", "1"),
+            ("RSQB", "]"),
+            ("INDEX_LSQB", "["),
+            ("INT", "0"),
+            ("RSQB", "]"),
+            ("LBRACE", "{"),
+            ("TEMPLATE_START", '"'),
+            ("STRING_FRAGMENT", "a"),
+            ("TEMPLATE_END", '"'),
+            ("COLON", ":"),
+            ("INT", "1"),
+            ("RBRACE", "}"),
+            ("INDEX_LSQB", "["),
+            ("TEMPLATE_START", '"'),
+            ("STRING_FRAGMENT", "a"),
+            ("TEMPLATE_END", '"'),
+            ("RSQB", "]"),
+        ]
+
+    def test_spaced_lsqb_stays_list_literal_lsqb(self) -> None:
+        assert lark_tok("f [2]") == [
+            ("VAR_NAME", "f"),
+            ("LSQB", "["),
+            ("INT", "2"),
+            ("RSQB", "]"),
+        ]
+
+    def test_newline_and_comment_separated_lsqb_stays_lsqb(self) -> None:
+        assert lark_tok("xs\n[0]") == [
+            ("VAR_NAME", "xs"),
+            ("_NEWLINE", "0"),
+            ("LSQB", "["),
+            ("INT", "0"),
+            ("RSQB", "]"),
+        ]
+        assert lark_tok("xs # comment\n[0]") == [
+            ("VAR_NAME", "xs"),
+            ("_NEWLINE", "0"),
+            ("LSQB", "["),
+            ("INT", "0"),
+            ("RSQB", "]"),
+        ]
+
+    def test_do_loop_bound_merge_still_wins_over_index_lsqb(self) -> None:
+        assert lark_tok("do[3] tick until done") == [
+            ("DO", "do"),
+            ("LOOP_BOUND", "3"),
+            ("VAR_NAME", "tick"),
+            ("UNTIL", "until"),
+            ("VAR_NAME", "done"),
+        ]
 
 
 # ---------------------------------------------------------------------------

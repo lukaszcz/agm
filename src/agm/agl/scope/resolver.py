@@ -67,6 +67,8 @@ from agm.agl.syntax.nodes import (
     FieldAccess,
     FuncDef,
     If,
+    IndexAccess,
+    IndexTarget,
     InterpSegment,
     IntLit,
     IsTest,
@@ -74,6 +76,7 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
+    NameTarget,
     NullLit,
     ParamDecl,
     Pattern,
@@ -133,6 +136,18 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 def _immutable_binder_phrase(kind: BinderKind) -> str:
     """Return the ``set``-rejection phrase naming *kind*'s binder."""
     return _IMMUTABLE_BINDER_PHRASES[kind]
+
+
+def _target_root_name(target: object) -> str:
+    """Return the variable name at the root of an assignment target."""
+    if isinstance(target, (IndexTarget, IndexAccess)):
+        return _target_root_name(target.obj)
+    if isinstance(target, (NameTarget, VarRef)):
+        return target.name
+    raise AglScopeError(
+        "indexed assignment requires a variable list or dict root.",
+        span=target.span if isinstance(target, IndexAccess) else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -625,22 +640,29 @@ class _Resolver:
         self._define(node.name, ref)
 
     def _resolve_set(self, node: SetStmt) -> None:
-        ref = self._current_scope().lookup(node.target)
+        name = _target_root_name(node.target)
+        ref = self._current_scope().lookup(name)
         if ref is None:
             raise AglScopeError(
-                f"'{node.target}' is not declared; 'set' requires an existing "
+                f"'{name}' is not declared; 'set' requires an existing "
                 f"mutable binding.",
                 span=node.span,
             )
         if not ref.mutable:
             raise AglScopeError(
-                f"Cannot assign to '{node.target}': "
+                f"Cannot assign to '{name}': "
                 f"{_immutable_binder_phrase(ref.kind)} (immutable). "
                 f"Declare with 'var' to make the variable mutable.",
                 span=node.span,
             )
         self._resolution[node.node_id] = ref
+        self._resolve_set_target_indexes(node.target)
         self._resolve_expr(node.value)
+
+    def _resolve_set_target_indexes(self, target: object) -> None:
+        if isinstance(target, IndexTarget):
+            self._resolve_expr(target.obj)
+            self._resolve_expr(target.index)
 
     def _resolve_param(self, node: ParamDecl) -> None:
         if not self._at_root:
@@ -718,6 +740,9 @@ class _Resolver:
             self._resolve_expr(expr.exc)
         elif isinstance(expr, FieldAccess):
             self._resolve_expr(expr.obj)
+        elif isinstance(expr, IndexAccess):
+            self._resolve_expr(expr.obj)
+            self._resolve_expr(expr.index)
         elif isinstance(expr, BinaryOp):
             self._resolve_expr(expr.left)
             self._resolve_expr(expr.right)

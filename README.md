@@ -156,7 +156,11 @@ agm list -v
 
 ### `agm setup`
 
-Run configured setup scripts for the current checkout.
+Run configured setup scripts for the current checkout, in this order:
+
+1. `config/setup.sh`
+2. `<checkout>/.config/setup.sh`
+3. `<checkout>/.setup.sh`
 
 ```bash
 agm setup
@@ -268,16 +272,12 @@ Low-level worktree operations for the main project repo.
 ```bash
 agm worktree new feat/search
 agm wt new --dir /tmp/worktrees feat/search
-agm worktree setup
 agm worktree remove --force old-branch
 agm wt rm old-branch
 ```
 
-`agm worktree setup` runs executable setup scripts, in order, from:
-
-1. `config/setup.sh`
-2. `<checkout>/.config/setup.sh`
-3. `<checkout>/.setup.sh`
+`agm setup` (not a worktree subcommand) runs the configured setup scripts for the
+current checkout; see [`agm setup`](#agm-setup).
 
 ### `agm dep`
 
@@ -355,6 +355,6 @@ See `agm help repl` and [docs/commands.md](docs/commands.md) for the full refere
 ```bash
 agm help
 agm help run
-agm help worktree setup
+agm help worktree new
 agm open --help
 ```

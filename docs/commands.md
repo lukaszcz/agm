@@ -66,6 +66,12 @@ Global options:
 - the main repo worktree is listed first
 - the current worktree is indicated with a leading `*`
 
+`agm setup` runs executable setup scripts for the current checkout, in this order:
+
+1. project-level `config/setup.sh`
+2. checkout-local `.config/setup.sh`
+3. checkout-local `.setup.sh`
+
 `agm init` options:
 
 - `--embedded`: force the embedded layout with AGM data under `.agm/`
@@ -160,11 +166,9 @@ Logging:
 | Command | Description |
 |---|---|
 | `agm worktree new [-d\|--dir DIR] BRANCH` | Create a new branch worktree or check out an existing branch |
-| `agm worktree setup` | Run configured setup scripts for the current checkout |
 | `agm worktree remove [-f\|--force] BRANCH` | Remove a worktree and delete its local branch |
 | `agm worktree rm [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
 | `agm wt new [-d\|--dir DIR] BRANCH` | Alias form of `agm worktree new` |
-| `agm wt setup` | Alias form of `agm worktree setup` |
 | `agm wt rm [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
 | `agm wt remove [-f\|--force] BRANCH` | Alias form of `agm worktree remove` |
 | `agm dep list [-v\|--verbose] [--all]` | List dependency checkouts |
@@ -178,12 +182,6 @@ Logging:
 `agm worktree new` options:
 
 - `-d`, `--dir DIR`: use `agm worktree new --dir DIR BRANCH` to create the worktree under `DIR` instead of the project's default worktrees directory
-
-`agm worktree setup` runs executable setup scripts, in this order:
-
-1. project-level `config/setup.sh`
-2. checkout-local `.config/setup.sh`
-3. checkout-local `.setup.sh`
 
 `agm worktree remove` options:
 

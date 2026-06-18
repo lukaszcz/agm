@@ -67,7 +67,6 @@ from agm.agl.syntax.types import (
     IntT,
     JsonT,
     ListT,
-    NameT,
     TextT,
     UnitT,
 )
@@ -675,17 +674,23 @@ class TestLiterals:
 
     def test_int_widens_to_decimal_annotation(self) -> None:
         r = accept_type("let d: decimal = 3\nd")
-        assert r.resolved.program is not None
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.type_env.get_binding_type(decl.node_id) == DecimalType()
 
     def test_mismatch_text_vs_int(self) -> None:
         err = reject_type("let x: text = 42\nx")
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_mismatch_int_vs_bool(self) -> None:
-        reject_type("let x: bool = 42\nx")
+        err = reject_type("let x: bool = 42\nx")
+        assert "bool" in str(err).lower()
+        assert "int" in str(err).lower()
 
     def test_mismatch_text_vs_bool(self) -> None:
-        reject_type('let x: bool = "hello"\nx')
+        err = reject_type('let x: bool = "hello"\nx')
+        assert "bool" in str(err).lower()
+        assert "text" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -3050,23 +3055,15 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities())
 
     def test_alias_seen_guard_in_ensure_referenced(self) -> None:
-        # Exercises line 315->exit: the _alias_seen guard prevents re-following an
-        # alias that's already in the traversal set.  We trigger this by directly
-        # calling _TypeBuilder._ensure_referenced_type_built with a NameT that
-        # refers back to an alias already in _alias_seen (simulating a cycle that
-        # _validate_alias would normally catch first, but not when calling directly).
-        from agm.agl.typecheck.checker import _TypeBuilder
-
-        sp = mk_span()
-        env = TypeEnvironment()
-        builder = _TypeBuilder(env)
-        # Register two aliases that reference each other: A -> B, B -> A
-        env.register_alias("A", NameT(name="B", span=sp, node_id=_mk_node_id()))
-        env.register_alias("B", NameT(name="A", span=sp, node_id=_mk_node_id()))
-        # Start traversal from A; this eventually reaches A again with A in _alias_seen
-        # On the second encounter of A: 'A' in _alias_seen → branch 315->exit fires
-        builder._ensure_referenced_type_built(NameT(name="A", span=sp, node_id=_mk_node_id()))
-        # No error raised — the guard simply skips re-traversal
+        err = reject_type(
+            "record Wrapper\n"
+            "  value: A\n"
+            "type A = B\n"
+            "type B = A\n"
+            "()"
+        )
+        assert "cycle" in str(err).lower()
+        assert "a" in str(err).lower()
 
     def test_binding_type_not_set_assertion(self) -> None:
         # Exercises line 609: _require_binding_type raises AssertionError when a

@@ -1946,11 +1946,9 @@ class TestFencedRepairFallback:
         # The outer prose has the real JSON.
         raw = "Here is the value: 42 ```json\n\n```"
         result = codec.parse(raw, IntType(), strict_json=False)
-        # The whole-raw repair path should find 42.
-        # (If it doesn't, that's also acceptable — the important thing is we cover the path.)
-        # This test simply exercises the branch without asserting a specific outcome
-        # since json_repair behavior on edge cases may vary.
-        assert isinstance(result.ok, bool)
+        assert result.ok
+        assert result.value == IntValue(42)
+        assert result.normalized_raw == "42"
 
     def test_lenient_json_decode_error_after_extraction(self) -> None:
         """_parse_lenient: _extract_json_text returns a string that json.loads still rejects."""
@@ -2239,9 +2237,9 @@ class TestRegisterCodec:
         codec = copy.copy(TextCodec())
         return codec
 
-    def test_register_codec_accepted(self) -> None:
+    def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
-        rt = WorkflowRuntime()
+        rt = WorkflowRuntime(default_agent=lambda request: "response")
 
         class AltTextCodec(TC):
             @property
@@ -2252,7 +2250,14 @@ class TestRegisterCodec:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
 
-        rt.register_codec(AltTextCodec())  # should not raise
+        rt.register_codec(AltTextCodec())
+        result = rt.run(
+            'let answer: text = ask("question", format: "alt_text")\nprint answer',
+            param_values={},
+        )
+
+        assert result.ok
+        assert capsys.readouterr().out == "response\n"
 
     def test_register_duplicate_codec_raises(self) -> None:
         from agm.agl.runtime.codec import ParseResult as PR

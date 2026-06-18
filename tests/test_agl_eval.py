@@ -342,12 +342,15 @@ until count = 3
 
 def test_do_block_bindings_visible_to_until_condition() -> None:
     source = """\
+var iterations = 0
 do[1]
   let done = true
+  iterations := iterations + 1
   ()
 until done
 ()"""
-    _run_source(source)
+    snap = _run_source(source)
+    assert snap["iterations"] == IntValue(1)
 
 
 def test_do_expression_body_still_runs_in_iteration_scope() -> None:

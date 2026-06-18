@@ -62,11 +62,20 @@ class TestWorkflowRuntimeConstructor:
 class TestRegisterAgent:
     def test_register_agent_accepted(self) -> None:
         rt = WorkflowRuntime()
+        prompts: list[str] = []
 
-        def my_agent(request: object) -> str:
+        def my_agent(request: AgentRequest) -> str:
+            prompts.append(request.prompt)
             return "response"
 
-        rt.register_agent("my_agent", my_agent)  # should not raise
+        rt.register_agent("my_agent", my_agent)
+        result = rt.run(
+            'agent my_agent\nlet answer = ask("meaningful prompt", agent: my_agent)\n'
+            "print answer"
+        )
+
+        assert result.ok
+        assert prompts == ["meaningful prompt"]
 
     def test_register_duplicate_raises(self) -> None:
         rt = WorkflowRuntime()

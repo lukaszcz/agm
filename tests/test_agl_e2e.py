@@ -89,7 +89,7 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
 
 
 def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, ScriptedAgent]]:
-    from agm.agl import WorkflowRuntime  # red until the AgL implementation lands
+    from agm.agl import WorkflowRuntime
 
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
@@ -218,7 +218,7 @@ def test_program_scenario(
 
 @pytest.mark.parametrize("program", _rejection_params())
 def test_static_rejection(program: Path) -> None:
-    from agm.agl import WorkflowRuntime  # red until the AgL implementation lands
+    from agm.agl import WorkflowRuntime
 
     expect = _load_json(program.with_name(program.stem + ".expect.json"))["diagnostic"]
     result = WorkflowRuntime().run(program.read_text(encoding="utf-8"), param_values={})

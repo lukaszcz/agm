@@ -800,6 +800,7 @@ class TestPipeContinuation:
         # The | branches should not be separated by _NEWLINE
         # Between the DEDENT of first branch and the | there should be no _NEWLINE
         pipe_indices = [i for i, t in enumerate(types) if t == "PIPE"]
+        assert len(pipe_indices) == 1
         # No _NEWLINE should appear just before a PIPE (after potential DEDENTs)
         for pipe_idx in pipe_indices:
             # Check that no _NEWLINE precedes this PIPE
@@ -817,6 +818,7 @@ class TestPipeContinuation:
         result = tok(source)
         types = [t for t, _ in result]
         pipe_indices = [i for i, t in enumerate(types) if t == "PIPE"]
+        assert len(pipe_indices) == 2
         # All pipes after the first should not have _NEWLINE before them
         for pipe_idx in pipe_indices[1:]:
             for j in range(pipe_idx - 1, -1, -1):

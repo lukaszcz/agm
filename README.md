@@ -74,6 +74,10 @@ Without `--embedded` or `--split`, AGM chooses:
 `agm init` also creates `config/env.sh` and an executable `config/setup.sh` if they do not
 already exist.
 
+For split layouts without a repository URL, AGM initializes `repo/` as an empty git repository.
+Use `--no-repo-git` to skip that repository, or `--no-git-init` to skip all git repositories
+created by `agm init`.
+
 ## Usage
 
 ```bash

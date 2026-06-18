@@ -26,10 +26,10 @@ Global options:
 | `agm wsp close [-f\|--force] [-D] BRANCH` | Alias form of `agm workspace close` |
 | `agm wsp list [-v\|--verbose]` | Alias form of `agm workspace list` |
 | `agm wsp setup` | Alias form of `agm workspace setup` |
-| `agm init [--embedded \| --split] [--no-git-init \| --no-config-git \| --no-notes-git]` | Initialize the current directory without cloning a repo |
-| `agm init [--embedded \| --split] [--no-git-init \| --no-config-git \| --no-notes-git] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
-| `agm init [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
-| `agm init --clone [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
+| `agm init [--embedded \| --split] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git]` | Initialize the current directory without cloning a repo |
+| `agm init [--embedded \| --split] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
+| `agm init [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
+| `agm init --clone [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
 | `agm sync fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
 | `agm sync pull` | Run `agm sync fetch`, then run `git merge` in every dependency, main workspace, and branch workspace |
 
@@ -87,7 +87,8 @@ config, branch config, dependency environment, setup scripts, and tmux session l
 - `--split`: force the split layout with `repo/`, `deps/`, `notes/`, `worktrees/`, and `config/`
 - `--clone`: initialize a child directory derived from `REPO_URL` when no `PROJECT_NAME` is provided
 - `-b`, `--branch BRANCH`: clone this branch when `REPO_URL` is provided
-- `--no-git-init`: do not create git repositories in `config/` and `notes/`
+- `--no-git-init`: do not create git repositories in `repo/`, `config/`, and `notes/`
+- `--no-repo-git`: do not create a git repository in `repo/`
 - `--no-config-git`: do not create a git repository in `config/`
 - `--no-notes-git`: do not create a git repository in `notes/`
 
@@ -99,6 +100,12 @@ config, branch config, dependency environment, setup scripts, and tmux session l
 - without `PROJECT_NAME`, AGM initializes the current directory
 - with `PROJECT_NAME`, AGM initializes a child directory with that name
 - with `--clone REPO_URL`, AGM initializes a child directory derived from the URL
+
+`agm init` split layout notes:
+
+- without `REPO_URL`, AGM initializes `repo/` as an empty git repository
+- `--no-repo-git` skips the empty `repo/` git repository initialization
+- `--no-git-init` includes `--no-repo-git`, `--no-config-git`, and `--no-notes-git`
 
 ## Loop automation
 

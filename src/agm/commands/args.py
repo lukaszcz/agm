@@ -80,6 +80,7 @@ class InitArgs:
     embedded: bool
     split: bool
     clone: bool
+    no_repo_git: bool
     no_config_git: bool
     no_notes_git: bool
     no_git_init: bool

@@ -779,6 +779,16 @@ class TestInit:
         assert calls[0].split is True
         assert calls[0].positional == ["myproj"]
 
+    def test_init_with_no_repo_git(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.init_command)
+        result = invoke(runner, ["init", "--no-repo-git", "myproj"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_repo_git is True
+        assert calls[0].positional == ["myproj"]
+
     def test_init_with_workspace_is_rejected(self, runner: CliRunner) -> None:
         result = invoke(runner, ["init", "--workspace", "myproj"])
         assert result.exit_code != 0

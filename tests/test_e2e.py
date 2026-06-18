@@ -2896,7 +2896,7 @@ class TestInit:
         assert result.returncode != 0
         assert "no-such-branch" in result.stderr.lower() or result.returncode == 128
 
-    def test_init_without_url_creates_structure_only(
+    def test_init_without_url_initializes_split_repo(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         run_agm(["init", "myproj"], env=env, cwd=str(tmp_path))
@@ -2904,9 +2904,33 @@ class TestInit:
         proj = tmp_path / "myproj"
         for d in ("repo", "deps", "worktrees", "notes", "config"):
             assert (proj / d).is_dir()
-        assert not list((proj / "repo").iterdir())
+        assert (proj / "repo" / ".git").is_dir()
+        assert ".agent-files" in (proj / "repo" / ".gitignore").read_text().splitlines()
         assert (proj / "config" / ".git").is_dir()
         assert (proj / "notes" / ".git").is_dir()
+
+    def test_init_no_repo_git_skips_split_repo_git_init(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        run_agm(["init", "--no-repo-git", "myproj"], env=env, cwd=str(tmp_path))
+
+        proj = tmp_path / "myproj"
+        assert (proj / "repo").is_dir()
+        assert not (proj / "repo" / ".git").exists()
+        assert not (proj / "repo" / ".gitignore").exists()
+        assert (proj / "config" / ".git").is_dir()
+        assert (proj / "notes" / ".git").is_dir()
+
+    def test_init_no_git_init_skips_all_init_created_git_repositories(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        run_agm(["init", "--no-git-init", "myproj"], env=env, cwd=str(tmp_path))
+
+        proj = tmp_path / "myproj"
+        assert (proj / "repo").is_dir()
+        assert not (proj / "repo" / ".git").exists()
+        assert not (proj / "config" / ".git").exists()
+        assert not (proj / "notes" / ".git").exists()
 
     def test_init_initializes_current_directory_for_workspace_layout(
         self, tmp_path: Path, env: dict[str, str]
@@ -2918,6 +2942,7 @@ class TestInit:
 
         for dirname in ("repo", "deps", "worktrees", "notes", "config"):
             assert (project / dirname).is_dir()
+        assert (project / "repo" / ".git").is_dir()
         assert not (project / "myproj").exists()
 
     def test_init_dry_run_prints_operations_without_creating_project(
@@ -6906,7 +6931,8 @@ class TestHelp:
 
         assert (
             "agm init [--embedded | --split]"
-            "\n         [--no-git-init | --no-config-git | --no-notes-git] PROJECT_NAME"
+            "\n         [--no-git-init | --no-repo-git | --no-config-git | --no-notes-git]"
+            "\n         PROJECT_NAME"
             in result.stdout
         )
         assert (

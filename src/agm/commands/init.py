@@ -80,6 +80,7 @@ def configure_project_dir(
     embedded: bool,
     no_config_git: bool = False,
     no_notes_git: bool = False,
+    no_repo_git: bool = False,
     no_git_init: bool = False,
 ) -> None:
     layout_dirs: Sequence[Path]
@@ -110,6 +111,9 @@ def configure_project_dir(
         mkdir(dirname, parents=True, exist_ok=True)
     if not embedded:
         repo_dir = project_repo_dir(project_dir)
+        skip_repo_git = no_repo_git or no_git_init
+        if not skip_repo_git:
+            ensure_git_repo(repo_dir)
         if git_helpers.is_git_repo(repo_dir):
             ensure_gitignore_entry(repo_dir / ".gitignore", AGENT_FILES_GITIGNORE_ENTRY)
 
@@ -190,6 +194,7 @@ def run(args: InitArgs) -> None:
             embedded=embedded_layout,
             no_config_git=args.no_config_git,
             no_notes_git=args.no_notes_git,
+            no_repo_git=args.no_repo_git,
             no_git_init=args.no_git_init,
         )
         return
@@ -216,5 +221,6 @@ def run(args: InitArgs) -> None:
         embedded=embedded_layout,
         no_config_git=args.no_config_git,
         no_notes_git=args.no_notes_git,
+        no_repo_git=args.no_repo_git,
         no_git_init=args.no_git_init,
     )

@@ -635,7 +635,8 @@ class _Resolver:
         if not ref.mutable:
             raise AglScopeError(
                 f"Cannot assign to '{node.target}': "
-                f"{_immutable_binder_phrase(ref.kind)} (immutable).",
+                f"{_immutable_binder_phrase(ref.kind)} (immutable). "
+                f"Declare with 'var' to make the variable mutable.",
                 span=node.span,
             )
         self._resolution[node.node_id] = ref

@@ -97,7 +97,7 @@ class TestDepEnvVarName:
 
 class TestConfigTomlFile:
     def test_no_branch_returns_config_dir_config_toml(self, tmp_path: Path) -> None:
-        # workspace layout: data_dir = project_dir, config_dir = project_dir / "config"
+        # split layout: data_dir = project_dir, config_dir = project_dir / "config"
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
         (project_dir / "repo").mkdir()
@@ -881,7 +881,7 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
-        # Without parent_branch, falls back to main checkout
+        # Without parent_branch, falls back to main workspace
         ensure_dependency_configs_for_branch(
             project_dir=project_dir, branch="feat"
         )
@@ -1179,7 +1179,7 @@ class TestUpdateAllProjectDependencyConfigs:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Worktrees directory is project_dir/worktrees (workspace layout)."""
+        """Worktrees directory is project_dir/worktrees (split layout)."""
         project_dir = self._workspace_project(tmp_path)
         worktrees_dir = project_dir / "worktrees"
         worktrees_dir.mkdir()

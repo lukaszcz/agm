@@ -1,4 +1,4 @@
-"""agm fetch."""
+"""agm sync fetch."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Tests for agm.commands.open helper functions."""
+"""Tests for agm.commands.workspace.open helper functions."""
 
 from __future__ import annotations
 
@@ -31,12 +31,12 @@ class TestResolveParentConfigBranch:
         result = layout_module.parent_config_branch(project_dir, "feature-a")
         assert result == "feature-a"
 
-    def test_none_parent_returns_repo_branch_if_branch_checkout(
+    def test_none_parent_returns_repo_branch_if_branch_workspace(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
     ) -> None:
         project_dir = self._workspace_project(tmp_path, env)
         # When parent=None and repo branch is "main", resolve uses "main"
-        # but since main IS the main checkout, it should return None
+        # but since main IS the main workspace, it should return None
         monkeypatch.setattr(
             layout_module.git_helpers,
             "current_branch",
@@ -50,13 +50,13 @@ class TestResolveParentConfigBranch:
     ) -> None:
         project_dir = self._workspace_project(tmp_path, env)
         # When repo branch is "develop" (not "main"), and parent is None,
-        # resolve uses "develop" which is the repo branch → main checkout → None
+        # resolve uses "develop" which is the repo branch → main workspace → None
         monkeypatch.setattr(
             layout_module.git_helpers,
             "current_branch",
             lambda _repo_dir, **_kw: "develop",
         )
-        # The repo branch IS the main checkout branch, so None
+        # The repo branch IS the main workspace branch, so None
         result = layout_module.parent_config_branch(project_dir, None)
         assert result is None
 
@@ -69,7 +69,7 @@ class TestResolveParentConfigBranch:
             "current_branch",
             lambda _repo_dir, **_kw: "main",
         )
-        # Parent "main" == repo branch "main" → this is the main checkout → None
+        # Parent "main" == repo branch "main" → this is the main workspace → None
         result = layout_module.parent_config_branch(project_dir, "main")
         assert result is None
 
@@ -82,6 +82,6 @@ class TestResolveParentConfigBranch:
             "current_branch",
             lambda _repo_dir, **_kw: "develop",
         )
-        # Parent "feature-x" != repo branch "develop" → not main checkout
+        # Parent "feature-x" != repo branch "develop" → not main workspace
         result = layout_module.parent_config_branch(project_dir, "feature-x")
         assert result == "feature-x"

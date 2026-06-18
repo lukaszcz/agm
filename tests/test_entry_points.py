@@ -12,10 +12,10 @@ import pytest
 import agm.commands.config.copy as config_copy_cmd
 import agm.commands.config.env as config_env_cmd
 import agm.commands.dep.new as dep_new_cmd
-import agm.commands.setup as setup_cmd
 import agm.commands.tmux.close as tmux_close_cmd
 import agm.commands.tmux.layout as tmux_layout_cmd
 import agm.commands.tmux.open as tmux_open_cmd
+import agm.commands.workspace.setup as setup_cmd
 import agm.commands.worktree.new as worktree_new_cmd
 import agm.commands.worktree.remove as worktree_remove_cmd
 import agm.tmux.layout as tmux_layout
@@ -210,7 +210,7 @@ class TestWorktreeRemoveRun:
 
 
 # ---------------------------------------------------------------------------
-# agm.commands.setup
+# agm.commands.workspace.setup
 # ---------------------------------------------------------------------------
 
 
@@ -276,7 +276,7 @@ class TestConfigEnvRun:
         monkeypatch.setattr(config_env_cmd.os, "environ", dict(before))
         monkeypatch.setattr(
             config_env_cmd,
-            "load_current_config_env",
+            "load_current_workspace_env",
             lambda env: after,
         )
         config_env_cmd.run(ConfigEnvArgs())
@@ -291,7 +291,7 @@ class TestConfigEnvRun:
         monkeypatch.setattr(config_env_cmd.os, "environ", dict(env))
         monkeypatch.setattr(
             config_env_cmd,
-            "load_current_config_env",
+            "load_current_workspace_env",
             lambda env: dict(env),
         )
         config_env_cmd.run(ConfigEnvArgs())

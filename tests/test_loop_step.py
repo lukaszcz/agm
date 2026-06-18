@@ -2336,7 +2336,7 @@ class TestCleanupRuntimeViaStep:
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# project/layout.py – current_checkout with REPO_DIR env var
+# project/layout.py – current_workspace with REPO_DIR env var
 # ---------------------------------------------------------------------------
 
 class TestPrepareRuntimeExtraPromptSource:

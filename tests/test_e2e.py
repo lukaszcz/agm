@@ -855,7 +855,7 @@ class TestCpConfig:
 
 
 class TestConfigEnv:
-    """agm config env: print shell statements for current checkout config."""
+    """agm config env: print shell statements for current workspace config."""
 
     def test_eval_refreshes_current_shell_from_project_config(
         self, tmp_path: Path, env: dict[str, str]
@@ -1417,7 +1417,11 @@ class TestMkWt:
         setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "setup-test"], env=env, cwd=str(project / "repo"))
-        result = run_agm(["setup"], env=env, cwd=str(project / "worktrees" / "setup-test"))
+        result = run_agm(
+            ["workspace", "setup"],
+            env=env,
+            cwd=str(project / "worktrees" / "setup-test"),
+        )
 
         assert (project / "worktrees" / "setup-test" / ".setup-ran").exists()
         assert "Running setup for" in result.stdout
@@ -1434,7 +1438,7 @@ class TestMkWt:
         dot_setup.chmod(dot_setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "dotsetup"], env=env, cwd=str(project / "repo"))
-        run_agm(["setup"], env=env, cwd=str(project / "worktrees" / "dotsetup"))
+        run_agm(["workspace", "setup"], env=env, cwd=str(project / "worktrees" / "dotsetup"))
 
         assert (project / "worktrees" / "dotsetup" / ".dot-setup-ran").exists()
 
@@ -1451,7 +1455,7 @@ class TestMkWt:
         setup.chmod(setup.stat().st_mode | stat.S_IEXEC)
 
         run_agm(["wt", "new", "dc-setup"], env=env, cwd=str(project / "repo"))
-        run_agm(["setup"], env=env, cwd=str(project / "worktrees" / "dc-setup"))
+        run_agm(["workspace", "setup"], env=env, cwd=str(project / "worktrees" / "dc-setup"))
 
         assert (project / "worktrees" / "dc-setup" / ".dotconfig-setup-ran").exists()
 
@@ -1544,7 +1548,7 @@ class TestMkWt:
         )
 
         assert result.returncode != 0
-        assert "repo checkout" in (result.stdout + result.stderr).lower()
+        assert "main workspace" in (result.stdout + result.stderr).lower()
 
     def test_rejects_main_repo_branch_name(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -1558,7 +1562,7 @@ class TestMkWt:
         )
 
         assert result.returncode != 0
-        assert "repo checkout" in (result.stdout + result.stderr).lower()
+        assert "main workspace" in (result.stdout + result.stderr).lower()
 
     def test_wt_new_checks_out_existing_remote_branch(
         self, tmp_path: Path, env: dict[str, str]
@@ -1766,7 +1770,7 @@ class TestRmWt:
         result = run_agm(["wt", "rm", "repo"], env=env, cwd=str(project), check=False)
 
         assert result.returncode != 0
-        assert "repo checkout" in (result.stdout + result.stderr).lower()
+        assert "main workspace" in (result.stdout + result.stderr).lower()
 
     def test_rejects_removing_main_repo_branch_name(
         self, tmp_path: Path, env: dict[str, str]
@@ -1777,7 +1781,7 @@ class TestRmWt:
         result = run_agm(["wt", "rm", "main"], env=env, cwd=str(project), check=False)
 
         assert result.returncode != 0
-        assert "repo checkout" in (result.stdout + result.stderr).lower()
+        assert "main workspace" in (result.stdout + result.stderr).lower()
 
 
 # ── agm close ────────────────────────────────────────────────────────────────
@@ -2409,17 +2413,17 @@ class TestDepRemove:
         assert "other worktrees" in output
 
 
-# ── agm fetch ───────────────────────────────────────────────────────────────
+# ── agm sync fetch ───────────────────────────────────────────────────────────────
 
 
 class TestFetch:
-    """agm fetch: fetch repo and dependencies."""
+    """agm sync fetch: fetch repo and dependencies."""
 
     def test_fetches_main_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
-        result = run_agm(["fetch"], env=env, cwd=str(project))
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project))
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
 
@@ -2433,7 +2437,7 @@ class TestFetch:
         dep_wt.mkdir(parents=True)
         make_working_repo(dep_wt, bare_dep, env)
 
-        result = run_agm(["fetch"], env=env, cwd=str(project))
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project))
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/" in result.stdout
@@ -2449,7 +2453,7 @@ class TestFetch:
         dep_wt.mkdir(parents=True)
         make_working_repo(dep_wt, bare_dep, env)
 
-        result = run_agm(["fetch"], env=env, cwd=str(project / "repo"))
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project / "repo"))
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/mylib/main" in result.stdout
@@ -2460,7 +2464,7 @@ class TestFetch:
         project.mkdir()
         make_working_repo(project / "repo", bare, env)
 
-        result = run_agm(["fetch"], env=env, cwd=str(project))
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project))
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
 
@@ -2469,7 +2473,7 @@ class TestFetch:
         project = make_working_repo(tmp_path / "proj", bare, env)
         (project / ".agm").mkdir()
 
-        result = run_agm(["fetch"], env=env, cwd=str(project))
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project))
 
         assert result.returncode == 0
         assert "Fetching ." in result.stdout
@@ -2479,7 +2483,7 @@ class TestFetch:
         project.mkdir()
 
         result = run_agm(
-            ["fetch"],
+            ["sync", "fetch"],
             env=env,
             cwd=str(project),
             check=False,
@@ -2498,7 +2502,7 @@ class TestFetch:
         _git("commit", "-m", "new commit", cwd=str(other), env=env)
         _git("push", cwd=str(other), env=env)
 
-        run_agm(["fetch"], env=env, cwd=str(project))
+        run_agm(["sync", "fetch"], env=env, cwd=str(project))
 
         log = _git(
             "log",
@@ -2521,7 +2525,7 @@ class TestFetch:
         branches_before = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/main-sync" not in branches_before
 
-        run_agm(["fetch"], env=env, cwd=str(project))
+        run_agm(["sync", "fetch"], env=env, cwd=str(project))
 
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/main-sync" in branches
@@ -2543,7 +2547,7 @@ class TestFetch:
         branches_before = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/trunk-sync" not in branches_before
 
-        result = run_agm(["fetch"], env=env, cwd=str(project), check=False)
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project), check=False)
 
         assert result.returncode == 0
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
@@ -2566,7 +2570,7 @@ class TestFetch:
         branches_before = _git("branch", cwd=str(dep_wt), env=env).stdout
         assert "feat/dep-sync" not in branches_before
 
-        run_agm(["fetch"], env=env, cwd=str(project))
+        run_agm(["sync", "fetch"], env=env, cwd=str(project))
 
         branches = _git("branch", cwd=str(dep_wt), env=env).stdout
         assert "feat/dep-sync" in branches
@@ -2587,7 +2591,7 @@ class TestFetch:
         dep2_wt.mkdir(parents=True)
         make_working_repo(dep2_wt, bare_dep2, env)
 
-        result = run_agm(["fetch"], env=env, cwd=str(project))
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project))
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/dep1" in result.stdout
@@ -2629,7 +2633,7 @@ class TestFetch:
             env=env,
         )
 
-        run_agm(["fetch"], env=env, cwd=str(project))
+        run_agm(["sync", "fetch"], env=env, cwd=str(project))
 
         assert (
             _git(
@@ -2645,11 +2649,11 @@ class TestFetch:
         )
 
 
-# ── agm pull ────────────────────────────────────────────────────────────────
+# ── agm sync pull ────────────────────────────────────────────────────────────────
 
 
 class TestPull:
-    """agm pull: fetch repo and dependencies, then merge every checkout."""
+    """agm sync pull: fetch repo and dependencies, then merge every workspace."""
 
     def test_pulls_main_repo(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -2661,7 +2665,7 @@ class TestPull:
         _git("commit", "-m", "new commit", cwd=str(other), env=env)
         _git("push", cwd=str(other), env=env)
 
-        result = run_agm(["pull"], env=env, cwd=str(project))
+        result = run_agm(["sync", "pull"], env=env, cwd=str(project))
 
         assert result.returncode == 0
         assert "Fetching repo" in result.stdout
@@ -2691,7 +2695,7 @@ class TestPull:
         _git("commit", "-m", "update worktree branch", cwd=str(other), env=env)
         _git("push", cwd=str(other), env=env)
 
-        result = run_agm(["pull"], env=env, cwd=str(project))
+        result = run_agm(["sync", "pull"], env=env, cwd=str(project))
 
         assert result.returncode == 0
         assert "Merging worktrees/feat/app" in result.stdout
@@ -2729,7 +2733,7 @@ class TestPull:
         _git("commit", "-m", "update dependency worktree", cwd=str(dep_other), env=env)
         _git("push", cwd=str(dep_other), env=env)
 
-        result = run_agm(["pull"], env=env, cwd=str(project))
+        result = run_agm(["sync", "pull"], env=env, cwd=str(project))
 
         assert result.returncode == 0
         assert "Fetching deps/mylib/" in result.stdout
@@ -2951,7 +2955,7 @@ class TestInit:
         bare = make_bare_repo(tmp_path / "proj.git", env)
         project = make_working_repo(tmp_path / "proj", bare, env)
 
-        result = run_agm(["init", "--workspace"], env=env, cwd=str(project))
+        result = run_agm(["init", "--split"], env=env, cwd=str(project))
 
         assert "git repo detected" not in result.stdout.lower()
         assert (project / "repo").is_dir()
@@ -5991,7 +5995,7 @@ class TestLoop:
 
 @needs_zsh
 class TestOpen:
-    """agm open: project session management."""
+    """agm open: workspace management."""
 
     def test_open_repo_target(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -6757,9 +6761,9 @@ class TestHelp:
         for cmd in (
             "open",
             "init",
-            "fetch",
-            "pull",
             "close",
+            "workspace",
+            "sync",
             "config",
             "worktree",
             "dep",
@@ -6774,9 +6778,9 @@ class TestHelp:
         for cmd in (
             "open",
             "init",
-            "fetch",
-            "pull",
             "close",
+            "workspace",
+            "sync",
             "config",
             "worktree",
             "dep",
@@ -6833,18 +6837,18 @@ class TestHelp:
         result = run_agm(["help", "init"], env=env, cwd=str(tmp_path))
 
         assert (
-            "agm init [--embedded | --workspace]"
+            "agm init [--embedded | --split]"
             "\n         [--no-git-init | --no-config-git | --no-notes-git] PROJECT_NAME"
             in result.stdout
         )
         assert (
-            "agm init [--embedded | --workspace] [-b|--branch BRANCH] PROJECT_NAME"
+            "agm init [--embedded | --split] [-b|--branch BRANCH] PROJECT_NAME"
             not in result.stdout
         )
 
     def test_help_aliases_resolve(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Aliases show help for the canonical command."""
-        alias_map = {"wt": "worktree"}
+        alias_map = {"wt": "worktree", "wsp": "workspace"}
         for alias, canonical in alias_map.items():
             result = run_agm(["help", alias], env=env, cwd=str(tmp_path))
             assert result.returncode == 0
@@ -6855,6 +6859,10 @@ class TestHelp:
         [
             (["help", "wt", "new"], ["wt", "new", "-h"], "agm wt new"),
             (["help", "worktree", "remove"], ["worktree", "remove", "-h"], "agm worktree remove"),
+            (["help", "workspace", "setup"], ["workspace", "setup", "-h"], "agm workspace setup"),
+            (["help", "wsp", "list"], ["wsp", "list", "-h"], "agm workspace list"),
+            (["help", "sync", "fetch"], ["sync", "fetch", "-h"], "agm sync fetch"),
+            (["help", "sync", "pull"], ["sync", "pull", "-h"], "agm sync pull"),
             (["help", "config", "cp"], ["config", "cp", "-h"], "agm config cp"),
             (["help", "config", "env"], ["config", "env", "-h"], "agm config env"),
             (["help", "dep", "switch"], ["dep", "switch", "-h"], "agm dep switch"),
@@ -6885,8 +6893,12 @@ class TestHelp:
             (["open", "-h"], ["help", "open"]),
             (["close", "-h"], ["help", "close"]),
             (["init", "-h"], ["help", "init"]),
-            (["fetch", "-h"], ["help", "fetch"]),
-            (["pull", "-h"], ["help", "pull"]),
+            (["workspace", "-h"], ["help", "workspace"]),
+            (["workspace", "setup", "-h"], ["help", "workspace", "setup"]),
+            (["wsp", "list", "-h"], ["help", "wsp", "list"]),
+            (["sync", "-h"], ["help", "sync"]),
+            (["sync", "fetch", "-h"], ["help", "sync", "fetch"]),
+            (["sync", "pull", "-h"], ["help", "sync", "pull"]),
             (["config", "-h"], ["help", "config"]),
             (["config", "cp", "-h"], ["help", "config", "cp"]),
             (["config", "env", "-h"], ["help", "config", "env"]),
@@ -6927,6 +6939,9 @@ class TestHelp:
             (["config"], ["help", "config"]),
             (["run"], ["help", "run"]),
             (["run", "--"], ["help", "run"]),
+            (["workspace"], ["help", "workspace"]),
+            (["wsp"], ["help", "wsp"]),
+            (["sync"], ["help", "sync"]),
             (["wt"], ["help", "wt"]),
             (["worktree"], ["help", "worktree"]),
             (["tmux"], ["help", "tmux"]),
@@ -7077,7 +7092,7 @@ class TestEdgeCases:
         assert "json" in result.stderr.lower()
 
     def test_worktree_already_exists(self, tmp_path: Path, env: dict[str, str]) -> None:
-        """An existing branch worktree is reused by ``wt new``."""
+        """An existing branch workspace is reused by ``wt new``."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
 
@@ -7145,7 +7160,7 @@ class TestWorkflows:
         project = tmp_path / "proj"
         assert (project / "repo").is_dir()
 
-        # Step 2: create a branch worktree
+        # Step 2: create a branch workspace
         run_agm(
             ["wt", "new", "feat/lifecycle"],
             env=env,
@@ -7192,7 +7207,7 @@ class TestWorkflows:
         assert (project / "deps" / "mylib" / "feat/dep-feature" / "dep.txt").exists()
 
         # Step 4: fetch should pick up both main repo and deps
-        result = run_agm(["fetch"], env=env, cwd=str(project))
+        result = run_agm(["sync", "fetch"], env=env, cwd=str(project))
         assert "Fetching repo" in result.stdout
         assert "Fetching deps/" in result.stdout
 
@@ -7287,7 +7302,7 @@ class TestWorkflows:
         _push_branch(other, bare, "feat/synced", "synced.txt", env)
 
         # Fetch to discover the remote branch.
-        run_agm(["fetch"], env=env, cwd=str(project / "repo"))
+        run_agm(["sync", "fetch"], env=env, cwd=str(project / "repo"))
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/synced" in branches
 
@@ -7351,20 +7366,20 @@ class TestWorkflows:
 
 
 class TestListCommand:
-    """agm list: print open worktrees with the main repo first."""
+    """agm workspace list: print open workspaces with the main repo first."""
 
     def test_lists_main_only_when_no_branch_worktrees(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         project = _make_workspace_project(tmp_path, env)
 
-        result = run_agm(["list"], env=env, cwd=str(project / "repo"))
+        result = run_agm(["workspace", "list"], env=env, cwd=str(project / "repo"))
 
         assert result.returncode == 0
         lines = result.stdout.splitlines()
         # The main repo is listed first, marked as current.
         assert lines[0] == "* main"
-        # No branch worktrees exist yet.
+        # No branch workspaces exist yet.
         assert len(lines) == 1
 
     def test_lists_branch_worktrees_after_main_sorted(
@@ -7374,7 +7389,7 @@ class TestListCommand:
         run_agm(["wt", "new", "feat/beta"], env=env, cwd=str(project / "repo"))
         run_agm(["wt", "new", "feat/alpha"], env=env, cwd=str(project / "repo"))
 
-        result = run_agm(["list"], env=env, cwd=str(project / "repo"))
+        result = run_agm(["workspace", "list"], env=env, cwd=str(project / "repo"))
 
         assert result.returncode == 0
         lines = result.stdout.splitlines()
@@ -7388,7 +7403,7 @@ class TestListCommand:
         project = _make_workspace_project(tmp_path, env)
         run_agm(["wt", "new", "feat/x"], env=env, cwd=str(project / "repo"))
 
-        result = run_agm(["list", "-v"], env=env, cwd=str(project / "repo"))
+        result = run_agm(["workspace", "list", "-v"], env=env, cwd=str(project / "repo"))
 
         assert result.returncode == 0
         wt_path = project / "worktrees" / "feat/x"
@@ -7400,11 +7415,15 @@ class TestListCommand:
         project = _make_workspace_project(tmp_path, env)
         run_agm(["wt", "new", "feat/here"], env=env, cwd=str(project / "repo"))
 
-        result = run_agm(["list"], env=env, cwd=str(project / "worktrees" / "feat/here"))
+        result = run_agm(
+            ["workspace", "list"],
+            env=env,
+            cwd=str(project / "worktrees" / "feat/here"),
+        )
 
         assert result.returncode == 0
         lines = result.stdout.splitlines()
-        # The branch worktree is now the current one (marked with '*').
+        # The branch workspace is now the current workspace (marked with '*').
         assert "* feat/here" in lines
         assert "  main" in lines
 

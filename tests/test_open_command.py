@@ -1,4 +1,4 @@
-"""Tests for agm.commands.open."""
+"""Tests for agm.commands.workspace.open."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-import agm.commands.open as open_module
+import agm.commands.workspace.open as open_module
 from agm.commands.args import OpenArgs
-from agm.commands.open import (
-    checkout_session,
-    new_session,
-    open_session,
-    queue_setup_and_focus_session,
-    smart_open_session,
+from agm.commands.workspace.open import (
+    checkout_workspace,
+    create_workspace,
+    open_or_create_workspace,
+    open_workspace,
+    queue_setup_and_focus_workspace_session,
     validate_pane_count,
 )
 from agm.core import dry_run
@@ -68,7 +68,7 @@ class TestValidatePaneCount:
 
 
 # ===========================================================================
-# queue_setup_and_focus_session
+# queue_setup_and_focus_workspace_session
 # ===========================================================================
 
 
@@ -78,7 +78,7 @@ class TestQueueSetupAndFocusSession:
     ) -> None:
         dry_run.set_enabled(True)
 
-        queue_setup_and_focus_session(
+        queue_setup_and_focus_workspace_session(
             detached=True,
             pane_count=None,
             session_name="s",
@@ -88,7 +88,7 @@ class TestQueueSetupAndFocusSession:
 
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
-        assert "tmux send-keys -t s:0.0 'agm setup' C-m" in out
+        assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
         assert "tmux attach-session" not in out
         assert "tmux switch-client" not in out
 
@@ -98,7 +98,7 @@ class TestQueueSetupAndFocusSession:
         dry_run.set_enabled(True)
 
         with pytest.raises(SystemExit) as exc_info:
-            queue_setup_and_focus_session(
+            queue_setup_and_focus_workspace_session(
                 detached=False,
                 pane_count=None,
                 session_name="s",
@@ -108,7 +108,7 @@ class TestQueueSetupAndFocusSession:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
-        assert "tmux send-keys -t s:0.0 'agm setup' C-m" in out
+        assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
         assert "tmux attach-session -t s" in out
 
     def test_raises_assertion_when_session_name_is_none(
@@ -118,7 +118,7 @@ class TestQueueSetupAndFocusSession:
             open_module, "create_tmux_session", lambda **kw: None
         )
         with pytest.raises(AssertionError):
-            queue_setup_and_focus_session(
+            queue_setup_and_focus_workspace_session(
                 detached=True,
                 pane_count=None,
                 session_name="s",
@@ -128,7 +128,7 @@ class TestQueueSetupAndFocusSession:
 
 
 # ===========================================================================
-# open_session
+# open_workspace
 # ===========================================================================
 
 
@@ -147,7 +147,7 @@ class TestOpenSession:
             open_module.git_helpers, "current_branch", lambda rd, **kw: "main"
         )
         monkeypatch.setattr(
-            open_module, "load_worktree_env", lambda pd, branch, checkout_dir: {}
+            open_module, "load_workspace_env", lambda pd, branch, workspace_dir: {}
         )
         monkeypatch.setattr(open_module, "create_tmux_session", lambda **kw: None)
         return proj_dir, repo_dir
@@ -162,7 +162,7 @@ class TestOpenSession:
         proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
         monkeypatch.setattr(open_module, "create_tmux_session", create_tmux_session)
 
-        open_session(detached=True, pane_count=None, branch=None, cwd=tmp_path)
+        open_workspace(detached=True, pane_count=None, branch=None, cwd=tmp_path)
 
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
@@ -182,7 +182,7 @@ class TestOpenSession:
             open_module, "has_expected_worktree", lambda pd, branch, **kw: False
         )
         with pytest.raises(SystemExit) as exc_info:
-            open_session(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
+            open_workspace(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
         assert exc_info.value.code == 1
 
     def test_opens_branch_session_when_worktree_exists(
@@ -211,7 +211,7 @@ class TestOpenSession:
             open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
         )
 
-        open_session(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
+        open_workspace(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
 
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
@@ -252,11 +252,11 @@ class TestOpenSession:
         worktree_env["GIT_COMMITTER_NAME"] = "Worktree Env"
         monkeypatch.setattr(
             open_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir: worktree_env,
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir: worktree_env,
         )
 
-        open_session(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
+        open_workspace(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
 
         result = subprocess.run(
             ["git", "log", "-1", "--format=%an"],
@@ -270,7 +270,7 @@ class TestOpenSession:
 
 
 # ===========================================================================
-# new_session
+# create_workspace
 # ===========================================================================
 
 
@@ -284,7 +284,7 @@ class TestNewSession:
         dry_run.set_enabled(True)
         project = _make_git_project(tmp_path, env)
 
-        new_session(
+        create_workspace(
             detached=True, pane_count=None, parent=None, branch="feature", cwd=project
         )
 
@@ -303,7 +303,7 @@ class TestNewSession:
         dry_run.set_enabled(True)
         project = _make_git_project(tmp_path, env)
 
-        new_session(
+        create_workspace(
             detached=True, pane_count=None, parent="shallow-parent",
             branch="feature", cwd=project,
         )
@@ -314,7 +314,7 @@ class TestNewSession:
 
 
 # ===========================================================================
-# checkout_session
+# checkout_workspace
 # ===========================================================================
 
 
@@ -328,7 +328,7 @@ class TestCheckoutSession:
         dry_run.set_enabled(True)
         project = _make_git_project(tmp_path, env)
 
-        checkout_session(
+        checkout_workspace(
             detached=True, pane_count=None, parent=None, branch="feature", cwd=project
         )
 
@@ -340,7 +340,7 @@ class TestCheckoutSession:
 
 
 # ===========================================================================
-# smart_open_session
+# open_or_create_workspace
 # ===========================================================================
 
 
@@ -354,7 +354,7 @@ class TestSmartOpenSession:
         dry_run.set_enabled(True)
         project = _make_git_project(tmp_path, env)
 
-        smart_open_session(
+        open_or_create_workspace(
             detached=True, pane_count=None, parent=None, branch="main", cwd=project
         )
 
@@ -377,7 +377,7 @@ class TestSmartOpenSession:
             check=True,
         )
 
-        smart_open_session(
+        open_or_create_workspace(
             detached=True, pane_count=None, parent=None, branch="feature", cwd=project
         )
 
@@ -395,7 +395,7 @@ class TestSmartOpenSession:
         project = _make_git_project(tmp_path, env)
         subprocess.run(["git", "branch", "remote-feat"], cwd=project / "repo", env=env, check=True)
 
-        smart_open_session(
+        open_or_create_workspace(
             detached=True, pane_count=None, parent=None, branch="remote-feat", cwd=project
         )
 
@@ -404,7 +404,7 @@ class TestSmartOpenSession:
         assert "-b remote-feat" not in out
         assert "remote-feat" in out
 
-    def test_creates_new_session_when_branch_doesnt_exist(
+    def test_creates_create_workspace_when_branch_doesnt_exist(
         self,
         tmp_path: Path,
         env: dict[str, str],
@@ -413,7 +413,7 @@ class TestSmartOpenSession:
         dry_run.set_enabled(True)
         project = _make_git_project(tmp_path, env)
 
-        smart_open_session(
+        open_or_create_workspace(
             detached=True, pane_count=None, parent=None, branch="new-branch", cwd=project
         )
 
@@ -444,10 +444,10 @@ class TestOpenRun:
         monkeypatch.setattr(open_module.git_helpers, "current_branch", lambda rd: "main")
         monkeypatch.setattr(
             open_module,
-            "is_main_checkout_branch",
+            "is_main_workspace_branch",
             lambda pd, branch, repo_branch: True,
         )
-        monkeypatch.setattr(open_module, "load_worktree_env", lambda pd, branch, checkout_dir: {})
+        monkeypatch.setattr(open_module, "load_workspace_env", lambda pd, branch, workspace_dir: {})
 
         open_module.run(
             OpenArgs(detached=True, pane_count=None, parent=None, branch="main")

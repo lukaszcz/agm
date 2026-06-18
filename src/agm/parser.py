@@ -16,20 +16,21 @@ _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
         agm open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
 
-        Open a tmux session for a project worktree, creating or checking out a branch as needed.
+        Open a tmux session for an AGM workspace, creating or checking out a branch as needed.
 
         Options:
           -d, --detach            Create the tmux session without attaching to it.
           -n, --num-panes PANES   Create the session with PANES panes.
-          -p, --parent PARENT     Base a newly created branch worktree on PARENT instead of
-                                  the main checkout's current branch.
+          -p, --parent PARENT     Base a newly created branch workspace on PARENT instead of
+                                  the main workspace's current branch.
 
         Behavior:
-          repo           Open the main checkout session.
-          default branch Open the main checkout session when TARGET matches the
-                         branch currently checked out in the main checkout.
-          existing wt    Open the tmux session for an existing branch worktree.
-          existing branch Check out BRANCH into a worktree, then open it.
+          repo           Open the main workspace.
+          default branch Open the main workspace when TARGET matches the
+                         branch currently checked out there.
+          existing branch workspace
+                         Open the tmux session for an existing branch workspace.
+          existing branch Check out BRANCH into a Git worktree, then open it as a workspace.
           missing branch  Create BRANCH from PARENT/current branch, then open it.
 
         Examples:
@@ -43,28 +44,28 @@ _HELP_TEXTS: dict[str, str] = {
     "close": textwrap.dedent("""\
         agm close [-f|--force] [-D] BRANCH
 
-        Close a project session for a branch worktree.
+        Close a branch workspace.
 
-        Remove the branch worktree via agm wt rm, then kill
+        Remove the workspace's Git worktree via agm wt rm, then kill
         the corresponding tmux session.
 
         Options:
-          -f, --force   Force remove the worktree (even with untracked or
-                        uncommitted changes) and force delete the branch
+          -f, --force   Force remove the branch workspace's Git worktree
+                        (even with untracked or uncommitted changes) and force delete the branch
                         (git branch -D). Implies -D.
           -D            Force delete the branch (git branch -D) instead of
-                        safe delete (git branch -d). The worktree is only
+                        safe delete (git branch -d). The Git worktree is only
                         removed if the branch deletion would succeed.
     """),
     "init": textwrap.dedent("""\
-        agm init [--embedded | --workspace]
+        agm init [--embedded | --split]
                  [--no-git-init | --no-config-git | --no-notes-git]
-        agm init [--embedded | --workspace]
+        agm init [--embedded | --split]
                  [--no-git-init | --no-config-git | --no-notes-git] PROJECT_NAME
-        agm init [--embedded | --workspace] [-b|--branch BRANCH]
+        agm init [--embedded | --split] [-b|--branch BRANCH]
                  [--no-git-init | --no-config-git | --no-notes-git]
                  [PROJECT_NAME] REPO_URL
-        agm init --clone [--embedded | --workspace] [-b|--branch BRANCH]
+        agm init --clone [--embedded | --split] [-b|--branch BRANCH]
                  [--no-git-init | --no-config-git | --no-notes-git] REPO_URL
 
         Initialize a project. Without PROJECT_NAME, agm initializes the current
@@ -74,11 +75,11 @@ _HELP_TEXTS: dict[str, str] = {
         to initialize a child directory derived from the repo URL. Without an
         explicit layout flag, agm chooses the embedded layout when the target
         project directory is already a git repo; otherwise it chooses the
-        workspace layout.
+        split layout.
 
         Options:
           --embedded   Force the embedded layout with AGM data under .agm/.
-          --workspace  Force the workspace layout with repo/, deps/, notes/,
+          --split      Force the split layout with repo/, deps/, notes/,
                        worktrees/, and config/ under the project root.
           --clone      Initialize a new project directory derived from REPO_URL.
           -b, --branch BRANCH
@@ -90,18 +91,31 @@ _HELP_TEXTS: dict[str, str] = {
           --no-notes-git
                        Do not create a git repository in notes/.
     """),
-    "fetch": textwrap.dedent("""\
-        agm fetch
+    "workspace": textwrap.dedent("""\
+        agm workspace open  [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm workspace close [-f|--force] [-D] BRANCH
+        agm workspace setup
+        agm workspace list  [-v|--verbose]
+        agm wsp open        [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm wsp close       [-f|--force] [-D] BRANCH
+        agm wsp setup
+        agm wsp list        [-v|--verbose]
 
-        Fetch the main repository and all checked-out dependencies, then create
-        missing local tracking branches for origin branches not merged into
-        the default origin branch in each repo.
+        Manage AGM workspaces. A workspace may be the main repo or a linked
+        Git worktree, interpreted with AGM project config, branch config,
+        dependency environment, setup scripts, and tmux session lifecycle.
     """),
-    "pull": textwrap.dedent("""\
-        agm pull
+    "sync": textwrap.dedent("""\
+        agm sync fetch
+        agm sync pull
 
-        Run agm fetch, then run git merge in every checkout: all dependency
-        worktrees, the main repository checkout, and every project worktree.
+        Synchronize the main repository, dependency repositories, and their
+        checked-out Git worktrees.
+
+        Commands:
+          fetch   Fetch the main repository and all checked-out dependencies,
+                  then create missing local tracking branches.
+          pull    Run sync fetch, then run git merge in every Git worktree.
     """),
     "loop": textwrap.dedent("""\
         agm loop [--runner COMMAND] [--selector COMMAND|--no-selector]
@@ -325,7 +339,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm config update
 
         Copy project dot configuration files into an existing target directory.
-        Print shell statements that refresh the current checkout environment
+        Print shell statements that refresh the current workspace environment
         from project and branch config.toml [deps] tables, .env,
         .env.local, and env.sh files.
         Create missing project and branch config.toml files under the project
@@ -349,11 +363,6 @@ _HELP_TEXTS: dict[str, str] = {
           agm worktree remove --force BRANCH
               Force removal even when git reports uncommitted or locked state.
     """),
-    "setup": textwrap.dedent("""\
-        agm setup
-
-        Run configured setup scripts for the current checkout.
-    """),
     "dep": textwrap.dedent("""\
         agm dep list   [-v|--verbose] [--all]
         agm dep new    [-b|--branch BRANCH] REPO_URL
@@ -361,7 +370,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm dep rm     DEP/NAME_OR_BRANCH | DEP/repo | DEP/MAIN_CHECKOUT
         agm dep switch [-b|--branch] DEP BRANCH
 
-        Manage dependency repos and dependency branch worktrees under deps/.
+        Manage dependency repos and dependency Git worktrees under deps/.
         AGM tracks dependency checkout names in config.toml [deps] tables.
 
         Options:
@@ -369,7 +378,7 @@ _HELP_TEXTS: dict[str, str] = {
               Show the checkout path after each dep/branch.
           agm dep list --all
               List all dependency checkouts on disk, instead of
-              only the current checkout.
+              only the current workspace.
           agm dep new --branch BRANCH REPO_URL
               Clone the dependency's initial checkout from BRANCH instead of
               its default branch.
@@ -460,15 +469,6 @@ _HELP_TEXTS: dict[str, str] = {
               Create the session without attaching to it.
           agm tmux open --num-panes PANES
               Create the session with PANES panes.
-    """),
-    "list": textwrap.dedent("""\
-        agm list [-v|--verbose]
-
-        List all currently open worktrees, with the main repo at the top.
-        The current worktree is indicated with a leading *.
-
-        By default only branch names are printed.  With -v/--verbose the
-        worktree directory path is shown after each branch name.
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
@@ -564,21 +564,18 @@ _HELP_TEXTS: dict[str, str] = {
 
 _HELP_ALIASES: dict[str, str] = {
     "wt": "worktree",
+    "wsp": "workspace",
     "cp": "config",
     "copy": "config",
 }
 
 _COMMAND_OVERVIEW: list[tuple[str, str]] = [
-    ("open", "Open a project session"),
-    ("close", "Close a project session"),
+    ("open", "Open a workspace"),
+    ("close", "Close a workspace"),
+    ("workspace", "Manage AGM workspaces"),
     ("init", "Initialize a project"),
-    ("setup", "Run setup scripts for the current checkout"),
+    ("sync", "Fetch and merge project repositories"),
     ("dep", "Manage project dependency checkouts"),
-    (
-        "fetch",
-        "Fetch upstream changes for the repo and all dependencies",
-    ),
-    ("pull", "Fetch and merge the repo, dependencies, and worktrees"),
     ("loop", "Run the loop prompt until completion"),
     ("review", "Run the review prompt"),
     ("revise", "Run the revision prompt"),
@@ -587,13 +584,67 @@ _COMMAND_OVERVIEW: list[tuple[str, str]] = [
     ("repl", "Start an interactive AgL REPL"),
     ("run", "Run a command in a sandbox"),
     ("config", "Manage project configuration files"),
-    ("list", "List all open worktrees"),
     ("worktree", "Git worktree management"),
     ("tmux", "Tmux session and layout management"),
     ("help", "Show help for a command"),
 ]
 
 _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
+    ("workspace", "open"): textwrap.dedent("""\
+        agm workspace open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+
+        Open a tmux session for an AGM workspace, creating or checking out a
+        branch workspace as needed.
+    """),
+    ("wsp", "open"): textwrap.dedent("""\
+        agm wsp open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+
+        Alias form of agm workspace open.
+    """),
+    ("workspace", "close"): textwrap.dedent("""\
+        agm workspace close [-f|--force] [-D] BRANCH
+
+        Close a branch workspace, remove its Git worktree, remove branch config,
+        and kill its tmux session.
+    """),
+    ("wsp", "close"): textwrap.dedent("""\
+        agm wsp close [-f|--force] [-D] BRANCH
+
+        Alias form of agm workspace close.
+    """),
+    ("workspace", "setup"): textwrap.dedent("""\
+        agm workspace setup
+
+        Run configured setup scripts for the current AGM workspace.
+    """),
+    ("wsp", "setup"): textwrap.dedent("""\
+        agm wsp setup
+
+        Alias form of agm workspace setup.
+    """),
+    ("workspace", "list"): textwrap.dedent("""\
+        agm workspace list [-v|--verbose]
+
+        List all open AGM workspaces.
+    """),
+    ("wsp", "list"): textwrap.dedent("""\
+        agm wsp list [-v|--verbose]
+
+        Alias form of agm workspace list.
+    """),
+    ("sync", "fetch"): textwrap.dedent("""\
+        agm sync fetch
+
+        Fetch the main repository and all checked-out dependencies, then create
+        missing local tracking branches.
+    """),
+    ("sync", "pull"): textwrap.dedent("""\
+        agm sync pull
+
+        Run agm sync fetch, then run git merge in every Git worktree: all
+        dependency worktrees, the main repository workspace, and every branch
+        workspace.
+    """),
     ("config", "cp"): textwrap.dedent("""\
         agm config cp DIRNAME
 
@@ -607,7 +658,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("config", "env"): textwrap.dedent("""\
         agm config env
 
-        Print shell statements that refresh the current checkout environment
+        Print shell statements that refresh the current workspace environment
         from project and branch config.toml [deps] tables, .env,
         .env.local, and env.sh files.
 
@@ -623,7 +674,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("wt", "new"): textwrap.dedent("""\
         agm wt new [-d|--dir DIR] BRANCH
 
-        Create a new branch worktree or check out an existing branch.
+        Create a bare Git worktree or check out an existing branch.
     """),
     ("wt", "rm"): textwrap.dedent("""\
         agm wt rm [-f|--force] BRANCH
@@ -695,7 +746,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("worktree", "new"): textwrap.dedent("""\
         agm worktree new [-d|--dir DIR] BRANCH
 
-        Create a new branch worktree or check out an existing branch.
+        Create a bare Git worktree or check out an existing branch.
     """),
     ("worktree", "remove"): textwrap.dedent("""\
         agm worktree remove [-f|--force] BRANCH
@@ -710,8 +761,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("dep", "list"): textwrap.dedent("""\
         agm dep list [-v|--verbose] [--all]
 
-        List dependency checkouts for the current worktree.  With --all, list
-        all dependency checkouts for every worktree.  By default only dep/branch
+        List dependency checkouts for the current workspace. With --all, list
+        all dependency checkouts for every workspace. By default only dep/branch
         names are printed; with -v/--verbose the checkout path is also shown.
     """),
     ("dep", "new"): textwrap.dedent("""\

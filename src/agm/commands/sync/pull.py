@@ -1,10 +1,10 @@
-"""agm pull."""
+"""agm sync pull."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import agm.commands.fetch as fetch_command
+import agm.commands.sync.fetch as fetch_command
 import agm.vcs.git as git_helpers
 from agm.project.layout import require_current_project_dir
 

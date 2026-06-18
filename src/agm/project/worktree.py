@@ -1,4 +1,4 @@
-"""AGM worktree orchestration built on top of git helpers."""
+"""Bare Git worktree orchestration built on top of git helpers."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from agm.project.layout import (
     copy_config,
     default_worktrees_dir,
     discover_current_project_dir,
-    exit_if_main_checkout_branch,
+    exit_if_main_workspace_branch,
     expected_branch_worktree_path,
     project_repo_dir,
 )
@@ -93,7 +93,7 @@ def ensure_worktree(
             file=sys.stderr,
         )
     else:
-        exit_if_main_checkout_branch(project_dir, branch_name, repo_branch=repo_branch)
+        exit_if_main_workspace_branch(project_dir, branch_name, repo_branch=repo_branch)
     worktrees_path = (
         default_worktrees_dir(project_dir) if project_dir is not None else repo_dir / "worktrees"
     )
@@ -153,7 +153,7 @@ def remove_worktree(
             file=sys.stderr,
         )
     else:
-        exit_if_main_checkout_branch(project_dir, branch, repo_branch=repo_branch)
+        exit_if_main_workspace_branch(project_dir, branch, repo_branch=repo_branch)
 
     worktree_path: Path | None = None
     worktrees = git_helpers.worktree_list(repo_dir, env=env)

@@ -129,17 +129,86 @@ class TestWorktreeNew:
         assert "No such command" in result.output
 
 
-class TestSetup:
-    def test_setup(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+class TestWorkspace:
+    def test_workspace_setup(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls: list[None] = []
 
         def record() -> None:
             calls.append(None)
 
-        monkeypatch.setattr(cli.setup_command, "run", record)
-        result = invoke(runner, ["setup"])
+        monkeypatch.setattr(cli.workspace_setup_command, "run", record)
+        result = invoke(runner, ["workspace", "setup"])
         assert result.exit_code == 0
         assert len(calls) == 1
+
+    def test_wsp_setup(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[None] = []
+
+        def record() -> None:
+            calls.append(None)
+
+        monkeypatch.setattr(cli.workspace_setup_command, "run", record)
+        result = invoke(runner, ["wsp", "setup"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+
+    def test_top_level_setup_is_rejected(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["setup"])
+        assert result.exit_code != 0
+        assert "No such command" in result.output
+
+    def test_workspace_list(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[bool] = []
+
+        def record(*, verbose: bool = False) -> None:
+            calls.append(verbose)
+
+        monkeypatch.setattr(cli.workspace_list_command, "run", record)
+        result = invoke(runner, ["workspace", "list"])
+
+        assert result.exit_code == 0
+        assert calls == [False]
+
+    def test_wsp_list_verbose(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[bool] = []
+
+        def record(*, verbose: bool = False) -> None:
+            calls.append(verbose)
+
+        monkeypatch.setattr(cli.workspace_list_command, "run", record)
+        result = invoke(runner, ["wsp", "list", "--verbose"])
+
+        assert result.exit_code == 0
+        assert calls == [True]
+
+    def test_top_level_list_is_rejected(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["list"])
+        assert result.exit_code != 0
+        assert "No such command" in result.output
+
+    def test_workspace_open(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
+        result = invoke(runner, ["workspace", "open", "-n", "6", "repo"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "repo"
+        assert calls[0].pane_count == "6"
+
+    def test_wsp_close(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.workspace_close_command)
+        result = invoke(runner, ["wsp", "close", "-D", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].branch == "feat/x"
+        assert calls[0].force_delete is True
 
 
 class TestWorktreeRemove:
@@ -269,14 +338,44 @@ class TestDep:
         assert "agm dep" in result.stdout
 
 
-class TestFetch:
-    def test_fetch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.fetch_command)
+class TestSync:
+    def test_sync_fetch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.sync_fetch_command)
+        result = invoke(runner, ["sync", "fetch"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+
+    def test_sync_fetch_accepts_global_dry_run(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        observed: list[bool] = []
+
+        def record(args: object) -> None:
+            del args
+            observed.append(dry_run_state.enabled())
+
+        monkeypatch.setattr(cli.sync_fetch_command, "run", record)
+        result = invoke(runner, ["--dry-run", "sync", "fetch"])
+        assert result.exit_code == 0
+        assert observed == [True]
+
+    def test_sync_fetch_rejects_args(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["sync", "fetch", "extra"])
+        assert result.exit_code != 0
+        assert "unexpected extra argument" in result.output
+
+    def test_top_level_fetch_is_rejected(self, runner: CliRunner) -> None:
         result = invoke(runner, ["fetch"])
+        assert result.exit_code != 0
+        assert "No such command" in result.output
+
+    def test_sync_pull(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, cli.sync_pull_command)
+        result = invoke(runner, ["sync", "pull"])
         assert result.exit_code == 0
         assert len(calls) == 1
 
-    def test_fetch_accepts_global_dry_run(
+    def test_sync_pull_accepts_global_dry_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         observed: list[bool] = []
@@ -285,42 +384,20 @@ class TestFetch:
             del args
             observed.append(dry_run_state.enabled())
 
-        monkeypatch.setattr(cli.fetch_command, "run", record)
-        result = invoke(runner, ["--dry-run", "fetch"])
+        monkeypatch.setattr(cli.sync_pull_command, "run", record)
+        result = invoke(runner, ["--dry-run", "sync", "pull"])
         assert result.exit_code == 0
         assert observed == [True]
 
-    def test_fetch_rejects_args(self, runner: CliRunner) -> None:
-        result = invoke(runner, ["fetch", "extra"])
+    def test_sync_pull_rejects_args(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["sync", "pull", "extra"])
         assert result.exit_code != 0
         assert "unexpected extra argument" in result.output
 
-
-class TestPull:
-    def test_pull(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.pull_command)
+    def test_top_level_pull_is_rejected(self, runner: CliRunner) -> None:
         result = invoke(runner, ["pull"])
-        assert result.exit_code == 0
-        assert len(calls) == 1
-
-    def test_pull_accepts_global_dry_run(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        observed: list[bool] = []
-
-        def record(args: object) -> None:
-            del args
-            observed.append(dry_run_state.enabled())
-
-        monkeypatch.setattr(cli.pull_command, "run", record)
-        result = invoke(runner, ["--dry-run", "pull"])
-        assert result.exit_code == 0
-        assert observed == [True]
-
-    def test_pull_rejects_args(self, runner: CliRunner) -> None:
-        result = invoke(runner, ["pull", "extra"])
         assert result.exit_code != 0
-        assert "unexpected extra argument" in result.output
+        assert "No such command" in result.output
 
 
 class TestReviewReviseRefine:
@@ -627,36 +704,10 @@ class TestDryRun:
             observed.append(dry_run_state.enabled())
             assert args.branch == "repo"
 
-        monkeypatch.setattr(cli.open_command, "run", record)
+        monkeypatch.setattr(cli.workspace_open_command, "run", record)
         result = invoke(runner, ["open", "--dry-run", "repo"])
         assert result.exit_code == 0
         assert observed == [True]
-
-
-class TestList:
-    def test_list(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[bool] = []
-
-        def record(*, verbose: bool = False) -> None:
-            calls.append(verbose)
-
-        monkeypatch.setattr(cli.list_command, "run", record)
-        result = invoke(runner, ["list"])
-
-        assert result.exit_code == 0
-        assert calls == [False]
-
-    def test_list_verbose(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[bool] = []
-
-        def record(*, verbose: bool = False) -> None:
-            calls.append(verbose)
-
-        monkeypatch.setattr(cli.list_command, "run", record)
-        result = invoke(runner, ["list", "--verbose"])
-
-        assert result.exit_code == 0
-        assert calls == [True]
 
 
 class TestInit:
@@ -670,7 +721,7 @@ class TestInit:
         assert calls[0].positional == ["myproj", "https://github.com/org/repo.git"]
         assert calls[0].branch is None
         assert calls[0].embedded is False
-        assert calls[0].workspace is False
+        assert calls[0].split is False
 
     def test_init_url_only(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
@@ -718,15 +769,20 @@ class TestInit:
         assert calls[0].embedded is True
         assert calls[0].positional == ["myproj"]
 
-    def test_init_with_workspace(
+    def test_init_with_split(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
-        result = invoke(runner, ["init", "--workspace", "myproj"])
+        result = invoke(runner, ["init", "--split", "myproj"])
         assert result.exit_code == 0
         assert len(calls) == 1
-        assert calls[0].workspace is True
+        assert calls[0].split is True
         assert calls[0].positional == ["myproj"]
+
+    def test_init_with_workspace_is_rejected(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["init", "--workspace", "myproj"])
+        assert result.exit_code != 0
+        assert "No such option" in result.output
 
     def test_init_without_args(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
@@ -745,7 +801,7 @@ class TestOpen:
         assert "required" in result.output
 
     def test_open_repo(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "repo"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -755,7 +811,7 @@ class TestOpen:
         assert calls[0].branch == "repo"
 
     def test_open_with_branch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -764,7 +820,7 @@ class TestOpen:
     def test_open_with_pane_count(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "-n", "6", "repo"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -773,7 +829,7 @@ class TestOpen:
     def test_open_with_num_panes_long(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "--num-panes", "6", "repo"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -782,7 +838,7 @@ class TestOpen:
     def test_open_with_parent_and_branch(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "-p", "main", "feat/y"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -792,7 +848,7 @@ class TestOpen:
     def test_open_with_parent_long(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "--parent", "main", "feat/y"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -800,7 +856,7 @@ class TestOpen:
         assert calls[0].parent == "main"
 
     def test_open_with_all(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "-n", "2", "-p", "main", "feat/y"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -809,7 +865,7 @@ class TestOpen:
         assert calls[0].branch == "feat/y"
 
     def test_open_detached(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "-d", "feat/y"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -819,7 +875,7 @@ class TestOpen:
     def test_open_detach_long(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        calls = make_recorder(monkeypatch, cli.open_command)
+        calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "--detach", "feat/y"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -829,7 +885,7 @@ class TestOpen:
 
 class TestClose:
     def test_close_branch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.close_command)
+        calls = make_recorder(monkeypatch, cli.workspace_close_command)
         result = invoke(runner, ["close", "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -841,7 +897,7 @@ class TestClose:
         assert "required" in result.output
 
     def test_close_D_flag(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.close_command)
+        calls = make_recorder(monkeypatch, cli.workspace_close_command)
         result = invoke(runner, ["close", "-D", "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -849,7 +905,7 @@ class TestClose:
         assert calls[0].force_delete is True
 
     def test_close_default_no_D(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls = make_recorder(monkeypatch, cli.close_command)
+        calls = make_recorder(monkeypatch, cli.workspace_close_command)
         result = invoke(runner, ["close", "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
@@ -1573,7 +1629,8 @@ class TestHelpTextCoverage:
             "open",
             "close",
             "init",
-            "fetch",
+            "workspace",
+            "sync",
             "loop",
             "config",
             "worktree",
@@ -1808,7 +1865,7 @@ class TestParseLoopArgs:
 
 
 class TestCliCallbacks:
-    """Test config, worktree, dep, tmux callbacks when invoked without subcommand."""
+    """Test command group callbacks when invoked without subcommand."""
 
     def test_config_callback_shows_help(self) -> None:
         runner = CliRunner()
@@ -1821,6 +1878,24 @@ class TestCliCallbacks:
         result = invoke(runner, ["worktree"])
         assert result.exit_code == 0
         assert "agm worktree" in result.stdout
+
+    def test_workspace_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["workspace"])
+        assert result.exit_code == 0
+        assert "agm workspace" in result.stdout
+
+    def test_wsp_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["wsp"])
+        assert result.exit_code == 0
+        assert "agm wsp" in result.stdout or "agm workspace" in result.stdout
+
+    def test_sync_callback_shows_help(self) -> None:
+        runner = CliRunner()
+        result = invoke(runner, ["sync"])
+        assert result.exit_code == 0
+        assert "agm sync" in result.stdout
 
     def test_dep_callback_shows_help(self) -> None:
         runner = CliRunner()
@@ -1856,9 +1931,9 @@ class TestDepSwitchMissingArgs:
 
 
 class TestInitEmbeddedAndWorkspaceMutualExclusion:
-    def test_init_embedded_and_workspace_are_mutually_exclusive(self) -> None:
+    def test_init_embedded_and_split_are_mutually_exclusive(self) -> None:
         runner = CliRunner()
-        result = invoke(runner, ["init", "--embedded", "--workspace"])
+        result = invoke(runner, ["init", "--embedded", "--split"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 

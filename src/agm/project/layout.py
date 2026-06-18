@@ -16,12 +16,13 @@ from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
 
 @dataclass(frozen=True)
-class CurrentCheckout:
-    """Describes the currently active worktree checkout."""
+class CurrentWorkspace:
+    """Describes the currently active AGM workspace."""
 
-    checkout_dir: Path
+    workspace_dir: Path
     branch: str | None
     is_main: bool
+
 
 _DOTENV_CONFIG_FILES = frozenset({".env", ".env.local"})
 _DOT_CONFIG_COPY_EXCLUDES = frozenset({".git"})
@@ -73,22 +74,22 @@ def _resolved_cwd(cwd: Path | None = None) -> Path:
     return Path.cwd() if cwd is None else cwd.resolve()
 
 
-def _project_dir_from_checkout(checkout_dir: Path) -> Path | None:
-    if (checkout_dir / ".agm").is_dir():
-        return checkout_dir / ".agm"
-    if (checkout_dir / "repo").is_dir():
-        return checkout_dir
-    if checkout_dir.name == "repo" and (
-        (checkout_dir.parent / "worktrees").is_dir()
-        or (checkout_dir.parent / ".worktrees").is_dir()
+def _project_dir_from_workspace(workspace_dir: Path) -> Path | None:
+    if (workspace_dir / ".agm").is_dir():
+        return workspace_dir / ".agm"
+    if (workspace_dir / "repo").is_dir():
+        return workspace_dir
+    if workspace_dir.name == "repo" and (
+        (workspace_dir.parent / "worktrees").is_dir()
+        or (workspace_dir.parent / ".worktrees").is_dir()
     ):
-        return checkout_dir.parent
-    if checkout_dir.parent.name == ".worktrees":
-        return checkout_dir.parent.parent
-    if checkout_dir.parent.name == "worktrees" and checkout_dir.parent.parent.name == ".agm":
-        return checkout_dir.parent.parent
-    if checkout_dir.parent.name == "worktrees" and (checkout_dir.parent.parent / "repo").is_dir():
-        return checkout_dir.parent.parent
+        return workspace_dir.parent
+    if workspace_dir.parent.name == ".worktrees":
+        return workspace_dir.parent.parent
+    if workspace_dir.parent.name == "worktrees" and workspace_dir.parent.parent.name == ".agm":
+        return workspace_dir.parent.parent
+    if workspace_dir.parent.name == "worktrees" and (workspace_dir.parent.parent / "repo").is_dir():
+        return workspace_dir.parent.parent
     return None
 
 
@@ -100,10 +101,10 @@ def _project_dir_from_env(env: Mapping[str, str] | None = None) -> Path | None:
     return Path(raw_project_dir)
 
 
-def current_checkout_or_project_root(
+def current_workspace_or_project_root(
     cwd: Path | None = None, *, env: Mapping[str, str] | None = None
 ) -> Path:
-    """Return the current AGM project, git checkout root, or current directory."""
+    """Return the current AGM project, Git checkout root, or current directory."""
 
     env_project_dir = _project_dir_from_env(env)
     if env_project_dir is not None:
@@ -112,7 +113,7 @@ def current_checkout_or_project_root(
     current = _resolved_cwd(cwd)
 
     for candidate in (current, *current.parents):
-        project_dir = _project_dir_from_checkout(candidate)
+        project_dir = _project_dir_from_workspace(candidate)
         if project_dir is not None:
             return project_dir
     if not git_helpers.is_git_repo(current):
@@ -132,12 +133,12 @@ def discover_current_project_dir(
     if env_project_dir is not None:
         return env_project_dir
 
-    candidate = current_checkout_or_project_root(cwd, env=env)
+    candidate = current_workspace_or_project_root(cwd, env=env)
     return candidate if is_project_dir(candidate) else None
 
 
-def is_workspace_project(project_dir: Path) -> bool:
-    """Return whether *project_dir* uses the workspace layout."""
+def is_split_project(project_dir: Path) -> bool:
+    """Return whether *project_dir* uses the split layout."""
 
     return (project_dir / "repo").is_dir()
 
@@ -163,7 +164,7 @@ def require_project_dir(project_dir: Path) -> Path:
     print(
         (
             f"error: {resolved} is not a valid AGM project directory "
-            "(expected embedded layout with a git repo and .agm/, or workspace layout with repo/)"
+            "(expected embedded layout with a git repo and .agm/, or split layout with repo/)"
         ),
         file=sys.stderr,
     )
@@ -178,20 +179,20 @@ def require_current_project_dir(
     project_dir = discover_current_project_dir(cwd, env=env)
     if project_dir is not None:
         return project_dir.resolve()
-    return require_project_dir(current_checkout_or_project_root(cwd, env=env))
+    return require_project_dir(current_workspace_or_project_root(cwd, env=env))
 
 
-def current_checkout(
+def current_workspace(
     project_dir: Path,
     *,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
-) -> CurrentCheckout | None:
-    """Return the current worktree checkout within *project_dir*.
+) -> CurrentWorkspace | None:
+    """Return the current AGM workspace within *project_dir*.
 
     Prefers the ``REPO_DIR`` environment variable when it points to a git
-    checkout (main or worktree) inside *project_dir*.  Falls back to
-    detecting the checkout from *cwd*.  Returns ``None`` when *cwd* is not inside
+    checkout (main or branch workspace) inside *project_dir*. Falls back to
+    detecting the workspace from *cwd*. Returns ``None`` when *cwd* is not inside
     *project_dir* and no usable ``REPO_DIR`` override is available.
     """
     resolved_env = env if env is not None else os.environ
@@ -199,7 +200,7 @@ def current_checkout(
     repo_dir = project_repo_dir(project_dir).resolve(strict=False)
 
     # --- Try REPO_DIR env var first ---
-    checkout_dir: Path | None = None
+    workspace_dir: Path | None = None
     repo_dir_var = resolved_env.get("REPO_DIR", "").strip()
     if repo_dir_var:
         candidate = Path(repo_dir_var).resolve(strict=False)
@@ -212,10 +213,10 @@ def current_checkout(
             or candidate == resolved_project_dir
             or resolved_project_dir in candidate.parents
         ):
-            checkout_dir = candidate
+            workspace_dir = candidate
 
     # --- Fall back to cwd-based detection ---
-    if checkout_dir is None:
+    if workspace_dir is None:
         current = Path.cwd() if cwd is None else cwd.resolve()
         current_project = discover_current_project_dir(current, env=resolved_env)
         if (
@@ -229,31 +230,31 @@ def current_checkout(
                 current.resolve(strict=False) == resolved_project_dir
                 and git_helpers.is_git_repo(repo_dir)
             ):
-                checkout_dir = repo_dir
+                workspace_dir = repo_dir
             else:
                 return None
         else:
             try:
-                checkout_dir = git_helpers.checkout_root(current).resolve(strict=False)
+                workspace_dir = git_helpers.checkout_root(current).resolve(strict=False)
             except SystemExit:
                 if git_helpers.is_git_repo(repo_dir):
-                    checkout_dir = repo_dir
+                    workspace_dir = repo_dir
                 else:
-                    checkout_dir = current
+                    workspace_dir = current
 
-    # --- Determine branch / is_main ---
-    if checkout_dir == repo_dir or repo_dir in checkout_dir.parents:
-        return CurrentCheckout(checkout_dir=checkout_dir, branch=None, is_main=True)
+    # --- Determine workspace branch / is_main ---
+    if workspace_dir == repo_dir or repo_dir in workspace_dir.parents:
+        return CurrentWorkspace(workspace_dir=workspace_dir, branch=None, is_main=True)
 
-    branch = git_helpers.current_branch(checkout_dir, env=env)
-    return CurrentCheckout(checkout_dir=checkout_dir, branch=branch, is_main=False)
+    branch = git_helpers.current_branch(workspace_dir, env=env)
+    return CurrentWorkspace(workspace_dir=workspace_dir, branch=branch, is_main=False)
 
 
 def project_root(project_dir: Path) -> Path:
     """Return the top-level directory of the AGM project.
 
     For embedded layout this is the git repository directory (``.agm``'s
-    parent); for workspace layout it is the workspace root directory (same
+    parent); for split layout it is the project root directory (same
     as *project_dir*).
     """
     if is_embedded_project(project_dir):
@@ -285,7 +286,7 @@ def project_name(project_dir: Path) -> str:
 def project_repo_dir(project_dir: Path) -> Path:
     """Return the main repository directory for *project_dir*."""
 
-    if is_workspace_project(project_dir):
+    if is_split_project(project_dir):
         return project_dir / "repo"
     if is_embedded_project(project_dir):
         return project_dir.parent
@@ -322,16 +323,16 @@ def project_notes_dir(project_dir: Path) -> Path:
     return project_dir / "notes"
 
 
-def is_main_checkout_branch(project_dir: Path, branch: str, *, repo_branch: str) -> bool:
-    """Return whether *branch* resolves to the main repo checkout."""
+def is_main_workspace_branch(project_dir: Path, branch: str, *, repo_branch: str) -> bool:
+    """Return whether *branch* resolves to the main workspace."""
 
     return branch in {"repo", repo_branch}
 
 
 def branch_worktree_path(project_dir: Path, branch: str, *, repo_branch: str) -> Path:
-    """Return the checkout path corresponding to *branch*."""
+    """Return the workspace path corresponding to *branch*."""
 
-    if is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
+    if is_main_workspace_branch(project_dir, branch, repo_branch=repo_branch):
         return project_repo_dir(project_dir)
     return default_worktrees_dir(project_dir) / branch
 
@@ -348,12 +349,12 @@ def expected_branch_worktree_path(project_dir: Path, branch: str) -> Path:
 
 
 def parent_config_branch(project_dir: Path, parent: str | None) -> str | None:
-    """Return the parent branch name for config seeding, or None for main checkout."""
+    """Return the parent branch name for config seeding, or None for the main workspace."""
 
     repo_dir = project_repo_dir(project_dir)
     repo_branch = git_helpers.current_branch(repo_dir)
     resolved_parent = parent or repo_branch
-    if is_main_checkout_branch(project_dir, resolved_parent, repo_branch=repo_branch):
+    if is_main_workspace_branch(project_dir, resolved_parent, repo_branch=repo_branch):
         return None
     return resolved_parent
 
@@ -367,20 +368,20 @@ def branch_session_name(project_dir: Path, branch: str) -> str:
         return name
 
     repo_branch = git_helpers.current_branch(project_repo_dir(project_dir))
-    if is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
+    if is_main_workspace_branch(project_dir, branch, repo_branch=repo_branch):
         return name
     return f"{name}/{branch}"
 
 
-def exit_if_main_checkout_branch(project_dir: Path, branch: str, *, repo_branch: str) -> None:
-    """Exit when *branch* resolves to the main repo checkout."""
+def exit_if_main_workspace_branch(project_dir: Path, branch: str, *, repo_branch: str) -> None:
+    """Exit when *branch* resolves to the main workspace."""
 
-    if not is_main_checkout_branch(project_dir, branch, repo_branch=repo_branch):
+    if not is_main_workspace_branch(project_dir, branch, repo_branch=repo_branch):
         return
     print(
         (
-            f"error: '{branch}' resolves to the main repo checkout at "
-            f"{project_repo_dir(project_dir)} and cannot be managed as a branch worktree"
+            f"error: '{branch}' resolves to the main workspace at "
+            f"{project_repo_dir(project_dir)} and cannot be managed as a branch workspace"
         ),
         file=sys.stderr,
     )
@@ -409,9 +410,9 @@ def copy_config(
     if config_dir.is_dir():
         resolved_branch = branch
         if resolved_branch is None:
-            checkout = current_checkout(proj_dir, cwd=current)
-            if checkout is not None:
-                resolved_branch = checkout.branch
+            workspace = current_workspace(proj_dir, cwd=current)
+            if workspace is not None:
+                resolved_branch = workspace.branch
         if resolved_branch is None:
             _copy_existing_config_files(config_dir, resolved_target)
             return

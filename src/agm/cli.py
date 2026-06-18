@@ -8,7 +8,6 @@ from typing import cast
 
 import typer
 
-import agm.commands.close as close_command
 import agm.commands.config.copy as config_copy_command
 import agm.commands.config.env as config_env_command
 import agm.commands.config.update as config_update_command
@@ -17,24 +16,25 @@ import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
 import agm.commands.exec as exec_command
-import agm.commands.fetch as fetch_command
 import agm.commands.init as init_command
-import agm.commands.list as list_command
 import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
 import agm.commands.loop.select as loop_select_command
 import agm.commands.loop.step as loop_step_command
-import agm.commands.open as open_command
-import agm.commands.pull as pull_command
 import agm.commands.refine as refine_command
 import agm.commands.repl as repl_command
 import agm.commands.review as review_command
 import agm.commands.revise as revise_command
 import agm.commands.run as run_command
-import agm.commands.setup as setup_command
+import agm.commands.sync.fetch as sync_fetch_command
+import agm.commands.sync.pull as sync_pull_command
 import agm.commands.tmux.close as tmux_close_command
 import agm.commands.tmux.layout as tmux_layout_command
 import agm.commands.tmux.open as tmux_open_command
+import agm.commands.workspace.close as workspace_close_command
+import agm.commands.workspace.list as workspace_list_command
+import agm.commands.workspace.open as workspace_open_command
+import agm.commands.workspace.setup as workspace_setup_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 from agm import completion
@@ -581,6 +581,8 @@ app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_comman
 
 config_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 worktree_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
+workspace_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
+sync_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 dep_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 tmux_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_command=True)
 
@@ -620,6 +622,44 @@ def help(
     raise typer.Exit()
 
 
+def _run_workspace_open(
+    *,
+    command_path: Sequence[str],
+    target: str | None,
+    detached: bool,
+    pane_count: str | None,
+    parent: str | None,
+) -> None:
+    workspace_open_command.run(
+        OpenArgs(
+            detached=detached,
+            pane_count=pane_count,
+            parent=parent,
+            branch=_require_value(target, command_path=command_path, name="target"),
+        )
+    )
+
+
+def _run_workspace_close(
+    *,
+    command_path: Sequence[str],
+    branch: str | None,
+    force: bool,
+    force_delete: bool,
+) -> None:
+    workspace_close_command.run(
+        CloseArgs(
+            branch=_require_value(
+                branch,
+                command_path=command_path,
+                name="branch",
+            ),
+            force=force,
+            force_delete=force_delete,
+        )
+    )
+
+
 @app.command()
 def open(
     target: str | None = typer.Argument(
@@ -641,7 +681,7 @@ def open(
         None,
         "-p",
         "--parent",
-        help="Base a new branch on this checkout.",
+        help="Base a new branch on this workspace.",
         autocompletion=completion.complete_worktree_branch,
     ),
     _help: bool = _help_option(),
@@ -649,13 +689,12 @@ def open(
 ) -> None:
     del _help
     del _dry_run
-    open_command.run(
-        OpenArgs(
-            detached=detached,
-            pane_count=pane_count,
-            parent=parent,
-            branch=_require_value(target, command_path=["open"], name="target"),
-        )
+    _run_workspace_open(
+        command_path=["open"],
+        target=target,
+        detached=detached,
+        pane_count=pane_count,
+        parent=parent,
     )
 
 
@@ -671,8 +710,8 @@ def close(
         "-f",
         "--force",
         help=(
-            "Force remove the worktree (even with untracked files) and force delete the"
-            " branch (git branch -D)."
+            "Force remove the branch workspace's Git worktree (even with untracked files) "
+            "and force delete the branch (git branch -D)."
         ),
     ),
     force_delete: bool = typer.Option(
@@ -685,16 +724,11 @@ def close(
 ) -> None:
     del _help
     del _dry_run
-    close_command.run(
-        CloseArgs(
-            branch=_require_value(
-                branch,
-                command_path=["close"],
-                name="branch",
-            ),
-            force=force,
-            force_delete=force_delete,
-        )
+    _run_workspace_close(
+        command_path=["close"],
+        branch=branch,
+        force=force,
+        force_delete=force_delete,
     )
 
 
@@ -771,6 +805,112 @@ def config_update(
     config_update_command.run(ConfigUpdateArgs())
 
 
+@workspace_app.callback(invoke_without_command=True)
+def workspace_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    if ctx.invoked_subcommand is None:
+        print_help_for_command_path([ctx.info_name or "workspace"])
+        raise typer.Exit()
+
+
+@workspace_app.command(name="open")
+def workspace_open(
+    target: str | None = typer.Argument(
+        None,
+        metavar="TARGET",
+        autocompletion=completion.complete_open_target,
+    ),
+    detached: bool = typer.Option(
+        False, "-d", "--detach", "--detached", help="Open the session detached."
+    ),
+    pane_count: str | None = typer.Option(
+        None,
+        "-n",
+        "--num-panes",
+        help="Create the session with this many panes.",
+        autocompletion=completion.complete_pane_count,
+    ),
+    parent: str | None = typer.Option(
+        None,
+        "-p",
+        "--parent",
+        help="Base a new branch on this workspace.",
+        autocompletion=completion.complete_worktree_branch,
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_workspace_open(
+        command_path=["workspace", "open"],
+        target=target,
+        detached=detached,
+        pane_count=pane_count,
+        parent=parent,
+    )
+
+
+@workspace_app.command(name="close")
+def workspace_close(
+    branch: str | None = typer.Argument(
+        None,
+        metavar="BRANCH",
+        autocompletion=completion.complete_close_branch,
+    ),
+    force: bool = typer.Option(
+        False,
+        "-f",
+        "--force",
+        help=(
+            "Force remove the branch workspace's Git worktree (even with untracked files) "
+            "and force delete the branch (git branch -D)."
+        ),
+    ),
+    force_delete: bool = typer.Option(
+        False,
+        "-D",
+        help="Force delete the branch (git branch -D) instead of safe delete (git branch -d).",
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    _run_workspace_close(
+        command_path=["workspace", "close"],
+        branch=branch,
+        force=force,
+        force_delete=force_delete,
+    )
+
+
+@workspace_app.command(name="setup")
+def workspace_setup(
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    workspace_setup_command.run()
+
+
+@workspace_app.command(name="list")
+def workspace_list(
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show workspace directories."),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    workspace_list_command.run(verbose=verbose)
+
+
 @worktree_app.callback(invoke_without_command=True)
 def worktree_callback(
     ctx: typer.Context,
@@ -809,13 +949,6 @@ def new(
             branch=_require_value(branch, command_path=["worktree", "new"], name="branch"),
         )
     )
-
-
-@app.command()
-def setup(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
-    del _help
-    del _dry_run
-    setup_command.run()
 
 
 def _exec_print_help(*, file: str | None, command: str | None) -> None:
@@ -1193,18 +1326,31 @@ def _run_dep_remove(*, command_path: list[str], target: str | None, all: bool) -
     )
 
 
-@app.command()
-def fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
+@sync_app.callback(invoke_without_command=True)
+def sync_callback(
+    ctx: typer.Context,
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
     del _help
     del _dry_run
-    fetch_command.run(object())
+    if ctx.invoked_subcommand is None:
+        print_help_for_command_path(["sync"])
+        raise typer.Exit()
 
 
-@app.command()
-def pull(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
+@sync_app.command(name="fetch")
+def sync_fetch(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
     del _help
     del _dry_run
-    pull_command.run(object())
+    sync_fetch_command.run(object())
+
+
+@sync_app.command(name="pull")
+def sync_pull(_help: bool = _help_option(), _dry_run: bool = _dry_run_option()) -> None:
+    del _help
+    del _dry_run
+    sync_pull_command.run(object())
 
 
 @app.command()
@@ -1523,7 +1669,7 @@ def init(
     arg1: str | None = typer.Argument(None, metavar="arg"),
     arg2: str | None = typer.Argument(None, metavar="arg"),
     embedded: bool = typer.Option(False, "--embedded", help="Force the embedded layout."),
-    workspace: bool = typer.Option(False, "--workspace", help="Force the workspace layout."),
+    split: bool = typer.Option(False, "--split", help="Force the split layout."),
     clone: bool = typer.Option(
         False,
         "--clone",
@@ -1552,15 +1698,15 @@ def init(
 ) -> None:
     del _help
     del _dry_run
-    if embedded and workspace:
-        exit_with_usage_error(["init"], "error: --embedded and --workspace are mutually exclusive")
+    if embedded and split:
+        exit_with_usage_error(["init"], "error: --embedded and --split are mutually exclusive")
     positional: list[str] = [] if arg1 is None else [arg1] if arg2 is None else [arg1, arg2]
     init_command.run(
         InitArgs(
             positional=positional,
             branch=branch,
             embedded=embedded,
-            workspace=workspace,
+            split=split,
             clone=clone,
             no_config_git=no_config_git,
             no_notes_git=no_notes_git,
@@ -1727,20 +1873,12 @@ def tmux_layout(
     )
 
 
-@app.command(name="list")
-def list_cmd(
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show worktree directories."),
-    _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
-) -> None:
-    del _help
-    del _dry_run
-    list_command.run(verbose=verbose)
-
-
 app.add_typer(config_app, name="config")
+app.add_typer(workspace_app, name="workspace")
+app.add_typer(workspace_app, name="wsp")
 app.add_typer(worktree_app, name="wt")
 app.add_typer(worktree_app, name="worktree")
+app.add_typer(sync_app, name="sync")
 app.add_typer(dep_app, name="dep")
 app.add_typer(tmux_app, name="tmux")
 

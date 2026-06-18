@@ -1,4 +1,4 @@
-"""Tests for agm.commands.close."""
+"""Tests for agm.commands.workspace.close."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-import agm.commands.close as close_module
+import agm.commands.workspace.close as close_module
 from agm.commands.args import CloseArgs
-from agm.commands.close import close_session
+from agm.commands.workspace.close import close_workspace
 
 
 def _make_git_close_project(
@@ -77,7 +77,7 @@ def _install_fake_tmux(
     return log_path
 
 # ===========================================================================
-# close_session branch config removal
+# close_workspace branch config removal
 # ===========================================================================
 
 
@@ -97,7 +97,7 @@ class TestCloseSessionRemovesBranchConfig:
         monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
         monkeypatch.setattr(
             close_module,
-            "is_main_checkout_branch",
+            "is_main_workspace_branch",
             lambda pd, close_branch, repo_branch: False,
         )
         monkeypatch.setattr(
@@ -106,8 +106,8 @@ class TestCloseSessionRemovesBranchConfig:
         monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
         monkeypatch.setattr(
             close_module,
-            "load_worktree_env",
-            lambda pd, config_branch, checkout_dir: {"HOME": str(tmp_path / "home")},
+            "load_workspace_env",
+            lambda pd, config_branch, workspace_dir: {"HOME": str(tmp_path / "home")},
         )
         monkeypatch.setattr(
             close_module, "branch_session_name", lambda pd, close_branch: f"proj/{close_branch}"
@@ -122,7 +122,7 @@ class TestCloseSessionRemovesBranchConfig:
             tmp_path, monkeypatch, branch="feature"
         )
 
-        close_session(branch="feature", cwd=tmp_path)
+        close_workspace(branch="feature", cwd=tmp_path)
 
         assert not branch_config.exists()
 
@@ -141,7 +141,7 @@ class TestCloseSessionRemovesBranchConfig:
             lambda pd, msg, **kw: commit_calls.append((pd, msg, kw.get("add_paths", []))),
         )
 
-        close_session(branch="feature", cwd=tmp_path)
+        close_workspace(branch="feature", cwd=tmp_path)
 
         assert not branch_config.exists()
         assert len(commit_calls) == 1
@@ -164,7 +164,7 @@ class TestCloseSessionRemovesBranchConfig:
             lambda pd, msg, **kw: commit_calls.append(msg),
         )
 
-        close_session(branch="feature", cwd=tmp_path)
+        close_workspace(branch="feature", cwd=tmp_path)
 
         assert not branch_config.exists()
         assert len(commit_calls) == 1
@@ -184,7 +184,7 @@ class TestCloseSessionRemovesBranchConfig:
             lambda pd, msg, **kw: commit_calls.append(msg),
         )
 
-        close_session(branch="my-feature", cwd=tmp_path)
+        close_workspace(branch="my-feature", cwd=tmp_path)
 
         assert not branch_config.exists()
         assert len(commit_calls) == 1
@@ -192,7 +192,7 @@ class TestCloseSessionRemovesBranchConfig:
 
 
 # ===========================================================================
-# close_session
+# close_workspace
 # ===========================================================================
 
 
@@ -212,10 +212,10 @@ class TestCloseSession:
             close_module.git_helpers, "current_branch", lambda repo, **kw: "main"
         )
         monkeypatch.setattr(
-            close_module, "is_main_checkout_branch", lambda pd, branch, repo_branch: is_main
+            close_module, "is_main_workspace_branch", lambda pd, branch, repo_branch: is_main
         )
         monkeypatch.setattr(
-            close_module, "load_worktree_env", lambda pd, branch, checkout_dir: {}
+            close_module, "load_workspace_env", lambda pd, branch, workspace_dir: {}
         )
         monkeypatch.setattr(
             close_module.git_helpers, "branch_can_delete", lambda repo, b, **kw: True
@@ -238,7 +238,7 @@ class TestCloseSession:
         project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env)
         tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
-        close_session(branch="feature", cwd=project_dir)
+        close_workspace(branch="feature", cwd=project_dir)
 
         assert not worktree_dir.exists()
         assert not _branch_exists(repo_dir, "feature", env)
@@ -249,7 +249,7 @@ class TestCloseSession:
     ) -> None:
         self._setup(tmp_path, monkeypatch, is_main=True)
         with pytest.raises(SystemExit) as exc_info:
-            close_session(branch="main", cwd=tmp_path)
+            close_workspace(branch="main", cwd=tmp_path)
         assert exc_info.value.code == 1
 
     def test_exits_without_removing_worktree_when_branch_not_deletable(
@@ -263,7 +263,7 @@ class TestCloseSession:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            close_session(branch="feature", cwd=project_dir)
+            close_workspace(branch="feature", cwd=project_dir)
 
         assert exc_info.value.code == 1
         assert worktree_dir.exists()
@@ -281,7 +281,7 @@ class TestCloseSession:
             close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: True
         )
         with pytest.raises(SystemExit):
-            close_session(branch="feature", cwd=tmp_path)
+            close_workspace(branch="feature", cwd=tmp_path)
         captured = capsys.readouterr()
         assert "not fully merged" in captured.err
         assert "-D" in captured.err
@@ -297,7 +297,7 @@ class TestCloseSession:
             close_module.git_helpers, "local_branch_exists", lambda repo, b, **kw: False
         )
         with pytest.raises(SystemExit):
-            close_session(branch="feature", cwd=tmp_path)
+            close_workspace(branch="feature", cwd=tmp_path)
         assert "does not exist" in capsys.readouterr().err
 
     def test_force_delete_removes_unmerged_branch(
@@ -311,7 +311,7 @@ class TestCloseSession:
         )
         _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
-        close_session(branch="feature", force_delete=True, cwd=project_dir)
+        close_workspace(branch="feature", force_delete=True, cwd=project_dir)
 
         assert not worktree_dir.exists()
         assert not _branch_exists(repo_dir, "feature", env)
@@ -327,7 +327,7 @@ class TestCloseSession:
         )
         _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
-        close_session(branch="feature", force=True, force_delete=False, cwd=project_dir)
+        close_workspace(branch="feature", force=True, force_delete=False, cwd=project_dir)
 
         assert not worktree_dir.exists()
         assert not _branch_exists(repo_dir, "feature", env)
@@ -354,7 +354,7 @@ class TestCloseRun:
         monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
         monkeypatch.setattr(
             close_module,
-            "is_main_checkout_branch",
+            "is_main_workspace_branch",
             lambda pd, branch, repo_branch: False,
         )
         monkeypatch.setattr(
@@ -367,7 +367,7 @@ class TestCloseRun:
         )
         monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
         monkeypatch.setattr(
-            close_module, "load_worktree_env", lambda pd, branch, checkout_dir: {}
+            close_module, "load_workspace_env", lambda pd, branch, workspace_dir: {}
         )
         monkeypatch.setattr(
             close_module, "branch_session_name", lambda pd, branch: f"proj/{branch}"

@@ -1,7 +1,7 @@
 # AGM
 
-Agent Management Framework is a CLI for setting up agent-oriented project workspaces, managing
-repo and dependency worktrees, opening tmux sessions, running setup scripts, executing
+Agent Management Framework is a CLI for setting up agent-oriented project directories, managing
+AGM workspaces, opening tmux sessions, running setup scripts, executing
 commands with sandbox settings, and running AgL agent workflows — as whole programs (`agm exec`)
 or in an interactive REPL (`agm repl`).
 
@@ -43,7 +43,7 @@ just install /usr/local --force
 
 `agm init` supports two layouts.
 
-Workspace layout:
+Split layout:
 
 ```text
 myproject/
@@ -63,13 +63,13 @@ myproject/
 │   ├── deps/
 │   ├── notes/
 │   └── worktrees/
-└── <main checkout>
+└── <main workspace files>
 ```
 
-Without `--embedded` or `--workspace`, AGM chooses:
+Without `--embedded` or `--split`, AGM chooses:
 
 - embedded when the target project directory already exists and is a git repo
-- workspace otherwise
+- split otherwise
 
 `agm init` also creates `config/env.sh` and an executable `config/setup.sh` if they do not
 already exist.
@@ -90,8 +90,8 @@ Use `agm help` for the command list and `agm help <command>` for detailed help. 
 
 ### `agm open`
 
-Open a tmux session for the main checkout or a branch worktree, creating or checking out the
-branch when needed.
+Shortcut for `agm workspace open`. Open a tmux session for the main workspace or a branch
+workspace, creating or checking out the branch when needed.
 
 ```bash
 agm open repo
@@ -103,14 +103,14 @@ agm open --detach feat/search
 
 ### `agm close`
 
-Remove a branch worktree and close its tmux session.
+Shortcut for `agm workspace close`. Remove a branch workspace and close its tmux session.
 
 ```bash
 agm close feat/search
 agm close --force feat/search
 ```
 
-`repo` and the branch currently checked out in the main checkout resolve to the main checkout and
+`repo` and the branch currently checked out in the main workspace resolve to the main workspace and
 cannot be closed.
 
 ### `agm init`
@@ -121,49 +121,49 @@ Initialize a project directory, optionally cloning a repo.
 agm init myproject
 agm init https://github.com/org/repo.git
 agm init myproject https://github.com/org/repo.git
-agm init --workspace -b develop myproject https://github.com/org/repo.git
+agm init --split -b develop myproject https://github.com/org/repo.git
 agm init --embedded myproject
 ```
 
 When only `REPO_URL` is provided, AGM derives the project name from the repository URL.
 
-### `agm fetch`
+### `agm workspace`
+
+Manage AGM workspaces. A workspace may be the main repo or a linked Git worktree, interpreted
+with AGM project config, branch config, dependency environment, setup scripts, and tmux session
+lifecycle.
+
+```bash
+agm workspace open repo
+agm wsp open feat/login
+agm workspace close feat/login
+agm workspace list
+agm wsp list -v
+agm workspace setup
+```
+
+`agm workspace setup` runs configured setup scripts for the current workspace, in this order:
+
+1. `config/setup.sh`
+2. `<workspace>/.config/setup.sh`
+3. `<workspace>/.setup.sh`
+
+### `agm sync fetch`
 
 Fetch the main repo and all checked-out dependencies, then create local tracking branches for
 remote branches that are not yet merged into the default origin branch.
 
 ```bash
-agm fetch
+agm sync fetch
 ```
 
-### `agm pull`
+### `agm sync pull`
 
-Run `agm fetch`, then run `git merge` in every checkout: dependency worktrees, the main repo,
-and project worktrees.
-
-```bash
-agm pull
-```
-
-### `agm list`
-
-List all open worktrees, with the main repo at the top. The current worktree is marked with `*`.
+Run `agm sync fetch`, then run `git merge` in every Git worktree: dependency worktrees, the main
+workspace, and branch workspaces.
 
 ```bash
-agm list
-agm list -v
-```
-
-### `agm setup`
-
-Run configured setup scripts for the current checkout, in this order:
-
-1. `config/setup.sh`
-2. `<checkout>/.config/setup.sh`
-3. `<checkout>/.setup.sh`
-
-```bash
-agm setup
+agm sync pull
 ```
 
 ### `agm review`
@@ -250,7 +250,7 @@ Known files currently include `.setup.sh`, `.env`, `.env.local`, `.config`, `.ag
 
 ### `agm config env`
 
-Print shell statements that refresh the current checkout environment from project and branch
+Print shell statements that refresh the current workspace environment from project and branch
 `.env`, `.env.local`, and `env.sh` files. Apply them to the current shell with:
 
 ```bash
@@ -276,8 +276,7 @@ agm worktree remove --force old-branch
 agm wt rm old-branch
 ```
 
-`agm setup` (not a worktree subcommand) runs the configured setup scripts for the
-current checkout; see [`agm setup`](#agm-setup).
+Use `agm workspace setup` to run the configured setup scripts for the current workspace.
 
 ### `agm dep`
 

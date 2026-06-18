@@ -1,4 +1,4 @@
-"""Tests for agm.commands.pull."""
+"""Tests for agm.commands.sync.pull."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import agm.commands.pull as pull_cmd
+import agm.commands.sync.pull as pull_cmd
 from agm.vcs.git import WorktreeInfo
 
 

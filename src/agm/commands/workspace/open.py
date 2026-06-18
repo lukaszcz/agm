@@ -1,4 +1,4 @@
-"""agm open."""
+"""agm workspace open."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
-    is_main_checkout_branch,
+    is_main_workspace_branch,
     parent_config_branch,
     project_config_dir,
     project_name,
     project_repo_dir,
     require_current_project_dir,
 )
-from agm.project.setup import load_worktree_env
+from agm.project.workspace_env import load_workspace_env
 from agm.project.worktree import (
     branch_exists,
     ensure_worktree,
@@ -52,7 +52,7 @@ def branch_path(proj_dir: Path, branch: str) -> Path:
     )
 
 
-def queue_setup_and_focus_session(
+def queue_setup_and_focus_workspace_session(
     *,
     detached: bool,
     pane_count: str | None,
@@ -71,7 +71,7 @@ def queue_setup_and_focus_session(
         raise AssertionError("detached tmux session creation did not return a session name")
     queue_command_in_session(
         session_name=created_session,
-        command=["agm", "setup"],
+        command=["agm", "workspace", "setup"],
         cwd=repo_path,
         env=env,
     )
@@ -80,7 +80,7 @@ def queue_setup_and_focus_session(
     raise SystemExit(focus_tmux_session(session_name=created_session, cwd=repo_path, env=env))
 
 
-def open_session(
+def open_workspace(
     *,
     detached: bool,
     pane_count: str | None,
@@ -105,7 +105,7 @@ def open_session(
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
         ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)
-    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
+    env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
     if branch is not None:
         commit_config_dir_changes(
             proj_dir, f"chore: update config for {branch}",
@@ -120,7 +120,7 @@ def open_session(
     )
 
 
-def new_session(
+def create_workspace(
     *,
     detached: bool,
     pane_count: str | None,
@@ -139,7 +139,7 @@ def new_session(
         branch=branch,
         parent_branch=start_point,
     )
-    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
+    env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
     ensure_worktree(
         new_branch=branch,
         worktrees_dir=None,
@@ -153,7 +153,7 @@ def new_session(
         proj_dir, f"chore: add config for {branch}",
         add_paths=[project_config_dir(proj_dir) / branch], env=env,
     )
-    queue_setup_and_focus_session(
+    queue_setup_and_focus_workspace_session(
         detached=detached,
         pane_count=pane_count,
         session_name=branch_session_name(proj_dir, branch),
@@ -162,7 +162,7 @@ def new_session(
     )
 
 
-def checkout_session(
+def checkout_workspace(
     *,
     detached: bool,
     pane_count: str | None,
@@ -179,7 +179,7 @@ def checkout_session(
         project_dir=proj_dir, branch=branch,
         parent_branch=parent_config_branch(proj_dir, parent),
     )
-    env = load_worktree_env(proj_dir, branch, checkout_dir=repo_path)
+    env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
     ensure_worktree(
         new_branch=None,
         worktrees_dir=None,
@@ -192,7 +192,7 @@ def checkout_session(
         proj_dir, f"chore: add config for {branch}",
         add_paths=[project_config_dir(proj_dir) / branch], env=env,
     )
-    queue_setup_and_focus_session(
+    queue_setup_and_focus_workspace_session(
         detached=detached,
         pane_count=pane_count,
         session_name=branch_session_name(proj_dir, branch),
@@ -201,7 +201,7 @@ def checkout_session(
     )
 
 
-def smart_open_session(
+def open_or_create_workspace(
     *,
     detached: bool,
     pane_count: str | None,
@@ -214,20 +214,20 @@ def smart_open_session(
     proj_dir = require_current_project_dir(current)
 
     repo_dir = project_repo_dir(proj_dir)
-    if is_main_checkout_branch(
+    if is_main_workspace_branch(
         proj_dir,
         branch,
         repo_branch=git_helpers.current_branch(repo_dir),
     ):
-        open_session(detached=detached, pane_count=pane_count, branch=None, cwd=current)
+        open_workspace(detached=detached, pane_count=pane_count, branch=None, cwd=current)
         return
 
     git_helpers.fetch(repo_dir)
     if has_expected_worktree(proj_dir, branch):
-        open_session(detached=detached, pane_count=pane_count, branch=branch, cwd=current)
+        open_workspace(detached=detached, pane_count=pane_count, branch=branch, cwd=current)
         return
     if branch_exists(repo_dir, branch):
-        checkout_session(
+        checkout_workspace(
             detached=detached,
             pane_count=pane_count,
             parent=parent,
@@ -235,7 +235,7 @@ def smart_open_session(
             cwd=current,
         )
         return
-    new_session(
+    create_workspace(
         detached=detached,
         pane_count=pane_count,
         parent=parent,
@@ -245,7 +245,7 @@ def smart_open_session(
 
 
 def run(args: OpenArgs) -> None:
-    smart_open_session(
+    open_or_create_workspace(
         detached=args.detached,
         pane_count=args.pane_count,
         parent=args.parent,

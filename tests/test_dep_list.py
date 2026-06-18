@@ -219,11 +219,11 @@ class TestListAllDepCheckouts:
 
 
 # ---------------------------------------------------------------------------
-# list_deps — current checkout mode (no --all)
+# list_deps — current workspace mode (no --all)
 # ---------------------------------------------------------------------------
 
 
-class TestListDepsCurrentCheckout:
+class TestListDepsCurrentWorkspace:
     def test_lists_deps_from_branch_config(
         self,
         tmp_path: Path,

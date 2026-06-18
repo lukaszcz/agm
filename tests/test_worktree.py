@@ -558,7 +558,7 @@ class TestEnsureWorktree:
         monkeypatch.setattr(worktree_mod.git_helpers, "worktree_list", lambda p, env=None: [])
         monkeypatch.setattr(
             worktree_mod,
-            "exit_if_main_checkout_branch",
+            "exit_if_main_workspace_branch",
             lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected check")),
         )
         monkeypatch.setattr(
@@ -799,7 +799,7 @@ class TestRemoveWorktree:
         monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             worktree_mod,
-            "exit_if_main_checkout_branch",
+            "exit_if_main_workspace_branch",
             lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected check")),
         )
         monkeypatch.setattr(
@@ -876,7 +876,7 @@ class TestEnsureWorktreeRelativePath:
             worktree_module, "discover_current_project_dir", lambda cwd=None, env=None: project
         )
         monkeypatch.setattr(
-            worktree_module, "exit_if_main_checkout_branch", lambda pd, b, repo_branch=None: None
+            worktree_module, "exit_if_main_workspace_branch", lambda pd, b, repo_branch=None: None
         )
 
         # Pass a relative worktrees_dir

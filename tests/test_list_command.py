@@ -1,4 +1,4 @@
-"""Tests for agm.commands.list."""
+"""Tests for agm.commands.workspace.list."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from click.testing import CliRunner
 from typer.main import get_command
 
 import agm.cli as cli
-import agm.commands.list as list_cmd
+import agm.commands.workspace.list as list_cmd
 from agm.vcs.git import WorktreeInfo
 
 
@@ -18,8 +18,8 @@ def _invoke(runner: CliRunner, argv: list[str]) -> Any:
     return runner.invoke(get_command(cli.app), argv, prog_name="agm")
 
 
-class TestListWorktrees:
-    """Tests for list_worktrees."""
+class TestListWorkspaces:
+    """Tests for list_workspaces."""
 
     def test_lists_main_repo_at_top(
         self,
@@ -44,11 +44,11 @@ class TestListWorktrees:
             list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees()
+        list_cmd.list_workspaces()
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -79,11 +79,11 @@ class TestListWorktrees:
             list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees(verbose=True)
+        list_cmd.list_workspaces(verbose=True)
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -125,11 +125,11 @@ class TestListWorktrees:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees()
+        list_cmd.list_workspaces()
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -176,11 +176,11 @@ class TestListWorktrees:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees(verbose=True)
+        list_cmd.list_workspaces(verbose=True)
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -205,7 +205,7 @@ class TestListWorktrees:
         repo_dir.mkdir(parents=True)
         feat_path.mkdir(parents=True)
 
-        from agm.project.layout import CurrentCheckout
+        from agm.project.layout import CurrentWorkspace
 
         monkeypatch.setattr(
             list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
@@ -225,13 +225,13 @@ class TestListWorktrees:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
-            lambda pd, cwd=None, env=None: CurrentCheckout(
-                checkout_dir=feat_path, branch="feat", is_main=False,
+            list_cmd, "current_workspace",
+            lambda pd, cwd=None, env=None: CurrentWorkspace(
+                workspace_dir=feat_path, branch="feat", is_main=False,
             ),
         )
 
-        list_cmd.list_worktrees()
+        list_cmd.list_workspaces()
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -253,7 +253,7 @@ class TestListWorktrees:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
-        from agm.project.layout import CurrentCheckout
+        from agm.project.layout import CurrentWorkspace
 
         monkeypatch.setattr(
             list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
@@ -272,13 +272,13 @@ class TestListWorktrees:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
-            lambda pd, cwd=None, env=None: CurrentCheckout(
-                checkout_dir=repo_dir, branch=None, is_main=True,
+            list_cmd, "current_workspace",
+            lambda pd, cwd=None, env=None: CurrentWorkspace(
+                workspace_dir=repo_dir, branch=None, is_main=True,
             ),
         )
 
-        list_cmd.list_worktrees()
+        list_cmd.list_workspaces()
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -286,7 +286,7 @@ class TestListWorktrees:
         assert lines[0].startswith("*")
         assert "main" in lines[0]
 
-    def test_no_star_when_no_current_checkout(
+    def test_no_star_when_no_current_workspace(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -313,11 +313,11 @@ class TestListWorktrees:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees()
+        list_cmd.list_workspaces()
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -351,11 +351,11 @@ class TestListWorktrees:
             lambda p, env=None: [],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees()
+        list_cmd.list_workspaces()
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -389,11 +389,11 @@ class TestListWorktrees:
             lambda p, env=None: [],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees(verbose=True)
+        list_cmd.list_workspaces(verbose=True)
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -424,11 +424,11 @@ class TestListWorktrees:
             list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
-        list_cmd.list_worktrees(verbose=True)
+        list_cmd.list_workspaces(verbose=True)
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -440,7 +440,7 @@ class TestListWorktrees:
 class TestRun:
     """Tests for the run() entrypoint."""
 
-    def test_delegates_to_list_worktrees(
+    def test_delegates_to_list_workspaces(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -463,7 +463,7 @@ class TestRun:
             list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout",
+            list_cmd, "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -506,10 +506,10 @@ class TestDetachedWorktree:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_checkout", lambda pd, cwd=None, env=None: None
+            list_cmd, "current_workspace", lambda pd, cwd=None, env=None: None
         )
 
-        list_cmd.list_worktrees()
+        list_cmd.list_workspaces()
 
         captured = capsys.readouterr()
         lines = [line for line in captured.out.splitlines() if line]
@@ -518,7 +518,7 @@ class TestDetachedWorktree:
 
 
 class TestListCommandViaCli:
-    """list_cmd CLI entry point dispatches correctly."""
+    """workspace list CLI entry point dispatches correctly."""
 
     def test_list_cmd_via_cli(
         self, monkeypatch: pytest.MonkeyPatch
@@ -529,7 +529,7 @@ class TestListCommandViaCli:
         def record(*, verbose: bool = False) -> None:
             calls.append(True)
 
-        monkeypatch.setattr(cli.list_command, "run", record)
-        result = _invoke(runner, ["list"])
+        monkeypatch.setattr(cli.workspace_list_command, "run", record)
+        result = _invoke(runner, ["workspace", "list"])
         assert result.exit_code == 0
         assert len(calls) == 1

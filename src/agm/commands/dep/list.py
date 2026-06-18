@@ -60,9 +60,9 @@ def list_deps(
     verbose: bool = False,
     all_checkouts: bool = False,
 ) -> None:
-    """Print dependency checkouts for the current project checkout (or all).
+    """Print dependency checkouts for the current workspace (or all).
 
-    Without --all, only the deps for the current checkout's config branch are
+    Without --all, only the deps for the current workspace's config branch are
     listed.  With --all, every checkout under deps/ is listed grouped by
     dependency name.
 

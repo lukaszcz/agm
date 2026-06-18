@@ -78,7 +78,7 @@ class InitArgs:
     positional: list[str]
     branch: str | None
     embedded: bool
-    workspace: bool
+    split: bool
     clone: bool
     no_config_git: bool
     no_notes_git: bool

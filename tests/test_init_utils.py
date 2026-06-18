@@ -31,7 +31,7 @@ def make_args(
     *,
     branch: str | None = None,
     embedded: bool = False,
-    workspace: bool = False,
+    split: bool = False,
     clone: bool = False,
     no_config_git: bool = False,
     no_notes_git: bool = False,
@@ -41,7 +41,7 @@ def make_args(
         positional=positional or [],
         branch=branch,
         embedded=embedded,
-        workspace=workspace,
+        split=split,
         clone=clone,
         no_config_git=no_config_git,
         no_notes_git=no_notes_git,
@@ -307,7 +307,7 @@ class TestEnsureGitRepo:
 
 
 # ---------------------------------------------------------------------------
-# configure_project_dir – workspace layout
+# configure_project_dir – split layout
 # ---------------------------------------------------------------------------
 
 
@@ -492,11 +492,11 @@ class TestUseEmbeddedLayout:
         args = make_args(embedded=True)
         assert use_embedded_layout(args, project_dir=tmp_path, repo_url="") is True
 
-    def test_returns_false_when_workspace_flag_set(
+    def test_returns_false_when_split_flag_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
-        args = make_args(workspace=True)
+        args = make_args(split=True)
         assert use_embedded_layout(args, project_dir=tmp_path, repo_url="") is False
 
     def test_returns_false_when_repo_url_provided(
@@ -527,11 +527,11 @@ class TestUseEmbeddedLayout:
         result = use_embedded_layout(args, project_dir=non_existing, repo_url="")
         assert result is False
 
-    def test_workspace_flag_takes_priority_over_existing_git_repo(
+    def test_split_flag_takes_priority_over_existing_git_repo(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: True)
-        args = make_args(workspace=True)
+        args = make_args(split=True)
         result = use_embedded_layout(args, project_dir=tmp_path, repo_url="")
         assert result is False
 
@@ -599,7 +599,7 @@ class TestRunLocalInit:
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
 
-        args = make_args(workspace=True)
+        args = make_args(split=True)
         run(args)
 
         assert (tmp_path / "config").is_dir()
@@ -611,7 +611,7 @@ class TestRunLocalInit:
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
 
-        args = make_args(["myproject"], workspace=True)
+        args = make_args(["myproject"], split=True)
         run(args)
 
         assert (tmp_path / "myproject" / "config").is_dir()
@@ -623,7 +623,7 @@ class TestRunLocalInit:
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
 
-        args = make_args(["notaurl"], workspace=True)
+        args = make_args(["notaurl"], split=True)
         run(args)
 
         assert (tmp_path / "notaurl").is_dir()
@@ -644,7 +644,7 @@ class TestRunLocalInit:
         monkeypatch.setattr(init_module, "require_success", fake_require_success)
 
         url = "https://github.com/org/myrepo"
-        args = make_args([url], workspace=True)
+        args = make_args([url], split=True)
         run(args)
 
         assert any("clone" in c for c in cloned)
@@ -664,7 +664,7 @@ class TestRunLocalInit:
         monkeypatch.setattr(init_module, "require_success", fake_require_success)
 
         url = "https://github.com/org/myrepo"
-        args = make_args(["customname", url], workspace=True)
+        args = make_args(["customname", url], split=True)
         run(args)
 
         assert (tmp_path / "customname" / "repo").is_dir() or any(
@@ -693,7 +693,7 @@ class TestRunClone:
         monkeypatch.setattr(init_module, "require_success", fake_require_success)
 
         url = "https://github.com/org/derived-name.git"
-        args = make_args([url], clone=True, workspace=True)
+        args = make_args([url], clone=True, split=True)
         run(args)
 
         assert (tmp_path / "derived-name").is_dir()
@@ -713,7 +713,7 @@ class TestRunClone:
         monkeypatch.setattr(init_module, "require_success", fake_require_success)
 
         url = "https://github.com/org/myrepo.git"
-        args = make_args([url], clone=True, branch="dev", workspace=True)
+        args = make_args([url], clone=True, branch="dev", split=True)
         run(args)
 
         assert clone_calls, "git clone should have been called"
@@ -736,7 +736,7 @@ class TestRunClone:
         (repo_dir / "somefile.txt").write_text("content\n", encoding="utf-8")
 
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
-        args = make_args([url], clone=True, workspace=True)
+        args = make_args([url], clone=True, split=True)
 
         with pytest.raises(SystemExit):
             run(args)
@@ -765,7 +765,7 @@ class TestRunClone:
 
         # Use two-positional form so project_dir is an absolute path outside cwd
         url = "https://github.com/org/myrepo.git"
-        args = make_args([str(other_root / "myrepo"), url], workspace=True)
+        args = make_args([str(other_root / "myrepo"), url], split=True)
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
 
         with pytest.raises(SystemExit):
@@ -791,7 +791,7 @@ class TestRunClone:
         monkeypatch.setattr(init_module, "require_success", fake_require_success)
 
         url = "https://github.com/org/myrepo.git"
-        args = make_args([url], clone=True, workspace=True)
+        args = make_args([url], clone=True, split=True)
         run(args)
 
         assert clone_calls, "git clone should have been called"
@@ -816,14 +816,14 @@ class TestRunEmbeddedLayout:
 
         assert (tmp_path / "proj" / ".agm").is_dir()
 
-    def test_workspace_flag_chooses_workspace_layout(
+    def test_split_flag_chooses_split_layout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
 
-        args = make_args(["proj"], workspace=True)
+        args = make_args(["proj"], split=True)
         run(args)
 
         assert (tmp_path / "proj" / "repo").is_dir()
@@ -836,10 +836,10 @@ class TestRunEmbeddedLayout:
 
 
 class TestConfigureProjectDirAlternatives:
-    def test_workspace_non_git_repo_does_not_add_agent_files_gitignore(
+    def test_split_non_git_repo_does_not_add_agent_files_gitignore(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Workspace layout where repo_dir is NOT a git repo.
+        """Split layout where repo_dir is NOT a git repo.
 
         When the repo directory is not a git repo, the .gitignore for
         .agent-files should NOT be written.
@@ -910,12 +910,12 @@ class TestConfigureProjectDirAlternatives:
 
 
 # ---------------------------------------------------------------------------
-# integration: real git init (workspace layout)
+# integration: real git init (split layout)
 # ---------------------------------------------------------------------------
 
 
 class TestConfigureProjectDirRealGit:
-    def test_workspace_layout_creates_real_git_repos(
+    def test_split_layout_creates_real_git_repos(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         old_env: dict[str, str | None] = {}

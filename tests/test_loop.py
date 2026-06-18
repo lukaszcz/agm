@@ -1719,7 +1719,7 @@ class TestPrepareSelectInvocationMissingDefault:
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# project/layout.py – current_project_dir and current_checkout
+# project/layout.py – current_project_dir and current_workspace
 # ---------------------------------------------------------------------------
 
 class TestResolveExtraPromptSource:

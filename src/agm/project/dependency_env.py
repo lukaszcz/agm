@@ -11,7 +11,7 @@ import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, is_file, iterdir, mkdir, read_text, rglob, write_text
 from agm.core.toml import TomlDict, load_toml_file, set_toml_table_value, toml_dict
 from agm.project.layout import (
-    current_checkout,
+    current_workspace,
     default_worktrees_dir,
     project_config_dir,
     project_deps_dir,
@@ -25,9 +25,9 @@ def current_config_branch(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> str | None:
-    """Return the current branch config name, or ``None`` for the main checkout."""
+    """Return the current branch config name, or ``None`` for the main workspace."""
 
-    result = current_checkout(project_dir, cwd=cwd, env=env)
+    result = current_workspace(project_dir, cwd=cwd, env=env)
     return result.branch if result is not None else None
 
 

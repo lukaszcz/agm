@@ -144,7 +144,7 @@ def configure_project_dir(
 def use_embedded_layout(args: InitArgs, *, project_dir: Path, repo_url: str) -> bool:
     if args.embedded:
         return True
-    if args.workspace:
+    if args.split:
         return False
     if repo_url:
         return False

@@ -11,22 +11,22 @@ import agm.project.layout as layout_module
 from agm.project.layout import (
     _copy_existing_config_files,
     _merge_branch_env_file,
-    _project_dir_from_checkout,
     _project_dir_from_env,
+    _project_dir_from_workspace,
     _resolved_cwd,
     branch_session_name,
     branch_worktree_path,
     copy_config,
-    current_checkout,
-    current_checkout_or_project_root,
+    current_workspace,
+    current_workspace_or_project_root,
     default_worktrees_dir,
     discover_current_project_dir,
-    exit_if_main_checkout_branch,
+    exit_if_main_workspace_branch,
     expected_branch_worktree_path,
     is_embedded_project,
-    is_main_checkout_branch,
+    is_main_workspace_branch,
     is_project_dir,
-    is_workspace_project,
+    is_split_project,
     main_repo_dir,
     project_config_dir,
     project_deps_dir,
@@ -79,70 +79,70 @@ def test_expected_branch_worktree_path_resolves_branch_path(
 
 
 # ---------------------------------------------------------------------------
-# _project_dir_from_checkout
+# _project_dir_from_workspace
 # ---------------------------------------------------------------------------
 
 
-def test_project_dir_from_checkout_finds_agm_marker(tmp_path: Path) -> None:
+def test_project_dir_from_workspace_finds_agm_marker(tmp_path: Path) -> None:
     project = tmp_path / "myproject"
     (project / ".agm").mkdir(parents=True)
-    assert _project_dir_from_checkout(project) == project / ".agm"
+    assert _project_dir_from_workspace(project) == project / ".agm"
 
 
-def test_project_dir_from_checkout_finds_repo_subdir(tmp_path: Path) -> None:
+def test_project_dir_from_workspace_finds_repo_subdir(tmp_path: Path) -> None:
     project = tmp_path / "myproject"
     (project / "repo").mkdir(parents=True)
-    assert _project_dir_from_checkout(project) == project
+    assert _project_dir_from_workspace(project) == project
 
 
-def test_project_dir_from_checkout_finds_parent_via_repo_name(tmp_path: Path) -> None:
+def test_project_dir_from_workspace_finds_parent_via_repo_name(tmp_path: Path) -> None:
     project = tmp_path / "myproject"
     repo_dir = project / "repo"
     (project / "worktrees").mkdir(parents=True)
     repo_dir.mkdir(parents=True)
-    assert _project_dir_from_checkout(repo_dir) == project
+    assert _project_dir_from_workspace(repo_dir) == project
 
 
-def test_project_dir_from_checkout_finds_parent_via_repo_name_with_worktrees_hidden(
+def test_project_dir_from_workspace_finds_parent_via_repo_name_with_worktrees_hidden(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "myproject"
     repo_dir = project / "repo"
     (project / ".worktrees").mkdir(parents=True)
     repo_dir.mkdir(parents=True)
-    assert _project_dir_from_checkout(repo_dir) == project
+    assert _project_dir_from_workspace(repo_dir) == project
 
 
-def test_project_dir_from_checkout_finds_parent_from_worktree_in_hidden_worktrees(
+def test_project_dir_from_workspace_finds_parent_from_worktree_in_hidden_worktrees(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "myproject"
     worktree_dir = project / ".worktrees" / "feat"
     worktree_dir.mkdir(parents=True)
-    assert _project_dir_from_checkout(worktree_dir) == project
+    assert _project_dir_from_workspace(worktree_dir) == project
 
 
-def test_project_dir_from_checkout_finds_parent_from_worktree_in_worktrees(
+def test_project_dir_from_workspace_finds_parent_from_worktree_in_worktrees(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "myproject"
     (project / "repo").mkdir(parents=True)
     worktree_dir = project / "worktrees" / "feat"
     worktree_dir.mkdir(parents=True)
-    assert _project_dir_from_checkout(worktree_dir) == project
+    assert _project_dir_from_workspace(worktree_dir) == project
 
 
-def test_project_dir_from_checkout_returns_none_for_plain_dir(tmp_path: Path) -> None:
+def test_project_dir_from_workspace_returns_none_for_plain_dir(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert _project_dir_from_checkout(plain) is None
+    assert _project_dir_from_workspace(plain) is None
 
 
-def test_project_dir_from_checkout_finds_agm_from_embedded_worktree(tmp_path: Path) -> None:
+def test_project_dir_from_workspace_finds_agm_from_embedded_worktree(tmp_path: Path) -> None:
     project = tmp_path / "myproject"
     worktree_dir = project / ".agm" / "worktrees" / "feat"
     worktree_dir.mkdir(parents=True)
-    assert _project_dir_from_checkout(worktree_dir) == project / ".agm"
+    assert _project_dir_from_workspace(worktree_dir) == project / ".agm"
 
 
 # ---------------------------------------------------------------------------
@@ -169,22 +169,22 @@ def test_project_dir_from_env_returns_agm_dir_directly(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# is_workspace_project
+# is_split_project
 # ---------------------------------------------------------------------------
 
 
-def test_is_workspace_project_true_when_repo_subdir_exists(tmp_path: Path) -> None:
+def test_is_split_project_true_when_repo_subdir_exists(tmp_path: Path) -> None:
     (tmp_path / "repo").mkdir()
-    assert is_workspace_project(tmp_path) is True
+    assert is_split_project(tmp_path) is True
 
 
-def test_is_workspace_project_false_when_no_repo_subdir(tmp_path: Path) -> None:
-    assert is_workspace_project(tmp_path) is False
+def test_is_split_project_false_when_no_repo_subdir(tmp_path: Path) -> None:
+    assert is_split_project(tmp_path) is False
 
 
-def test_is_workspace_project_false_when_repo_is_file(tmp_path: Path) -> None:
+def test_is_split_project_false_when_repo_is_file(tmp_path: Path) -> None:
     (tmp_path / "repo").write_text("not a dir", encoding="utf-8")
-    assert is_workspace_project(tmp_path) is False
+    assert is_split_project(tmp_path) is False
 
 
 # ---------------------------------------------------------------------------
@@ -499,38 +499,38 @@ def test_project_notes_dir_embedded(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# is_main_checkout_branch
+# is_main_workspace_branch
 # ---------------------------------------------------------------------------
 
 
-def test_is_main_checkout_branch_true_for_repo_literal(tmp_path: Path) -> None:
+def test_is_main_workspace_branch_true_for_repo_literal(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    assert is_main_checkout_branch(project, "repo", repo_branch="main") is True
+    assert is_main_workspace_branch(project, "repo", repo_branch="main") is True
 
 
-def test_is_main_checkout_branch_true_when_branch_equals_repo_branch(tmp_path: Path) -> None:
+def test_is_main_workspace_branch_true_when_branch_equals_repo_branch(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    assert is_main_checkout_branch(project, "main", repo_branch="main") is True
+    assert is_main_workspace_branch(project, "main", repo_branch="main") is True
 
 
-def test_is_main_checkout_branch_true_for_custom_repo_branch(tmp_path: Path) -> None:
+def test_is_main_workspace_branch_true_for_custom_repo_branch(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    assert is_main_checkout_branch(project, "master", repo_branch="master") is True
+    assert is_main_workspace_branch(project, "master", repo_branch="master") is True
 
 
-def test_is_main_checkout_branch_false_for_different_branch(tmp_path: Path) -> None:
+def test_is_main_workspace_branch_false_for_different_branch(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    assert is_main_checkout_branch(project, "feat/x", repo_branch="main") is False
+    assert is_main_workspace_branch(project, "feat/x", repo_branch="main") is False
 
 
-def test_is_main_checkout_branch_false_for_develop_branch(tmp_path: Path) -> None:
+def test_is_main_workspace_branch_false_for_develop_branch(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    assert is_main_checkout_branch(project, "develop", repo_branch="main") is False
+    assert is_main_workspace_branch(project, "develop", repo_branch="main") is False
 
 
 # ---------------------------------------------------------------------------
@@ -647,36 +647,36 @@ def test_branch_session_name_for_embedded_project(
 
 
 # ---------------------------------------------------------------------------
-# exit_if_main_checkout_branch
+# exit_if_main_workspace_branch
 # ---------------------------------------------------------------------------
 
 
-def test_exit_if_main_checkout_branch_exits_for_repo_literal(tmp_path: Path) -> None:
+def test_exit_if_main_workspace_branch_exits_for_repo_literal(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     (project / "repo").mkdir(parents=True)
 
     with pytest.raises(SystemExit) as exc_info:
-        exit_if_main_checkout_branch(project, "repo", repo_branch="main")
+        exit_if_main_workspace_branch(project, "repo", repo_branch="main")
 
     assert exc_info.value.code == 1
 
 
-def test_exit_if_main_checkout_branch_exits_for_main_branch(tmp_path: Path) -> None:
+def test_exit_if_main_workspace_branch_exits_for_main_branch(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     (project / "repo").mkdir(parents=True)
 
     with pytest.raises(SystemExit) as exc_info:
-        exit_if_main_checkout_branch(project, "main", repo_branch="main")
+        exit_if_main_workspace_branch(project, "main", repo_branch="main")
 
     assert exc_info.value.code == 1
 
 
-def test_exit_if_main_checkout_branch_does_not_exit_for_worktree_branch(tmp_path: Path) -> None:
+def test_exit_if_main_workspace_branch_does_not_exit_for_worktree_branch(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     (project / "repo").mkdir(parents=True)
 
     # Should not raise
-    exit_if_main_checkout_branch(project, "feat/x", repo_branch="main")
+    exit_if_main_workspace_branch(project, "feat/x", repo_branch="main")
 
 
 # ---------------------------------------------------------------------------
@@ -1032,15 +1032,15 @@ def test_copy_config_replaces_existing_target_env_local_when_merging(tmp_path: P
     assert "STALE=value" not in target_local
 
 
-def test_copy_config_detects_current_checkout_branch_when_branch_not_given(
+def test_copy_config_detects_current_workspace_branch_when_branch_not_given(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
     branch_config_dir = config_dir / "feat"
     branch_config_dir.mkdir(parents=True)
-    checkout_dir = project / "worktrees" / "feat"
-    checkout_dir.mkdir(parents=True)
+    workspace_dir = project / "worktrees" / "feat"
+    workspace_dir.mkdir(parents=True)
     (project / "repo").mkdir()
     target = tmp_path / "target"
     target.mkdir()
@@ -1048,15 +1048,15 @@ def test_copy_config_detects_current_checkout_branch_when_branch_not_given(
     (branch_config_dir / ".branch-tool").write_text("branch\n", encoding="utf-8")
     monkeypatch.setattr(
         layout_module,
-        "current_checkout",
-        lambda _project_dir, *, cwd=None, env=None: layout_module.CurrentCheckout(
-            checkout_dir=checkout_dir,
+        "current_workspace",
+        lambda _project_dir, *, cwd=None, env=None: layout_module.CurrentWorkspace(
+            workspace_dir=workspace_dir,
             branch="feat",
             is_main=False,
         ),
     )
 
-    copy_config(project_dir=project, target=target, branch=None, cwd=checkout_dir)
+    copy_config(project_dir=project, target=target, branch=None, cwd=workspace_dir)
 
     assert (target / ".branch-tool").read_text(encoding="utf-8") == "branch\n"
 
@@ -1089,13 +1089,13 @@ def test_current_project_root_candidate_falls_back_when_no_markers_and_not_git(
     monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda _path: False)
 
     assert discover_current_project_dir(plain) is None
-    assert current_checkout_or_project_root(plain) == plain
+    assert current_workspace_or_project_root(plain) == plain
 
 
-def test_current_checkout_or_project_root_uses_proj_dir_env(tmp_path: Path) -> None:
+def test_current_workspace_or_project_root_uses_proj_dir_env(tmp_path: Path) -> None:
     project = tmp_path / "project"
 
-    assert current_checkout_or_project_root(tmp_path, env={"PROJ_DIR": str(project)}) == project
+    assert current_workspace_or_project_root(tmp_path, env={"PROJ_DIR": str(project)}) == project
 
 
 def test_discover_current_project_dir_uses_proj_dir_env(tmp_path: Path) -> None:
@@ -1104,14 +1104,14 @@ def test_discover_current_project_dir_uses_proj_dir_env(tmp_path: Path) -> None:
     assert discover_current_project_dir(tmp_path, env={"PROJ_DIR": str(project)}) == project
 
 
-def test_current_checkout_or_project_root_uses_proj_dir_env_with_agm_dir(
+def test_current_workspace_or_project_root_uses_proj_dir_env_with_agm_dir(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     agm_dir = project / ".agm"
     agm_dir.mkdir(parents=True)
 
-    assert current_checkout_or_project_root(
+    assert current_workspace_or_project_root(
         tmp_path, env={"PROJ_DIR": str(agm_dir)}
     ) == agm_dir
 
@@ -1129,7 +1129,7 @@ def test_discover_current_project_dir_uses_proj_dir_env_with_agm_dir(
     ) == agm_dir
 
 
-def test_current_checkout_or_project_root_falls_back_to_git_checkout_root(
+def test_current_workspace_or_project_root_falls_back_to_git_checkout_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = tmp_path / "proj"
@@ -1147,7 +1147,7 @@ def test_current_checkout_or_project_root_falls_back_to_git_checkout_root(
         lambda _cwd=None: checkout,
     )
 
-    assert current_checkout_or_project_root(cwd) == checkout
+    assert current_workspace_or_project_root(cwd) == checkout
 
 
 class TestCurrentProjectDirFallbackPaths:
@@ -1175,13 +1175,13 @@ class TestCurrentProjectDirFallbackPaths:
             lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = current_checkout_or_project_root(worktree)
+        result = current_workspace_or_project_root(worktree)
         assert result == worktree
 
-    def test_falls_back_to_checkout_dir_when_no_project_markers(
+    def test_falls_back_to_workspace_dir_when_no_project_markers(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When no project markers exist, falls back to checkout_dir."""
+        """When no project markers exist, falls back to workspace_dir."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
@@ -1197,7 +1197,7 @@ class TestCurrentProjectDirFallbackPaths:
             lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = current_checkout_or_project_root(plain_dir)
+        result = current_workspace_or_project_root(plain_dir)
         assert result == plain_dir
 
     def test_checkout_root_raises_system_exit(
@@ -1214,11 +1214,11 @@ class TestCurrentProjectDirFallbackPaths:
             lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = current_checkout_or_project_root(plain_dir)
+        result = current_workspace_or_project_root(plain_dir)
         assert result == plain_dir
 
 
-class TestCurrentCheckout:
+class TestCurrentWorkspace:
     def test_returns_none_when_cwd_not_in_project(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1228,7 +1228,7 @@ class TestCurrentCheckout:
         other.mkdir()
 
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: False)
-        result = current_checkout(project, cwd=other)
+        result = current_workspace(project, cwd=other)
         assert result is None
 
     def test_falls_back_to_repo_when_cwd_not_git_repo(
@@ -1256,9 +1256,9 @@ class TestCurrentCheckout:
             lambda p, env=None: "main",
         )
 
-        result = current_checkout(project, cwd=project)
+        result = current_workspace(project, cwd=project)
         assert result is not None
-        assert result.checkout_dir == repo.resolve(strict=False)
+        assert result.workspace_dir == repo.resolve(strict=False)
 
     def test_checkout_root_raises_system_exit_uses_repo_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1290,7 +1290,7 @@ class TestCurrentCheckout:
             lambda p, env=None: "main",
         )
 
-        result = current_checkout(project, cwd=repo)
+        result = current_workspace(project, cwd=repo)
         assert result is not None
 
     def test_checkout_root_raises_system_exit_no_repo_dir(
@@ -1323,15 +1323,15 @@ class TestCurrentCheckout:
             lambda p, env=None: "main",
         )
 
-        result = current_checkout(project, cwd=project)
-        assert result is None or result.checkout_dir is not None
+        result = current_workspace(project, cwd=project)
+        assert result is None or result.workspace_dir is not None
 
 
 class TestCurrentProjectDirCommonDirFallback:
-    def test_returns_checkout_dir_when_in_parents(
+    def test_returns_workspace_dir_when_in_parents(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_dir is a parent of current, return checkout_dir."""
+        """When workspace_dir is a parent of current, return workspace_dir."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
@@ -1349,7 +1349,7 @@ class TestCurrentProjectDirCommonDirFallback:
             lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = current_checkout_or_project_root(plain_dir)
+        result = current_workspace_or_project_root(plain_dir)
         assert result == parent_dir
 
     def test_checkout_root_succeeds_but_no_project_markers_uses_common_dir(
@@ -1376,11 +1376,11 @@ class TestCurrentProjectDirCommonDirFallback:
             lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = current_checkout_or_project_root(worktree)
+        result = current_workspace_or_project_root(worktree)
         assert result == worktree
 
 
-class TestCurrentCheckoutSystemExitPaths:
+class TestCurrentWorkspaceSystemExitPaths:
     def test_checkout_root_raises_and_repo_is_git(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1409,9 +1409,9 @@ class TestCurrentCheckoutSystemExitPaths:
             lambda p, env=None: "main",
         )
 
-        result = current_checkout(project, cwd=project)
+        result = current_workspace(project, cwd=project)
         assert result is not None
-        assert result.checkout_dir == repo
+        assert result.workspace_dir == repo
 
     def test_checkout_root_raises_and_repo_not_git_uses_current(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1441,9 +1441,9 @@ class TestCurrentCheckoutSystemExitPaths:
             lambda p, env=None: "main",
         )
 
-        result = current_checkout(project, cwd=project)
+        result = current_workspace(project, cwd=project)
         assert result is not None
-        assert result.checkout_dir == project
+        assert result.workspace_dir == project
 
 
 class TestCurrentProjectDirCheckoutRootRaisesThenCommonDirRaises:
@@ -1466,15 +1466,15 @@ class TestCurrentProjectDirCheckoutRootRaisesThenCommonDirRaises:
             lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = current_checkout_or_project_root(plain_dir)
+        result = current_workspace_or_project_root(plain_dir)
         assert result == plain_dir
 
 
-class TestCurrentCheckoutEdgeCases:
-    def test_checkout_dir_equals_repo_dir_returns_main_checkout(
+class TestCurrentWorkspaceEdgeCases:
+    def test_workspace_dir_equals_repo_dir_returns_main_checkout(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When checkout_dir equals repo_dir, returns main checkout with branch=None."""
+        """When workspace_dir equals repo_dir, returns main workspace with branch=None."""
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
@@ -1491,13 +1491,13 @@ class TestCurrentCheckoutEdgeCases:
             lambda cwd=None, env=None: repo.resolve(strict=False),
         )
 
-        result = current_checkout(project, cwd=repo)
+        result = current_workspace(project, cwd=repo)
         assert result is not None
-        assert result.checkout_dir == repo.resolve(strict=False)
+        assert result.workspace_dir == repo.resolve(strict=False)
         assert result.branch is None
         assert result.is_main is True
 
-    def test_checkout_dir_current_returns_main_when_same_as_repo_dir(
+    def test_workspace_dir_current_returns_main_when_same_as_repo_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """When cwd is 'current' and checkout_root returns current, returns main."""
@@ -1518,12 +1518,12 @@ class TestCurrentCheckoutEdgeCases:
             lambda cwd=None, env=None: repo.resolve(strict=False),
         )
 
-        result = current_checkout(project, cwd=repo)
+        result = current_workspace(project, cwd=repo)
         assert result is not None
         assert result.is_main is True
 
 
-class TestCurrentCheckoutWithRepoDirEnv:
+class TestCurrentWorkspaceWithRepoDirEnv:
     def test_repo_dir_env_var_points_inside_project(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1544,9 +1544,9 @@ class TestCurrentCheckoutWithRepoDirEnv:
         )
 
         env = {"REPO_DIR": str(worktree_dir)}
-        result = current_checkout(project, env=env)
+        result = current_workspace(project, env=env)
         assert result is not None
-        assert result.checkout_dir == worktree_dir.resolve(strict=False)
+        assert result.workspace_dir == worktree_dir.resolve(strict=False)
         assert result.branch == "feat"
         assert result.is_main is False
 
@@ -1566,7 +1566,7 @@ class TestCurrentCheckoutWithRepoDirEnv:
         )
 
         env = {"REPO_DIR": str(repo)}
-        result = current_checkout(project, env=env)
+        result = current_workspace(project, env=env)
         assert result is not None
         assert result.is_main is True
         assert result.branch is None
@@ -1597,7 +1597,7 @@ class TestCurrentProjectDirGitCommonDirFindsProject:
             lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = current_checkout_or_project_root(worktree)
+        result = current_workspace_or_project_root(worktree)
         assert result == worktree
 
     def test_falls_back_to_current_when_nothing_matches(
@@ -1621,15 +1621,15 @@ class TestCurrentProjectDirGitCommonDirFindsProject:
             lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
         )
 
-        result = current_checkout_or_project_root(isolated)
+        result = current_workspace_or_project_root(isolated)
         assert result == other
 
 
-class TestCurrentCheckoutCwdNotInProject:
+class TestCurrentWorkspaceCwdNotInProject:
     def test_returns_none_when_cwd_not_in_project(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """current_checkout returns None when cwd is not inside project."""
+        """current_workspace returns None when cwd is not inside project."""
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
         other = tmp_path / "other"
@@ -1642,14 +1642,14 @@ class TestCurrentCheckoutCwdNotInProject:
         )
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: False)
 
-        result = current_checkout(project, cwd=other)
+        result = current_workspace(project, cwd=other)
         assert result is None
 
     def test_checkout_root_raises_repo_not_git_repo_uses_current(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """When checkout_root raises and repo_dir is not a git repo,
-        checkout_dir = current."""
+        workspace_dir = current."""
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
 
@@ -1674,18 +1674,18 @@ class TestCurrentCheckoutCwdNotInProject:
             lambda p, env=None: "some-branch",
         )
 
-        result = current_checkout(project, cwd=project)
+        result = current_workspace(project, cwd=project)
         assert result is not None
-        assert result.checkout_dir == project.resolve(strict=False)
+        assert result.workspace_dir == project.resolve(strict=False)
         assert result.branch == "some-branch"
         assert result.is_main is False
 
 
-class TestCurrentCheckoutReturnsNoneWhenCwdNotInProject:
+class TestCurrentWorkspaceReturnsNoneWhenCwdNotInProject:
     def test_cwd_not_at_project_root_and_not_git_repo(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """current_checkout returns None when cwd is inside the project but
+        """current_workspace returns None when cwd is inside the project but
         is not a git repo and not at the project root."""
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
@@ -1699,7 +1699,7 @@ class TestCurrentCheckoutReturnsNoneWhenCwdNotInProject:
             lambda cwd=None, env=None: project.resolve(strict=False),
         )
 
-        result = current_checkout(project, cwd=sub_dir)
+        result = current_workspace(project, cwd=sub_dir)
         assert result is None
 
 
@@ -1735,7 +1735,7 @@ class TestCurrentProjectDirGitCommonDirTry:
             lambda cwd=None, env=None: git_dir,
         )
 
-        assert current_checkout_or_project_root(cwd) == checkout
+        assert current_workspace_or_project_root(cwd) == checkout
 
     def test_git_common_dir_finds_workspace_project(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1766,7 +1766,7 @@ class TestCurrentProjectDirGitCommonDirTry:
             lambda cwd=None, env=None: git_dir,
         )
 
-        result = current_checkout_or_project_root(cwd)
+        result = current_workspace_or_project_root(cwd)
         assert result == checkout
 
     def test_git_common_dir_finds_embedded_project_via_parent_walk(
@@ -1798,7 +1798,7 @@ class TestCurrentProjectDirGitCommonDirTry:
             lambda cwd=None, env=None: git_subdir,
         )
 
-        result = current_checkout_or_project_root(cwd)
+        result = current_workspace_or_project_root(cwd)
         assert result == checkout
 
 
@@ -1828,7 +1828,7 @@ class TestCurrentProjectDirGitCommonDirPath:
             lambda cwd=None, env=None: repo / ".git",
         )
 
-        result = current_checkout_or_project_root(worktree)
+        result = current_workspace_or_project_root(worktree)
         assert result == worktree
 
 

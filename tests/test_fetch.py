@@ -1,4 +1,4 @@
-"""Tests for agm.commands.fetch."""
+"""Tests for agm.commands.sync.fetch."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import agm.commands.fetch as fetch_cmd
+import agm.commands.sync.fetch as fetch_cmd
 
 
 class TestFetchRepo:

@@ -1,4 +1,4 @@
-"""Tests for agm.project.setup – run_setup."""
+"""Tests for AGM workspace setup and environment helpers."""
 
 from __future__ import annotations
 
@@ -10,16 +10,17 @@ from typing import Any
 
 import pytest
 
-import agm.project.setup as project_setup
-from agm.project.layout import CurrentCheckout
-from agm.project.setup import load_current_config_env
+import agm.project.workspace_env as workspace_env
+import agm.project.workspace_setup as project_setup
+from agm.project.layout import CurrentWorkspace
+from agm.project.workspace_env import load_current_workspace_env
 
 
 class TestRunSetup:
-    """Tests for project.setup.run_setup."""
+    """Tests for project.workspace_setup.run_setup."""
 
     def _make_project(self, tmp_path: Path) -> tuple[Path, Path]:
-        """Return (project_dir, repo_dir) with minimal workspace layout."""
+        """Return (project_dir, repo_dir) with minimal split layout."""
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
@@ -34,14 +35,14 @@ class TestRunSetup:
         monkeypatch.setattr(
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(project_setup, "current_checkout", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             project_setup,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         project_setup.run_setup(cwd=project_dir)
@@ -61,14 +62,14 @@ class TestRunSetup:
         monkeypatch.setattr(
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(project_setup, "current_checkout", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             project_setup,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         run_calls: list[list[str]] = []
@@ -99,14 +100,14 @@ class TestRunSetup:
         monkeypatch.setattr(
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(project_setup, "current_checkout", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             project_setup,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         project_setup.run_setup(cwd=project_dir)
@@ -120,7 +121,7 @@ class TestRunSetup:
         project_dir, repo_dir = self._make_project(tmp_path)
         config_dir = project_dir / "config"
 
-        # Create two setup scripts: one in config_dir, one in checkout_dir
+        # Create two setup scripts: one in config_dir, one in workspace_dir
         config_script = config_dir / "setup.sh"
         config_script.write_text("#!/bin/sh\n", encoding="utf-8")
         config_script.chmod(config_script.stat().st_mode | stat.S_IEXEC)
@@ -132,14 +133,14 @@ class TestRunSetup:
         monkeypatch.setattr(
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(project_setup, "current_checkout", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             project_setup,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         run_calls: list[list[str]] = []
@@ -163,14 +164,14 @@ class TestRunSetup:
         monkeypatch.setattr(
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(project_setup, "current_checkout", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             project_setup,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
         monkeypatch.setattr(project_setup.dry_run, "enabled", lambda: True)
 
@@ -195,17 +196,17 @@ class TestRunSetup:
 
 
 class TestLoadCurrentConfigEnvWithNoResult:
-    def test_falls_back_when_current_checkout_returns_none(
+    def test_falls_back_when_current_workspace_returns_none(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        import agm.project.setup as setup_module
+        import agm.project.workspace_env as setup_module
 
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project)
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
 
         env_captured: list[dict[str, Any]] = []
@@ -214,26 +215,26 @@ class TestLoadCurrentConfigEnvWithNoResult:
             project_dir: Path,
             branch: Any,
             *,
-            checkout_dir: Path,
+            workspace_dir: Path,
             env: Any = None,
         ) -> dict[str, str]:
             env_captured.append(
-                {"project_dir": project_dir, "branch": branch, "checkout_dir": checkout_dir}
+                {"project_dir": project_dir, "branch": branch, "workspace_dir": workspace_dir}
             )
             return {}
 
         monkeypatch.setattr(setup_module, "load_config_env", fake_load_config_env)
 
-        load_current_config_env(cwd=project)
+        load_current_workspace_env(cwd=project)
         assert len(env_captured) == 1
         assert env_captured[0]["branch"] is None
-        # checkout_dir should be repo (since it exists)
-        assert env_captured[0]["checkout_dir"] == repo
+        # workspace_dir should be repo (since it exists)
+        assert env_captured[0]["workspace_dir"] == repo
 
     def test_falls_back_to_current_when_repo_not_a_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        import agm.project.setup as setup_module
+        import agm.project.workspace_env as setup_module
 
         project = tmp_path / "proj"
         project.mkdir()
@@ -242,13 +243,13 @@ class TestLoadCurrentConfigEnvWithNoResult:
         plain.mkdir()
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: plain)
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
         monkeypatch.setattr(
-            setup_module, "load_config_env", lambda pd, br, *, checkout_dir, env=None: {}
+            setup_module, "load_config_env", lambda pd, br, *, workspace_dir, env=None: {}
         )
         # Should not crash
-        load_current_config_env(cwd=plain)
+        load_current_workspace_env(cwd=plain)
 
 
 class TestRunSetupLabelFromProjectDir:
@@ -258,8 +259,8 @@ class TestRunSetupLabelFromProjectDir:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """When setup_path is not relative to checkout_dir, try project_dir."""
-        import agm.project.setup as setup_module
+        """When setup_path is not relative to workspace_dir, try project_dir."""
+        import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
@@ -267,7 +268,7 @@ class TestRunSetupLabelFromProjectDir:
         config_dir = project_dir / "config"
         config_dir.mkdir()
 
-        # Put a setup script in config_dir (outside checkout_dir=repo_dir)
+        # Put a setup script in config_dir (outside workspace_dir=repo_dir)
         setup_script = config_dir / "setup.sh"
         setup_script.write_text("#!/bin/sh\n", encoding="utf-8")
         setup_script.chmod(setup_script.stat().st_mode | stat.S_IEXEC)
@@ -275,14 +276,14 @@ class TestRunSetupLabelFromProjectDir:
         monkeypatch.setattr(
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(setup_module, "current_checkout", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             setup_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         run_calls: list[list[str]] = []
@@ -300,10 +301,10 @@ class TestRunSetupLabelFromProjectDir:
 
 
 class TestLoadCurrentConfigEnvRepoDirFallback:
-    def test_falls_back_to_cwd_when_repo_not_dir_and_current_checkout_none(
+    def test_falls_back_to_cwd_when_repo_not_dir_and_current_workspace_none(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        import agm.project.setup as setup_module
+        import agm.project.workspace_env as setup_module
 
         project = tmp_path / "proj"
         project.mkdir()
@@ -314,23 +315,23 @@ class TestLoadCurrentConfigEnvRepoDirFallback:
 
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project)
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
 
         captured_env: dict[str, Any] = {}
 
         def fake_load_config_env(
-            project_dir: Path, branch: Any, *, checkout_dir: Path, env: Any = None
+            project_dir: Path, branch: Any, *, workspace_dir: Path, env: Any = None
         ) -> dict[str, str]:
-            captured_env["checkout_dir"] = checkout_dir
+            captured_env["workspace_dir"] = workspace_dir
             return {}
 
         monkeypatch.setattr(setup_module, "load_config_env", fake_load_config_env)
 
-        load_current_config_env(cwd=cwd)
+        load_current_workspace_env(cwd=cwd)
         # For embedded project without repo/, project_repo_dir returns project_dir itself
-        # which is a dir, so checkout_dir = project_dir (repo_dir)
-        assert captured_env["checkout_dir"] == project
+        # which is a dir, so workspace_dir = project_dir (repo_dir)
+        assert captured_env["workspace_dir"] == project
 
 
 class TestRunSetupNoScripts:
@@ -340,7 +341,7 @@ class TestRunSetupNoScripts:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        import agm.project.setup as setup_module
+        import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
@@ -351,14 +352,14 @@ class TestRunSetupNoScripts:
         monkeypatch.setattr(
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(setup_module, "current_checkout", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             setup_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         setup_module.run_setup(cwd=project_dir)
@@ -371,7 +372,7 @@ class TestLoadCurrentConfigEnvWhenResultNoneNoRepoDir:
     def test_falls_back_to_current_when_repo_dir_not_a_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        import agm.project.setup as setup_module
+        import agm.project.workspace_env as setup_module
 
         project = tmp_path / "proj"
         project.mkdir()
@@ -379,7 +380,7 @@ class TestLoadCurrentConfigEnvWhenResultNoneNoRepoDir:
 
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project)
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
 
         env_captured: list[dict[str, Any]] = []
@@ -388,28 +389,28 @@ class TestLoadCurrentConfigEnvWhenResultNoneNoRepoDir:
             project_dir: Path,
             branch: Any,
             *,
-            checkout_dir: Path,
+            workspace_dir: Path,
             env: Any = None,
         ) -> dict[str, str]:
             env_captured.append(
-                {"project_dir": project_dir, "branch": branch, "checkout_dir": checkout_dir}
+                {"project_dir": project_dir, "branch": branch, "workspace_dir": workspace_dir}
             )
             return {}
 
         monkeypatch.setattr(setup_module, "load_config_env", fake_load_config_env)
-        load_current_config_env(cwd=project)
+        load_current_workspace_env(cwd=project)
         assert len(env_captured) == 1
         assert env_captured[0]["branch"] is None
         # For embedded project, project_repo_dir returns project itself which is a dir
-        assert env_captured[0]["checkout_dir"] == project
+        assert env_captured[0]["workspace_dir"] == project
 
 
 class TestRunSetupLabelValueErrorFallback:
     def test_setup_label_uses_absolute_path_when_not_relative_to_either_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """When setup_path is not relative to checkout_dir or project_dir, use absolute path."""
-        import agm.project.setup as setup_module
+        """When setup_path is not relative to workspace_dir or project_dir, use absolute path."""
+        import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
@@ -425,15 +426,15 @@ class TestRunSetupLabelValueErrorFallback:
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
         monkeypatch.setattr(
             setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             setup_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         external_setup = tmp_path / "external" / "setup.sh"
@@ -458,9 +459,9 @@ class TestLoadCurrentConfigEnvFallbackNoResult:
     def test_uses_current_when_repo_dir_not_a_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """load_current_config_env uses current when result is None and
+        """load_current_workspace_env uses current when result is None and
         repo_dir is not a directory."""
-        import agm.project.setup as setup_module
+        import agm.project.workspace_env as setup_module
 
         project2 = tmp_path / "proj2"
         project2.mkdir(parents=True)
@@ -468,7 +469,7 @@ class TestLoadCurrentConfigEnvFallbackNoResult:
 
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project2)
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
 
         env_captured: list[dict[str, Any]] = []
@@ -477,37 +478,37 @@ class TestLoadCurrentConfigEnvFallbackNoResult:
             project_dir: Path,
             branch: Any,
             *,
-            checkout_dir: Path,
+            workspace_dir: Path,
             env: Any = None,
         ) -> dict[str, str]:
             env_captured.append(
-                {"branch": branch, "checkout_dir": checkout_dir}
+                {"branch": branch, "workspace_dir": workspace_dir}
             )
             return {}
 
         monkeypatch.setattr(setup_module, "load_config_env", fake_load_config_env)
 
-        load_current_config_env(cwd=project2)
+        load_current_workspace_env(cwd=project2)
         assert len(env_captured) == 1
         assert env_captured[0]["branch"] is None
-        # Since repo_dir (project2 / "repo") is not a dir, checkout_dir = current = project2
-        assert env_captured[0]["checkout_dir"] == project2
+        # Since repo_dir (project2 / "repo") is not a dir, workspace_dir = current = project2
+        assert env_captured[0]["workspace_dir"] == project2
 
 
-class TestRunSetupWithCurrentCheckoutResult:
-    def test_run_setup_with_checkout_result(
+class TestRunSetupWithCurrentWorkspaceResult:
+    def test_run_setup_with_workspace_result(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """run_setup uses checkout result when current_checkout returns non-None."""
-        import agm.project.setup as setup_module
+        """run_setup uses workspace result when current_workspace returns non-None."""
+        import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
         (project_dir / "config").mkdir()
 
-        checkout = CurrentCheckout(
-            checkout_dir=repo_dir,
+        workspace = CurrentWorkspace(
+            workspace_dir=repo_dir,
             branch="feat",
             is_main=False,
         )
@@ -515,15 +516,15 @@ class TestRunSetupWithCurrentCheckoutResult:
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: checkout
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: workspace
         )
         monkeypatch.setattr(
             setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             setup_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         setup_module.run_setup(cwd=project_dir)
@@ -535,7 +536,7 @@ class TestRunSetupWithCurrentCheckoutResult:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """run_setup uses repo_branch for target_name when branch is None (line 100)."""
-        import agm.project.setup as setup_module
+        import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
@@ -546,15 +547,15 @@ class TestRunSetupWithCurrentCheckoutResult:
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
         monkeypatch.setattr(
             setup_module.git_helpers, "current_branch", lambda p, env=None: "dev"
         )
         monkeypatch.setattr(
             setup_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
 
         setup_module.run_setup(cwd=project_dir)
@@ -564,9 +565,9 @@ class TestRunSetupWithCurrentCheckoutResult:
     def test_run_setup_value_error_fallback_for_label(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """When setup_path is not relative to checkout_dir or project_dir,
+        """When setup_path is not relative to workspace_dir or project_dir,
         the absolute path is used as the label (lines 127-128)."""
-        import agm.project.setup as setup_module
+        import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
@@ -582,15 +583,15 @@ class TestRunSetupWithCurrentCheckoutResult:
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(
-            setup_module, "current_checkout", lambda pd, cwd=None, env=None: None
+            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
         )
         monkeypatch.setattr(
             setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
         )
         monkeypatch.setattr(
             setup_module,
-            "load_worktree_env",
-            lambda pd, branch, checkout_dir, env=None: dict(os.environ),
+            "load_workspace_env",
+            lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
         monkeypatch.setattr(
             setup_module, "require_success", lambda cmd, cwd=None, env=None: None
@@ -620,12 +621,12 @@ class TestLoadConfigEnvProjDir:
         agm_dir.mkdir()
         (agm_dir / "config").mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
-        checkout_dir = project
+        workspace_dir = project
 
-        result_env = project_setup.load_config_env(
+        result_env = workspace_env.load_config_env(
             project_dir=agm_dir,
             branch=None,
-            checkout_dir=checkout_dir,
+            workspace_dir=workspace_dir,
             env={},
         )
 
@@ -633,16 +634,16 @@ class TestLoadConfigEnvProjDir:
         assert result_env["REPO_DIR"] == str(project)
 
     def test_workspace_layout_proj_dir_points_to_project_root(self, tmp_path: Path) -> None:
-        """For workspace layout, PROJ_DIR should point to the project root."""
+        """For split layout, PROJ_DIR should point to the project root."""
         project = tmp_path / "proj"
         repo_dir = project / "repo"
         repo_dir.mkdir(parents=True)
         (project / "config").mkdir()
 
-        env = project_setup.load_config_env(
+        env = workspace_env.load_config_env(
             project_dir=project,
             branch=None,
-            checkout_dir=repo_dir,
+            workspace_dir=repo_dir,
             env={},
         )
 
@@ -652,7 +653,7 @@ class TestLoadConfigEnvProjDir:
     def test_embedded_layout_worktree_proj_dir_still_points_to_agm(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """For embedded layout with a worktree checkout, PROJ_DIR still points to .agm."""
+        """For embedded layout with a branch workspace, PROJ_DIR still points to .agm."""
         project = tmp_path / "proj"
         project.mkdir()
         agm_dir = project / ".agm"
@@ -662,10 +663,10 @@ class TestLoadConfigEnvProjDir:
         worktree_dir.mkdir(parents=True)
         subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-        result_env = project_setup.load_config_env(
+        result_env = workspace_env.load_config_env(
             project_dir=agm_dir,
             branch="feat",
-            checkout_dir=worktree_dir,
+            workspace_dir=worktree_dir,
             env={},
         )
 

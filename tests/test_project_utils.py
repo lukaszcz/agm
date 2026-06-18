@@ -14,12 +14,12 @@ from agm.project.dependency_env import current_config_branch
 from agm.project.layout import (
     branch_session_name,
     branch_worktree_path,
-    current_checkout,
+    current_workspace,
     discover_current_project_dir,
-    is_main_checkout_branch,
+    is_main_workspace_branch,
     main_repo_dir,
 )
-from agm.project.setup import load_current_config_env, load_worktree_env
+from agm.project.workspace_env import load_current_workspace_env, load_workspace_env
 
 
 def test_current_project_dir_from_project_root(tmp_path: Path, env: dict[str, str]) -> None:
@@ -87,18 +87,18 @@ def test_main_repo_dir_for_embedded_project(tmp_path: Path) -> None:
     assert main_repo_dir(project) == project
 
 
-def test_main_checkout_branch_helpers_for_repo_name(tmp_path: Path) -> None:
+def test_main_workspace_branch_helpers_for_repo_name(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     (project / "repo").mkdir()
     (project / "worktrees").mkdir()
 
-    assert is_main_checkout_branch(project, "repo", repo_branch="main") is True
+    assert is_main_workspace_branch(project, "repo", repo_branch="main") is True
     assert branch_worktree_path(project, "repo", repo_branch="main") == project / "repo"
     assert branch_session_name(project, "repo") == "proj"
 
 
-def test_main_checkout_branch_helpers_for_repo_current_branch(
+def test_main_workspace_branch_helpers_for_repo_current_branch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = tmp_path / "proj"
@@ -112,7 +112,7 @@ def test_main_checkout_branch_helpers_for_repo_current_branch(
 
     monkeypatch.setattr(project_helpers.git_helpers, "current_branch", fake_current_branch)
 
-    assert is_main_checkout_branch(project, "main", repo_branch="main") is True
+    assert is_main_workspace_branch(project, "main", repo_branch="main") is True
     assert branch_worktree_path(project, "main", repo_branch="main") == project / "repo"
     assert branch_session_name(project, "main") == "proj"
 
@@ -131,7 +131,7 @@ def test_branch_helpers_for_worktree_branch(
 
     monkeypatch.setattr(project_helpers.git_helpers, "current_branch", fake_current_branch)
 
-    assert is_main_checkout_branch(project, "feat/x", repo_branch="main") is False
+    assert is_main_workspace_branch(project, "feat/x", repo_branch="main") is False
     assert (
         branch_worktree_path(
             project,
@@ -160,25 +160,25 @@ def test_branch_session_name_for_repo_name_does_not_need_repo_branch_lookup(
     assert branch_session_name(project, "repo") == "proj"
 
 
-def test_load_worktree_env_exposes_repo_dir_to_sourced_scripts(
+def test_load_workspace_env_exposes_repo_dir_to_sourced_scripts(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
     config_dir.mkdir(parents=True)
-    checkout_dir = project / "worktrees" / "feat"
-    checkout_dir.mkdir(parents=True)
+    workspace_dir = project / "worktrees" / "feat"
+    workspace_dir.mkdir(parents=True)
     (config_dir / "env.sh").write_text(
         'export CAPTURE_PROJ_DIR="$PROJ_DIR"\nexport CAPTURE_REPO_DIR="$REPO_DIR"\n',
         encoding="utf-8",
     )
 
-    loaded_env = load_worktree_env(project, "feat", checkout_dir=checkout_dir, env=env)
+    loaded_env = load_workspace_env(project, "feat", workspace_dir=workspace_dir, env=env)
 
     assert loaded_env["PROJ_DIR"] == str(project)
-    assert loaded_env["REPO_DIR"] == str(checkout_dir)
+    assert loaded_env["REPO_DIR"] == str(workspace_dir)
     assert loaded_env["CAPTURE_PROJ_DIR"] == str(project)
-    assert loaded_env["CAPTURE_REPO_DIR"] == str(checkout_dir)
+    assert loaded_env["CAPTURE_REPO_DIR"] == str(workspace_dir)
 
 
 def test_current_config_branch_ignores_cwd_from_other_project(
@@ -203,15 +203,15 @@ def test_current_config_branch_ignores_cwd_from_other_project(
     assert current_config_branch(project, cwd=current) is None
 
 
-def test_load_worktree_env_applies_dotenv_precedence_before_env_sh(
+def test_load_workspace_env_applies_dotenv_precedence_before_env_sh(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
     branch_config_dir = config_dir / "feat"
     branch_config_dir.mkdir(parents=True)
-    checkout_dir = project / "worktrees" / "feat"
-    checkout_dir.mkdir(parents=True)
+    workspace_dir = project / "worktrees" / "feat"
+    workspace_dir.mkdir(parents=True)
 
     (config_dir / ".env").write_text("SHARED=project-dotenv\nPROJECT_ONLY=1\n", encoding="utf-8")
     (config_dir / ".env.local").write_text(
@@ -236,7 +236,7 @@ def test_load_worktree_env_applies_dotenv_precedence_before_env_sh(
         encoding="utf-8",
     )
 
-    loaded_env = load_worktree_env(project, "feat", checkout_dir=checkout_dir, env=env)
+    loaded_env = load_workspace_env(project, "feat", workspace_dir=workspace_dir, env=env)
 
     assert loaded_env["PROJECT_ONLY"] == "1"
     assert loaded_env["PROJECT_LOCAL_ONLY"] == "1"
@@ -247,7 +247,7 @@ def test_load_worktree_env_applies_dotenv_precedence_before_env_sh(
     assert loaded_env["SHARED"] == "branch-env-sh"
 
 
-def test_load_current_config_env_uses_current_project_checkout(
+def test_load_current_workspace_env_uses_current_project_workspace(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
@@ -263,7 +263,7 @@ def test_load_current_config_env_uses_current_project_checkout(
         encoding="utf-8",
     )
 
-    loaded_env = load_current_config_env(cwd=project, env=env)
+    loaded_env = load_current_workspace_env(cwd=project, env=env)
 
     assert loaded_env["PROJ_DIR"] == str(project)
     assert loaded_env["REPO_DIR"] == str(repo_dir)
@@ -271,10 +271,10 @@ def test_load_current_config_env_uses_current_project_checkout(
     assert loaded_env["FROM_ENV_SH"] == f"1:{repo_dir}"
 
 
-# --- current_checkout ---
+# --- current_workspace ---
 
 
-def test_current_checkout_returns_none_for_cwd_outside_project(
+def test_current_workspace_returns_none_for_cwd_outside_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = tmp_path / "proj"
@@ -293,10 +293,10 @@ def test_current_checkout_returns_none_for_cwd_outside_project(
 
     monkeypatch.setattr(git_helpers, "checkout_root", fail_checkout_root)
 
-    assert current_checkout(project, cwd=current) is None
+    assert current_workspace(project, cwd=current) is None
 
 
-def test_current_checkout_returns_main_for_workspace_project_root(
+def test_current_workspace_returns_main_for_workspace_project_root(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
@@ -305,30 +305,30 @@ def test_current_checkout_returns_main_for_workspace_project_root(
     (project / "worktrees").mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
 
-    result = current_checkout(project, cwd=project, env=env)
+    result = current_workspace(project, cwd=project, env=env)
 
     assert result is not None
     assert result.is_main is True
     assert result.branch is None
-    assert result.checkout_dir == repo_dir
+    assert result.workspace_dir == repo_dir
 
 
-def test_current_checkout_returns_main_for_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
+def test_current_workspace_returns_main_for_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)
     (project / "worktrees").mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
 
-    result = current_checkout(project, cwd=repo_dir, env=env)
+    result = current_workspace(project, cwd=repo_dir, env=env)
 
     assert result is not None
     assert result.is_main is True
     assert result.branch is None
-    assert result.checkout_dir == repo_dir
+    assert result.workspace_dir == repo_dir
 
 
-def test_current_checkout_returns_branch_for_worktree(tmp_path: Path, env: dict[str, str]) -> None:
+def test_current_workspace_returns_branch_for_worktree(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)
@@ -348,15 +348,15 @@ def test_current_checkout_returns_branch_for_worktree(tmp_path: Path, env: dict[
         check=True,
     )
 
-    result = current_checkout(project, cwd=worktree_dir, env=env)
+    result = current_workspace(project, cwd=worktree_dir, env=env)
 
     assert result is not None
     assert result.is_main is False
     assert result.branch == "feat"
-    assert result.checkout_dir == worktree_dir
+    assert result.workspace_dir == worktree_dir
 
 
-def test_current_checkout_uses_repo_dir_env_var_for_main_checkout(
+def test_current_workspace_uses_repo_dir_env_var_for_main_workspace(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
@@ -369,15 +369,15 @@ def test_current_checkout_uses_repo_dir_env_var_for_main_checkout(
     other_dir.mkdir()
     env_with_repo = {**env, "REPO_DIR": str(repo_dir)}
 
-    result = current_checkout(project, cwd=other_dir, env=env_with_repo)
+    result = current_workspace(project, cwd=other_dir, env=env_with_repo)
 
     assert result is not None
     assert result.is_main is True
     assert result.branch is None
-    assert result.checkout_dir == repo_dir
+    assert result.workspace_dir == repo_dir
 
 
-def test_current_checkout_uses_repo_dir_env_var_for_worktree(
+def test_current_workspace_uses_repo_dir_env_var_for_worktree(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
@@ -401,15 +401,15 @@ def test_current_checkout_uses_repo_dir_env_var_for_worktree(
     other_dir.mkdir()
     env_with_repo = {**env, "REPO_DIR": str(worktree_dir)}
 
-    result = current_checkout(project, cwd=other_dir, env=env_with_repo)
+    result = current_workspace(project, cwd=other_dir, env=env_with_repo)
 
     assert result is not None
     assert result.is_main is False
     assert result.branch == "feat"
-    assert result.checkout_dir == worktree_dir
+    assert result.workspace_dir == worktree_dir
 
 
-def test_current_checkout_ignores_repo_dir_outside_project(
+def test_current_workspace_ignores_repo_dir_outside_project(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
@@ -423,16 +423,18 @@ def test_current_checkout_ignores_repo_dir_outside_project(
     subprocess.run(["git", "init", "-b", "main"], cwd=outside_dir, env=env, check=True)
     env_with_outside = {**env, "REPO_DIR": str(outside_dir)}
 
-    result = current_checkout(project, cwd=repo_dir, env=env_with_outside)
+    result = current_workspace(project, cwd=repo_dir, env=env_with_outside)
 
     assert result is not None
     assert result.is_main is True
     assert result.branch is None
     # Falls back to cwd-based detection instead of REPO_DIR
-    assert result.checkout_dir == repo_dir
+    assert result.workspace_dir == repo_dir
 
 
-def test_current_checkout_ignores_nonexistent_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
+def test_current_workspace_ignores_missing_repo_dir(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)
@@ -440,15 +442,15 @@ def test_current_checkout_ignores_nonexistent_repo_dir(tmp_path: Path, env: dict
     subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
     env_with_bad = {**env, "REPO_DIR": "/nonexistent/path"}
 
-    result = current_checkout(project, cwd=repo_dir, env=env_with_bad)
+    result = current_workspace(project, cwd=repo_dir, env=env_with_bad)
 
     assert result is not None
     assert result.is_main is True
     assert result.branch is None
-    assert result.checkout_dir == repo_dir
+    assert result.workspace_dir == repo_dir
 
 
-def test_current_checkout_ignores_non_git_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
+def test_current_workspace_ignores_non_git_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)
@@ -459,15 +461,15 @@ def test_current_checkout_ignores_non_git_repo_dir(tmp_path: Path, env: dict[str
     non_git.mkdir()
     env_with_non_git = {**env, "REPO_DIR": str(non_git)}
 
-    result = current_checkout(project, cwd=repo_dir, env=env_with_non_git)
+    result = current_workspace(project, cwd=repo_dir, env=env_with_non_git)
 
     assert result is not None
     assert result.is_main is True
     assert result.branch is None
-    assert result.checkout_dir == repo_dir
+    assert result.workspace_dir == repo_dir
 
 
-def test_current_checkout_workspace_checkout_under_repo_dir_is_main(
+def test_current_workspace_subdir_under_repo_dir_is_main(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
@@ -475,11 +477,11 @@ def test_current_checkout_workspace_checkout_under_repo_dir_is_main(
     repo_dir.mkdir(parents=True)
     (project / "worktrees").mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, env=env, check=True)
-    # A subdirectory of repo_dir — still main checkout
+    # A subdirectory of repo_dir — still main workspace
     sub_dir = repo_dir / "src"
     sub_dir.mkdir()
 
-    result = current_checkout(project, cwd=sub_dir, env=env)
+    result = current_workspace(project, cwd=sub_dir, env=env)
 
     assert result is not None
     assert result.is_main is True

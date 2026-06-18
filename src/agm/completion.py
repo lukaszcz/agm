@@ -16,7 +16,7 @@ from agm.commands.dep.common import main_dep_repo
 from agm.config.context import current_config_context
 from agm.config.general import load_merged_config, load_run_config
 from agm.project.layout import (
-    current_checkout_or_project_root,
+    current_workspace_or_project_root,
     default_worktrees_dir,
     discover_current_project_dir,
     project_deps_dir,
@@ -30,9 +30,9 @@ _HELP_TREE: dict[str, list[str]] = {
         "open",
         "close",
         "init",
-        "setup",
-        "fetch",
-        "pull",
+        "workspace",
+        "wsp",
+        "sync",
         "config",
         "wt",
         "worktree",
@@ -44,6 +44,9 @@ _HELP_TREE: dict[str, list[str]] = {
     ],
     "loop": ["select", "run", "step"],
     "config": ["cp", "copy", "env", "update"],
+    "workspace": ["open", "close", "setup", "list"],
+    "wsp": ["open", "close", "setup", "list"],
+    "sync": ["fetch", "pull"],
     "wt": ["new", "rm", "remove"],
     "worktree": ["new", "rm", "remove"],
     "dep": ["list", "new", "switch", "rm", "remove"],
@@ -113,7 +116,7 @@ def _worktree_branch_candidates(repo_dir: Path) -> set[str]:
     except SystemExit:
         return set()
 
-    project_dir = current_checkout_or_project_root(repo_dir)
+    project_dir = current_workspace_or_project_root(repo_dir)
     worktrees_dir = default_worktrees_dir(project_dir)
     branches: set[str] = set()
     try:

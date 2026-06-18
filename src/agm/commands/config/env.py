@@ -7,7 +7,7 @@ import shlex
 
 from agm.commands.args import ConfigEnvArgs
 from agm.core.env import is_safe_shell_env_assignment_name
-from agm.project.setup import load_current_config_env
+from agm.project.workspace_env import load_current_workspace_env
 
 
 def shell_env_delta(
@@ -31,6 +31,6 @@ def shell_env_delta(
 def run(args: ConfigEnvArgs) -> None:
     del args
     before = dict(os.environ)
-    after = load_current_config_env(env=before)
+    after = load_current_workspace_env(env=before)
     for statement in shell_env_delta(before=before, after=after):
         print(statement)

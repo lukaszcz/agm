@@ -12,70 +12,79 @@ Global options:
 - `--install-completion`
 - `--show-completion`
 
-## Project session and lifecycle commands
+## Workspace and project lifecycle commands
 
 | Command | Description |
 |---|---|
-| `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Open the main checkout or a branch worktree, creating or checking it out when needed |
-| `agm close [-f\|--force] [-D] BRANCH` | Remove a branch worktree and close its tmux session |
-| `agm init [--embedded \| --workspace] [--no-git-init \| --no-config-git \| --no-notes-git]` | Initialize the current directory without cloning a repo |
-| `agm init [--embedded \| --workspace] [--no-git-init \| --no-config-git \| --no-notes-git] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
-| `agm init [--embedded \| --workspace] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
-| `agm init --clone [--embedded \| --workspace] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
-| `agm fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
-| `agm pull` | Run `agm fetch`, then run `git merge` in every dependency, main repo, and worktree checkout |
-| `agm list [-v\|--verbose]` | List all open worktrees |
-| `agm setup` | Run setup scripts for the current checkout |
+| `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Shortcut for `agm workspace open` |
+| `agm close [-f\|--force] [-D] BRANCH` | Shortcut for `agm workspace close` |
+| `agm workspace open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Open the main workspace or a branch workspace, creating or checking it out when needed |
+| `agm workspace close [-f\|--force] [-D] BRANCH` | Remove a branch workspace and close its tmux session |
+| `agm workspace list [-v\|--verbose]` | List all open AGM workspaces |
+| `agm workspace setup` | Run setup scripts for the current workspace |
+| `agm wsp open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Alias form of `agm workspace open` |
+| `agm wsp close [-f\|--force] [-D] BRANCH` | Alias form of `agm workspace close` |
+| `agm wsp list [-v\|--verbose]` | Alias form of `agm workspace list` |
+| `agm wsp setup` | Alias form of `agm workspace setup` |
+| `agm init [--embedded \| --split] [--no-git-init \| --no-config-git \| --no-notes-git]` | Initialize the current directory without cloning a repo |
+| `agm init [--embedded \| --split] [--no-git-init \| --no-config-git \| --no-notes-git] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
+| `agm init [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
+| `agm init --clone [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-config-git \| --no-notes-git] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
+| `agm sync fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
+| `agm sync pull` | Run `agm sync fetch`, then run `git merge` in every dependency, main workspace, and branch workspace |
 
-`agm open` behavior:
+An AGM workspace may be the main repo or a linked Git worktree, interpreted with AGM project
+config, branch config, dependency environment, setup scripts, and tmux session lifecycle.
 
-- `repo` opens the main checkout session
-- the branch currently checked out in the main checkout also opens the main checkout session
-- an existing worktree target opens its tmux session
-- an existing branch without a worktree is checked out into a worktree and then opened
-- a missing branch is created from `--parent` or the main checkout's current branch and then opened
+`agm workspace open` behavior:
 
-`agm open` options:
+- `repo` opens the main workspace
+- the branch currently checked out in the main workspace also opens the main workspace
+- an existing branch workspace opens its tmux session
+- an existing branch without a workspace is checked out into a Git worktree and then opened
+- a missing branch is created from `--parent` or the main workspace's current branch and then opened
+
+`agm workspace open` options:
 
 - `-d`, `--detach`: create the tmux session without attaching
 - `-n`, `--num-panes PANES`: create the session with `PANES` panes
-- `-p`, `--parent PARENT`: base a newly created branch worktree on `PARENT`
+- `-p`, `--parent PARENT`: base a newly created branch workspace on `PARENT`
 
-`agm close` options:
+`agm workspace close` options:
 
-- `-f`, `--force`: force remove the worktree (even with untracked or uncommitted changes) and force delete the branch (`git branch -D`). Implies `-D`.
+- `-f`, `--force`: force remove the branch workspace's Git worktree (even with untracked or uncommitted changes) and force delete the branch (`git branch -D`). Implies `-D`.
 - `-D`: force delete the branch (`git branch -D`) instead of safe delete (`git branch -d`). The worktree is only removed if the branch deletion would succeed.
 
-`agm close` notes:
+`agm workspace close` notes:
 
-- closes only branch worktrees
-- `repo` and the main checkout branch cannot be removed with `agm close`
+- closes only branch workspaces
+- `repo` and the main workspace branch cannot be removed with `agm workspace close`
 
-`agm pull` notes:
+`agm sync pull` notes:
 
-- runs the same fetch and tracking-branch sync as `agm fetch` first
-- runs `git merge` in each dependency checkout/worktree, the main repo checkout, and each project worktree
-- relies on each checkout's current branch upstream, matching plain `git merge`
+- runs the same fetch and tracking-branch sync as `agm sync fetch` first
+- runs `git merge` in each dependency checkout/worktree, the main workspace, and each branch workspace
+- relies on each Git worktree's current branch upstream, matching plain `git merge`
 
-`agm list` options:
+`agm workspace list` options:
 
-- `-v`, `--verbose`: show the worktree directory path after each branch name
+- `-v`, `--verbose`: show the workspace directory path after each branch name
 
-`agm list` notes:
+`agm workspace list` notes:
 
-- the main repo worktree is listed first
-- the current worktree is indicated with a leading `*`
+- the main workspace is listed first
+- the current workspace is indicated with a leading `*`
 
-`agm setup` runs executable setup scripts for the current checkout, in this order:
+`agm workspace setup` runs executable setup scripts for the current workspace, in this order:
 
 1. project-level `config/setup.sh`
-2. checkout-local `.config/setup.sh`
-3. checkout-local `.setup.sh`
+2. workspace-local `.config/setup.sh`
+3. workspace-local `.setup.sh`
 
 `agm init` options:
 
 - `--embedded`: force the embedded layout with AGM data under `.agm/`
-- `--workspace`: force the workspace layout with `repo/`, `deps/`, `notes/`, `worktrees/`, and `config/`
+- `--split`: force the split layout with `repo/`, `deps/`, `notes/`, `worktrees/`, and `config/`
 - `--clone`: initialize a child directory derived from `REPO_URL` when no `PROJECT_NAME` is provided
 - `-b`, `--branch BRANCH`: clone this branch when `REPO_URL` is provided
 - `--no-git-init`: do not create git repositories in `config/` and `notes/`
@@ -84,9 +93,9 @@ Global options:
 
 `agm init` layout selection:
 
-- with `REPO_URL`, the default is the workspace layout unless `--embedded` is provided
+- with `REPO_URL`, the default is the split layout unless `--embedded` is provided
 - without `REPO_URL`, AGM chooses the embedded layout only when the target project directory is a git repo
-- otherwise it chooses the workspace layout
+- otherwise it chooses the split layout
 - without `PROJECT_NAME`, AGM initializes the current directory
 - with `PROJECT_NAME`, AGM initializes a child directory with that name
 - with `--clone REPO_URL`, AGM initializes a child directory derived from the URL
@@ -200,7 +209,7 @@ Dependency commands track selected dependency checkout names in config `config.t
 `agm dep list` options:
 
 - `-v`, `--verbose`: show the checkout path after each dep/branch
-- `--all`: list all dependency checkouts on disk instead of only the current checkout's dependencies
+- `--all`: list all dependency checkouts on disk instead of only the current workspace's dependencies
 
 `agm dep rm` targets:
 
@@ -210,7 +219,7 @@ Dependency commands track selected dependency checkout names in config `config.t
 
 `agm dep rm` options:
 
-- `--all DEP`: use `agm dep rm --all DEP` to remove the entire dependency directory, including the main checkout and any linked worktrees
+- `--all DEP`: use `agm dep rm --all DEP` to remove the entire dependency directory, including the main dependency checkout and any linked worktrees
 
 ## Agent commands
 
@@ -293,7 +302,7 @@ command name is forwarded to review/revise config lookup.
 |---|---|
 | `agm config copy DIRNAME` | Copy known project config files into an existing target directory |
 | `agm config cp DIRNAME` | Alias form of `agm config copy` |
-| `agm config env` | Print shell statements for refreshing the current checkout environment |
+| `agm config env` | Print shell statements for refreshing the current workspace environment |
 | `agm config update` | Create missing config.toml files and commit generated changes |
 | `agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
 | `agm tmux open [-d\|--detach] [-n\|--num-panes PANES] [SESSION]` | Open a tmux session |
@@ -308,9 +317,9 @@ For `.env` and `.env.local`, AGM writes merged dotenv values using the same
 precedence as `agm config env`: shared `.env`, shared `.env.local`, branch
 `.env`, then branch `.env.local`.
 
-`agm config env` uses the same environment resolution as `agm open`: project and branch
+`agm config env` uses the same environment resolution as `agm workspace open`: project and branch
 `config.toml` `[deps]` tables first, then project `.env`, project `.env.local`, project
-`env.sh`, and matching branch config files when the current checkout is a branch worktree.
+`env.sh`, and matching branch config files when the current workspace is a branch workspace.
 Apply the printed shell statements with:
 
 ```bash

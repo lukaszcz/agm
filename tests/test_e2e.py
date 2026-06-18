@@ -1,11 +1,13 @@
 """End-to-end tests that exercise commands through the ``agm`` CLI.
 
-These tests create real git repos, invoke the ``agm`` command-line interface,
-and verify the resulting filesystem and git state.
+These tests create real git repos, invoke the installed ``agm`` command-line
+binary, and verify the resulting filesystem and git state.
 
+The suite installs the current repository version of ``agm`` into an isolated
+temporary virtual environment (see the ``_agm_install`` session fixture) and
+invokes that binary with a fake ``HOME`` so no real user files are touched.
 Test setup uses only raw git/filesystem operations, never other scripts from
-this repository.  The shell scripts must be installed on PATH (via
-``just install``) before running these tests.
+this repository.
 """
 
 from __future__ import annotations
@@ -13,11 +15,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
 import subprocess
-import sys
 import time
 import tomllib
 from pathlib import Path
@@ -275,6 +277,123 @@ def _install_fake_loop_command(
 
 
 # ---------------------------------------------------------------------------
+# Isolated install of the current repo's ``agm`` CLI
+# ---------------------------------------------------------------------------
+
+# Populated once per session (per xdist worker) by the ``_agm_install`` fixture.
+# Keys: ``"bin_dir"`` (the venv ``bin/`` directory) and ``"bin"`` (the
+# installed ``agm`` executable).  ``which("agm")`` inside the subprocess
+# resolves to ``bin_dir`` so ``agm_installation_prefix()`` reports this venv.
+_AGM_INSTALL: dict[str, Path] = {}
+
+# The developer's pristine PATH captured at module import (before any test
+# fixture mutates ``os.environ``).  ``_agm_env`` uses this to distinguish
+# test-prepended directories (tmp dirs not in the original PATH) from the
+# original system PATH, so the guard-shim directory can be placed *before*
+# the original PATH — shadowing real ``claude``/``codex``/``srt``/… binaries
+# that live on the developer's PATH.
+_ORIGINAL_PATH: str = os.environ.get("PATH", "")
+
+# External agent/sandbox CLIs that an e2e test must NEVER invoke for real.
+# The ``_agm_install`` fixture places a hard-failing shim for each one in the
+# isolated venv's ``bin/`` (which ``_agm_env`` prepends to PATH).  A test that
+# needs one of these installs a *fake* by prepending its own tmp dir to PATH
+# first, which shadows the shim; a test that forgets to install a fake hits
+# the shim and fails loudly instead of silently calling a real agent.  ``srt``
+# is included so ``agm run`` (sandboxed) can never reach a real sandbox runtime
+# unless a test deliberately installs a fake ``srt``.
+_EXTERNAL_AGENT_CLIS: tuple[str, ...] = ("claude", "codex", "opencode", "pi", "srt")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Install the current repository version of ``agm`` into an isolated venv.
+
+    The venv lives under a temporary directory and is fully disposable; no real
+    user files (``~/.agm``, installed tools, PATH entries) are modified.  Every
+    e2e test then invokes this installed ``agm`` binary, exercising the real
+    packaged console-script entry point rather than ``python -m agm.cli``.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    venv = tmp_path_factory.mktemp("agm-install") / "venv"
+    subprocess.run(
+        ["uv", "venv", str(venv), "--python", "3.12"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(venv / "bin" / "python"), str(repo_root)],
+        check=True,
+        capture_output=True,
+    )
+    bin_dir = venv / "bin"
+    agm_bin = bin_dir / "agm"
+    assert agm_bin.is_file(), f"installed agm binary missing at {agm_bin}"
+    # Install hard-failing guard shims for every external agent/sandbox CLI in
+    # a dedicated directory.  ``_agm_env`` places this guard dir AFTER the test's
+    # own fake-CLI dirs and the venv ``bin/`` but BEFORE the rest of PATH, so:
+    #   - a test-installed fake (prepended first) shadows the guard shim → the
+    #     fake is used (intended);
+    #   - ``which("agm")`` resolves to the venv ``agm`` (no guard shim for agm);
+    #   - a forgotten fake resolves to the guard shim, which fails loudly
+    #     instead of falling through to a *real* ``claude``/``codex``/``srt``/…
+    #     elsewhere on PATH.
+    guard_dir = tmp_path_factory.mktemp("agm-agent-guard")
+    for cli in _EXTERNAL_AGENT_CLIS:
+        shim = guard_dir / cli
+        shim.write_text(
+            "#!/bin/bash\n"
+            f'echo "agm e2e guard: {cli} is not faked in this test; refusing to '
+            'invoke a real external agent CLI." >&2\n'
+            "exit 127\n",
+            encoding="utf-8",
+        )
+        shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    _AGM_INSTALL["bin_dir"] = bin_dir
+    _AGM_INSTALL["bin"] = agm_bin
+    _AGM_INSTALL["guard_dir"] = guard_dir
+
+
+def _agm_argv(args: list[str]) -> list[str]:
+    """Build an argv list invoking the installed ``agm`` binary."""
+    return [str(_AGM_INSTALL["bin"]), *args]
+
+
+def _agm_env(env: dict[str, str]) -> dict[str, str]:
+    """Return *env* with PATH ordered so real external agent CLIs are unreachable.
+
+    The final PATH is::
+
+        <test-prepended dirs> : <venv bin> : <guard shim dir> : <original PATH>
+
+    where ``<original PATH>`` is the developer's pristine PATH
+    (``_ORIGINAL_PATH``) minus the venv bin and guard dir.  Test-prepended
+    directories (tmp dirs not present in the pristine PATH) are kept first so
+    test-installed fakes shadow everything.  Ordering guarantees:
+
+    - ``which("agm")`` resolves to the isolated install's ``agm`` (in the venv
+      ``bin/``), so ``agm_installation_prefix()`` reports this venv — unless a
+      test prepended its own shim ``agm`` dir (the install-prefix tests), in
+      which case that wins.
+    - A test-installed fake (in a prepended dir) shadows both the venv and the
+      guard shims for that CLI, so the genuine fake is used.
+    - A *forgotten* fake resolves to the guard shim (placed ahead of the
+      original PATH), which fails loudly instead of silently invoking a real
+      ``claude``/``codex``/``opencode``/``pi``/``srt`` from the original PATH.
+    """
+    out = dict(env)
+    guard = str(_AGM_INSTALL["guard_dir"])
+    venv_bin = str(_AGM_INSTALL["bin_dir"])
+    original_set = {e for e in _ORIGINAL_PATH.split(":") if e}
+    raw = out.get("PATH", "")
+    all_entries = [e for e in raw.split(":") if e and e != venv_bin and e != guard]
+    test_entries = [e for e in all_entries if e not in original_set]
+    orig_entries = [e for e in all_entries if e in original_set]
+    out["PATH"] = ":".join([*test_entries, venv_bin, guard, *orig_entries])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Fixtures & helpers
 # ---------------------------------------------------------------------------
 
@@ -285,13 +404,43 @@ def run_agm(
     env: dict[str, str],
     cwd: str | Path | None = None,
     check: bool = True,
+    input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run an ``agm`` CLI command as a subprocess."""
+    """Run an ``agm`` CLI command as a subprocess via the installed binary."""
     return subprocess.run(
-        [sys.executable, "-m", "agm.cli", *args],
+        _agm_argv(args),
         capture_output=True,
         text=True,
-        env=env,
+        env=_agm_env(env),
+        cwd=cwd,
+        check=check,
+        input=input,
+    )
+
+
+def _run_agm_raw(
+    args: list[str],
+    *,
+    env: dict[str, str],
+    cwd: str | Path | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run the installed ``agm`` binary without prepending the venv ``bin/`` to PATH.
+
+    Used by tests that need to control ``agm_installation_prefix()`` (which is
+    derived from ``shutil.which("agm")``) by placing a shim ``agm`` earlier on
+    PATH themselves.  The real binary is still invoked (by absolute path), so
+    its behaviour is exercised; only the resolved install prefix differs.
+
+    The PATH is still sanitized (via :func:`_agm_env`) so a real external agent
+    CLI on the developer's PATH can never be invoked; only the test's shim
+    ``agm`` and fake ``claude`` (both under tmp_path) are reachable.
+    """
+    return subprocess.run(
+        [str(_AGM_INSTALL["bin"]), *args],
+        capture_output=True,
+        text=True,
+        env=_agm_env(env),
         cwd=cwd,
         check=check,
     )
@@ -728,14 +877,14 @@ class TestConfigEnv:
                 "bash",
                 "-c",
                 (
-                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
                     'printf "VALUE=%s\\nPROJ_DIR=%s\\nREPO_DIR=%s\\nREMOVE_ME=%s\\n" '
                     '"$VALUE" "$PROJ_DIR" "$REPO_DIR" "${REMOVE_ME-unset}"'
                 ),
             ],
             capture_output=True,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=project,
             check=True,
         )
@@ -770,14 +919,14 @@ class TestConfigEnv:
                 "bash",
                 "-c",
                 (
-                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
                     'printf "VALUE=%s\\nPROJ_DIR=%s\\nREPO_DIR=%s\\n" '
                     '"$VALUE" "$PROJ_DIR" "$REPO_DIR"'
                 ),
             ],
             capture_output=True,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=worktree,
             check=True,
         )
@@ -808,14 +957,14 @@ class TestConfigEnv:
                 "bash",
                 "-c",
                 (
-                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
                     'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
                     '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=project,
             check=True,
         )
@@ -847,14 +996,14 @@ class TestConfigEnv:
                 "bash",
                 "-c",
                 (
-                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
                     'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
                     '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=project,
             check=True,
         )
@@ -893,14 +1042,14 @@ class TestConfigEnv:
                 "bash",
                 "-c",
                 (
-                    f'eval "$({sys.executable} -m agm.cli config env)"; '
+                    f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
                     'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
                     '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=worktree,
             check=True,
         )
@@ -2966,25 +3115,14 @@ class TestSandbox:
         systemd_run.chmod(systemd_run.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = str(directory) + ":" + env["PATH"]
 
-    def test_error_when_srt_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
-        # Build a PATH that has everything except ``srt``.  For each PATH
-        # directory that contains ``srt``, symlink all *other* executables
-        # into a replacement directory so bash/zsh/scripts are still found.
-        dirs = env.get("PATH", "").split(":")
-        clean: list[str] = []
-        for d in dirs:
-            dp = Path(d)
-            if (dp / "srt").exists():
-                alt = tmp_path / f"nosrt-{dp.name}"
-                alt.mkdir(parents=True, exist_ok=True)
-                for item in dp.iterdir():
-                    if item.name != "srt" and item.is_file() and not (alt / item.name).exists():
-                        os.symlink(item, alt / item.name)
-                clean.append(str(alt))
-            else:
-                clean.append(d)
-        env["PATH"] = ":".join(clean)
-
+    def test_sandboxed_run_without_fake_srt_fails_without_invoking_real_srt(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # With no fake ``srt`` installed and no sandbox settings file, a
+        # sandboxed ``agm run`` must fail.  The e2e install fixture installs a
+        # hard-failing ``srt`` guard shim (see ``_agm_install``) that shadows
+        # any *real* ``srt`` on the developer's PATH, so this can never reach a
+        # real sandbox runtime: it fails at settings resolution instead.
         work = tmp_path / "work"
         work.mkdir()
 
@@ -2995,7 +3133,13 @@ class TestSandbox:
             check=False,
         )
         assert result.returncode != 0
-        assert "srt is not installed" in result.stderr
+        # No real srt was invoked: either the guard shim intercepted it or, when
+        # the shim passes the installed-check, settings resolution fails cleanly.
+        assert (
+            "srt is not installed" in result.stderr
+            or "no sandbox settings file found" in result.stderr
+        )
+        assert "hi" not in result.stdout
 
     def test_help_when_command_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_srt(tmp_path / "bin", env)
@@ -3816,11 +3960,11 @@ class TestSandbox:
         work.mkdir()
 
         process = subprocess.Popen(
-            [sys.executable, "-m", "agm.cli", "run", "--no-sandbox", "sleeper"],
+            _agm_argv(["run", "--no-sandbox", "sleeper"]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=work,
         )
 
@@ -3876,20 +4020,11 @@ class TestSandbox:
         work.mkdir()
 
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "agm.cli",
-                "run",
-                "--no-sandbox",
-                "--memory",
-                "1G",
-                "sleeper",
-            ],
+            _agm_argv(["run", "--no-sandbox", "--memory", "1G", "sleeper"]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=work,
         )
 
@@ -3952,11 +4087,11 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         process = subprocess.Popen(
-            [sys.executable, "-m", "agm.cli", "loop", "run", "--no-selector", "--runner", "runner"],
+            _agm_argv(["loop", "run", "--no-selector", "--runner", "runner"]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=str(work),
         )
 
@@ -4039,21 +4174,11 @@ class TestLoop:
         env["FAKE_SELECTOR_STATE"] = str(tmp_path / "selector-count")
 
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "agm.cli",
-                "loop",
-                "run",
-                "--runner",
-                "runner",
-                "--selector",
-                "selector",
-            ],
+            _agm_argv(["loop", "run", "--runner", "runner", "--selector", "selector"]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=str(work),
         )
 
@@ -4144,7 +4269,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        result = run_agm(["loop", "run", "--no-selector"], env=env, cwd=str(work))
+        result = _run_agm_raw(["loop", "run", "--no-selector"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
@@ -4173,7 +4298,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["loop", "run", "--no-selector"], env=env, cwd=str(work))
+        result = _run_agm_raw(["loop", "run", "--no-selector"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
@@ -5359,20 +5484,11 @@ class TestLoop:
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "agm.cli",
-                "loop",
-                "run",
-                "--no-selector",
-                "--runner",
-                "runner",
-            ],
+            _agm_argv(["loop", "run", "--no-selector", "--runner", "runner"]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=work,
         )
 
@@ -5442,21 +5558,11 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "agm.cli",
-                "loop",
-                "run",
-                "--runner",
-                "runner",
-                "--selector",
-                "selector",
-            ],
+            _agm_argv(["loop", "run", "--runner", "runner", "--selector", "selector"]),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=_agm_env(env),
             cwd=work,
         )
 
@@ -5838,6 +5944,46 @@ class TestLoop:
         assert "Step 2" not in result.stdout
         assert "Completed." not in result.stdout
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"--print @{prompt_file}"]
+
+    def test_loop_run_breaks_when_runner_exits_127(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """A runner that exits 127 (command-not-found) is fatal: the loop breaks.
+
+        No fake ``claude`` is installed, so the default runner ``claude -p``
+        resolves to the hard-failing guard shim (exit 127) placed by the
+        ``_agm_install`` fixture.  ``validate_command`` passes (the shim is
+        executable and on PATH), but the actual invocation exits 127 — which
+        ``run_prompt_command`` treats as a fatal runner-configuration error,
+        raising ``SystemExit(1)`` instead of retrying forever.
+        """
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        prompt_dir.joinpath("loop.md").write_text("loop prompt\n")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        tasks_dir = work / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "PROGRESS.md").write_text("started\n")
+
+        result = subprocess.run(
+            _agm_argv(["loop", "run", "--no-selector"]),
+            capture_output=True,
+            text=True,
+            env=_agm_env(env),
+            cwd=str(work),
+            check=False,
+            timeout=30,
+        )
+
+        assert result.returncode == 1
+        assert "Step 1" in result.stdout
+        assert "Step 2" not in result.stdout
+        assert "Completed." not in result.stdout
+        assert "could not be found or executed" in result.stderr
+        assert "claude" in result.stderr
 
 
 # ── agm open ────────────────────────────────────────────────────────────────
@@ -7192,3 +7338,644 @@ class TestWorkflows:
             env=env,
         ).stdout.strip()
         assert head == "branch-keep"
+
+
+# ---------------------------------------------------------------------------
+# Command-surface coverage: every ``agm`` command exercised via the installed
+# binary.  These tests cover commands not otherwise reached by the workflow
+# tests above: ``list``, ``dep list``, ``review``, ``revise``, ``refine``,
+# ``exec``, and ``repl``.  They drive real behavior with fake runner/agent
+# binaries on PATH and assert on filesystem output, runner invocations, and
+# exit codes — not implementation details.
+# ---------------------------------------------------------------------------
+
+
+class TestListCommand:
+    """agm list: print open worktrees with the main repo first."""
+
+    def test_lists_main_only_when_no_branch_worktrees(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_workspace_project(tmp_path, env)
+
+        result = run_agm(["list"], env=env, cwd=str(project / "repo"))
+
+        assert result.returncode == 0
+        lines = result.stdout.splitlines()
+        # The main repo is listed first, marked as current.
+        assert lines[0] == "* main"
+        # No branch worktrees exist yet.
+        assert len(lines) == 1
+
+    def test_lists_branch_worktrees_after_main_sorted(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_workspace_project(tmp_path, env)
+        run_agm(["wt", "new", "feat/beta"], env=env, cwd=str(project / "repo"))
+        run_agm(["wt", "new", "feat/alpha"], env=env, cwd=str(project / "repo"))
+
+        result = run_agm(["list"], env=env, cwd=str(project / "repo"))
+
+        assert result.returncode == 0
+        lines = result.stdout.splitlines()
+        assert lines[0] == "* main"
+        # Branch worktrees are sorted alphabetically after the main repo.
+        assert lines[1:] == ["  feat/alpha", "  feat/beta"]
+
+    def test_verbose_includes_worktree_paths(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_workspace_project(tmp_path, env)
+        run_agm(["wt", "new", "feat/x"], env=env, cwd=str(project / "repo"))
+
+        result = run_agm(["list", "-v"], env=env, cwd=str(project / "repo"))
+
+        assert result.returncode == 0
+        wt_path = project / "worktrees" / "feat/x"
+        assert f"feat/x  {wt_path}" in result.stdout
+
+    def test_marks_branch_worktree_as_current_when_run_from_it(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_workspace_project(tmp_path, env)
+        run_agm(["wt", "new", "feat/here"], env=env, cwd=str(project / "repo"))
+
+        result = run_agm(["list"], env=env, cwd=str(project / "worktrees" / "feat/here"))
+
+        assert result.returncode == 0
+        lines = result.stdout.splitlines()
+        # The branch worktree is now the current one (marked with '*').
+        assert "* feat/here" in lines
+        assert "  main" in lines
+
+
+class TestDepListCommand:
+    """agm dep list: print configured dependency checkouts."""
+
+    def test_lists_configured_dependency_for_main_checkout(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "lib.git", env)
+        project = _make_project(tmp_path, bare_main, env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+
+        result = run_agm(["dep", "list"], env=env, cwd=str(project / "repo"))
+
+        assert result.returncode == 0
+        assert "lib/main" in result.stdout.splitlines()
+
+    def test_verbose_includes_checkout_path(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "lib.git", env)
+        project = _make_project(tmp_path, bare_main, env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+
+        result = run_agm(["dep", "list", "-v"], env=env, cwd=str(project / "repo"))
+
+        assert result.returncode == 0
+        dep_path = project / "deps" / "lib" / "main"
+        assert f"lib/main  {dep_path}" in result.stdout
+
+    def test_all_lists_every_checkout_on_disk(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare_main = make_bare_repo(tmp_path / "main.git", env)
+        bare_dep = make_bare_repo(tmp_path / "lib.git", env)
+        project = _make_project(tmp_path, bare_main, env)
+        run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project / "repo"))
+        # Add a branch checkout for the dependency.
+        dep_clone = tmp_path / "dep-clone"
+        _git("clone", str(bare_dep), str(dep_clone), cwd=str(tmp_path), env=env)
+        _push_branch(dep_clone, bare_dep, "feat/api", "api.txt", env)
+        run_agm(["dep", "switch", "lib", "feat/api"], env=env, cwd=str(project / "repo"))
+
+        result = run_agm(["dep", "list", "--all"], env=env, cwd=str(project / "repo"))
+
+        assert result.returncode == 0
+        lines = result.stdout.splitlines()
+        assert "lib/main" in lines
+        assert "lib/feat/api" in lines
+
+    def test_empty_project_prints_nothing(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = _make_workspace_project(tmp_path, env)
+
+        result = run_agm(["dep", "list"], env=env, cwd=str(project / "repo"))
+
+        assert result.returncode == 0
+        assert result.stdout == ""
+
+
+class TestExecCommand:
+    """agm exec: run an AgL workflow program through the installed CLI."""
+
+    def test_executes_program_file_and_prints_output(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "hello.agl"
+        program.write_text('print "hello from agl"\n', encoding="utf-8")
+
+        result = run_agm(["exec", str(program)], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "hello from agl"
+
+    def test_exec_command_flag_runs_inline_program(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["exec", "-c", 'print "inline ok"'], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "inline ok"
+
+    def test_exec_passes_named_param_to_program(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "greet.agl"
+        program.write_text(
+            "param name\nprint \"hi \"\nprint name\n", encoding="utf-8"
+        )
+
+        result = run_agm(["exec", str(program), "--name", "world"], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout.splitlines() == ["hi ", "world"]
+
+    def test_exec_missing_file_argument_errors(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(["exec"], env=env, cwd=str(work), check=False)
+
+        assert result.returncode != 0
+        assert "required" in result.stderr.lower()
+
+    def test_exec_static_rejection_reports_diagnostic(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "bad.agl"
+        # ``let`` binding to an undefined name is a static scope error.
+        program.write_text("let x = undefined_name\nx\n", encoding="utf-8")
+
+        result = run_agm(["exec", str(program)], env=env, cwd=str(work), check=False)
+
+        assert result.returncode != 0
+        assert "undefined" in result.stderr.lower()
+
+    def test_exec_agent_call_dispatches_registered_runner(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "ask.agl"
+        program.write_text(
+            "agent reviewer\nlet r = ask(\"ping\", agent: reviewer)\nprint r\n",
+            encoding="utf-8",
+        )
+        # Install a fake runner named ``claude`` (the built-in default) that
+        # echoes a fixed response, so the agent call resolves and returns.
+        fake_claude = tmp_path / "bin" / "claude"
+        fake_claude.parent.mkdir(parents=True)
+        fake_claude.write_text("#!/bin/bash\nprintf 'pong'\n")
+        fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_claude.parent}:{env['PATH']}"
+
+        result = run_agm(["exec", str(program)], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert "pong" in result.stdout
+
+
+class TestReplCommand:
+    """agm repl: interactive AgL read-eval-print loop."""
+
+    def test_repl_evaluates_entries_from_stdin_and_exits(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        # Feed an expression then quit.  prompt-toolkit reads stdin line by
+        # line even when not a terminal, and the REPL prints each result.
+        result = run_agm(
+            ["repl"],
+            env=env,
+            cwd=str(work),
+            # ``run_agm`` captures stderr; the REPL warns about non-tty stdin
+            # but still evaluates entries and exits 0 on :quit.
+            input="1 + 2\n:quit\n",
+        )
+
+        assert result.returncode == 0
+        # The evaluated expression yields 3 in the output.
+        assert "3" in result.stdout
+
+    def test_repl_help_lists_meta_commands(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        result = run_agm(
+            ["repl"], env=env, cwd=str(work), input=":help\n:quit\n"
+        )
+
+        assert result.returncode == 0
+        assert ":help" in result.stdout
+        assert ":quit" in result.stdout
+        assert ":type" in result.stdout
+
+    def test_repl_bindings_persist_across_entries(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        result = run_agm(
+            ["repl"],
+            env=env,
+            cwd=str(work),
+            input="let n = 21\nn * 2\n:quit\n",
+        )
+
+        assert result.returncode == 0
+        # The first binding evaluates to 21, the second expression reuses it.
+        assert "21" in result.stdout
+        assert "42" in result.stdout
+
+
+class TestReviewCommand:
+    """agm review: run a prompt-driven review runner and save its output."""
+
+    def test_runs_review_runner_and_saves_output_to_default_file(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        fake_runner = tmp_path / "bin" / "reviewer"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\nprintf 'review body\\n'\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "review.md").write_text("review prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["review", "--runner", "reviewer", "--review-file", "auto"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "review body" in result.stdout
+        saved = list((work / ".agent-files").glob("review-*.md"))
+        assert len(saved) == 1
+        assert saved[0].read_text() == "review body\n"
+
+    def test_no_review_file_disables_saving(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        fake_runner = tmp_path / "bin" / "reviewer"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\nprintf 'out\\n'\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "review.md").write_text("review prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["review", "--runner", "reviewer", "--no-review-file"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "out" in result.stdout
+        assert not (work / ".agent-files").exists() or not list(
+            (work / ".agent-files").glob("review-*.md")
+        )
+
+    def test_prompt_file_overrides_default_prompt(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        fake_runner = tmp_path / "bin" / "reviewer"
+        fake_runner.parent.mkdir(parents=True)
+        # Echo the received prompt file path so we can assert the custom
+        # prompt file was forwarded to the runner as @TARGET.
+        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        work = tmp_path / "work"
+        work.mkdir()
+        custom_prompt = work / "my-review.md"
+        custom_prompt.write_text("custom review prompt\n", encoding="utf-8")
+
+        result = run_agm(
+            [
+                "review",
+                "--runner", "reviewer",
+                "--prompt-file", str(custom_prompt),
+                "--no-review-file",
+            ],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "custom review prompt" in result.stdout
+
+    def test_missing_runner_errors_cleanly(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "review.md").write_text("review prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["review", "--runner", "nonexistent-reviewer-binary"],
+            env=env,
+            cwd=str(work),
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "not installed" in result.stderr.lower()
+
+    def test_inline_prompt_is_used(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        fake_runner = tmp_path / "bin" / "reviewer"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            [
+                "review",
+                "--runner", "reviewer",
+                "--prompt", "inline review text",
+                "--no-review-file",
+            ],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "inline review text" in result.stdout
+
+
+class TestReviseCommand:
+    """agm revise: run a revision runner against a review file."""
+
+    def test_runs_revise_runner_against_review_file(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        fake_runner = tmp_path / "bin" / "reviser"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "revise.md").write_text("revise prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        review_file = work / "review-1.md"
+        review_file.write_text("found issues\n", encoding="utf-8")
+
+        result = run_agm(
+            ["revise", "--runner", "reviser", str(review_file)],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        # The revise prompt file is forwarded to the runner; the default
+        # revise.md prompt references the review file via $REVIEW_FILE.
+        assert "revise prompt" in result.stdout
+
+    def test_missing_prompt_file_errors_cleanly(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "revise.md").write_text("revise prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+        review_file = work / "review.md"
+        review_file.write_text("body\n", encoding="utf-8")
+        fake_runner = tmp_path / "bin" / "reviser"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\nprintf 'ok'\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        result = run_agm(
+            [
+                "revise",
+                "--runner", "reviser",
+                "--prompt-file", str(work / "nonexistent-prompt.md"),
+                str(review_file),
+            ],
+            env=env,
+            cwd=str(work),
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "not found" in result.stderr.lower()
+
+    def test_inline_prompt_overrides_default(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        fake_runner = tmp_path / "bin" / "reviser"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        work = tmp_path / "work"
+        work.mkdir()
+        review_file = work / "review.md"
+        review_file.write_text("body\n", encoding="utf-8")
+
+        result = run_agm(
+            [
+                "revise",
+                "--runner", "reviser",
+                "--prompt", "inline revise text",
+                str(review_file),
+            ],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "inline revise text" in result.stdout
+
+
+class TestRefineCommand:
+    """agm refine: run review→revise cycles until COMPLETE."""
+
+    def test_refine_stops_when_revise_returns_complete(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # Two-role fake runner: reviewer emits a review; reviser replies
+        # COMPLETE on the first cycle so refine exits after one step.
+        state_file = tmp_path / "refine-state"
+        fake_runner = tmp_path / "bin" / "runner"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text(
+            "#!/bin/bash\n"
+            f'state_file="{state_file}"\n'
+            "role=\"$1\"\n"  # first arg distinguishes the role (passed via runner alias)
+            'count=0\n'
+            'if [[ -f "$state_file" ]]; then count="$(cat "$state_file")"; fi\n'
+            'count=$((count + 1))\n'
+            'printf "%s" "$count" > "$state_file"\n'
+            'case "$count" in\n'
+            '  1) printf "issues found\\n" ;;\n'      # review output
+            '  *) printf "COMPLETE\\n" ;;\n'           # revise output
+            "esac\n"
+        )
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "review.md").write_text("review prompt\n", encoding="utf-8")
+        (prompt_dir / "revise.md").write_text("revise prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["refine", "--runner", "runner", "--no-max-steps"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "Step 1" in result.stdout
+        assert "Step 2" not in result.stdout
+        assert "issues found" in result.stdout
+        assert "COMPLETE" in result.stdout
+        # The refine log captures every step's output.
+        log_file = next((work / ".agent-files").glob("refine-*.log"))
+        assert "COMPLETE" in log_file.read_text()
+
+    def test_refine_runs_multiple_steps_until_complete(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # First revise returns CONTINUE (forces a fresh review), the second
+        # returns COMPLETE — exercising the multi-cycle loop.
+        state_file = tmp_path / "refine-state"
+        fake_runner = tmp_path / "bin" / "runner"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text(
+            "#!/bin/bash\n"
+            f'state_file="{state_file}"\n'
+            'count=0\n'
+            'if [[ -f "$state_file" ]]; then count="$(cat "$state_file")"; fi\n'
+            'count=$((count + 1))\n'
+            'printf "%s" "$count" > "$state_file"\n'
+            'case "$count" in\n'
+            '  1) printf "review-1\\n" ;;\n'     # review step 1
+            '  2) printf "CONTINUE\\n" ;;\n'      # revise step 1 → redo review
+            '  3) printf "review-2\\n" ;;\n'     # review step 2
+            '  *) printf "COMPLETE\\n" ;;\n'       # revise step 2 → done
+            "esac\n"
+        )
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "review.md").write_text("review prompt\n", encoding="utf-8")
+        (prompt_dir / "revise.md").write_text("revise prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["refine", "--runner", "runner", "--no-max-steps"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "Step 1" in result.stdout
+        assert "Step 2" in result.stdout
+        assert "review-1" in result.stdout
+        assert "review-2" in result.stdout
+        assert "COMPLETE" in result.stdout
+
+    def test_refine_respects_max_steps_limit(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # The reviser never returns COMPLETE; refine must stop after max_steps.
+        fake_runner = tmp_path / "bin" / "runner"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\nprintf 'keep going\\n'\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "review.md").write_text("review prompt\n", encoding="utf-8")
+        (prompt_dir / "revise.md").write_text("revise prompt\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["refine", "--runner", "runner", "--max-steps", "2"],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "Step 1" in result.stdout
+        assert "Step 2" in result.stdout
+        # No third step is attempted.
+        assert "Step 3" not in result.stdout
+        assert "keep going" in result.stdout

@@ -60,6 +60,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Avoid brittle tests. Test user workflows, not implementation details.
 - Test only main app Python code under `src/agm/`, not build/install scripts, `justfile` commands or config file content. Do not test exact help messages.
 - Maintain 100% test coverage of `src/`.
+- Maintain 100% command coverage in e2e tests.
 - Test files in `tests/` group tests by module or meaningful category.
 
 ## Commit Guidelines

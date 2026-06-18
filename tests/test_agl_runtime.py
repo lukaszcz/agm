@@ -410,7 +410,7 @@ class TestUncaughtAgentCallErrorSpan:
         """End to end: ``agm exec`` prints ``at line N`` to stderr (exit 2)."""
         import agm.commands.exec as exec_mod
         from agm.agl.runtime.agents import AgentCallHostError
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         from agm.commands.exec import run as exec_run
 
         agl_file = tmp_path / "prog.agl"

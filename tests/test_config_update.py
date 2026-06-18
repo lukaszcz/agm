@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import agm.commands.config.update as config_update
-from agm.commands.args import ConfigUpdateArgs
+from agm.cli_support.args import ConfigUpdateArgs
 
 
 class TestConfigUpdateRun:

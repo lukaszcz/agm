@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.commands.args import LoopArgs
+from agm.cli_support.args import LoopArgs
 from agm.core import dry_run
 
 from . import step as step_command

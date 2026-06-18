@@ -39,7 +39,7 @@ import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 from agm import completion
 from agm import parser as parser_helpers
-from agm.commands.args import (
+from agm.cli_support.args import (
     CloseArgs,
     ConfigCopyArgs,
     ConfigEnvArgs,
@@ -958,7 +958,7 @@ def _exec_print_help(*, file: str | None, command: str | None) -> None:
     appends the discovered ``Program parameters:`` section.  Degrades silently
     on any error (syntax errors, unreadable files, etc.).
     """
-    from agm.commands.param_options import (
+    from agm.cli_support.exec_params import (
         discover_params_from_source,
         render_param_help_section,
     )

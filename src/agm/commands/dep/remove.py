@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.commands.args import DepRemoveArgs
-from agm.commands.dep.common import main_dep_repo
+from agm.cli_support.args import DepRemoveArgs
 from agm.core.fs import is_dir, rmtree
+from agm.project.dependency_checkout import main_dep_repo
 from agm.project.layout import project_deps_dir, require_current_project_dir
 
 

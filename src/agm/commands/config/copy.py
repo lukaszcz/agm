@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.commands.args import ConfigCopyArgs
+from agm.cli_support.args import ConfigCopyArgs
 from agm.project.layout import copy_config
 
 

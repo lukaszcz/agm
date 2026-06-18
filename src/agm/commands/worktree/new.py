@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.commands.args import WorktreeNewArgs
+from agm.cli_support.args import WorktreeNewArgs
 from agm.project.config_git import commit_config_dir_changes
 from agm.project.layout import discover_current_project_dir, project_config_dir
 from agm.project.worktree import ensure_worktree

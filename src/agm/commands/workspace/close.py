@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.commands.args import CloseArgs
+from agm.cli_support.args import CloseArgs
 from agm.core import fs
 from agm.project.config_git import commit_config_dir_changes
 from agm.project.layout import (

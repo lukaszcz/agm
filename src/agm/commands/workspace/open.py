@@ -7,7 +7,7 @@ from pathlib import Path
 from shlex import quote as shlex_quote
 
 import agm.vcs.git as git_helpers
-from agm.commands.args import OpenArgs
+from agm.cli_support.args import OpenArgs
 from agm.core.fs import chmod, mkdir, write_text
 from agm.parser import exit_with_usage_error
 from agm.project.config_git import commit_config_dir_changes

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 
-from agm.commands.args import ConfigEnvArgs
+from agm.cli_support.args import ConfigEnvArgs
 from agm.core.env import is_safe_shell_env_assignment_name
 from agm.project.workspace_env import load_current_workspace_env
 

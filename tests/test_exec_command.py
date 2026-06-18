@@ -25,7 +25,7 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.exec as exec_command
-from agm.commands.args import ExecArgs
+from agm.cli_support.args import ExecArgs
 
 
 class RecordedArgs(Protocol):
@@ -344,7 +344,7 @@ class TestExecCommandBehavior:
     """Behavior tests for the exec command run() function."""
 
     def test_missing_file_exits_1(self, tmp_path: Path) -> None:
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(tmp_path / "nonexistent.agl"),
@@ -362,7 +362,7 @@ class TestExecCommandBehavior:
     def test_missing_file_prints_error(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(tmp_path / "nonexistent.agl"),
@@ -382,7 +382,7 @@ class TestExecCommandBehavior:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """A path that is a directory (not a readable file) exits 1 with a friendly error."""
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         a_dir = tmp_path / "a_directory"
         a_dir.mkdir()
@@ -410,7 +410,7 @@ class TestExecCommandBehavior:
         """A valid .agl file with no agent calls exits 0 (success)."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\nx\n")
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -431,7 +431,7 @@ class TestExecCommandBehavior:
         """A .agl file with a static error exits 1 and prints diagnostics to stderr."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = undefined_name\n")
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -831,7 +831,7 @@ class TestExecCommandM1:
     def test_valid_program_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\nx\n")
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -848,7 +848,7 @@ class TestExecCommandM1:
     def test_program_with_params_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("param msg\nprint msg\n")
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -865,7 +865,7 @@ class TestExecCommandM1:
     def test_missing_param_exits_1(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("param msg\nprint msg\n")
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -926,7 +926,7 @@ class TestExecCommandM1:
         AgentCallError (exit 2) when the runner subprocess fails."""
         import agm.commands.exec as exec_mod
         from agm.agl.runtime.agents import AgentCallHostError
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('ask("hi")\n')
@@ -959,7 +959,7 @@ class TestExecCommandM1:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """F2: ``agm exec --dry-run`` runs the static pipeline only — no output."""
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         from agm.core import dry_run
 
         monkeypatch.setattr(dry_run, "_ENABLED", True)
@@ -984,7 +984,7 @@ class TestExecCommandM1:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """F2: a static-error program under --dry-run still exits 1."""
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         from agm.core import dry_run
 
         monkeypatch.setattr(dry_run, "_ENABLED", True)
@@ -1008,7 +1008,7 @@ class TestExecCommandM1:
     def test_static_error_exits_1_not_2(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = undefined_name\n")
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1069,7 +1069,7 @@ class TestExecConfigWiring:
     def test_config_values_reach_runtime_constructor(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         from agm.config.context import ConfigContext
 
         home = self._config_home(tmp_path)
@@ -1100,7 +1100,7 @@ class TestExecConfigWiring:
     def test_cli_strict_json_overrides_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         from agm.config.context import ConfigContext
 
         home = self._config_home(tmp_path)  # config sets strict_json = true
@@ -1132,7 +1132,7 @@ class TestExecConfigWiring:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """[exec] timeout config is wired to shell_exec_timeout on WorkflowRuntime."""
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         from agm.config.context import ConfigContext
 
         home = tmp_path / "home"
@@ -1397,7 +1397,7 @@ class TestJsonParamsCLI:
             'param pt: Point\n'
             'print pt.x\n'
         )
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1428,7 +1428,7 @@ class TestJsonParamsCLI:
             'param price: decimal\n'
             'print price\n'
         )
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1459,7 +1459,7 @@ class TestJsonParamsCLI:
             'param tags: list[text]\n'
             'print tags\n'
         )
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1493,7 +1493,7 @@ class TestJsonParamsCLI:
             'param pt: Point\n'
             'print pt.x\n'
         )
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
             file=str(agl_file),
@@ -1524,7 +1524,7 @@ class TestUncaughtExceptionOutputFormat:
     """
 
     def _exec_args_nolog(self, agl_file: Path) -> "ExecArgs":
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         return ExecArgs(
             file=str(agl_file),
             param_tokens=[],
@@ -1559,7 +1559,7 @@ class TestUncaughtExceptionOutputFormat:
         log_file = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],

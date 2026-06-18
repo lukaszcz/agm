@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
-from agm.commands.args import RunArgs
+from agm.cli_support.args import RunArgs
 from agm.config.context import current_config_context
 from agm.config.general import load_run_config
 from agm.core import dry_run

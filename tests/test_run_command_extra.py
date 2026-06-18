@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 import agm.commands.run as run_module
-from agm.commands.args import RunArgs
+from agm.cli_support.args import RunArgs
 from agm.commands.run import (
     normalize_run_command,
 )

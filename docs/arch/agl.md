@@ -203,7 +203,7 @@ before execution; a conversion failure is a pre-execution error (no eval, no
 agent calls).
 
 **agm exec param wiring** (`agm.commands.exec`, helpers in
-`agm.commands.param_options`): after `prepare(source)`, `discover_params` is
+`agm.cli_support.exec_params`): after `prepare(source)`, `discover_params` is
 called once; each declared `param` becomes a first-class CLI option via
 `parse_param_tokens` / `resolve_param_values` (bool params use `--name/--no-name`
 flag pairs; `check_param_collisions` rejects any name that clashes with a

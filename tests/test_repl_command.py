@@ -23,7 +23,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.repl as repl_command
 from agm.agl.repl import ReplSession
-from agm.commands.args import ReplArgs
+from agm.cli_support.args import ReplArgs
 
 
 class RecordedArgs(Protocol):

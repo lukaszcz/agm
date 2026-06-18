@@ -7,15 +7,7 @@ from typing import Any
 
 import pytest
 
-from agm.agent.runner import (
-    command_with_prompt_target,
-    prepare_prompt_from_source,
-    run_prompt_command,
-    split_command,
-    validate_command,
-)
-from agm.commands.args import LoopArgs, LoopSelectArgs
-from agm.commands.loop.common import (
+from agm.agent.loop import (
     configured_loop_settings,
     is_complete_output,
     loop_env,
@@ -26,6 +18,14 @@ from agm.commands.loop.common import (
     selector_result,
     use_selector_mode,
 )
+from agm.agent.runner import (
+    command_with_prompt_target,
+    prepare_prompt_from_source,
+    run_prompt_command,
+    split_command,
+    validate_command,
+)
+from agm.cli_support.args import LoopArgs, LoopSelectArgs
 
 
 def test_selector_result_accepts_relative_path_from_current_working_directory(
@@ -1084,7 +1084,7 @@ class TestTasksDirRelativePath:
     def test_relative_tasks_dir_resolved_against_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import tasks_dir as _tasks_dir
+        from agm.agent.loop import tasks_dir as _tasks_dir
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
@@ -1116,7 +1116,7 @@ class TestTasksDirRelativePath:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When tasks_dir is a relative path, it is joined with cwd."""
-        from agm.commands.loop.common import tasks_dir as _tasks_dir
+        from agm.agent.loop import tasks_dir as _tasks_dir
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
@@ -1566,7 +1566,7 @@ class TestResolvedTimeoutFromArgs:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """resolved_timeout returns args.timeout when it's provided."""
-        from agm.commands.loop.common import resolved_timeout as _resolved_timeout
+        from agm.agent.loop import resolved_timeout as _resolved_timeout
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
@@ -1605,7 +1605,7 @@ class TestTasksDirFromConfigRelative:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """tasks_dir joins relative config path with cwd."""
-        from agm.commands.loop.common import tasks_dir as _tasks_dir
+        from agm.agent.loop import tasks_dir as _tasks_dir
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -1641,7 +1641,7 @@ class TestTasksDirFromConfigRelative:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When tasks_dir is an absolute path, it is returned as-is."""
-        from agm.commands.loop.common import tasks_dir as _tasks_dir
+        from agm.agent.loop import tasks_dir as _tasks_dir
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
@@ -1683,8 +1683,8 @@ class TestPrepareSelectInvocationMissingDefault:
     ) -> None:
         """prepare_select_invocation exits when no selector prompt is provided
         and the default select.md file is missing."""
-        from agm.commands.args import LoopSelectArgs
-        from agm.commands.loop.common import prepare_select_invocation
+        from agm.agent.loop import prepare_select_invocation
+        from agm.cli_support.args import LoopSelectArgs
 
         home = tmp_path / "home"
         (home / ".agm" / "prompts").mkdir(parents=True)
@@ -1749,7 +1749,7 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         assert extra_prompt_source(args) is None
 
@@ -1779,7 +1779,7 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         assert extra_prompt_source(args) == "extra instructions"
 
@@ -1809,7 +1809,7 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         result = extra_prompt_source(args)
         assert result == Path("/path/to/extra.md")
@@ -1840,7 +1840,7 @@ class TestResolveExtraPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         result = extra_prompt_source(args)
         assert result == "inline extra"
@@ -1874,7 +1874,7 @@ class TestResolveExtraSelectorPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import extra_selector_prompt_source
+        from agm.agent.loop import extra_selector_prompt_source
 
         assert extra_selector_prompt_source(args) is None
 
@@ -1904,7 +1904,7 @@ class TestResolveExtraSelectorPromptSource:
             extra_selector_prompt_file=None,
             timeout=None,
         )
-        from agm.commands.loop.common import extra_selector_prompt_source
+        from agm.agent.loop import extra_selector_prompt_source
 
         result = extra_selector_prompt_source(args)
         assert result == "extra selector text"
@@ -2007,7 +2007,7 @@ class TestResolveExtraPromptSourceConfig:
     def test_returns_extra_prompt_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -2042,7 +2042,7 @@ class TestResolveExtraPromptSourceConfig:
     def test_returns_extra_prompt_file_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -2077,7 +2077,7 @@ class TestResolveExtraPromptSourceConfig:
     def test_cli_overrides_config_extra_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -2114,7 +2114,7 @@ class TestResolveExtraSelectorPromptSourceConfig:
     def test_returns_extra_selector_prompt_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import extra_selector_prompt_source
+        from agm.agent.loop import extra_selector_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -2149,7 +2149,7 @@ class TestResolveExtraSelectorPromptSourceConfig:
     def test_returns_extra_selector_prompt_file_from_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import extra_selector_prompt_source
+        from agm.agent.loop import extra_selector_prompt_source
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
@@ -2186,7 +2186,7 @@ class TestResolveExtraPromptSourceRelativePath:
     def test_resolves_relative_extra_prompt_file_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import extra_prompt_source
+        from agm.agent.loop import extra_prompt_source
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
@@ -2219,7 +2219,7 @@ class TestResolveExtraSelectorPromptSourceRelativePath:
     def test_resolves_relative_extra_selector_prompt_file_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from agm.commands.loop.common import extra_selector_prompt_source
+        from agm.agent.loop import extra_selector_prompt_source
 
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))

@@ -9,7 +9,7 @@ import pytest
 
 import agm.commands.init as init_module
 import agm.vcs.git as git_helpers
-from agm.commands.args import InitArgs
+from agm.cli_support.args import InitArgs
 from agm.commands.init import (
     configure_project_dir,
     derive_project_name,

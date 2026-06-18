@@ -1,4 +1,4 @@
-"""Comprehensive tests for agm.commands.dep.common, .remove, and .switch."""
+"""Comprehensive tests for agm.project.dependency_checkout, .remove, and .switch."""
 
 from __future__ import annotations
 
@@ -7,18 +7,18 @@ from typing import Any
 
 import pytest
 
-import agm.commands.dep.common as dep_common
 import agm.commands.dep.remove as dep_remove
 import agm.commands.dep.switch as dep_switch
-from agm.commands.args import DepRemoveArgs, DepSwitchArgs
-from agm.commands.dep.common import (
+import agm.project.dependency_checkout as dep_common
+from agm.cli_support.args import DepRemoveArgs, DepSwitchArgs
+from agm.project.dependency_checkout import (
     derive_dep_name,
     main_dep_repo,
 )
 from agm.vcs.git import WorktreeInfo, default_branch_from_remote, default_branch_from_repo
 
 # ---------------------------------------------------------------------------
-# agm.commands.dep.common – derive_dep_name
+# agm.project.dependency_checkout – derive_dep_name
 # ---------------------------------------------------------------------------
 
 
@@ -75,7 +75,7 @@ class TestDeriveDependencyName:
 
 
 # ---------------------------------------------------------------------------
-# agm.commands.dep.common – default_branch_from_remote
+# agm.project.dependency_checkout – default_branch_from_remote
 # ---------------------------------------------------------------------------
 
 
@@ -121,7 +121,7 @@ class TestDefaultBranchFromRemote:
 
 
 # ---------------------------------------------------------------------------
-# agm.commands.dep.common – default_branch_from_repo
+# agm.project.dependency_checkout – default_branch_from_repo
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +160,7 @@ class TestDefaultBranchFromRepo:
 
 
 # ---------------------------------------------------------------------------
-# agm.commands.dep.common – main_dep_repo
+# agm.project.dependency_checkout – main_dep_repo
 # ---------------------------------------------------------------------------
 
 

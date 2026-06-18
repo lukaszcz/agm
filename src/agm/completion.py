@@ -12,9 +12,9 @@ from click.shell_completion import CompletionItem
 from typer.core import TyperCommand
 
 import agm.vcs.git as git_helpers
-from agm.commands.dep.common import main_dep_repo
 from agm.config.context import current_config_context
 from agm.config.general import load_merged_config, load_run_config
+from agm.project.dependency_checkout import main_dep_repo
 from agm.project.layout import (
     current_workspace_or_project_root,
     default_worktrees_dir,
@@ -389,7 +389,7 @@ def _exec_param_completion_items(source: str, incomplete: str) -> list[Completio
     Degrades silently to ``[]`` on any error.
     """
     from agm.agl.typecheck.types import BoolType
-    from agm.commands.param_options import (
+    from agm.cli_support.exec_params import (
         discover_params_from_source,
         negative_param_flag,
         param_flag,

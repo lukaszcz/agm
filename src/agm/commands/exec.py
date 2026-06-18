@@ -43,14 +43,14 @@ import sys
 from pathlib import Path
 from typing import TypeVar
 
+from agm.agent.config import default_agent_runner
 from agm.agent.runner import split_command
 from agm.agl import WorkflowRuntime
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.agl.syntax.nodes import PragmaValue
-from agm.commands.agent_io import default_agent_runner
-from agm.commands.args import ExecArgs
-from agm.commands.param_options import (
+from agm.cli_support.args import ExecArgs
+from agm.cli_support.exec_params import (
     check_param_collisions,
     parse_param_tokens,
     resolve_param_values,

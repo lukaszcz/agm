@@ -6,22 +6,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.agent.prompt import preprocess_prompt_file
-from agm.agent.runner import (
-    ResolvedPrompt,
-    append_extra_prompt,
-    cleanup_temp_files,
-    command_with_prompt_target,
-    prepare_prompt_from_source,
-    run_prompt_command,
-    validate_command,
-)
-from agm.commands.args import LoopArgs
-from agm.core import dry_run
-from agm.core.fs import is_file
-from agm.core.log import append_log, prepare_log_file, resolve_log_file
-
-from .common import (
+from agm.agent.loop import (
     PreparedSelectInvocation,
     dry_run_prompt_text,
     extra_prompt_source,
@@ -40,6 +25,20 @@ from .common import (
     tasks_dir,
     use_selector_mode,
 )
+from agm.agent.prompt import preprocess_prompt_file
+from agm.agent.runner import (
+    ResolvedPrompt,
+    append_extra_prompt,
+    cleanup_temp_files,
+    command_with_prompt_target,
+    prepare_prompt_from_source,
+    run_prompt_command,
+    validate_command,
+)
+from agm.cli_support.args import LoopArgs
+from agm.core import dry_run
+from agm.core.fs import is_file
+from agm.core.log import append_log, prepare_log_file, resolve_log_file
 
 
 @dataclass(slots=True)

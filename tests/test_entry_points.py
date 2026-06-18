@@ -19,7 +19,7 @@ import agm.commands.workspace.setup as setup_cmd
 import agm.commands.worktree.new as worktree_new_cmd
 import agm.commands.worktree.remove as worktree_remove_cmd
 import agm.tmux.layout as tmux_layout
-from agm.commands.args import (
+from agm.cli_support.args import (
     ConfigCopyArgs,
     ConfigEnvArgs,
     DepNewArgs,

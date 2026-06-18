@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.commands.args import TmuxOpenArgs
+from agm.cli_support.args import TmuxOpenArgs
 from agm.tmux.session import create_tmux_session
 
 

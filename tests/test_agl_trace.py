@@ -16,7 +16,7 @@ import pytest
 import agm.commands.exec as exec_command
 from agm.agl import WorkflowRuntime
 from agm.agl.runtime import AgentRequest, AgentResponse
-from agm.commands.args import ExecArgs
+from agm.cli_support.args import ExecArgs
 
 # ---------------------------------------------------------------------------
 # Helpers

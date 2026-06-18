@@ -6,10 +6,10 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.commands.args import DepSwitchArgs
-from agm.commands.dep.common import main_dep_repo
+from agm.cli_support.args import DepSwitchArgs
 from agm.core.fs import exists, is_dir, mkdir
 from agm.project.config_git import commit_config_dir_changes
+from agm.project.dependency_checkout import main_dep_repo
 from agm.project.dependency_env import (
     config_toml_file,
     current_config_branch,

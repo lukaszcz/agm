@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import agm.commands.workspace.close as close_module
-from agm.commands.args import CloseArgs
+from agm.cli_support.args import CloseArgs
 from agm.commands.workspace.close import close_workspace
 
 

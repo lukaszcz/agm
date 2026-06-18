@@ -5,12 +5,12 @@ from __future__ import annotations
 import sys
 
 import agm.vcs.git as git_helpers
-from agm.commands.args import DepNewArgs
-from agm.commands.dep.common import derive_dep_name
+from agm.cli_support.args import DepNewArgs
 from agm.core import dry_run
 from agm.core.fs import exists, mkdir, rmdir
 from agm.core.process import require_success
 from agm.project.config_git import commit_config_dir_changes
+from agm.project.dependency_checkout import derive_dep_name
 from agm.project.dependency_env import (
     config_toml_file,
     current_config_branch,

@@ -7,10 +7,10 @@ from typing import Any
 
 import pytest
 
+from agm.agent.loop import PreparedSelectInvocation
+from agm.agent.loop import dry_run_prompt_text as next_dry_run_prompt_text
 from agm.agent.runner import ResolvedPrompt
-from agm.commands.args import LoopArgs, LoopSelectArgs
-from agm.commands.loop.common import PreparedSelectInvocation
-from agm.commands.loop.common import dry_run_prompt_text as next_dry_run_prompt_text
+from agm.cli_support.args import LoopArgs, LoopSelectArgs
 from agm.commands.loop.run import run as loop_run
 from agm.commands.loop.select import _print_dry_run_prompt as next_print_dry_run_prompt
 from agm.commands.loop.select import run as next_run
@@ -2160,7 +2160,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
 
         # Inline prompt text with ${TASK_FILE} placeholder
         inline_text = "Work on ${TASK_FILE}\n"
-        from agm.commands.loop.common import loop_env
+        from agm.agent.loop import loop_env
         env_no_task = loop_env(tmp_path / "tasks")
         resolved_prompt = ResolvedPrompt(source=inline_text, effective_file=tmp_path / "stub")
         loop_prompt = StepPrepPrompt(

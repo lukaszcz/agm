@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from agm.cli_support.args import RunArgs
 from agm.commands import run as run_command
-from agm.commands.args import RunArgs
 from agm.config.general import RunConfig
 
 

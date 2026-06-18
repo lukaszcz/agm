@@ -1,4 +1,4 @@
-"""Shared helpers for dependency commands."""
+"""Dependency checkout helpers."""
 
 from __future__ import annotations
 

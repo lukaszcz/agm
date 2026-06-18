@@ -11,7 +11,7 @@ import pytest
 import agm.commands.refine as refine_mod
 import agm.commands.review as review_mod
 import agm.commands.revise as revise_mod
-from agm.commands.args import RefineArgs, ReviewArgs, ReviseArgs
+from agm.cli_support.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.commands.refine import _write_review_file, refine
 from agm.commands.review import (
     DEFAULT_REVIEW_ASPECTS,

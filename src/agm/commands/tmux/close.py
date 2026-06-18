@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.commands.args import TmuxCloseArgs
+from agm.cli_support.args import TmuxCloseArgs
 from agm.tmux.session import close_tmux_session
 
 

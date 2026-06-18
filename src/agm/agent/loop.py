@@ -1,4 +1,4 @@
-"""Shared helpers for loop commands."""
+"""Shared helpers for agent loop execution."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from agm.agent.runner import (
     split_command,
     validate_command,
 )
-from agm.commands.agent_io import exit_config_command_not_found
-from agm.commands.args import LoopArgs, LoopSelectArgs
+from agm.cli_support.args import LoopArgs, LoopSelectArgs
 from agm.config.context import current_config_context
+from agm.config.errors import exit_config_command_not_found
 from agm.config.general import (
     ConfigCommandNotFound,
     LoopConfig,

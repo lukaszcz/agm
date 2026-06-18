@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.commands.args import TmuxLayoutArgs
+from agm.cli_support.args import TmuxLayoutArgs
 from agm.tmux.layout import apply_layout, resolve_window_layout_target
 
 

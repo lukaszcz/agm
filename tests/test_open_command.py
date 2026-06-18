@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import agm.commands.workspace.open as open_module
-from agm.commands.args import OpenArgs
+from agm.cli_support.args import OpenArgs
 from agm.commands.workspace.open import (
     checkout_workspace,
     create_workspace,

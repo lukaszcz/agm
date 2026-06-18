@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 import agm.vcs.git as git_helpers
-from agm.commands.args import InitArgs
+from agm.cli_support.args import InitArgs
 from agm.core.fs import chmod, exists, is_empty_dir, mkdir, read_text, stat, write_text
 from agm.core.process import require_success
 from agm.project.config_git import commit_config_dir_changes

@@ -21,7 +21,7 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 import agm.commands.repl as repl_command
-from agm.commands.args import ExecArgs
+from agm.cli_support.args import ExecArgs
 from agm.core.log import LogDecision, resolve_log_decision, resolve_log_file
 
 # ---------------------------------------------------------------------------

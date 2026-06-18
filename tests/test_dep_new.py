@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 import agm.commands.dep.new as dep_new
-from agm.commands.args import DepNewArgs
+from agm.cli_support.args import DepNewArgs
 
 
 class TestDepNewRun:

@@ -1131,7 +1131,7 @@ class TestWorkflowRuntimeRunnerWiring:
         """exec.py constructs runtime using runner from ExecConfig (not dead code)."""
         import agm.commands.exec as exec_mod
         from agm.agl.runtime.runtime import WorkflowRuntime
-        from agm.commands.args import ExecArgs
+        from agm.cli_support.args import ExecArgs
 
         constructed_runtimes: list[WorkflowRuntime] = []
         original_init = WorkflowRuntime.__init__

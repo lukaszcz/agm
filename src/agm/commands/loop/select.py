@@ -5,16 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from agm.agent.runner import (
-    append_extra_prompt,
-    cleanup_temp_files,
-    command_with_prompt_target,
-    run_prompt_command,
-)
-from agm.commands.args import LoopSelectArgs
-from agm.core import dry_run
-
-from .common import (
+from agm.agent.loop import (
     dry_run_prompt_text,
     extra_selector_prompt_source,
     loop_env,
@@ -23,6 +14,14 @@ from .common import (
     tasks_dir,
     use_selector_mode,
 )
+from agm.agent.runner import (
+    append_extra_prompt,
+    cleanup_temp_files,
+    command_with_prompt_target,
+    run_prompt_command,
+)
+from agm.cli_support.args import LoopSelectArgs
+from agm.core import dry_run
 
 
 def _print_dry_run_prompt(label: str, prompt_text: str) -> None:

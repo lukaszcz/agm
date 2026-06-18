@@ -23,13 +23,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from agm.agent.config import default_agent_runner
 from agm.agent.runner import split_command
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
 from agm.agl.runtime.agents import runner_backed_agent_factory
-from agm.commands.agent_io import default_agent_runner
-from agm.commands.args import ReplArgs
+from agm.cli_support.args import ReplArgs
 from agm.config.context import current_config_context
 from agm.config.general import load_exec_config, load_params_config
 from agm.core import dry_run

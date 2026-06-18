@@ -145,6 +145,16 @@ class TestEnsureWorkspaceShell:
         ).read_text(encoding="utf-8")
         assert 'exec "$AGM_REAL_SHELL" --rcfile' in wrapper.read_text(encoding="utf-8")
 
+    def test_shell_startup_files_do_not_source_user_dotfiles(self, tmp_path: Path) -> None:
+        ensure_workspace_shell(tmp_path)
+
+        shell_dir = tmp_path / ".agent-files" / "agm-shell"
+        zshrc = (shell_dir / "zsh" / ".zshrc").read_text(encoding="utf-8")
+        bashrc = (shell_dir / "bash" / "bashrc").read_text(encoding="utf-8")
+
+        assert "$HOME/.zshrc" not in zshrc
+        assert "$HOME/.bashrc" not in bashrc
+
     def test_bash_restart_refreshes_workspace_env(
         self, tmp_path: Path
     ) -> None:
@@ -156,7 +166,10 @@ class TestEnsureWorkspaceShell:
         bin_dir = tmp_path / "bin"
         home.mkdir()
         bin_dir.mkdir()
-        (home / ".bashrc").write_text('export HOLDIR="$HOME/HOL"\n', encoding="utf-8")
+        (home / ".bashrc").write_text(
+            'printf "user bashrc should not run\\n"; exit 99\n',
+            encoding="utf-8",
+        )
         agm = bin_dir / "agm"
         agm.write_text(
             "\n".join(

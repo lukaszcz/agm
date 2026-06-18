@@ -66,7 +66,6 @@ def ensure_workspace_shell(repo_path: Path) -> Path:
         zsh_dir / ".zshrc",
         "\n".join(
             [
-                '[[ -r "$HOME/.zshrc" ]] && source "$HOME/.zshrc"',
                 'eval "$(agm config env)"',
                 'export SHELL="$AGM_WORKSPACE_SHELL"',
                 "",
@@ -77,7 +76,6 @@ def ensure_workspace_shell(repo_path: Path) -> Path:
         bash_dir / "bashrc",
         "\n".join(
             [
-                '[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"',
                 'eval "$(agm config env)"',
                 'export SHELL="$AGM_WORKSPACE_SHELL"',
                 "",

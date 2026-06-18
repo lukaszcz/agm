@@ -489,6 +489,24 @@ class TestCreateTmuxSessionDryRun:
         out = capsys.readouterr().out
         assert "new-session" in out
 
+    def test_attached_dry_run_includes_shell_command_for_each_pane(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _enable_dry_run()
+        create_tmux_session(
+            detach=False,
+            pane_count="3",
+            session_name="s",
+            cwd=tmp_path,
+            env={},
+            shell_command="/tmp/agm-shell",
+        )
+
+        out = capsys.readouterr().out
+        assert out.count("/tmp/agm-shell") == 3
+        assert "new-session" in out
+        assert out.count("split-window") == 2
+
 
 # ===========================================================================
 # create_tmux_session — live subprocess paths

@@ -6102,7 +6102,8 @@ class TestOpen:
         assert "-dP" in log
         assert "attach-session" in log
         assert "send-keys" in log
-        assert log.index('eval "$(agm config env)"') < log.index("agm workspace setup")
+        assert ".agent-files/agm-shell/shell" in log
+        assert log.index(".agent-files/agm-shell/shell") < log.index("agm workspace setup")
         assert "-s proj/feat/test" in log
         _wait_for_path(project / "worktrees" / "feat/test" / ".setup-ran")
         assert "Detached tmux session proj/feat/test created" in result.stdout

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -12,9 +14,9 @@ from agm.commands.args import OpenArgs
 from agm.commands.workspace.open import (
     checkout_workspace,
     create_workspace,
+    ensure_workspace_shell,
     open_or_create_workspace,
     open_workspace,
-    queue_env_refresh_in_session,
     queue_setup_and_focus_workspace_session,
     validate_pane_count,
 )
@@ -89,9 +91,9 @@ class TestQueueSetupAndFocusSession:
 
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
-        assert 'tmux send-keys -t s:0.0 \'eval "$(agm config env)"\' C-m' in out
+        assert ".agent-files/agm-shell/shell" in out
         assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
-        assert out.index('eval "$(agm config env)"') < out.index("agm workspace setup")
+        assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session" not in out
         assert "tmux switch-client" not in out
 
@@ -111,9 +113,9 @@ class TestQueueSetupAndFocusSession:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
-        assert 'tmux send-keys -t s:0.0 \'eval "$(agm config env)"\' C-m' in out
+        assert ".agent-files/agm-shell/shell" in out
         assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
-        assert out.index('eval "$(agm config env)"') < out.index("agm workspace setup")
+        assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session -t s" in out
 
     def test_raises_assertion_when_session_name_is_none(
@@ -132,24 +134,82 @@ class TestQueueSetupAndFocusSession:
             )
 
 
-class TestQueueEnvRefreshInSession:
-    def test_queues_config_env_refresh_for_each_pane(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+class TestEnsureWorkspaceShell:
+    def test_writes_wrapper_and_shell_startup_files(
+        self, tmp_path: Path
     ) -> None:
-        dry_run.set_enabled(True)
+        wrapper = ensure_workspace_shell(tmp_path)
 
-        queue_env_refresh_in_session(
-            pane_count=3,
-            session_name="s",
-            repo_path=tmp_path,
-            env={},
+        assert wrapper == tmp_path / ".agent-files" / "agm-shell" / "shell"
+        assert wrapper.stat().st_mode & 0o111 != 0
+        assert 'eval "$(agm config env)"' in (
+            tmp_path / ".agent-files" / "agm-shell" / "zsh" / ".zshrc"
+        ).read_text(encoding="utf-8")
+        assert 'exec "$AGM_REAL_SHELL" --rcfile' in wrapper.read_text(encoding="utf-8")
+
+    def test_bash_restart_refreshes_workspace_env(
+        self, tmp_path: Path
+    ) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash is required")
+
+        home = tmp_path / "home"
+        bin_dir = tmp_path / "bin"
+        home.mkdir()
+        bin_dir.mkdir()
+        (home / ".bashrc").write_text('export HOLDIR="$HOME/HOL"\n', encoding="utf-8")
+        agm = bin_dir / "agm"
+        agm.write_text(
+            "\n".join(
+                [
+                    "#!/bin/sh",
+                    'if [ "$1" = config ] && [ "$2" = env ]; then',
+                    '  printf "export HOLDIR=%s/hold\\n" "$PWD"',
+                    "  exit 0",
+                    "fi",
+                    "exit 64",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        agm.chmod(0o755)
+        wrapper = ensure_workspace_shell(tmp_path)
+
+        result = subprocess.run(
+            [str(wrapper)],
+            input="\n".join(
+                [
+                    'printf "first:%s\\n" "$HOLDIR"',
+                    "export HOLDIR=broken",
+                    'if [ "${AGM_RESTARTED:-}" != 1 ]; then',
+                    "  export AGM_RESTARTED=1",
+                    '  exec "$SHELL"',
+                    "fi",
+                    'printf "second:%s\\n" "$HOLDIR"',
+                    'printf "shell:%s\\n" "$SHELL"',
+                    "exit",
+                    "",
+                ]
+            ),
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": bash,
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
 
-        out = capsys.readouterr().out
-        assert out.count('eval "$(agm config env)"') == 3
-        assert "tmux send-keys -t s:0.0" in out
-        assert "tmux send-keys -t s:0.1" in out
-        assert "tmux send-keys -t s:0.2" in out
+        assert result.returncode == 0
+        assert f"first:{tmp_path}/hold" in result.stdout
+        assert f"second:{tmp_path}/hold" in result.stdout
+        assert f"shell:{wrapper}" in result.stdout
 
 
 # ===========================================================================

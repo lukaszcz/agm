@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from shlex import quote as shlex_quote
 
 import agm.vcs.git as git_helpers
 from agm.commands.args import OpenArgs
-from agm.core.fs import mkdir
+from agm.core.fs import chmod, mkdir, write_text
 from agm.parser import exit_with_usage_error
 from agm.project.config_git import commit_config_dir_changes
 from agm.project.dependency_env import ensure_dependency_configs_for_branch
@@ -31,7 +32,6 @@ from agm.tmux.session import (
     create_tmux_session,
     focus_tmux_session,
     queue_command_in_session,
-    queue_shell_command_in_session,
 )
 from agm.tmux.session import validate_pane_count as validate_tmux_pane_count
 
@@ -53,21 +53,83 @@ def branch_path(proj_dir: Path, branch: str) -> Path:
     )
 
 
-def queue_env_refresh_in_session(
-    *,
-    pane_count: int,
-    session_name: str,
-    repo_path: Path,
-    env: dict[str, str],
-) -> None:
-    for pane_index in range(pane_count):
-        queue_shell_command_in_session(
-            session_name=session_name,
-            pane_index=pane_index,
-            shell_command='eval "$(agm config env)"',
-            cwd=repo_path,
-            env=env,
-        )
+def ensure_workspace_shell(repo_path: Path) -> Path:
+    shell_dir = repo_path / ".agent-files" / "agm-shell"
+    zsh_dir = shell_dir / "zsh"
+    bash_dir = shell_dir / "bash"
+    sh_dir = shell_dir / "sh"
+    mkdir(zsh_dir, parents=True, exist_ok=True)
+    mkdir(bash_dir, parents=True, exist_ok=True)
+    mkdir(sh_dir, parents=True, exist_ok=True)
+
+    write_text(
+        zsh_dir / ".zshrc",
+        "\n".join(
+            [
+                '[[ -r "$HOME/.zshrc" ]] && source "$HOME/.zshrc"',
+                'eval "$(agm config env)"',
+                'export SHELL="$AGM_WORKSPACE_SHELL"',
+                "",
+            ]
+        ),
+    )
+    write_text(
+        bash_dir / "bashrc",
+        "\n".join(
+            [
+                '[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"',
+                'eval "$(agm config env)"',
+                'export SHELL="$AGM_WORKSPACE_SHELL"',
+                "",
+            ]
+        ),
+    )
+    write_text(
+        sh_dir / "env",
+        "\n".join(
+            [
+                'eval "$(agm config env)"',
+                'export SHELL="$AGM_WORKSPACE_SHELL"',
+                "",
+            ]
+        ),
+    )
+
+    wrapper = shell_dir / "shell"
+    write_text(
+        wrapper,
+        "\n".join(
+            [
+                "#!/bin/sh",
+                f"AGM_WORKSPACE_SHELL_DIR={shlex_quote(str(shell_dir))}",
+                f"export AGM_WORKSPACE_SHELL={shlex_quote(str(wrapper))}",
+                (
+                    'if [ -z "${AGM_REAL_SHELL:-}" ] '
+                    '|| [ "$AGM_REAL_SHELL" = "$AGM_WORKSPACE_SHELL" ]; then'
+                ),
+                '  AGM_REAL_SHELL="${SHELL:-/bin/sh}"',
+                '  [ "$AGM_REAL_SHELL" = "$AGM_WORKSPACE_SHELL" ] && AGM_REAL_SHELL=/bin/sh',
+                "fi",
+                "export AGM_REAL_SHELL",
+                'case "$(basename "$AGM_REAL_SHELL")" in',
+                "  zsh)",
+                '    export ZDOTDIR="$AGM_WORKSPACE_SHELL_DIR/zsh"',
+                '    exec "$AGM_REAL_SHELL" -i',
+                "    ;;",
+                "  bash)",
+                '    exec "$AGM_REAL_SHELL" --rcfile "$AGM_WORKSPACE_SHELL_DIR/bash/bashrc" -i',
+                "    ;;",
+                "  *)",
+                '    export ENV="$AGM_WORKSPACE_SHELL_DIR/sh/env"',
+                '    exec "$AGM_REAL_SHELL" -i',
+                "    ;;",
+                "esac",
+                "",
+            ]
+        ),
+    )
+    chmod(wrapper, 0o755)
+    return wrapper
 
 
 def create_configured_workspace_session(
@@ -79,22 +141,17 @@ def create_configured_workspace_session(
     env: dict[str, str],
     run_setup: bool,
 ) -> None:
-    pane_total = validate_pane_count(pane_count)
+    validate_pane_count(pane_count)
     created_session = create_tmux_session(
         detach=True,
         pane_count=pane_count,
         session_name=session_name,
         cwd=repo_path,
         env=env,
+        shell_command=str(ensure_workspace_shell(repo_path)),
     )
     if created_session is None:
         raise AssertionError("detached tmux session creation did not return a session name")
-    queue_env_refresh_in_session(
-        pane_count=pane_total,
-        session_name=created_session,
-        repo_path=repo_path,
-        env=env,
-    )
     if run_setup:
         queue_command_in_session(
             session_name=created_session,

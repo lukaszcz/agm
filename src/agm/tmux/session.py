@@ -44,6 +44,7 @@ def create_tmux_session(
     session_name: str | None,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    shell_command: str | None = None,
 ) -> str | None:
     """Create a tmux session matching tmux.sh semantics."""
 
@@ -79,6 +80,7 @@ def create_tmux_session(
                     str(current),
                     *tmux_env_args,
                     *session_name_args,
+                    *([] if shell_command is None else [shell_command]),
                 ],
                 cwd=current,
             )
@@ -93,6 +95,7 @@ def create_tmux_session(
                         f"{planned_session}:0",
                         "-c",
                         str(current),
+                        *([] if shell_command is None else [shell_command]),
                     ],
                     cwd=current,
                 )
@@ -119,6 +122,7 @@ def create_tmux_session(
                 str(current),
                 *tmux_env_args,
                 *session_name_args,
+                *([] if shell_command is None else [shell_command]),
             ],
             capture_output=True,
             text=True,
@@ -145,6 +149,7 @@ def create_tmux_session(
                     f"{target_session}:0",
                     "-c",
                     str(current),
+                    *([] if shell_command is None else [shell_command]),
                 ],
                 cwd=current,
                 env=resolved_env,
@@ -207,8 +212,12 @@ def create_tmux_session(
     )
 
     args = ["tmux", "new-session", "-c", str(current), *tmux_env_args, *session_name_args]
+    if shell_command is not None:
+        args.append(shell_command)
     for _ in range(1, pane_total):
         args.extend([";", "split-window", "-d", "-h", "-c", str(current)])
+        if shell_command is not None:
+            args.append(shell_command)
     args.extend([";", "run-shell", layout_command, ";", "select-pane", "-t", "0"])
     if dry_run.enabled():
         dry_run.print_command(args, cwd=current)

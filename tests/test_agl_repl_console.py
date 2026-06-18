@@ -400,6 +400,32 @@ class TestCompleter:
         completer = AglCompleter(ReplSession())
         assert _completions(completer, "zzzzz") == []
 
+    def test_completes_builtin_calls(self) -> None:
+        # The four builtin call names are not reserved keywords and are not
+        # promoted bindings; the completer must still offer them so a user
+        # typing ``ask-...`` or ``print(`` gets a suggestion.
+        completer = AglCompleter(ReplSession())
+        for name in ("print", "exec", "ask", "ask-request"):
+            assert name in _completions(completer, "")
+
+    def test_completes_ask_request_prefix(self) -> None:
+        completer = AglCompleter(ReplSession())
+        assert "ask-request" in _completions(completer, "ask-r")
+        # ``ask`` is also a builtin, so the unqualified prefix must still
+        # surface both it and ``ask-request``.  Use a prefix shorter than the
+        # full name so the exact-match exclusion does not drop ``ask``.
+        suggestions = _completions(completer, "as")
+        assert "ask" in suggestions
+        assert "ask-request" in suggestions
+
+    def test_completes_ask_without_default_agent(self) -> None:
+        # ``ask`` is a builtin call name independent of any configured default
+        # agent; even with no default agent it must be offered (regression for
+        # the previous behaviour where ``ask`` only leaked in via the agents
+        # pool when a default agent existed).
+        completer = AglCompleter(ReplSession())
+        assert "ask" in _completions(completer, "as")
+
 
 # ---------------------------------------------------------------------------
 # Evaluated output via the loop

@@ -25,6 +25,7 @@ reach into the application object.
 from __future__ import annotations
 
 import bisect
+import re
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
@@ -47,6 +48,7 @@ from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl import session as session_mod
 from agm.agl.repl.agentmode import AgentMode
+from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -87,6 +89,12 @@ def format_banner(agent_mode: "AgentMode | None" = None) -> str:
 # AgL keywords offered by the completer (the reserved-word set, sorted for a
 # stable suggestion order).
 _KEYWORDS: tuple[str, ...] = tuple(sorted(KEYWORDS))
+
+# Word pattern for completion: AgL identifiers, including the hyphenated
+# built-in call name ``ask-request``.  prompt_toolkit's default word finder
+# treats ``-`` as a boundary, so without this pattern typing ``ask-r`` yields
+# a one-character word (``r``) and never matches ``ask-request``.
+_IDENT_WORD: re.Pattern[str] = re.compile(r"[A-Za-z0-9_-]+")
 
 
 # ---------------------------------------------------------------------------
@@ -276,16 +284,29 @@ class AglCompleter(Completer):
                 yield Completion(name, start_position=-len(word))
 
     def _word_completions(self, document: Document) -> Iterable[Completion]:
-        word = document.get_word_before_cursor()
+        word = document.get_word_before_cursor(pattern=_IDENT_WORD)
         for candidate in self._candidates():
             if candidate.startswith(word) and candidate != word:
                 yield Completion(candidate, start_position=-len(word))
 
     def _candidates(self) -> list[str]:
         names: list[str] = list(_KEYWORDS)
+        # The built-in call names (print/exec/ask/ask-request) are reserved
+        # call-site identifiers, not keywords, so they are absent from
+        # ``KEYWORDS``; add them explicitly so the completer offers them.
+        names.extend(BUILTIN_CALL_NAMES)
         names.extend(name for name, _type, _value in self._session.bindings())
         names.extend(self._session.agents())
-        return names
+        # De-duplicate while preserving the stable keyword-first ordering.  A
+        # default agent makes ``ask`` appear in both the built-in names and the
+        # agents pool; offering it twice is redundant.
+        seen: set[str] = set()
+        unique: list[str] = []
+        for name in names:
+            if name not in seen:
+                seen.add(name)
+                unique.append(name)
+        return unique
 
 
 # ---------------------------------------------------------------------------

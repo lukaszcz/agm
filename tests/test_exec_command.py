@@ -2243,7 +2243,7 @@ class TestExecPragmaPrecedence:
             "config max_iters = 3\n"
             "var n = 0\n"
             "do\n"
-            "  set n = n + 1\n"
+            "  n := n + 1\n"
             "until n >= 100\n"
         )
         with pytest.raises(SystemExit) as exc_info:
@@ -2259,7 +2259,7 @@ class TestExecPragmaPrecedence:
             "config max_iters = 100\n"
             "var n = 0\n"
             "do\n"
-            "  set n = n + 1\n"
+            "  n := n + 1\n"
             "until n >= 100\n"
             'print "done"\n'
         )
@@ -2280,7 +2280,7 @@ class TestExecPragmaPrecedence:
             "config max_iters = 3\n"
             "var n = 0\n"
             "do\n"
-            "  set n = n + 1\n"
+            "  n := n + 1\n"
             "until n >= 100\n"
             'print "done"\n'
         )
@@ -2313,7 +2313,7 @@ class TestExecPragmaPrecedence:
             "config max_iters = 100\n"
             "var n = 0\n"
             "do\n"
-            "  set n = n + 1\n"
+            "  n := n + 1\n"
             "until n >= 100\n"
             'print "done"\n'
         )

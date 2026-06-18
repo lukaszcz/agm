@@ -1,6 +1,6 @@
 var n: int = 0
 do[2]
   let probe = n + 1
-  set n = probe
+  n := probe
 until probe >= 1
 print probe

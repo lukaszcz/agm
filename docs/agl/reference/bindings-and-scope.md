@@ -2,10 +2,10 @@
 
 [← Index](index.md)
 
-AgL has three value binders (`let`, `var`, `set`), a param declaration, an
+AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, an
 agent declaration, and a function declaration (`def`). There is no bare
 assignment: `x = e` as an item is a static error with the guidance to use
-`let`, `var`, or `set`. A single `=` in expression position is the equality
+`let`, `var`, or `:=`. A single `=` in expression position is the equality
 operator ([Expressions](expressions.md)).
 
 ## `let` — immutable binding
@@ -35,37 +35,37 @@ var_decl ::= "var" VAR_NAME (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
-updated with `set`:
+updated with `:=`:
 
 ```agl
 var artifact: text = ask("Implement ${spec}", agent: impl)
 ```
 
-## `set` — mutation
+## `:=` — destructive assignment
 
 ```ebnf
-set_stmt ::= "set" set_target "=" expr
-set_target ::= VAR_NAME ("[" expr "]")*
+assign_stmt ::= assign_target ":=" expr
+assign_target ::= VAR_NAME ("[" expr "]")*
 ```
 
-`set` updates the nearest visible **mutable** binding and yields `unit`. It
+`:=` updates the nearest visible **mutable** binding and yields `unit`. It
 never creates a binding. The expected type of the right-hand side is the
 declared type of the binding being updated:
 
 ```agl
 var proposal: Turn = ask("Initial proposal.", agent: researcher)
-set proposal = ask("Revise proposal.", agent: researcher)   # target type: Turn
+proposal := ask("Revise proposal.", agent: researcher)   # target type: Turn
 ```
 
-`set` can also update an element of a mutable list or an existing key of a
+`:=` can also update an element of a mutable list or an existing key of a
 mutable dictionary:
 
 ```agl
 var xs = [1, 2]
-set xs[0] = 10
+xs[0] := 10
 
 var metadata = {"status": "draft"}
-set metadata["status"] = "ready"
+metadata["status"] := "ready"
 ```
 
 Assignment indexes are adjacency-sensitive: the opening `[` must be adjacent
@@ -82,8 +82,8 @@ updates existing keys only; assigning to a missing key raises `KeyError`.
 Static rules, all checked before execution:
 
 1. Redeclaring a name in the same scope is an error.
-2. `set` on an undeclared name is an error.
-3. `set` on an immutable binding is an error; the diagnostic names the binder
+2. Assignment to an undeclared name is an error.
+3. Assignment to an immutable binding is an error; the diagnostic names the binder
    kind — `let`, `param`, a catch binder, or a pattern binding.
 4. Reading a name that is not visible in the current scope chain is an error.
 5. The contextual keywords `ask` and `exec` cannot be used as binding or
@@ -228,14 +228,14 @@ ask "Uses ${x}"      # outer
 
 ### Mutation across scopes
 
-`set` reaches *through* scopes to the nearest visible mutable binding:
+`:=` reaches *through* scopes to the nearest visible mutable binding:
 
 ```agl
 var artifact: text = ask("Implement ${spec}", agent: impl)
 
 case review of
   | Fail(issues) =>
-      set artifact = ask("Fix ${issues} in ${artifact}", agent: impl)
+      artifact := ask("Fix ${issues} in ${artifact}", agent: impl)
   | Pass => ()
 ```
 

@@ -71,7 +71,7 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
 class BinderKind(enum.Enum):
     """How an immutable (or mutable) binding was introduced.
 
-    Used to phrase a precise ``set`` rejection message that names the ACTUAL
+    Used to phrase a precise ``:=`` rejection message that names the ACTUAL
     binder kind, rather than always blaming ``let`` (F8).
 
     ``let_binding``
@@ -119,7 +119,7 @@ class BindingRef:
     ``decl_node_id``
         The ``node_id`` of the declaration node.
     ``kind``
-        How the binding was introduced.  Drives the precise ``set`` rejection
+        How the binding was introduced.  Drives the precise ``:=`` rejection
         message so a mutation of a catch binder is not mislabelled as a
         ``let`` (F8).
     """
@@ -179,7 +179,7 @@ class ResolvedProgram:
     ``program``
         The original ``Program`` AST node (never mutated).
     ``resolution``
-        Maps every ``VarRef.node_id`` and ``SetStmt.node_id`` to the
+        Maps every ``VarRef.node_id`` and ``AssignStmt.node_id`` to the
         ``BindingRef`` it resolved to.
     ``builtin_calls``
         Maps every ``Call.node_id`` whose callee is a built-in name

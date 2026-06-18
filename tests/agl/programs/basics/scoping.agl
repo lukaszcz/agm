@@ -7,9 +7,9 @@ var trail: text = ""
 if
   | mode = "shadow" =>
     let x = 2
-    set trail = "branch ${x}"
+    trail := "branch ${x}"
   | mode = "plain" =>
-    set trail = "branch kept ${x}"
+    trail := "branch kept ${x}"
   | else =>
     ()
 
@@ -19,6 +19,6 @@ print "after ${x}"
 var counter: int = 0
 do[5]
   let bump = counter + 1
-  set counter = bump
+  counter := bump
 until counter >= 3
 print counter

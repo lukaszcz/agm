@@ -28,7 +28,7 @@ var review: Review = Pass
 
 try
   do[5]
-    set review = ask("""
+    review := ask("""
     Review the artifact for correctness, completeness, and maintainability.
 
     Artifact:
@@ -52,9 +52,9 @@ try
 
           case result of
             | Complete(output) =>
-                set artifact = output
+                artifact := output
             | Changed(output) =>
-                set artifact = output
+                artifact := output
             | Blocked(reason) =>
                 let blocker_report = ask("Explain blocker:\n${reason}", agent: critic)
                 raise Abort(message: blocker_report)

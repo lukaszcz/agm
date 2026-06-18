@@ -10,7 +10,7 @@ The driver reproduces ``WorkflowRuntime.run``'s pipeline incrementally, reusing
 the shared host-environment assembly, param conversion, and exception-mapping
 helpers from :mod:`agm.agl.runtime.runtime` (no duplication).  Promotion into
 the session is **atomic**: a runtime raise discards ALL of the entry's in-session
-effects — both new ``let``/``var`` bindings and any ``set`` mutation of a PRIOR
+effects — both new ``let``/``var`` bindings and any ``:=`` mutation of a PRIOR
 session binding is rolled back (the prior binding's value is snapshotted before
 evaluation and restored on error).  The only effects that survive a failed entry
 are genuinely EXTERNAL ones already issued during evaluation (an agent call or an
@@ -50,31 +50,31 @@ EntryKind = Literal["expression", "binding", "declaration", "statement"]
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 
 
-def _set_targets_in_program(program: "Program") -> frozenset[str]:
-    """Return the set of variable names targeted by ``set`` statements in *program*.
+def _assign_targets_in_program(program: "Program") -> frozenset[str]:
+    """Return the set of variable names targeted by ``:=`` statements in *program*.
 
     Recursively walks all items in the program block, including nested bodies
     inside ``do``/``if``/``case``/``try`` blocks.  Used by
     ``_evaluate_and_promote`` to determine which session bindings need to be
     snapshotted before evaluation (only those names can be mutated in-place by
-    a ``set``).
+    a ``:=``).
     """
     from agm.agl.syntax.nodes import (
+        AssignStmt,
         Block,
         Case,
         Do,
         If,
         Item,
-        SetStmt,
         Try,
-        set_target_root_name,
+        assign_target_root_name,
     )
 
     targets: set[str] = set()
 
     def _walk_item(item: Item) -> None:
-        if isinstance(item, SetStmt):
-            target_name = set_target_root_name(item.target)
+        if isinstance(item, AssignStmt):
+            target_name = assign_target_root_name(item.target)
             if target_name is not None:
                 targets.add(target_name)
         elif isinstance(item, Block):
@@ -137,7 +137,7 @@ class EntryResult:
         Classified by the entry's LAST item: a bare ``Expr`` → ``"expression"``
         (``value``/``value_type`` set); ``let``/``var`` → ``"binding"``
         (``name``/``value_type``/``value``); ``record``/``enum``/``type``/
-        ``param``/``def``/``agent`` → ``"declaration"``; ``set`` or side-
+        ``param``/``def``/``agent`` → ``"declaration"``; ``:=`` or side-
         effecting expr (``print``, etc.) → ``"statement"``.
     ``name``
         The bound/declared name, when meaningful (binding / declaration).
@@ -189,7 +189,7 @@ class ReplSession:
 
     Each entry is promoted into the session **atomically**: if evaluation raises,
     the entry has NO in-session effect — new ``let``/``var`` bindings are discarded
-    AND any ``set`` mutation of a prior session binding is rolled back to its
+    AND any ``:=`` mutation of a prior session binding is rolled back to its
     pre-entry value.  Only external side effects already issued during evaluation
     (agent calls, ``exec`` shell commands) are irreversible.
     """
@@ -621,25 +621,25 @@ class ReplSession:
         # new bindings land in the child and are promoted only on success.
         child_scope = Scope(parent=self._value_scope)
 
-        # Atomicity snapshot: a ``set`` to a PRIOR session binding mutates that
+        # Atomicity snapshot: a ``:=`` to a PRIOR session binding mutates that
         # binding's ``.value`` in place in the persistent value scope (the child
-        # only holds NEW let/var bindings).  New keys never land here and ``set``
+        # only holds NEW let/var bindings).  New keys never land here and ``:=``
         # never adds/removes keys (it only updates an existing binding via
-        # ``Scope.set_value``), so a shallow value snapshot of ONLY the binding
-        # names targeted by ``set`` statements in this entry is a complete,
+        # ``Scope.assign_value``), so a shallow value snapshot of ONLY the binding
+        # names targeted by ``:=`` statements in this entry is a complete,
         # correct rollback point — Value objects are immutable, so storing the
         # reference suffices.  On a runtime raise we restore each binding's
         # ``.value`` from this snapshot.
         #
-        # Optimisation: entries with no ``set`` targeting a prior session binding
+        # Optimisation: entries with no ``:=`` targeting a prior session binding
         # need no snapshot at all (new let/var bindings live in the child scope
         # and are simply discarded on abort).  We collect targeted names
         # statically from the original program before evaluation.
-        set_targets = _set_targets_in_program(orig_program)
+        assign_targets = _assign_targets_in_program(orig_program)
         value_snapshot: dict[str, Value] = {
             name: binding.value
             for name, binding in self._value_scope.bindings.items()
-            if name in set_targets
+            if name in assign_targets
         }
 
         # One trace run per entry: a fresh ``TraceStore`` (own ``run_id``)
@@ -768,10 +768,10 @@ class ReplSession:
 
         Shared by the ``AglRaise`` and cancellation paths.  Discarding the entry's
         child scope drops new ``let``/``var`` bindings; restoring each session
-        binding's ``.value`` undoes any in-place ``set`` mutation of a prior
+        binding's ``.value`` undoes any in-place ``:=`` mutation of a prior
         binding.  The snapshot contains ONLY the names that could have been mutated
-        (those targeted by ``set`` statements in the entry), and all of them must
-        still be present in the session frame (``set`` only updates existing
+        (those targeted by ``:=`` statements in the entry), and all of them must
+        still be present in the session frame (``:=`` only updates existing
         bindings, never adds or removes keys).
         """
         assert value_snapshot.keys() <= self._value_scope.bindings.keys()
@@ -829,6 +829,7 @@ class ReplSession:
         """Classify the entry by its last item; return (kind, name)."""
         from agm.agl.syntax.nodes import (
             AgentDecl,
+            AssignStmt,
             Binder,
             Declaration,
             EnumDef,
@@ -837,7 +838,6 @@ class ReplSession:
             ParamDecl,
             ProgramDecl,
             RecordDef,
-            SetStmt,
             TypeAlias,
             VarDecl,
         )
@@ -855,8 +855,8 @@ class ReplSession:
             (RecordDef, EnumDef, TypeAlias, ParamDecl, ProgramDecl, FuncDef, AgentDecl),
         ):
             return "declaration", last.name
-        # SetStmt → "statement"
-        if isinstance(last, SetStmt):
+        # AssignStmt → "statement"
+        if isinstance(last, AssignStmt):
             return "statement", None
         # Remaining Declaration kinds (ConfigPragma is rejected earlier, but handle
         # defensively).

@@ -3,15 +3,15 @@
 ``resolve(program)`` performs a full single-pass walk over the AST,
 building the lexical scope chain and populating side tables:
 
-- ``resolution``:     ``VarRef.node_id`` / ``SetStmt.node_id`` → ``BindingRef``
+- ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
 - ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for print/exec/ask/ask-request)
 
 Scope rules
 -----------
 1. ``let``/``var``/``def`` bind in the current scope; redeclaration in the
    *same* scope is an error.
-2. ``set`` resolves to the nearest visible **mutable** binding; ``set`` on an
-   immutable binding → error; ``set`` on an undeclared name → error.
+2. ``:=`` resolves to the nearest visible **mutable** binding; ``:=`` on an
+   immutable binding → error; ``:=`` on an undeclared name → error.
 3. Reading (``VarRef``) a name not visible in the current scope chain → error.
 4. Pattern variables and catch binders are immutable and branch-local.
 5. ``do`` body bindings are visible to the ``until`` condition but not after.
@@ -50,6 +50,7 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AssignStmt,
     BinaryOp,
     Block,
     BoolLit,
@@ -85,7 +86,6 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
-    SetStmt,
     StringLit,
     Template,
     Try,
@@ -96,7 +96,7 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VarPattern,
     VarRef,
-    set_target_root_name,
+    assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 
@@ -122,7 +122,7 @@ _PRAGMA_KEY_KINDS: dict[str, str] = {
 }
 _ALLOWED_PRAGMA_KEYS: frozenset[str] = frozenset(_PRAGMA_KEY_KINDS)
 
-# Per-binder phrasing for the ``set``-on-immutable rejection.
+# Per-binder phrasing for the ``:=``-on-immutable rejection.
 _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.let_binding: "it was declared with 'let'",
     BinderKind.catch_binder: "it is a catch binder",
@@ -134,7 +134,7 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 
 
 def _immutable_binder_phrase(kind: BinderKind) -> str:
-    """Return the ``set``-rejection phrase naming *kind*'s binder."""
+    """Return the ``:=``-rejection phrase naming *kind*'s binder."""
     return _IMMUTABLE_BINDER_PHRASES[kind]
 
 
@@ -515,7 +515,7 @@ class _Resolver:
         """Resolve items in order; each binder adds to the current scope.
 
         This is the core sequencing logic.  Binders (``LetDecl``, ``VarDecl``,
-        ``SetStmt``) and declarations (``FuncDef``, ``AgentDecl``, etc.) that
+        ``AssignStmt``) and declarations (``FuncDef``, ``AgentDecl``, etc.) that
         are not pure expressions are handled first; everything else is treated
         as an expression item.
         """
@@ -534,8 +534,8 @@ class _Resolver:
                 self._resolve_let(item)
             elif isinstance(item, VarDecl):
                 self._resolve_var(item)
-            elif isinstance(item, SetStmt):
-                self._resolve_set(item)
+            elif isinstance(item, AssignStmt):
+                self._resolve_assign(item)
             elif isinstance(item, ParamDecl):
                 self._resolve_param(item)
             elif isinstance(item, ProgramDecl):
@@ -627,8 +627,8 @@ class _Resolver:
         )
         self._define(node.name, ref)
 
-    def _resolve_set(self, node: SetStmt) -> None:
-        name = set_target_root_name(node.target)
+    def _resolve_assign(self, node: AssignStmt) -> None:
+        name = assign_target_root_name(node.target)
         if name is None:
             raise AglScopeError(
                 "indexed assignment requires a variable list or dict root.",
@@ -637,7 +637,7 @@ class _Resolver:
         ref = self._current_scope().lookup(name)
         if ref is None:
             raise AglScopeError(
-                f"'{name}' is not declared; 'set' requires an existing "
+                f"'{name}' is not declared; assignment requires an existing "
                 f"mutable binding.",
                 span=node.span,
             )
@@ -649,10 +649,10 @@ class _Resolver:
                 span=node.span,
             )
         self._resolution[node.node_id] = ref
-        self._resolve_set_target_indexes(node.target)
+        self._resolve_assign_target_indexes(node.target)
         self._resolve_expr(node.value)
 
-    def _resolve_set_target_indexes(self, target: object) -> None:
+    def _resolve_assign_target_indexes(self, target: object) -> None:
         if isinstance(target, IndexTarget):
             self._resolve_expr(target.obj)
             self._resolve_expr(target.index)
@@ -960,7 +960,7 @@ def resolve(
         A parsed ``syntax.Program`` AST.
     parent_scope:
         When given, the entry's root ``ScopeNode`` is parented to it, so name
-        lookups (``VarRef``, ``set``) fall through to session bindings.  New
+        lookups (``VarRef``, ``:=``) fall through to session bindings.  New
         declarations live in the entry's own root scope and *shadow* parent
         bindings without raising a duplicate-declaration error.  Default
         ``None`` → standalone behaviour.

@@ -16,9 +16,9 @@ print threshold
 var status: text = ""
 if
   | score >= 90 =>
-    set status = "excellent"
+    status := "excellent"
   | score >= 50 =>
-    set status = "ok"
+    status := "ok"
   | else =>
-    set status = "needs work"
+    status := "needs work"
 print status

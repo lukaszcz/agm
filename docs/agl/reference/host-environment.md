@@ -126,7 +126,7 @@ trace records:
   every parse result (raw output, normalized output, error summary);
 - every `exec` invocation (command, exit code, duration, stdout, stderr,
   timeout flag);
-- every `set` mutation and every `print`;
+- every `:=` mutation and every `print`;
 - every raised exception.
 
 Every exception value carries a `trace_id` field linking it to the

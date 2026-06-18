@@ -30,6 +30,7 @@ from typing import cast
 
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AssignStmt,
     BinaryOp,
     Block,
     BoolLit,
@@ -70,7 +71,6 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
-    SetStmt,
     StringLit,
     Template,
     TextSegment,
@@ -166,7 +166,7 @@ class Visitor:
     # Binder nodes
     def visit_LetDecl(self, node: LetDecl) -> None: ...
     def visit_VarDecl(self, node: VarDecl) -> None: ...
-    def visit_SetStmt(self, node: SetStmt) -> None: ...
+    def visit_AssignStmt(self, node: AssignStmt) -> None: ...
     def visit_NameTarget(self, node: NameTarget) -> None: ...
     def visit_IndexTarget(self, node: IndexTarget) -> None: ...
 
@@ -256,7 +256,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         # binder nodes
         LetDecl,
         VarDecl,
-        SetStmt,
+        AssignStmt,
         NameTarget,
         IndexTarget,
         # literal nodes
@@ -401,7 +401,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(node.type_ann, callback)
         walk(node.value, callback)
 
-    elif isinstance(node, SetStmt):
+    elif isinstance(node, AssignStmt):
         walk(node.target, callback)
         walk(node.value, callback)
 

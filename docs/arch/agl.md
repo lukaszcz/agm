@@ -25,7 +25,7 @@ scope, typecheck, or eval.
 ## AST — expression-oriented design
 
 AgL v2 is **expression-oriented**: there is no separate statement category.
-Every construct (bindings, `set`, `print`, `if` without `else`, loops) is an
+Every construct (bindings, `:=`, `print`, `if` without `else`, loops) is an
 expression with a well-defined type. A block yields the value of its last item.
 
 The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
@@ -42,7 +42,7 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
 - `IndexAccess` — postfix list/dictionary indexing. The lexer emits a distinct
   adjacent-bracket token so `xs[0]` indexes while `f [0]` remains call sugar
   with a list literal argument.
-- `SetStmt` targets are either a name or an indexed mutable-root target; later
+- `AssignStmt` targets are either a name or an indexed mutable-root target; later
   passes require indexed assignment to resolve to a `var` list/dictionary root.
 - `FuncDef` / `Lambda` / `Param` — named function declarations (top-level only)
   and anonymous function expressions.
@@ -95,7 +95,7 @@ is `print`, `exec`, or `ask`, the resolver records the `BuiltinKind` in
 `agm.agl.typecheck` adds three new semantic types to the v2 system:
 
 - **`UnitType`** — the type of side-effecting expressions that produce no
-  meaningful value (`print`, `set`, `if` without `else`, `do … until`). Its
+  meaningful value (`print`, `:=`, `if` without `else`, `do … until`). Its
   single value is `()`.
 - **`FunctionType(params, result)`** — purely positional; named/default argument
   information is erased from the value type. Assignability is exact structural
@@ -185,8 +185,8 @@ than re-invoking. Promotion into the session is **atomic** — a runtime raise
 (`AglRaise`) OR an agent-call cancellation (`AgentCancelled` / `KeyboardInterrupt`
 from the confirming wrapper) discards ALL of the entry's in-session effects via a
 shared `_rollback` helper: new `let`/`var` bindings (held in the child scope) AND
-any `set` mutation of a prior session binding (rolled back from a value snapshot
-taken before eval, since `set` only updates an existing binding's value and never
+any `:=` mutation of a prior session binding (rolled back from a value snapshot
+taken before eval, since `:=` only updates an existing binding's value and never
 changes the value scope's key set). Only genuinely external effects already issued
 during evaluation (agent calls, `exec` shell commands) are irreversible.
 

@@ -62,7 +62,7 @@ The following words are **always reserved** and can never be used as
 variable, agent, or function names:
 
 ```text
-record enum type param program agent config def fn let var set do until if else
+record enum type param program agent config def fn let var do until if else
 case of try catch raise as and or not is in true false null unit
 ```
 

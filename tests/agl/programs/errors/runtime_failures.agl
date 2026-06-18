@@ -25,7 +25,7 @@ catch MatchError as e =>
 try
   var i: int = 0
   do[2]
-    set i = i + 1
+    i := i + 1
   until mode = "converge"
   print "loop done ${i}"
 catch MaxIterationsExceeded as e =>

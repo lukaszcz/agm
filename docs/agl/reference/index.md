@@ -25,7 +25,7 @@ oriented orchestration language whose core ideas are:
   lambdas produce values of function type `(A, B) -> C`; they may be stored,
   passed, and returned.
 - **Mutability is explicit.** `let` binds immutably, `var` binds mutably,
-  `set` updates; a single `=` is the equality operator, never assignment.
+  `:=` updates; a single `=` is the equality operator, never assignment.
 - **Failures are exceptions.** Parse failures, loop exhaustion, match
   failures, recursion depth, and shell errors are typed, catchable exceptions.
 - **Blocks use indentation**, with deterministic inline forms for one-liner
@@ -59,7 +59,7 @@ def review_and_fix(artifact: text, retries: int = 2) -> text =
 var artifact: text = ask("Implement ${spec}", agent: impl)
 
 do[5]
-  set artifact = review_and_fix(artifact)
+  artifact := review_and_fix(artifact)
   let final: Review = ask("Final review:\n${artifact}", agent: reviewer)
 until final is Pass
 ```
@@ -71,7 +71,7 @@ until final is Pass
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, operator precedence |
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, `agent`, function types), `record`/`enum`/`type` declarations, prelude types (`ExecResult`, `ParsePolicy`), assignability |
-| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `set`, `param`, `program`, `agent`, `def`, lexical scoping, shadowing |
+| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `program`, `agent`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Pattern matching](pattern-matching.md) | Patterns, matching semantics, exhaustiveness |

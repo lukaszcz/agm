@@ -99,7 +99,7 @@ class TestTraceFileCreated:
 
 
 # ---------------------------------------------------------------------------
-# 2. Record kinds: print, mutation (set), exec command, agent call
+# 2. Record kinds: print, mutation (assignment), exec command, agent call
 # ---------------------------------------------------------------------------
 
 
@@ -134,10 +134,10 @@ class TestPrintRecord:
 
 
 class TestMutationRecord:
-    def test_set_produces_mutation_record(self, tmp_path: Path) -> None:
+    def test_assign_produces_mutation_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run("var x = 1\nset x = 2", log_file=log_path)
+        rt.run("var x = 1\nx := 2", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "mutation" in kinds
@@ -145,7 +145,7 @@ class TestMutationRecord:
     def test_mutation_record_has_name_and_value(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run("var x = 1\nset x = 42", log_file=log_path)
+        rt.run("var x = 1\nx := 42", log_file=log_path)
         records = _load_jsonl(log_path)
         mut_recs = [r for r in records if r.get("kind") == "mutation"]
         assert mut_recs
@@ -492,7 +492,7 @@ class TestBuiltinExceptionTraceId:
         rt = WorkflowRuntime()
         # A do-loop whose condition never becomes true exhausts its limit.
         result = rt.run(
-            "var x = 0\ndo[2]\n  set x = x\nuntil false\n",
+            "var x = 0\ndo[2]\n  x := x\nuntil false\n",
             log_file=log_path,
         )
         assert not result.ok
@@ -544,7 +544,7 @@ class TestRunBoundaryRecords:
         """Every record in a trace file carries the same run_id."""
         log_path = tmp_path / "trace.jsonl"
         rt = WorkflowRuntime()
-        rt.run('var x = 1\nset x = 2\nprint "done"', log_file=log_path)
+        rt.run('var x = 1\nx := 2\nprint "done"', log_file=log_path)
         records = _load_jsonl(log_path)
         assert len(records) >= 3
         run_ids = {r.get("run_id") for r in records}
@@ -586,7 +586,7 @@ class TestNoLog:
         nothing (F3 early-out before any serialization/UUID work)."""
         rt = WorkflowRuntime()
         result = rt.run(
-            "var x: decimal = 0.1\nset x = x + 0.2",
+            "var x: decimal = 0.1\nx := x + 0.2",
             log_file=None,
         )
         assert result.ok
@@ -669,7 +669,7 @@ class TestDecimalExactness:
         rt = WorkflowRuntime()
         # 0.1 + 0.2 should NOT produce the float approximation 0.30000000000000004.
         rt.run(
-            "var x: decimal = 0.1\nset x = x + 0.2",
+            "var x: decimal = 0.1\nx := x + 0.2",
             log_file=log_path,
         )
         records = _load_jsonl(log_path)

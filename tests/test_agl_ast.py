@@ -35,6 +35,8 @@ from agm.agl.syntax import (
     ELSE,
     AgentDecl,
     AgentT,
+    AssignStmt,
+    AssignTarget,
     BinaryOp,
     Binder,
     BinOp,
@@ -89,8 +91,6 @@ from agm.agl.syntax import (
     ProgramDecl,
     Raise,
     RecordDef,
-    SetStmt,
-    SetTarget,
     # spans
     SourceSpan,
     StringLit,
@@ -920,10 +920,10 @@ class TestBinders:
         node = VarDecl(name="count", type_ann=None, value=val, span=self._s(), node_id=1)
         assert node.name == "count"
 
-    def test_set_stmt(self) -> None:
+    def test_assign_stmt(self) -> None:
         val = IntLit(value=5, span=self._s(), node_id=2)
         target = NameTarget(name="count", span=self._s(), node_id=3)
-        node = SetStmt(target=target, value=val, span=self._s(), node_id=1)
+        node = AssignStmt(target=target, value=val, span=self._s(), node_id=1)
         assert node.target is target
 
     def test_name_target(self) -> None:
@@ -1317,8 +1317,8 @@ class TestVisitorWalk:
         var_with_type = VarDecl(name="d", type_ann=json_t, value=null_lit, span=s, node_id=603)
         name_target = NameTarget(name="b", span=s, node_id=604)
         index_target = IndexTarget(obj=var_ref, index=int_lit, span=s, node_id=605)
-        set_stmt = SetStmt(target=name_target, value=index_access, span=s, node_id=606)
-        indexed_set_stmt = SetStmt(target=index_target, value=int_lit, span=s, node_id=607)
+        assign_stmt = AssignStmt(target=name_target, value=index_access, span=s, node_id=606)
+        indexed_assign_stmt = AssignStmt(target=index_target, value=int_lit, span=s, node_id=607)
 
         # Param decl without annotation (exercises None branch in walk)
         input_no_ann = ParamDecl(name="bare", annotation=None, default=None, span=s, node_id=609)
@@ -1332,7 +1332,7 @@ class TestVisitorWalk:
                 record_def, enum_def, type_alias, param_decl, input_no_ann,
                 agent_decl, config_pragma, func_def,
                 let_decl, let_with_type, var_decl, var_with_type,
-                set_stmt, indexed_set_stmt,
+                assign_stmt, indexed_assign_stmt,
                 # expressions directly in block
                 var_ref, field_access, index_access, constructor,
                 binary_op, unary_not, unary_neg, is_test,
@@ -1362,7 +1362,7 @@ class TestVisitorWalk:
         walk(prog, visited.append)
         kinds = {type(n) for n in visited}
 
-        binder_kinds = {LetDecl, VarDecl, SetStmt}
+        binder_kinds = {LetDecl, VarDecl, AssignStmt}
         for kind in binder_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
 
@@ -1879,11 +1879,11 @@ class TestUnionAliases:
         args = typing.get_args(Binder)
         assert LetDecl in args
         assert VarDecl in args
-        assert SetStmt in args
+        assert AssignStmt in args
 
-    def test_set_target_union_members(self) -> None:
+    def test_assign_target_union_members(self) -> None:
         import typing
-        args = typing.get_args(SetTarget)
+        args = typing.get_args(AssignTarget)
         assert NameTarget in args
         assert IndexTarget in args
 

@@ -59,7 +59,7 @@ class Scope:
             scope = scope.parent
         return None
 
-    def set_value(self, name: str, value: Value) -> bool:
+    def assign_value(self, name: str, value: Value) -> bool:
         """Update *name*'s value in the nearest frame that contains it.
 
         Returns ``True`` on success, ``False`` if *name* is not found.

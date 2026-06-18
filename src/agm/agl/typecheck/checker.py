@@ -15,7 +15,7 @@ Rules implemented
     - Other untyped initializers infer from the literal/expression.
     - ``param name[: T] [= default]`` — defaults to ``text`` when unannotated
       and defaultless; otherwise defaults are checked/inferred.
-4.  ``set name = e`` — expected type is the binding's declared type.
+4.  ``name := e`` — expected type is the binding's declared type.
 5.  ``print(expr)`` — accepts any non-function/non-agent type.
 6.  ``ask(prompt, ...)`` — named-agent or default-agent call with codec.
 7.  ``exec(cmd, ...)`` — shell call; requires ``supports_shell_exec``.
@@ -52,6 +52,7 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AssignStmt,
     BinaryOp,
     BinOp,
     Block,
@@ -91,7 +92,6 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
-    SetStmt,
     StringLit,
     Template,
     Try,
@@ -478,8 +478,8 @@ class _Checker:
         if isinstance(item, (LetDecl, VarDecl)):
             self._check_binding(item)
             return UnitType()
-        if isinstance(item, SetStmt):
-            self._check_set_stmt(item)
+        if isinstance(item, AssignStmt):
+            self._check_assign_stmt(item)
             return UnitType()
         # --- Expr ---
         return self._check_expr(item, expected=expected)
@@ -543,7 +543,7 @@ class _Checker:
             declared_type = val_type
         self._env.set_binding_type(stmt.node_id, declared_type)
 
-    def _check_set_stmt(self, stmt: SetStmt) -> None:
+    def _check_assign_stmt(self, stmt: AssignStmt) -> None:
         if isinstance(stmt.target, NameTarget):
             ref = self._resolved.resolution[stmt.node_id]
             target_type = self._require_binding_type(ref)
@@ -552,15 +552,15 @@ class _Checker:
             return
 
         if isinstance(stmt.target, IndexTarget):
-            self._check_indexed_set_stmt(stmt, stmt.target)
+            self._check_indexed_assign_stmt(stmt, stmt.target)
             return
 
         raise AglTypeError(
-            "set target must be a mutable variable or indexed mutable variable.",
+            "assignment target must be a mutable variable or indexed mutable variable.",
             span=stmt.span,
         )
 
-    def _check_indexed_set_stmt(self, stmt: SetStmt, target: IndexTarget) -> None:
+    def _check_indexed_assign_stmt(self, stmt: AssignStmt, target: IndexTarget) -> None:
         ref = self._resolved.resolution[stmt.node_id]
         if not ref.mutable:
             raise AglTypeError(

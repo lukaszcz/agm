@@ -89,11 +89,11 @@ parameters must follow all required parameters.
 ```ebnf
 let_decl ::= "let" VAR_NAME (":" type_expr)? "=" expr
 var_decl ::= "var" VAR_NAME (":" type_expr)? "=" expr
-set_expr ::= "set" set_target "=" expr
-set_target ::= VAR_NAME ("[" expr "]")*
+assign_expr ::= assign_target ":=" expr
+assign_target ::= VAR_NAME ("[" expr "]")*
 ```
 
-`set` yields `unit`. In an indexed assignment target, each opening `[` must be
+Assignment yields `unit`. In an indexed assignment target, each opening `[` must be
 adjacent to the target name or preceding index: `xs[0]` is indexed assignment,
 while `xs [0]` is not.
 
@@ -194,7 +194,7 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | lambda_expr
-               | set_expr
+               | assign_expr
                | do_until
                | raise_expr
 

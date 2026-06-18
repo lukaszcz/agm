@@ -19,7 +19,7 @@ Layout:
 
 | Directory | What it exercises |
 |-----------|-------------------|
-| `basics/` | `let`/`var`/`set`, params, agent calls, print rendering |
+| `basics/` | `let`/`var`/`:=`, params, agent calls, print rendering |
 | `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
 | `canonical/` | Multi-agent review/fix workflows |
 | `control/` | `if`/`case`/`do…until`/`try…catch`/`raise` |

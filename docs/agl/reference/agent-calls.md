@@ -99,7 +99,7 @@ Every `ask` call has a **target type**, determined from context exactly as
 expected types propagate ([Expressions](expressions.md)):
 
 1. the annotation of the enclosing `let`/`var`,
-2. the declared type of the binding in a `set`,
+2. the declared type of the binding in a `:=`,
 3. an expected type propagated from a larger expression (for example a
    function parameter type),
 4. otherwise **`text`**.
@@ -108,7 +108,7 @@ expected types propagate ([Expressions](expressions.md)):
 let x = ask "A"                          # target: text
 let review: Review = ask("…", agent: reviewer)   # target: Review
 var proposal: Turn = ask("…", agent: researcher)
-set proposal = ask("Revise.", agent: researcher)  # target: Turn
+proposal := ask("Revise.", agent: researcher)  # target: Turn
 ```
 
 The target type drives the call's **output contract**:

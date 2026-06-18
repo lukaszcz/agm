@@ -21,17 +21,17 @@ do[3]
   let review: Review = ask("Review:\n${artifact}", agent: reviewer)
   case review of
     | Pass =>
-        set status = "accepted"
+        status := "accepted"
     | Fail(issues) =>
         let plan: Plan = ask("Plan for:\n${issues}", agent: planner)
         case plan of
           | Retry =>
-              set artifact = ask("Fix ${issues} in ${artifact}", agent: impl)
+              artifact := ask("Fix ${issues} in ${artifact}", agent: impl)
           | GiveUp(why) =>
               if why = "hopeless" =>
-                set status = "abandoned"
+                status := "abandoned"
               else =>
-                set status = "deferred: ${why}"
+                status := "deferred: ${why}"
 until status != "working"
 print status
 print artifact

@@ -9,7 +9,7 @@ Covers:
 - Function declarations (def) and lambda expressions.
 - Type expressions: primitives, list[T], dict[text, T], func_type, unit, agent.
 - Control flow: if/case/do/try expressions; suite bodies; multi-line branches.
-- Binders: let/var/set.
+- Binders: let/var/assignment.
 - Input/agent/config declarations.
 - Error cases: == produces friendly AglSyntaxError; bad syntax raises AglSyntaxError.
 - REPL seam: parse_program_seeded and is_incomplete_source.
@@ -36,6 +36,7 @@ from agm.agl.parser import (
 )
 from agm.agl.syntax import (
     AgentDecl,
+    AssignStmt,
     BinaryOp,
     BinOp,
     Block,
@@ -75,7 +76,6 @@ from agm.agl.syntax import (
     Program,
     Raise,
     RecordDef,
-    SetStmt,
     StringLit,
     Template,
     TextSegment,
@@ -314,22 +314,29 @@ class TestBinders:
         assert v.name == "count"
         assert isinstance(v.type_ann, IntT)
 
-    def test_set_stmt(self) -> None:
-        s = first(parse("set x = 10"))
-        assert isinstance(s, SetStmt)
+    def test_assign_stmt(self) -> None:
+        s = first(parse("x := 10"))
+        assert isinstance(s, AssignStmt)
         assert isinstance(s.target, NameTarget)
         assert s.target.name == "x"
         assert isinstance(s.value, IntLit)
 
-    def test_set_index_target(self) -> None:
-        s = first(parse('set xs[0] = "first"'))
-        assert isinstance(s, SetStmt)
+    def test_assign_index_target(self) -> None:
+        s = first(parse('xs[0] := "first"'))
+        assert isinstance(s, AssignStmt)
         assert isinstance(s.target, IndexTarget)
         assert isinstance(s.target.obj, VarRef)
         assert s.target.obj.name == "xs"
         assert isinstance(s.target.index, IntLit)
         assert s.target.index.value == 0
         assert isinstance(s.value, StringLit)
+
+    def test_legacy_set_syntax_is_not_assignment(self) -> None:
+        assert not isinstance(first(parse("set x = 10")), AssignStmt)
+
+    def test_assignment_target_must_have_variable_root(self) -> None:
+        with pytest.raises(AglSyntaxError, match="assignment target"):
+            parse("make()[0] := 10")
 
     def test_let_continuation(self) -> None:
         """let-continuation: let x = 1; x parses as two block items."""
@@ -1153,13 +1160,13 @@ class TestCaseExpr:
 
 class TestDoExpr:
     def test_do_simple(self) -> None:
-        e = first(parse("do set x = 1 until x > 5"))
+        e = first(parse("do x := 1 until x > 5"))
         assert isinstance(e, Do)
         assert e.limit is None
         assert isinstance(e.condition, BinaryOp)
 
     def test_do_with_bound(self) -> None:
-        e = first(parse("do[10] set x = 1 until x > 5"))
+        e = first(parse("do[10] x := 1 until x > 5"))
         assert isinstance(e, Do)
         assert e.limit == 10
 
@@ -1168,7 +1175,7 @@ class TestDoExpr:
             parse("do[0] x until true")
 
     def test_do_suite_body(self) -> None:
-        src = "do\n  set x = 1\n  set y = 2\nuntil x > 5"
+        src = "do\n  x := 1\n  y := 2\nuntil x > 5"
         e = first(parse(src))
         assert isinstance(e, Do)
         assert isinstance(e.body, Block)
@@ -1421,7 +1428,7 @@ class TestNegativeCases:
 
     def test_bare_assignment_is_equality(self) -> None:
         """In v2, n = 2 is a BinaryOp(EQ) expression (not a mutation).
-        Mutation uses `set n = 2`. The parser accepts n = 2 as an expression.
+        Mutation uses `n := 2`. The parser accepts n = 2 as an expression.
         The scope pass would verify mutation intent.
         """
         e = first(parse("n = 2"))

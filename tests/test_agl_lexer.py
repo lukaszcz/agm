@@ -36,12 +36,12 @@ def lark_tok(source: str) -> list[tuple[str, str]]:
 
 class TestKeywordsAndIdentifiers:
     def test_reserved_keywords_emitted_as_literal_tokens(self) -> None:
-        # pass and print are no longer reserved in v2 (they lex as VAR_NAME).
+        # pass, print, and the former set keyword lex as VAR_NAME.
         result = tok("let var set do until if else case of try catch raise as")
         types = [t for t, _ in result]
         assert "let" in types
         assert "var" in types
-        assert "set" in types
+        assert ("VAR_NAME", "set") in result
         assert "do" in types
         assert "until" in types
         assert "if" in types
@@ -230,6 +230,9 @@ class TestOperators:
 
     def test_colon(self) -> None:
         assert tok(":") == [("COLON", ":")]
+
+    def test_assignment(self) -> None:
+        assert tok(":=") == [("ASSIGN", ":=")]
 
     def test_dcolon(self) -> None:
         # ``::`` is the type-argument introducer for typed calls
@@ -1910,12 +1913,12 @@ class TestV2Keywords:
         assert types == ["def", "fn"]
 
     def test_still_reserved_keywords_unchanged(self) -> None:
-        # let/var/set/do/until/if/else/case/of/try/catch/raise/as/and/or/not
+        # let/var/do/until/if/else/case/of/try/catch/raise/as/and/or/not
         # are still reserved.
         source = "let var set do until if else case of try catch raise as and or not"
         result = tok(source)
         types = [t for t, _ in result]
-        for kw in ("let", "var", "set", "do", "until", "if", "else", "case",
+        for kw in ("let", "var", "do", "until", "if", "else", "case",
                    "of", "try", "catch", "raise", "as", "and", "or", "not"):
             assert kw in types, f"keyword {kw!r} must still be reserved"
 

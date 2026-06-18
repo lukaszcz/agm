@@ -40,7 +40,7 @@ The following words are **always reserved**: the scanner never emits them as
 `VAR_NAME`.
 
 ```
-record enum type input agent config def fn let var set do until if else
+record enum type input agent config def fn let var do until if else
 case of try catch raise as and or not is in true false null unit
 ```
 
@@ -94,7 +94,8 @@ No float type in AgL. Decimal arithmetic is exact fixed-point.
 | Token | Source | Token | Source |
 |-------|--------|-------|--------|
 | `ARROW` | `=>` | `THIN_ARROW` | `->` |
-| `EQ` | `=` | `NEQ` | `!=` |
+| `ASSIGN` | `:=` | `EQ` | `=` |
+| `NEQ` | `!=` | | |
 | `LT` | `<` | `LE` | `<=` |
 | `GT` | `>` | `GE` | `>=` |
 | `PLUS` | `+` | `MINUS` | `-` |

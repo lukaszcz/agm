@@ -45,7 +45,7 @@ let y = ask "B"
 y              # the program's value is y
 ```
 
-Side-effecting forms (`print`, `set`, loops, else-less `if`) yield `unit`
+Side-effecting forms (`print`, `:=`, loops, else-less `if`) yield `unit`
 and are commonly followed by another expression.
 
 ## Config pragmas
@@ -119,10 +119,10 @@ must be parenthesized:
 let x = 3; let y = x + 1; y
 
 # Inline do loop: body items, then until condition
-do[5] let r: Review = ask("Review ${a}", agent: reviewer); case r of | Fail(i) => set a = ask("Fix ${i} in ${a}", agent: impl) | Pass => () until r is Pass
+do[5] let r: Review = ask("Review ${a}", agent: reviewer); case r of | Fail(i) => a := ask("Fix ${i} in ${a}", agent: impl) | Pass => () until r is Pass
 
 # A case expression as a loop condition must be parenthesized:
-do[3] set n = n + 1 until (case st of | Done => true | _ => false)
+do[3] n := n + 1 until (case st of | Done => true | _ => false)
 ```
 
 The `()` unit literal replaces `pass` — it is the idiomatic no-op in a
@@ -131,7 +131,7 @@ branch body:
 ```agl
 case review of
   | Pass => ()
-  | Fail(issues) => set artifact = ask("Fix ${issues}", agent: impl)
+  | Fail(issues) => artifact := ask("Fix ${issues}", agent: impl)
 ```
 
 ### Branch bodies
@@ -165,5 +165,5 @@ print "done"
 
 A bare equality at block level that looks like an assignment is rejected with
 a targeted error: `n = 2` as an item produces
-**"Bare assignment 'n = …' is not valid. Use 'set' to reassign a mutable
+**"Bare assignment 'n = …' is not valid. Use ':=' to reassign a mutable
 variable."**

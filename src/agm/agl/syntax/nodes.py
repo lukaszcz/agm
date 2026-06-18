@@ -285,7 +285,7 @@ class Block:
     """An expression block: a sequence of items whose value is the last item.
 
     Items may be declarations (``FuncDef``, ``RecordDef``, …), binders
-    (``LetDecl``, ``VarDecl``, ``SetStmt``), or expressions.  A block ending
+    (``LetDecl``, ``VarDecl``, ``AssignStmt``), or expressions.  A block ending
     in a binder is a static error (the binder needs a continuation expression).
     """
 
@@ -605,7 +605,7 @@ class VarDecl:
 
 @dataclass(frozen=True, slots=True)
 class NameTarget:
-    """Assignment target for ``set name = expr``."""
+    """Assignment target for ``name := expr``."""
 
     name: str
     span: SourceSpan = dc_field(compare=False)
@@ -614,7 +614,7 @@ class NameTarget:
 
 @dataclass(frozen=True, slots=True)
 class IndexTarget:
-    """Assignment target for ``set root[index] = expr``."""
+    """Assignment target for ``root[index] := expr``."""
 
     obj: Expr
     index: Expr
@@ -622,30 +622,30 @@ class IndexTarget:
     node_id: int = dc_field(compare=False)
 
 
-SetTarget = NameTarget | IndexTarget
+AssignTarget = NameTarget | IndexTarget
 
 
-def set_target_root_name(target: object) -> str | None:
+def assign_target_root_name(target: object) -> str | None:
     """Return the mutable root binding name for an assignment target."""
     if isinstance(target, (NameTarget, VarRef)):
         return target.name
     if isinstance(target, (IndexTarget, IndexAccess)):
-        return set_target_root_name(target.obj)
+        return assign_target_root_name(target.obj)
     return None
 
 
 @dataclass(frozen=True, slots=True)
-class SetStmt:
-    """``set target = expr`` — assignment to a mutable target.  Yields ``unit``."""
+class AssignStmt:
+    """``target := expr`` — assignment to a mutable target.  Yields ``unit``."""
 
-    target: SetTarget
+    target: AssignTarget
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
 
 # Closed union of binder nodes.
-Binder = LetDecl | VarDecl | SetStmt
+Binder = LetDecl | VarDecl | AssignStmt
 
 
 # ---------------------------------------------------------------------------

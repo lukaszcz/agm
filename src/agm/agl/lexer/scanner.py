@@ -40,6 +40,7 @@ from agm.agl.diagnostics import Diagnostic, SourceSpan
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
     ARROW,
+    ASSIGN,
     COLON,
     COMMA,
     DCOLON,
@@ -811,6 +812,11 @@ class _Scanner:
             yield self._make_token(MINUS, "-", start_pos, start_line, start_col)
             return
 
+        # ":=" is destructive assignment and "::" introduces typed calls.
+        if ch == ":" and self._peek() == "=":
+            self._advance()
+            yield self._make_token(ASSIGN, ":=", start_pos, start_line, start_col)
+            return
         # "::" is DCOLON (type-argument introducer for typed calls, e.g.
         # ask-request::[Review](...)); bare ":" is COLON.  Maximal munch:
         # check the next character before falling back to the single-char op.

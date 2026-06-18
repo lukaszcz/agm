@@ -134,12 +134,12 @@ class TestEchoData:
         assert r.name == "Age"
         assert r.value is None
 
-    def test_set_stmt_echo_kind(self) -> None:
-        # In v2, ``set`` is the only binder-kind that maps to "statement"
+    def test_assign_stmt_echo_kind(self) -> None:
+        # In v2, ``:=`` is the only binder-kind that maps to "statement"
         # (it mutates an existing binding, has no new name, yields unit).
         s = ReplSession()
         s.eval_entry("var v = 0")
-        r = s.eval_entry("set v = 1")
+        r = s.eval_entry("v := 1")
         assert r.kind == "statement"
         assert r.value is None
         assert r.ok
@@ -224,36 +224,36 @@ class TestAtomicOnError:
         assert r.diagnostics == []
         assert _snapshot(s) == before
 
-    def test_runtime_raise_rolls_back_set_to_prior_var(self) -> None:
-        # A ``set`` of a prior session ``var`` mutates the persistent value scope
+    def test_runtime_raise_rolls_back_assign_to_prior_var(self) -> None:
+        # A ``:=`` of a prior session ``var`` mutates the persistent value scope
         # in place; a later raise in the SAME entry must roll that mutation back.
         s = ReplSession()
         r1 = s.eval_entry("var v = 1")
         assert r1.ok
-        r2 = s.eval_entry("set v = 99\nlet z: decimal = 1 / 0")
+        r2 = s.eval_entry("v := 99\nlet z: decimal = 1 / 0")
         assert not r2.ok
         assert r2.error is not None
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["v"] == 1  # rolled back, NOT 99
 
-    def test_runtime_raise_rolls_back_indexed_set_to_prior_var(self) -> None:
+    def test_runtime_raise_rolls_back_indexed_assign_to_prior_var(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
 
         s = ReplSession()
         r1 = s.eval_entry("var xs = [1, 2, 3]")
         assert r1.ok
-        r2 = s.eval_entry("set xs[0] = 99\nlet z: decimal = 1 / 0")
+        r2 = s.eval_entry("xs[0] := 99\nlet z: decimal = 1 / 0")
         assert not r2.ok
         assert r2.error is not None
         vals = {n: v for n, _t, v in s.bindings()}
         assert vals["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
 
-    def test_successful_set_to_prior_var_persists(self) -> None:
-        # The positive counterpart: a successful ``set`` in a later entry DOES
+    def test_successful_assign_to_prior_var_persists(self) -> None:
+        # The positive counterpart: a successful ``:=`` in a later entry DOES
         # persist into the session.
         s = ReplSession()
         s.eval_entry("var v = 1")
-        r = s.eval_entry("set v = 5")
+        r = s.eval_entry("v := 5")
         assert r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["v"] == 5
@@ -549,9 +549,9 @@ class TestLoadFile:
             "let n = 1\n"
             "var label: text = \"\"\n"
             "if n = 1 =>\n"
-            "    set label = \"one\"\n"
+            "    label := \"one\"\n"
             "| else =>\n"
-            "    set label = \"many\"\n"
+            "    label := \"many\"\n"
             "label\n"
         )
         s = ReplSession()
@@ -852,15 +852,15 @@ class TestAgentCancellation:
         assert r.error is None
         assert _snapshot(s) == before
 
-    def test_cancellation_rolls_back_prior_set_mutation(self) -> None:
-        # A ``set`` to a prior binding before a cancelled agent call must roll
+    def test_cancellation_rolls_back_prior_assignment(self) -> None:
+        # A ``:=`` to a prior binding before a cancelled agent call must roll
         # back — the entry is atomic.
         s = ReplSession(default_agent=_CancellingAgent())
         s.eval_entry("var v = 1")
-        r = s.eval_entry('do\n  set v = 2\n  let g = ask """x"""')
+        r = s.eval_entry('do\n  v := 2\n  let g = ask """x"""')
         assert not r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
-        assert vals["v"] == 1  # the set was rolled back
+        assert vals["v"] == 1  # the assignment was rolled back
 
 
 # ---------------------------------------------------------------------------
@@ -968,13 +968,13 @@ class TestParamRedeclaration:
 
 
 # ---------------------------------------------------------------------------
-# Issue #7 — snapshot optimisation: set-to-prior binding still rolls back
+# Issue #7 — snapshot optimisation: assignment to a prior binding still rolls back
 # ---------------------------------------------------------------------------
 
 
 class TestSnapshotOptimisation:
-    def test_set_to_prior_binding_in_raising_entry_rolls_back(self) -> None:
-        """A ``set`` to a prior session binding that raises mid-entry rolls back.
+    def test_assign_to_prior_binding_in_raising_entry_rolls_back(self) -> None:
+        """A ``:=`` to a prior session binding that raises mid-entry rolls back.
 
         This verifies the rollback invariant is intact even when the snapshot
         optimisation narrows what is snapshotted.
@@ -982,24 +982,24 @@ class TestSnapshotOptimisation:
         s = ReplSession()
         r1 = s.eval_entry("var counter = 0")
         assert r1.ok
-        # This entry sets counter=99 then raises (division by zero).
-        r2 = s.eval_entry("set counter = 99\nlet _z: decimal = 1 / 0")
+        # This entry assigns counter=99 then raises (division by zero).
+        r2 = s.eval_entry("counter := 99\nlet _z: decimal = 1 / 0")
         assert not r2.ok
         assert r2.error is not None
-        # The set must have been rolled back.
+        # The assignment must have been rolled back.
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["counter"] == 0
 
-    def test_entry_without_set_does_not_corrupt_prior_bindings(self) -> None:
-        """An entry with no ``set`` statements leaves prior bindings untouched.
+    def test_entry_without_assignment_does_not_corrupt_prior_bindings(self) -> None:
+        """An entry with no ``:=`` statements leaves prior bindings untouched.
 
-        This guards that the optimisation (no snapshot for no-set entries) does
+        This guards that the optimisation (no snapshot for assignment-free entries) does
         not accidentally allow prior bindings to be mutated on success.
         """
         s = ReplSession()
         s.eval_entry("var a = 1")
         s.eval_entry("let b = 2")
-        # An entry that only reads a and b, with no set.
+        # An entry that only reads a and b, with no assignment.
         r = s.eval_entry("a + b")
         assert r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
@@ -1010,7 +1010,7 @@ class TestSnapshotOptimisation:
         """Adding new bindings in an entry that raises leaves old bindings clean."""
         s = ReplSession()
         s.eval_entry("let x = 10")
-        # Entry raises; it tries to add a new binding (no set to prior).
+        # Entry raises; it tries to add a new binding (no assignment to prior state).
         r = s.eval_entry("let _fail: decimal = 1 / 0")
         assert not r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
@@ -1054,10 +1054,10 @@ class TestIfExpr:
     def test_bare_if_expr_classified_as_expression(self) -> None:
         # In v2, ``if`` is a value-producing expression.  A bare ``if`` entry
         # at the prompt is classified as "expression" (it yields a value).
-        # The value is UNIT_VALUE when the branches yield unit (e.g. ``set``).
+        # The value is UNIT_VALUE when the branches yield unit (e.g. ``:=``).
         s = ReplSession()
         s.eval_entry("var x = 0")
-        r = s.eval_entry("if true =>\n    set x = 42\n| else =>\n    set x = 0")
+        r = s.eval_entry("if true =>\n    x := 42\n| else =>\n    x := 0")
         assert r.ok
         assert r.kind == "expression"
         # The side effect was applied.
@@ -1078,57 +1078,57 @@ class TestIfExpr:
 
 
 # ---------------------------------------------------------------------------
-# Do-loop expression with set — covers _set_targets_in_program Do branch
+# Do-loop expression with assignment — covers _assign_targets_in_program Do branch
 # ---------------------------------------------------------------------------
 
 
 class TestDoExpr:
-    def test_do_loop_set_target_detected(self) -> None:
-        # A ``do/until`` loop containing a ``set`` mutation must be classified
-        # as "expression" (not statement), and the ``set`` side-effect must be
+    def test_do_loop_assign_target_detected(self) -> None:
+        # A ``do/until`` loop containing a ``:=`` mutation must be classified
+        # as "expression" (not statement), and the ``:=`` side-effect must be
         # visible in the session after promotion.  This exercises the Do branch
-        # in ``_set_targets_in_program`` (session.py lines 80-81).
+        # in ``_assign_targets_in_program`` (session.py lines 80-81).
         s = ReplSession()
         s.eval_entry("var counter = 0")
-        r = s.eval_entry("do\n  set counter = counter + 1\nuntil counter >= 3\ncounter")
+        r = s.eval_entry("do\n  counter := counter + 1\nuntil counter >= 3\ncounter")
         assert r.ok
         assert r.kind == "expression"
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["counter"] == 3
 
-    def test_do_loop_set_rolls_back_on_error(self) -> None:
-        # A ``set`` inside a failing do-loop entry rolls back atomically: the
+    def test_do_loop_assignment_rolls_back_on_error(self) -> None:
+        # A ``:=`` inside a failing do-loop entry rolls back atomically: the
         # var is restored to its pre-entry value.
         s = ReplSession()
         s.eval_entry("var x = 0")
         # The loop mutates x but the trailing type error kills the entry.
-        r = s.eval_entry('do\n  set x = x + 1\nuntil x >= 2\nlet bad: int = "oops"')
+        r = s.eval_entry('do\n  x := x + 1\nuntil x >= 2\nlet bad: int = "oops"')
         assert not r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 0  # rolled back
 
 
-class TestIndexedSetTargets:
-    def test_nested_indexed_set_rolls_back_on_error(self) -> None:
+class TestIndexedAssignTargets:
+    def test_nested_indexed_assign_rolls_back_on_error(self) -> None:
         s = ReplSession()
         s.eval_entry("var xs = [[1, 2]]")
-        r = s.eval_entry('set xs[0][1] = 9\nlet bad: int = "oops"')
+        r = s.eval_entry('xs[0][1] := 9\nlet bad: int = "oops"')
         assert not r.ok
         vals = {n: v for n, _t, v in s.bindings()}
         assert vals["xs"].elements[0].elements[1] == IntValue(2)
 
-    def test_unknown_direct_set_target_has_no_root_name(self) -> None:
-        from agm.agl.repl.session import _set_targets_in_program
+    def test_unknown_direct_assign_target_has_no_root_name(self) -> None:
+        from agm.agl.repl.session import _assign_targets_in_program
         from agm.agl.syntax.nodes import (
+            AssignStmt,
             Block,
             IndexAccess,
             IndexTarget,
             IntLit,
             Program,
-            SetStmt,
             UnitLit,
             VarRef,
-            set_target_root_name,
+            assign_target_root_name,
         )
 
         span = SourceSpan(
@@ -1140,7 +1140,7 @@ class TestIndexedSetTargets:
             end_offset=1,
         )
         target = UnitLit(span=span, node_id=9001)
-        assert set_target_root_name(target) is None
+        assert assign_target_root_name(target) is None
         nested_target = IndexTarget(
             obj=IndexAccess(
                 obj=VarRef(name="xs", span=span, node_id=9005),
@@ -1152,7 +1152,7 @@ class TestIndexedSetTargets:
             span=span,
             node_id=9009,
         )
-        assert set_target_root_name(nested_target) == "xs"
+        assert assign_target_root_name(nested_target) == "xs"
         bad_nested_target = IndexTarget(
             obj=IndexAccess(
                 obj=target,
@@ -1164,52 +1164,52 @@ class TestIndexedSetTargets:
             span=span,
             node_id=9013,
         )
-        assert set_target_root_name(bad_nested_target) is None
-        stmt = SetStmt(target=target, value=target, span=span, node_id=9002)
+        assert assign_target_root_name(bad_nested_target) is None
+        stmt = AssignStmt(target=target, value=target, span=span, node_id=9002)
         program = Program(
             body=Block(items=(stmt,), span=span, node_id=9003),
             span=span,
             node_id=9004,
         )
-        assert _set_targets_in_program(program) == frozenset()
+        assert _assign_targets_in_program(program) == frozenset()
 
 
 # ---------------------------------------------------------------------------
-# Try expression with set — covers _set_targets_in_program Try branch
+# Try expression with assignment — covers _assign_targets_in_program Try branch
 # ---------------------------------------------------------------------------
 
 
 class TestTryExpr:
-    def test_try_set_target_detected_in_body(self) -> None:
-        # A ``try`` expression containing a ``set`` in its body must have the
-        # ``set`` target detected by ``_set_targets_in_program`` (lines 89-90)
+    def test_try_assign_target_detected_in_body(self) -> None:
+        # A ``try`` expression containing a ``:=`` in its body must have the
+        # ``:=`` target detected by ``_assign_targets_in_program`` (lines 89-90)
         # so the var is included in atomic rollback tracking.
         s = ReplSession()
         s.eval_entry("var x = 0")
-        r = s.eval_entry("try\n  set x = 1\ncatch _ =>\n  set x = 99\nx")
+        r = s.eval_entry("try\n  x := 1\ncatch _ =>\n  x := 99\nx")
         assert r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 1
 
-    def test_try_set_target_detected_in_handler(self) -> None:
-        # A ``set`` inside a catch handler must also be detected (line 91) so
+    def test_try_assign_target_detected_in_handler(self) -> None:
+        # A ``:=`` inside a catch handler must also be detected (line 91) so
         # the var snapshot is captured before the entry runs.
         s = ReplSession()
         s.eval_entry("var x = 0")
-        # The handler set path requires the try body to raise, which is tricky
-        # to trigger without a real exception; we just verify that a set inside
+        # The handler assignment path requires the try body to raise, which is tricky
+        # to trigger without a real exception; we just verify that an assignment inside
         # try is promoted correctly (body succeeds, handler is not taken).
-        r = s.eval_entry("try\n  set x = 7\ncatch _ =>\n  set x = 99\nx")
+        r = s.eval_entry("try\n  x := 7\ncatch _ =>\n  x := 99\nx")
         assert r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 7
 
-    def test_try_set_rolls_back_on_type_error(self) -> None:
+    def test_try_assignment_rolls_back_on_type_error(self) -> None:
         # A type error in the same entry causes the whole entry to roll back,
-        # including any ``set`` in a try body.
+        # including any ``:=`` in a try body.
         s = ReplSession()
         s.eval_entry("var x = 0")
-        r = s.eval_entry('try\n  set x = 5\ncatch _ =>\n  ()\nlet bad: int = "oops"')
+        r = s.eval_entry('try\n  x := 5\ncatch _ =>\n  ()\nlet bad: int = "oops"')
         assert not r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 0  # rolled back

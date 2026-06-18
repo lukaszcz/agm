@@ -80,7 +80,7 @@
 // for the `agent` keyword.
 %declare AGENT
 %declare INT DECIMAL
-%declare EQ NEQ LT LE GT GE
+%declare ASSIGN EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
 %declare ARROW THIN_ARROW
 %declare LPAR RPAR LSQB INDEX_LSQB RSQB LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
@@ -202,13 +202,11 @@ func_body: suite_expr | expr
 // Binders (transparent)
 // ---------------------------------------------------------------------------
 
-?binder: let_decl | var_decl | set_stmt
+?binder: let_decl | var_decl | assign_stmt
 
 let_decl: "let" VAR_NAME type_ann? EQ expr
 var_decl: "var" VAR_NAME type_ann? EQ expr
-set_stmt: "set" set_target EQ expr
-
-set_target: VAR_NAME (INDEX_LSQB expr RSQB)*
+assign_stmt: postfix ASSIGN expr
 
 // Type annotation: COLON followed by a type_expr.
 type_ann: COLON type_expr

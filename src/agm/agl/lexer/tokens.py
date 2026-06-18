@@ -69,7 +69,6 @@ KW_PROGRAM = "program"
 KW_AGENT = "agent"
 KW_LET = "let"
 KW_VAR = "var"
-KW_SET = "set"
 KW_DEF = "def"  # v2: function declaration keyword
 KW_FN = "fn"  # v2: lambda keyword
 KW_DO = "do"
@@ -105,7 +104,6 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_AGENT,
         KW_LET,
         KW_VAR,
-        KW_SET,
         KW_DEF,
         KW_FN,
         KW_DO,
@@ -147,6 +145,7 @@ DECIMAL = "DECIMAL"  # /[0-9]+\.[0-9]+/
 # ---------------------------------------------------------------------------
 THIN_ARROW = "THIN_ARROW"  # -> (v2: function return type / function type)
 ARROW = "ARROW"  # =>
+ASSIGN = "ASSIGN"  # :=
 EQ = "EQ"  # =
 NEQ = "NEQ"  # !=
 LE = "LE"  # <=

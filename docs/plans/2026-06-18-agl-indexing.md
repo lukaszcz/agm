@@ -104,10 +104,10 @@ Add indexed assignment, restricted to `var` list/dict bindings:
 
 ```agl
 var xs = [1, 2]
-set xs[0] = 10
+xs[0] := 10
 
 var d = {"a": 1}
-set d["a"] = 2
+d["a"] := 2
 ```
 
 Indexed assignment through `let`, params/function arguments, function-return
@@ -194,7 +194,7 @@ Wire it through:
 - parser transform method `index_access`;
 - AST tests.
 
-Indexed assignment also needs an assignment-target representation for `set`:
+Indexed assignment also needs an assignment-target representation for `:=`:
 
 - keep `IndexAccess` as the expression node;
 - add an AST node for indexed set targets:
@@ -208,9 +208,9 @@ class IndexTarget:
     node_id: int = dc_field(compare=False)
 ```
 
-- change `SetStmt` from `name: str` to a target union:
-  `SetTarget = NameTarget | IndexTarget`;
-- parse `set name = expr` exactly as today and add `set postfix[index] = expr`
+- change `AssignStmt` from `name: str` to a target union:
+  `AssignTarget = NameTarget | IndexTarget`;
+- parse `name := expr` exactly as today and add `postfix[index] := expr`
   with a restricted target grammar.
 
 The target grammar must avoid accepting arbitrary non-assignable expressions,
@@ -304,8 +304,8 @@ In `tests/test_agl_typecheck.py` or rejection fixtures:
 - list with text key is rejected;
 - dict with int key is rejected;
 - non-container indexing is rejected.
-- `set xs[0] = 3` is accepted only when `xs` is a `var list[int]`;
-- `set d["a"] = 3` is accepted only when `d` is a `var dict[text, int]`;
+- `xs[0] := 3` is accepted only when `xs` is a `var list[int]`;
+- `d["a"] := 3` is accepted only when `d` is a `var dict[text, int]`;
 - indexed assignment through `let`, `param`, and function arguments is rejected;
 - indexed assignment value type mismatches are rejected.
 
@@ -365,4 +365,4 @@ Update after implementation:
 - **`do[N]` regression.** Mitigation: keep existing `DO LSQB INT RSQB` merge
   priority and add a lexer/parser regression.
 - **Indexed dict assignment missing-key behavior.** Mitigation: test that
-  `set d["new"] = v` raises the same catchable `KeyError` as `d["new"]`.
+  `d["new"] := v` raises the same catchable `KeyError` as `d["new"]`.

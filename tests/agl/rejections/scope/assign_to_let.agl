@@ -1,2 +1,2 @@
 let stable = 1
-set stable = 2
+stable := 2

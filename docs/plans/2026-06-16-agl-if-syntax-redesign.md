@@ -108,7 +108,7 @@ makes `case_stmt`/`case_expr` work**:
   unreachable there. Identical to the existing rule that keeps statement-level
   bare `case` as `case_stmt`.
 - In **expression** positions (`paren_expr`, list/dict elements, interpolation,
-  `let`/`var`/`set`/`print` RHS, `case` subject, …) only `if_expr` is reachable;
+  `let`/`var`/`:=`/`print` RHS, `case` subject, …) only `if_expr` is reachable;
   `if_stmt` is not. The bodies after `=>` therefore differ by left context
   (`branch_body` vs `bar_expr`) in distinct LALR states — no merge, no conflict.
 - `if` is already a reserved keyword token (distinct from `VAR_NAME` and from
@@ -126,8 +126,8 @@ enables the fully-aligned multi-line form:
 
 ```agl
 if
-| code is Fail => set x = a
-| else => set x = b
+| code is Fail => x := a
+| else => x := b
 ```
 
 Add explicit lexer/parser tests for this (it is a new, now-reachable shape).
@@ -195,7 +195,7 @@ unchanged structurally.
   `_eval_case_expr`, which also returns the raw selected branch value without
   coercing it (`return self._eval_expr(branch.body, branch_scope)`). **No coercion
   happens inside the `if`-expression**: `int → decimal` widening (and any other
-  implicit coercion) materializes only when the result reaches a binding/`set`/
+  implicit coercion) materializes only when the result reaches a binding/`:=`/
   constructor boundary via `_coerce`, identical to how `case_expr` results widen.
 - `_exec_if` (statement) is unchanged.
 

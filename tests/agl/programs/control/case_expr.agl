@@ -30,7 +30,7 @@ print note
 
 var tries: int = 0
 do[3]
-  set tries = tries + 1
+  tries := tries + 1
 until (case grade of
   | Top => true
   | _ => tries >= 2)

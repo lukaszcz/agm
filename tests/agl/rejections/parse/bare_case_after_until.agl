@@ -3,4 +3,4 @@ enum S
   | B
 let s: S = A
 var n: int = 0
-do[2] set n = n + 1 until case s of | A => true | B => false
+do[2] n := n + 1 until case s of | A => true | B => false

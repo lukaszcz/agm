@@ -14,6 +14,8 @@ from __future__ import annotations
 from agm.agl.syntax.nodes import (
     ELSE,
     AgentDecl,
+    AssignStmt,
+    AssignTarget,
     BinaryOp,
     Binder,
     BinOp,
@@ -61,8 +63,6 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
-    SetStmt,
-    SetTarget,
     StringLit,
     Template,
     TemplateSegment,
@@ -77,7 +77,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
-    set_target_root_name,
+    assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
@@ -129,11 +129,11 @@ __all__ = [
     # binders
     "LetDecl",
     "VarDecl",
-    "SetStmt",
+    "AssignStmt",
     "NameTarget",
     "IndexTarget",
-    "SetTarget",
-    "set_target_root_name",
+    "AssignTarget",
+    "assign_target_root_name",
     # expressions
     "Block",
     "VarRef",

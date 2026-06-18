@@ -8,7 +8,7 @@ semantics of each. Operator precedence is tabulated in
 [Lexical structure](lexical-structure.md).
 
 In AgL v2 **everything is an expression**: there is no separate statement
-category. Former "statements" — bindings, `set`, `print`, `if` without
+category. Former "statements" — bindings, `:=`, `print`, `if` without
 `else`, loops — are all expressions with well-defined types. A block
 (function body, branch body, or the program top level) is a sequence of
 items whose value is the value of its last item.
@@ -286,7 +286,7 @@ effect, not their value:
 | Form | Type | Notes |
 |------|------|-------|
 | `print(e)` | `unit` | writes to stdout |
-| `set x = e` | `unit` | mutates `x` |
+| `x := e` | `unit` | mutates `x` |
 | `if c => body` (no `else`) | `unit` | branch body must be `unit` |
 | `do … until c` | `unit` | loops run for effect |
 | `()` | `unit` | the unit literal itself |
@@ -356,7 +356,7 @@ The checker propagates an expected type top-down where it helps:
 | Context | Propagated expectation |
 | ------- | ---------------------- |
 | `let x: T = e` / `var x: T = e` | `T` into `e` |
-| `set x = e` | declared type of `x` into `e` |
+| `x := e` | declared type of `x` into `e` |
 | Constructor argument | declared field type |
 | `list[T]` / `dict[text, V]` expectation | element/value type into each element |
 | `case` / `if` expression with outer expectation | into every branch |

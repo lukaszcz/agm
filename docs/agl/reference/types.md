@@ -45,7 +45,7 @@ generics. Model alternatives and optionality with enums.
 
 `unit` is the type of expressions that exist only for their side effect and
 produce no meaningful value. Its single value is written `()` — the empty
-argument list. Side-effecting expressions such as `print(…)`, `set`, an
+argument list. Side-effecting expressions such as `print(…)`, `:=`, an
 `if` without an `else` branch, and `do … until` loops all have type `unit`.
 
 ```agl
@@ -101,7 +101,7 @@ enum MaybeText
 
 Homogeneous containers. Elements and values are read with indexing
 (`xs[0]`, `metadata["key"]`). A mutable `var` binding can be updated through
-an index with `set`; this replaces the binding with a new list or dictionary
+an index with `:=`; this replaces the binding with a new list or dictionary
 value. There is no `len` operator.
 
 ### `agent`

@@ -27,7 +27,7 @@ Matches anything, binds nothing:
 
 ```agl
 case result of
-  | Complete(output) => set artifact = output
+  | Complete(output) => artifact := output
   | _ => ()
 ```
 
@@ -128,6 +128,6 @@ when you need the payload:
 until review is Pass
 
 case review of
-  | Fail(issues) => set artifact = ask("Fix ${issues}", agent: impl)
+  | Fail(issues) => artifact := ask("Fix ${issues}", agent: impl)
   | Pass => ()
 ```

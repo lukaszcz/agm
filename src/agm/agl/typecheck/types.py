@@ -212,7 +212,7 @@ class ExceptionType:
 class UnitType:
     """The ``unit`` type — has a single value written ``()`` (AgL v2, R9).
 
-    Side-effecting expressions (``print``, ``set``, ``if`` with no ``else``,
+    Side-effecting expressions (``print``, ``:=``, ``if`` with no ``else``,
     loops) yield ``unit``.
     """
 
@@ -507,7 +507,7 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "operation": TextType(),
         },
     ),
-    # §8.1: statically prevented in v1 (scope/typecheck reject set on immutable
+    # §8.1: statically prevented in v1 (scope/typecheck reject assignment to immutable
     # bindings and undeclared names), but still listed as catchable runtime
     # exceptions for any runtime paths that bypass the static passes.
     "UndefinedVariableError": ExceptionType(

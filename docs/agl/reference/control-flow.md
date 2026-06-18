@@ -21,7 +21,7 @@ if present, must be last; its own `|` is optional:
 
 ```agl
 if code is Fail or design is Fail =>
-  set artifact = ask("Fix issues:\n${code}\n${design}", agent: impl)
+  artifact := ask("Fix issues:\n${code}\n${design}", agent: impl)
 else =>
   ()
 ```
@@ -66,7 +66,7 @@ flow. A branch body that produces a non-`unit` value is a static error.
 Branch bodies are suites (indented blocks) or single expressions at the
 `or_expr` level. Because branch bodies are `or_expr` positions, a `case` or
 `if` expression used inline must be parenthesized. Mutating an outer `var`
-with `set` inside a branch persists after the `if`.
+with `:=` inside a branch persists after the `if`.
 
 ## `case`
 
@@ -77,8 +77,8 @@ case_branch      ::= pattern "=>" branch_body
 
 ```agl
 case result of
-  | Complete(output) => set artifact = output
-  | Changed(output) => set artifact = output
+  | Complete(output) => artifact := output
+  | Changed(output) => artifact := output
   | Blocked(reason) => raise Abort(message: reason)
   | _ => ()
 ```
@@ -121,7 +121,7 @@ do[5]
   )
   case r of
     | Fail(issues) =>
-        set artifact = ask("Fix ${issues}", agent: impl)
+        artifact := ask("Fix ${issues}", agent: impl)
     | Pass => ()
 until r is Pass
 ```
@@ -159,7 +159,7 @@ Because the condition is post-tested, the body always executes at least once.
 ### Loop state
 
 Iteration-local bindings do not survive to the next iteration or past the
-loop. Persistent state lives in an outer `var` mutated with `set`:
+loop. Persistent state lives in an outer `var` mutated with `:=`:
 
 ```agl
 var artifact: text = ask("Implement ${spec}", agent: impl)
@@ -168,7 +168,7 @@ do[5]
   let review: Review = ask("Review ${artifact}", agent: reviewer)
   case review of
     | Fail(issues) =>
-        set artifact = ask("Fix ${issues}", agent: impl)
+        artifact := ask("Fix ${issues}", agent: impl)
     | Pass => ()
 until review is Pass
 ```

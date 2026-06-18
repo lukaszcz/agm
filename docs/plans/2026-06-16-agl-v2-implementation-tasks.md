@@ -19,7 +19,7 @@ functions, agents-as-values, `unit`. Each plan milestone must end green
 - **D-C (unify stmt/expr control nodes).** `IfStmt`+`IfExpr` → one `If`;
   `CaseStmt`+`CaseExpr` → one `Case`; branch bodies are **blocks** (Expr).
   `DoUntil` → `Do` (yields unit). `TryCatch` → `Try`. `Raise` stays (bottom).
-  `SetStmt` stays (yields unit). `Pass`/`PrintStmt`/`AgentCall`/`CallOptions`
+  `AssignStmt` stays (yields unit). `Pass`/`PrintStmt`/`AgentCall`/`CallOptions`
   removed.
 - **D-D (Call node).** `Call(callee: Expr, args: tuple[Expr,...], named_args:
   tuple[NamedArg,...])`. Single-arg juxtaposition sugar produces the same node.

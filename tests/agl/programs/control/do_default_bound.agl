@@ -2,6 +2,6 @@
 # unbounded.
 var n: int = 0
 do
-  set n = n + 1
+  n := n + 1
 until n >= 4
 print n

@@ -24,6 +24,8 @@ from agm.agl.scope import (
 )
 from agm.agl.scope.symbols import BinderKind
 from agm.agl.syntax.nodes import (
+    AssignStmt,
+    AssignTarget,
     Block,
     BoolLit,
     Call,
@@ -44,8 +46,6 @@ from agm.agl.syntax.nodes import (
     Param,
     PatternField,
     Program,
-    SetStmt,
-    SetTarget,
     StringLit,
     Template,
     Try,
@@ -128,9 +128,9 @@ def _make_var(name: str, value: Expr, line: int = 1) -> VarDecl:
     return VarDecl(name=name, type_ann=None, value=value, span=_sp(line), node_id=_nid())
 
 
-def _make_set(target: str, value: Expr, line: int = 1) -> SetStmt:
+def _make_assign(target: str, value: Expr, line: int = 1) -> AssignStmt:
     span = _sp(line)
-    return SetStmt(
+    return AssignStmt(
         target=NameTarget(name=target, span=span, node_id=_nid()),
         value=value,
         span=span,
@@ -173,8 +173,8 @@ class TestAcceptance:
         r = parse_and_resolve('let x = "hello"\nprint x')
         assert r.program is not None
 
-    def test_var_and_set(self) -> None:
-        r = parse_and_resolve("var n: int = 0\nset n = 1\nn")
+    def test_var_and_assign(self) -> None:
+        r = parse_and_resolve("var n: int = 0\nn := 1\nn")
         assert r.program is not None
 
     def test_param_at_root(self) -> None:
@@ -300,80 +300,80 @@ class TestBlockScoping:
 
 
 # ---------------------------------------------------------------------------
-# set errors
+# Assignment errors
 # ---------------------------------------------------------------------------
 
 
-class TestSetErrors:
-    def test_set_on_let(self) -> None:
-        err = reject_scope("let stable = 1\nset stable = 2\nstable")
+class TestAssignErrors:
+    def test_assign_to_let(self) -> None:
+        err = reject_scope("let stable = 1\nstable := 2\nstable")
         line, msg = diag(err)
         assert line == 2
         assert "stable" in msg
 
-    def test_set_on_undeclared(self) -> None:
-        err = reject_scope("set ghost = 1")
+    def test_assign_to_undeclared(self) -> None:
+        err = reject_scope("ghost := 1")
         line, msg = diag(err)
         assert line == 1
         assert "ghost" in msg
 
-    def test_set_on_input(self) -> None:
-        err = reject_scope("param spec\nset spec = 2\nspec")
+    def test_assign_to_input(self) -> None:
+        err = reject_scope("param spec\nspec := 2\nspec")
         line, msg = diag(err)
         assert line == 2
         assert "spec" in msg
 
-    def test_set_on_let_names_let(self) -> None:
-        err = reject_scope("let stable = 1\nset stable = 2\nstable")
+    def test_assign_to_let_names_let(self) -> None:
+        err = reject_scope("let stable = 1\nstable := 2\nstable")
         _, msg = diag(err)
         assert "let" in msg
         assert "immutable" in msg
 
-    def test_set_on_input_names_input_not_let(self) -> None:
-        err = reject_scope("param spec\nset spec = 2\nspec")
+    def test_assign_to_input_names_input_not_let(self) -> None:
+        err = reject_scope("param spec\nspec := 2\nspec")
         _, msg = diag(err)
         assert "param" in msg
         assert "declared with 'let'" not in msg
 
-    def test_set_on_catch_binder_names_catch(self) -> None:
+    def test_assign_to_catch_binder_names_catch(self) -> None:
         err = reject_scope(
             "try\n"
             "  ()\n"
             "catch _ as err =>\n"
-            "  set err = 1\n"
+            "  err := 1\n"
         )
         line, msg = diag(err)
         assert line == 4
         assert "catch binder" in msg
         assert "declared with 'let'" not in msg
 
-    def test_set_on_pattern_binding_names_pattern(self) -> None:
+    def test_assign_to_pattern_binding_names_pattern(self) -> None:
         err = reject_scope(
             "let v = 1\n"
             "case v of\n"
             "  | n =>\n"
-            "    set n = 2\n"
+            "    n := 2\n"
         )
         line, msg = diag(err)
         assert line == 4
         assert "pattern binding" in msg
         assert "declared with 'let'" not in msg
 
-    def test_set_on_param_names_param(self) -> None:
-        """Setting a parameter is rejected with the 'param_binding' phrasing."""
+    def test_assign_to_param_names_param(self) -> None:
+        """Assigning to a parameter is rejected with the 'param_binding' phrasing."""
         # Use direct AST construction since the parser only allows expressions
-        # in a def body (set is a binder, not an expr in call position).
+        # in a def body (assignment is a binder, not an expr in call position).
         from agm.agl.syntax.types import IntT as IntTNode
 
         sp = _sp()
         int_t = IntTNode(span=sp, node_id=_nid())
         param = Param(name="n", type_expr=int_t, default=None, span=sp, node_id=_nid())
-        set_n = _make_set("n", _make_intlit(2))
+        assign_n = _make_assign("n", _make_intlit(2))
         funcdef = FuncDef(
             name="f",
             params=(param,),
             return_type=int_t,
-            body=_make_block(set_n, _make_varref("n")),
+            body=_make_block(assign_n, _make_varref("n")),
             span=sp,
             node_id=_nid(),
         )
@@ -388,31 +388,31 @@ class TestSetErrors:
         _, msg = diag(err)
         assert "parameter binding" in msg
 
-    def test_invalid_direct_ast_set_target_rejected(self) -> None:
-        set_bad = SetStmt(
-            target=cast(SetTarget, _make_unitlit()),
+    def test_invalid_direct_ast_assign_target_rejected(self) -> None:
+        assign_bad = AssignStmt(
+            target=cast(AssignTarget, _make_unitlit()),
             value=_make_intlit(1),
             span=_sp(),
             node_id=_nid(),
         )
-        err = reject_program(set_bad, _make_unitlit())
+        err = reject_program(assign_bad, _make_unitlit())
         _, msg = diag(err)
         assert "indexed assignment requires a variable list or dict root" in msg
 
-    def test_set_on_function_binding_names_function(self) -> None:
-        """Setting a def name is rejected."""
-        err = reject_scope("def f(x: int) -> int = x\nset f = 1\nf(1)")
+    def test_assign_to_function_binding_names_function(self) -> None:
+        """Assigning to a def name is rejected."""
+        err = reject_scope("def f(x: int) -> int = x\nf := 1\nf(1)")
         _, msg = diag(err)
         assert "function" in msg.lower() or "def" in msg.lower() or "immutable" in msg.lower()
 
-    def test_set_of_var_resolves(self) -> None:
-        r = parse_and_resolve("var n = 0\nset n = 1\nn")
+    def test_assign_to_var_resolves(self) -> None:
+        r = parse_and_resolve("var n = 0\nn := 1\nn")
         assert r.program is not None
-        # Verify the set stmt is in the resolution table.
+        # Verify the assignment statement is in the resolution table.
         block = r.program.body
-        set_node = block.items[1]
-        assert isinstance(set_node, SetStmt)
-        ref = r.resolution[set_node.node_id]
+        assign_node = block.items[1]
+        assert isinstance(assign_node, AssignStmt)
+        ref = r.resolution[assign_node.node_id]
         assert ref.name == "n"
         assert ref.mutable is True
 
@@ -966,7 +966,7 @@ class TestDoScoping:
             "var n = 0\n"
             "do[2]\n"
             "  let probe = n\n"
-            "  set n = probe\n"
+            "  n := probe\n"
             "until n >= 1\n"
             "n"
         )
@@ -992,7 +992,7 @@ class TestDoScoping:
 
     def test_do_inline_body_resolved(self) -> None:
         """Inline (non-block) do body is also resolved."""
-        r = parse_and_resolve("var n = 0\ndo[2] set n = 1 until n >= 1\nn")
+        r = parse_and_resolve("var n = 0\ndo[2] n := 1 until n >= 1\nn")
         assert r.program is not None
 
 
@@ -1181,20 +1181,20 @@ class TestParentScopeSeam:
         assert "x" in entry.root_scope.bindings
         assert entry.root_scope.bindings["x"].decl_node_id == let_stmt.node_id
 
-    def test_set_on_parent_mutable_resolves(self) -> None:
-        """``set`` of a parent var binding resolves through the parent."""
+    def test_assign_to_parent_mutable_resolves(self) -> None:
+        """``:=`` of a parent var binding resolves through the parent."""
         session = parse_and_resolve("var n: int = 0\nn")
-        entry = resolve(parse_program("set n = 1"), parent_scope=session.root_scope)
-        set_stmt = entry.program.body.items[0]
-        assert isinstance(set_stmt, SetStmt)
-        ref = entry.resolution[set_stmt.node_id]
+        entry = resolve(parse_program("n := 1"), parent_scope=session.root_scope)
+        assign_stmt = entry.program.body.items[0]
+        assert isinstance(assign_stmt, AssignStmt)
+        ref = entry.resolution[assign_stmt.node_id]
         assert ref.name == "n"
         assert ref.mutable is True
 
-    def test_set_on_parent_immutable_still_errors(self) -> None:
+    def test_assign_to_parent_immutable_still_errors(self) -> None:
         session = parse_and_resolve("let k = 1\nk")
         with pytest.raises(AglScopeError) as exc_info:
-            resolve(parse_program("set k = 2"), parent_scope=session.root_scope)
+            resolve(parse_program("k := 2"), parent_scope=session.root_scope)
         assert "Cannot assign" in str(exc_info.value)
 
     def test_ambient_agents(self) -> None:
@@ -1214,7 +1214,7 @@ class TestParentScopeSeam:
 
 
 # ---------------------------------------------------------------------------
-# Resolution side table: VarRef and SetStmt
+# Resolution side table: VarRef and AssignStmt
 # ---------------------------------------------------------------------------
 
 
@@ -1227,11 +1227,11 @@ class TestResolutionSideTable:
         assert ref.name == "x"
         assert not ref.mutable
 
-    def test_set_resolves_to_var(self) -> None:
-        r = parse_and_resolve("var n = 0\nset n = 1\nn")
-        set_item = r.program.body.items[1]
-        assert isinstance(set_item, SetStmt)
-        ref = r.resolution[set_item.node_id]
+    def test_assign_resolves_to_var(self) -> None:
+        r = parse_and_resolve("var n = 0\nn := 1\nn")
+        assign_item = r.program.body.items[1]
+        assert isinstance(assign_item, AssignStmt)
+        ref = r.resolution[assign_item.node_id]
         assert ref.name == "n"
         assert ref.mutable
 
@@ -1281,8 +1281,8 @@ class TestDirectASTConstruction:
     def test_do_body_as_block_bindings_visible_in_condition(self) -> None:
         var_n = _make_var("n", _make_intlit(0))
         let_probe = _make_let("probe", _make_varref("n"))
-        set_n = _make_set("n", _make_varref("probe"))
-        body = _make_block(let_probe, set_n)
+        assign_n = _make_assign("n", _make_varref("probe"))
+        body = _make_block(let_probe, assign_n)
         do_node = Do(
             limit=5,
             body=body,

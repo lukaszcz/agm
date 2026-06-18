@@ -34,6 +34,8 @@ from agm.agl.eval.values import (
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AssignStmt,
+    AssignTarget,
     BinaryOp,
     BinOp,
     Block,
@@ -67,8 +69,6 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
-    SetStmt,
-    SetTarget,
     StringLit,
     Template,
     TextSegment,
@@ -259,10 +259,10 @@ class Interpreter:
                 item.name, _coerce(value, target_type), mutable=True, decl_span=item.span
             )
             return UNIT_VALUE
-        if isinstance(item, SetStmt):
+        if isinstance(item, AssignStmt):
             ref = self._checked.resolved.resolution[item.node_id]
             target_type = self._binding_type_for(ref.decl_node_id)
-            slot_type = _set_target_slot_type(item.target, target_type)
+            slot_type = _assign_target_slot_type(item.target, target_type)
             if isinstance(item.target, NameTarget):
                 value = self._eval_expr(item.value, scope)
                 coerced = _coerce(value, slot_type)
@@ -281,7 +281,7 @@ class Interpreter:
                     coerced,
                     span=item.span,
                 )
-            scope.set_value(ref.name, updated)
+            scope.assign_value(ref.name, updated)
             self._trace.mutation(name=ref.name, value=updated, span=item.span)
             return UNIT_VALUE
         # --- Declarations (already handled in pre-pass or have no runtime action) ---
@@ -1524,7 +1524,7 @@ def _matches_catch(handler: CatchClause, exc: ExceptionValue) -> bool:
     return handler.exc_type == exc.type_name
 
 
-def _set_target_slot_type(target: SetTarget, root_type: Type) -> Type:
+def _assign_target_slot_type(target: AssignTarget, root_type: Type) -> Type:
     """Return the type assigned by *target*, starting from *root_type*."""
     if isinstance(target, NameTarget):
         return root_type

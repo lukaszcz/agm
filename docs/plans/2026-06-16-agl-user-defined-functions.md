@@ -35,7 +35,7 @@ breaking redesign, not an additive feature:
    a *declared* name (a `def` or a built-in), and are erased from the value type.
 6. **No generics yet**, but every interface is designed so parametric
    polymorphism can be added later without another redesign.
-7. **A `unit` type** is added for side-effecting expressions (`print`, `set`, an
+7. **A `unit` type** is added for side-effecting expressions (`print`, `:=`, an
    `if` with no `else`, loops).
 
 > This is a large undertaking touching every pipeline stage (lexer → grammar →
@@ -124,7 +124,7 @@ Each former statement gets an expression type:
 | Form | Value / type | Notes |
 |------|--------------|-------|
 | `let`/`var x = e; rest` | type of `rest` | binder over continuation |
-| `set x = e` | `unit` | mutation; followed by a continuation in a block |
+| `x := e` | `unit` | mutation; followed by a continuation in a block |
 | `print(e)` | `unit` | |
 | `if c => a` (no else) | `unit` | branch body must be `unit` |
 | `if c => a \| else => b` | unified type of `a`,`b` | `int→decimal` widening, as `case` today |
@@ -520,7 +520,7 @@ Write failing tests first; add regression tests; hold 100% `src/` coverage.
   typing via context; `print` any→unit; rejection of `let f = print` (D6);
   opacity rejections (D9); option-arg enum typing (D11).
 - **Eval:** closures, recursion + depth-limit exception; defaults evaluated in
-  def scope; `if`-no-else/`do`/`set`/`raise` values; `ask`/`exec`/`print` through
+  def scope; `if`-no-else/`do`/`:=`/`raise` values; `ask`/`exec`/`print` through
   the unified path; agent value dispatch + default agent.
 - **Runtime/REPL:** agent reconciliation unchanged; trace content stable; REPL
   echo of expression values.

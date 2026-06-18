@@ -177,7 +177,7 @@ class TraceStore:
         value: "Value",
         span: "SourceSpan | None" = None,
     ) -> None:
-        """Record a ``set`` mutation of a mutable binding."""
+        """Record a ``:=`` mutation of a mutable binding."""
         if self._path is None:
             return
         from agm.agl.runtime.serialize import dumps_exact

@@ -108,12 +108,12 @@ def test_let_block_value() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Var + set returns final mutated value
+# 2. Var + assignment returns final mutated value
 # ---------------------------------------------------------------------------
 
 
-def test_var_set_unit() -> None:
-    snap = _run_source("var x = 1\nset x = 2\n()")
+def test_var_assign_unit() -> None:
+    snap = _run_source("var x = 1\nx := 2\n()")
     assert snap["x"] == IntValue(2)
 
 
@@ -145,17 +145,17 @@ y"""
 
 
 def test_var_list_index_assignment_copy_on_write() -> None:
-    snap = _run_source("var xs = [1, 2, 3]\nset xs[1] = 20\nxs")
+    snap = _run_source("var xs = [1, 2, 3]\nxs[1] := 20\nxs")
     assert snap["xs"] == ListValue((IntValue(1), IntValue(20), IntValue(3)))
 
 
 def test_var_dict_index_assignment_copy_on_write() -> None:
-    snap = _run_source('var d = {"a": 1, "b": 2}\nset d["b"] = 20\nd')
+    snap = _run_source('var d = {"a": 1, "b": 2}\nd["b"] := 20\nd')
     assert snap["d"] == DictValue({"a": IntValue(1), "b": IntValue(20)})
 
 
 def test_nested_list_index_assignment_copy_on_write() -> None:
-    snap = _run_source("var xs = [[1, 2], [3, 4]]\nset xs[0][1] = 20\nxs")
+    snap = _run_source("var xs = [[1, 2], [3, 4]]\nxs[0][1] := 20\nxs")
     assert snap["xs"] == ListValue(
         (
             ListValue((IntValue(1), IntValue(20))),
@@ -165,7 +165,7 @@ def test_nested_list_index_assignment_copy_on_write() -> None:
 
 
 def test_nested_dict_index_assignment_copy_on_write() -> None:
-    snap = _run_source('var d = {"a": {"b": 1}}\nset d["a"]["b"] = 2\nd')
+    snap = _run_source('var d = {"a": {"b": 1}}\nd["a"]["b"] := 2\nd')
     assert snap["d"] == DictValue({"a": DictValue({"b": IntValue(2)})})
 
 
@@ -184,7 +184,7 @@ def test_out_of_range_list_assignment_raises_catchable_index_error() -> None:
     source = """\
 var xs = [1, 2]
 let r = try
-  set xs[2] = 3
+  xs[2] := 3
   0
 catch IndexError as e =>
   e.index + e.length
@@ -198,7 +198,7 @@ def test_index_assignment_target_failure_precedes_rhs_evaluation() -> None:
     source = """\
 var xs = [1, 2]
 let r = try
-  set xs[9] = raise ArithmeticError(message: "rhs", operation: "+")
+  xs[9] := raise ArithmeticError(message: "rhs", operation: "+")
   0
 catch IndexError as e =>
   e.index
@@ -214,7 +214,7 @@ def test_nested_index_assignment_outer_target_failure_precedes_inner_index() -> 
     source = """\
 var xs = [[1], [2]]
 let r = try
-  set xs[9][raise ArithmeticError(message: "inner", operation: "+")] = 2
+  xs[9][raise ArithmeticError(message: "inner", operation: "+")] := 2
   0
 catch IndexError as e =>
   e.index
@@ -247,7 +247,7 @@ def test_missing_dict_key_assignment_raises_catchable_key_error() -> None:
     source = """\
 var d = {"a": 1}
 let r = try
-  set d["b"] = 2
+  d["b"] := 2
   ""
 catch KeyError as e =>
   e.message
@@ -333,7 +333,7 @@ def test_do_until_success() -> None:
     source = """\
 var count = 0
 do[10]
-  set count = count + 1
+  count := count + 1
 until count = 3
 ()"""
     snap = _run_source(source)
@@ -405,7 +405,7 @@ def test_do_exhausted_raises() -> None:
     source = """\
 var x = 0
 do[3]
-  set x = x + 1
+  x := x + 1
 until x = 99
 ()"""
     with pytest.raises(AglRaise) as exc_info:
@@ -1149,15 +1149,15 @@ def test_closure_eq_and_hash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 34. scope.py — set_value returns False when name not found (line 60)
+# 34. scope.py — assign_value returns False when name not found (line 60)
 # ---------------------------------------------------------------------------
 
 
-def test_scope_set_value_not_found() -> None:
+def test_scope_assign_value_not_found() -> None:
     from agm.agl.eval.scope import Scope
 
     scope = Scope(parent=None)
-    result = scope.set_value("nonexistent", BoolValue(True))
+    result = scope.assign_value("nonexistent", BoolValue(True))
     assert result is False
 
 
@@ -1291,8 +1291,8 @@ def test_template_interpolation() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_var_decl_and_set() -> None:
-    source = "var x = 10\nset x = x + 5\nx"
+def test_var_decl_and_assign() -> None:
+    source = "var x = 10\nx := x + 5\nx"
     snap = _run_source(source)
     assert snap["x"] == IntValue(15)
 
@@ -1849,7 +1849,7 @@ def test_source_slice_empty() -> None:
     source = """\
 var x = 0
 do[1]
-  set x = x + 1
+  x := x + 1
 until x = 99
 ()"""
     with pytest.raises(AglRaise) as exc_info:
@@ -2280,7 +2280,7 @@ def test_source_slice_empty_and_non_empty() -> None:
     from agm.agl.scope import resolve
     from agm.agl.typecheck import check
 
-    src = "var n = 0\ndo[1]\n  set n = n + 1\nuntil n = 99\n()"
+    src = "var n = 0\ndo[1]\n  n := n + 1\nuntil n = 99\n()"
     program = parse_program(src)
     resolved = resolve(program)
     caps = HostCapabilities(

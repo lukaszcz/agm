@@ -221,7 +221,7 @@ operation: text
 
 `TypeError`, `UndefinedVariableError`, and `ImmutableBindingError` are
 prevented statically in normal programs — type errors, reads of undefined
-names, and `set` on immutable bindings are all static errors — but the types
+names, and `:=` on immutable bindings are all static errors — but the types
 exist, are catchable, and may be constructed and raised explicitly.
 
 ### `Abort`

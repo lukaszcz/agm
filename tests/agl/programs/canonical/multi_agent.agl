@@ -16,11 +16,11 @@ var code: Review = Pass
 var design: Review = Pass
 
 do[5]
-  set code = ask("Review correctness:\n${artifact}", agent: reviewer, on_parse_error: Retry(n: 2))
-  set design = ask("Review design:\n${artifact}", agent: critic, on_parse_error: Retry(n: 2))
+  code := ask("Review correctness:\n${artifact}", agent: reviewer, on_parse_error: Retry(n: 2))
+  design := ask("Review design:\n${artifact}", agent: critic, on_parse_error: Retry(n: 2))
 
   if code is Fail or design is Fail =>
-    set artifact = ask("""
+    artifact := ask("""
     Fix valid issues.
 
     Correctness review:

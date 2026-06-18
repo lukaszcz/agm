@@ -15,7 +15,7 @@ do[6]
   case proposal of
     | Continue(message) =>
         let critique: Turn = ask("Critique this proposal:\n${message}", agent: critic, on_parse_error: Retry(n: 2))
-        set proposal = ask("Revise using critique:\n${critique}", agent: researcher, on_parse_error: Retry(n: 2))
+        proposal := ask("Revise using critique:\n${critique}", agent: researcher, on_parse_error: Retry(n: 2))
 
     | _ => ()
 
@@ -23,7 +23,7 @@ until proposal is Done
 
 case proposal of
   | Done(answer) =>
-      set final_answer = answer
+      final_answer := answer
   | _ => ()
 
 print final_answer

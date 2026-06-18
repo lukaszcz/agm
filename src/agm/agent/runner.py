@@ -15,6 +15,11 @@ from agm.core import dry_run
 from agm.core.fs import is_file
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
 
+# Shell convention: exit code 127 means the command could not be found or
+# executed.  Treated as a fatal runner-configuration error (see
+# :func:`run_prompt_command`) so the loop does not retry a missing runner.
+_RUNNER_NOT_FOUND_EXIT = 127
+
 
 @dataclass(slots=True)
 class ResolvedPrompt:
@@ -201,7 +206,7 @@ def run_prompt_command(
         if stderr_callback is not None:
             stderr_callback(chunk)
 
-    _, stdout, stderr = run_capture(
+    returncode, stdout, stderr = run_capture(
         command_with_prompt_target(command, target),
         env=env,
         stdout_callback=handle_stdout,
@@ -209,6 +214,24 @@ def run_prompt_command(
         isolate_process_group=True,
         idle_timeout=idle_timeout,
     )
+
+    # Exit code 127 is the shell's "command not found" convention: the resolved
+    # runner command could not be found or executed.  This is a fatal
+    # configuration error, not a transient runner failure the loop should
+    # retry — surface it immediately so ``agm loop``/``review``/``revise``/
+    # ``refine`` break out instead of looping forever on a missing runner.
+    if returncode == _RUNNER_NOT_FOUND_EXIT:
+        runner_name = command[0] if command else ""
+        msg = (
+            f"Error: runner command {runner_name!r} could not be found or executed "
+            f"(exit code {returncode})."
+        )
+        if stderr:
+            stderr_tail = stderr if len(stderr) <= 500 else stderr[-500:]
+            msg = f"{msg}\n{stderr_tail}"
+        print(msg, file=sys.stderr)
+        raise SystemExit(1)
+
     if ordered_output:
         return "".join(ordered_output)
     output = stdout

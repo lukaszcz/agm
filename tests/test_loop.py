@@ -1264,6 +1264,124 @@ class TestRunCommandOutputAssembly:
 
 
 # ---------------------------------------------------------------------------
+# loop/step.py – run_prompt_command exit-127 fatal behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestRunCommandExit127Fatal:
+    """Exit code 127 (command-not-found) is a fatal runner-configuration error.
+
+    ``run_prompt_command`` raises ``SystemExit(1)`` and prints a clear message
+    so ``agm loop``/``review``/``revise``/``refine`` break out instead of
+    retrying a missing runner forever.
+    """
+
+    def test_exit_127_raises_system_exit_1(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        target = tmp_path / "prompt.md"
+        target.write_text("prompt", encoding="utf-8")
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str],
+            stdout_callback: Any = None,
+            stderr_callback: Any = None,
+            isolate_process_group: bool = False,
+            idle_timeout: float | None = None,
+        ) -> tuple[int, str, str]:
+            return (127, "", "command not found")
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_prompt_command(["claude", "-p"], target, env={})
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "could not be found or executed" in captured.err
+        assert "claude" in captured.err
+        assert "127" in captured.err
+
+    def test_exit_127_includes_stderr_tail_in_message(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        target = tmp_path / "prompt.md"
+        target.write_text("prompt", encoding="utf-8")
+        prefix = "HEAD-" * 20  # 100 chars, distinctive, at the start
+        suffix = "-TAIL-" * 100  # 600 chars, distinctive, at the end
+        long_stderr = prefix + suffix  # 700 chars total
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str],
+            stdout_callback: Any = None,
+            stderr_callback: Any = None,
+            isolate_process_group: bool = False,
+            idle_timeout: float | None = None,
+        ) -> tuple[int, str, str]:
+            return (127, "", long_stderr)
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(SystemExit):
+            run_prompt_command(["runner"], target, env={})
+        captured = capsys.readouterr()
+        # Only the last 500 chars of a long stderr are appended.
+        assert long_stderr[-500:] in captured.err
+        assert "HEAD-" not in captured.err
+
+    def test_exit_127_without_stderr_still_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        target = tmp_path / "prompt.md"
+        target.write_text("prompt", encoding="utf-8")
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str],
+            stdout_callback: Any = None,
+            stderr_callback: Any = None,
+            isolate_process_group: bool = False,
+            idle_timeout: float | None = None,
+        ) -> tuple[int, str, str]:
+            return (127, "", "")
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_prompt_command(["missing-runner"], target, env={})
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "could not be found or executed" in captured.err
+
+    def test_nonzero_non_127_exit_is_not_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A nonzero exit that is NOT 127 is returned normally (not fatal)."""
+        target = tmp_path / "prompt.md"
+        target.write_text("prompt", encoding="utf-8")
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str],
+            stdout_callback: Any = None,
+            stderr_callback: Any = None,
+            isolate_process_group: bool = False,
+            idle_timeout: float | None = None,
+        ) -> tuple[int, str, str]:
+            return (1, "agent output", "")
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        output = run_prompt_command(["claude", "-p"], target, env={})
+        assert output == "agent output"
+
+
+# ---------------------------------------------------------------------------
 # loop/step.py – validate_command
 # ---------------------------------------------------------------------------
 

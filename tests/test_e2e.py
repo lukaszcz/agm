@@ -4080,6 +4080,7 @@ class TestLoop:
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         state_file = tmp_path / "runner-count"
+        continue_file = tmp_path / "runner-continue"
 
         _install_fake_loop_command(
             tmp_path / "bin",
@@ -4096,7 +4097,7 @@ class TestLoop:
                 'if [[ "$count" == "1" ]]; then\n'
                 '  printf "runner line 1\\n"\n'
                 "  sync\n"
-                "  sleep 2\n"
+                f'  while [[ ! -f "{continue_file}" ]]; do sleep 0.01; done\n'
                 '  printf "keep going\\n"\n'
                 "else\n"
                 '  printf "COMPLETE\\n"\n'
@@ -4148,6 +4149,7 @@ class TestLoop:
             assert "runner line 1\n" in log_file.read_text()
             assert "COMPLETE\n" not in log_file.read_text()
 
+            continue_file.write_text("")
             stdout, stderr = process.communicate(timeout=30)
             assert process.returncode == 0
             assert stderr == ""
@@ -4160,6 +4162,7 @@ class TestLoop:
     def test_streams_selector_output_to_stdout_and_log_before_selector_exits(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
+        continue_file = tmp_path / "selector-continue"
         _install_fake_loop_command(
             tmp_path / "bin",
             env,
@@ -4175,7 +4178,7 @@ class TestLoop:
                 'if [[ "$count" == "1" ]]; then\n'
                 '  printf "task-1.md\\n"\n'
                 "  sync\n"
-                "  sleep 2\n"
+                f'  while [[ ! -f "{continue_file}" ]]; do sleep 0.01; done\n'
                 "else\n"
                 '  printf "COMPLETE\\n"\n'
                 "fi\n"
@@ -4235,6 +4238,7 @@ class TestLoop:
             assert "task-1.md\n" in log_file.read_text()
             assert "implemented task\n" not in log_file.read_text()
 
+            continue_file.write_text("")
             stdout, stderr = process.communicate(timeout=30)
             assert process.returncode == 0
             assert stderr == ""
@@ -6866,9 +6870,9 @@ class TestHelp:
         ):
             assert cmd in result.stdout, f"'{cmd}' missing from overview"
 
-    def test_help_for_each_canonical_command(self, tmp_path: Path, env: dict[str, str]) -> None:
-        """Every canonical command has a detailed help entry."""
-        for cmd in (
+    @pytest.mark.parametrize(
+        "cmd",
+        (
             "open",
             "init",
             "close",
@@ -6880,10 +6884,15 @@ class TestHelp:
             "run",
             "tmux",
             "help",
-        ):
-            result = run_agm(["help", cmd], env=env, cwd=str(tmp_path))
-            assert result.returncode == 0, f"help {cmd} failed"
-            assert f"agm {cmd}" in result.stdout, f"help {cmd} missing header"
+        ),
+    )
+    def test_help_for_each_canonical_command(
+        self, cmd: str, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """Every canonical command has a detailed help entry."""
+        result = run_agm(["help", cmd], env=env, cwd=str(tmp_path))
+        assert result.returncode == 0, f"help {cmd} failed"
+        assert f"agm {cmd}" in result.stdout, f"help {cmd} missing header"
 
     def test_help_help_mentions_completion_options(
         self, tmp_path: Path, env: dict[str, str]

@@ -19,10 +19,10 @@ def test_run_capture_streams_stdout_and_stderr_before_process_exit(tmp_path: Pat
         "import sys, time\n"
         'sys.stdout.write("out-1")\n'
         "sys.stdout.flush()\n"
-        "time.sleep(0.5)\n"
+        "time.sleep(0.05)\n"
         'sys.stderr.write("err-1")\n'
         "sys.stderr.flush()\n"
-        "time.sleep(0.5)\n"
+        "time.sleep(0.05)\n"
         'sys.stdout.write("out-2\\n")\n'
         "sys.stdout.flush()\n",
         encoding="utf-8",

@@ -3414,3 +3414,137 @@ class TestValueCallErrors:
         # exec into a function/agent type is a static error.
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
         assert "function" in str(err).lower() or "agent" in str(err).lower()
+
+
+# ---------------------------------------------------------------------------
+# Cast typecheck tests (M3)
+# ---------------------------------------------------------------------------
+
+
+class TestCast:
+    """Tests for the Cast node type checking."""
+
+    def test_int_as_text_total_render(self) -> None:
+        """int as text yields text."""
+        r = accept_type("let s: text = 1 as text\ns")
+        assert r  # no exception
+
+    def test_text_as_json_total_json(self) -> None:
+        """text as json yields json."""
+        r = accept_type('let j: json = "hello" as json\nj')
+        assert r
+
+    def test_text_as_int_fallible_yields_int(self) -> None:
+        """text as int yields int type."""
+        r = accept_type('let x: int = "42" as int\nx')
+        assert r
+
+    def test_decimal_as_int_fallible(self) -> None:
+        """decimal as int is fallible, yields int."""
+        r = accept_type("let d = 3.5\nlet x: int = d as int\nx")
+        assert r
+
+    def test_int_as_decimal_noop(self) -> None:
+        """int as decimal is a no-op widen."""
+        r = accept_type("let d: decimal = 1 as decimal\nd")
+        assert r
+
+    def test_as_question_yields_bool(self) -> None:
+        """as? always yields bool."""
+        r = accept_type('let b: bool = "42" as? int\nb')
+        assert r
+
+    def test_as_question_on_total_cast_yields_bool(self) -> None:
+        """as? on a total cast also yields bool."""
+        r = accept_type("let b: bool = 1 as? text\nb")
+        assert r
+
+    def test_bool_to_int_rejected(self) -> None:
+        """bool as int is a static error."""
+        err = reject_type("true as int")
+        assert "bool" in str(err).lower() or "cannot cast" in str(err).lower()
+
+    def test_int_to_bool_rejected(self) -> None:
+        """int as bool is a static error."""
+        err = reject_type("1 as bool")
+        assert "cannot cast" in str(err).lower() or "int" in str(err).lower()
+
+    def test_agent_as_text_rejected(self) -> None:
+        """agent value as text is a static error."""
+        err = reject_type("agent myAgent\nmyAgent as text")
+        assert "cannot cast" in str(err).lower() or "agent" in str(err).lower()
+
+    def test_record_as_json_rejected(self) -> None:
+        """record as json is a static error."""
+        err = reject_type("record R\n  x: int\nlet r = R(x: 1)\nr as json")
+        assert "cannot cast" in str(err).lower()
+
+    def test_cast_to_unit_rejected(self) -> None:
+        """casting to unit is a static error."""
+        err = reject_type("1 as unit")
+        assert "cannot cast" in str(err).lower() or "unit" in str(err).lower()
+
+    def test_as_question_same_static_error(self) -> None:
+        """as? on a static-error pair is also a static error."""
+        err = reject_type("true as? int")
+        assert "cannot cast" in str(err).lower()
+
+    def test_json_to_text_render(self) -> None:
+        """json as text yields text (TOTAL_RENDER — D1 completeness)."""
+        r = accept_type('let j: json = 42\nlet s: text = j as text\ns')
+        assert r
+
+    def test_json_as_text_let_binding(self) -> None:
+        """json as text typechecks: let s: text = (1 as json) as text."""
+        r = accept_type("let s: text = (1 as json) as text\ns")
+        assert r
+
+    def test_chained_cast_int_to_json_to_text(self) -> None:
+        """Chained x as json as text resolves to text (D5 example)."""
+        r = accept_type("let x: int = 1\nlet s: text = x as json as text\ns")
+        assert r
+
+    def test_json_to_list_fallible(self) -> None:
+        """json as list[int] yields list[int]."""
+        r = accept_type("let j: json = 42\nlet xs: list[int] = j as list[int]\nxs")
+        assert r
+
+    def test_cast_spec_stored(self) -> None:
+        """CastSpec is stored in CheckedProgram.cast_specs."""
+        from agm.agl.typecheck.types import CastKind
+        r = accept_type("1 as text")
+        assert len(r.cast_specs) == 1
+        spec = next(iter(r.cast_specs.values()))
+        assert spec.kind == CastKind.TOTAL_RENDER
+
+    def test_as_question_spec_stored(self) -> None:
+        """as? CastSpec is stored with same kind as as."""
+        from agm.agl.typecheck.types import CastKind
+        r = accept_type('"hello" as? int')
+        assert len(r.cast_specs) == 1
+        spec = next(iter(r.cast_specs.values()))
+        assert spec.kind == CastKind.FALLIBLE
+
+
+class TestParseJsonCall:
+    """Tests for parse_json built-in."""
+
+    def test_parse_json_returns_json(self) -> None:
+        """parse_json("...") yields json."""
+        r = accept_type('let j: json = parse_json("42")\nj')
+        assert r
+
+    def test_parse_json_named_arg_rejected(self) -> None:
+        """Named args to parse_json are rejected."""
+        err = reject_type('parse_json(text: "42")')
+        assert "parse_json" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_parse_json_wrong_arity_rejected(self) -> None:
+        """parse_json() with wrong arity is rejected."""
+        err = reject_type('parse_json("a", "b")')
+        assert "parse_json" in str(err).lower() or "one" in str(err).lower()
+
+    def test_parse_json_no_args_rejected(self) -> None:
+        """parse_json() with no args is rejected."""
+        err = reject_type("parse_json()")
+        assert "parse_json" in str(err).lower()

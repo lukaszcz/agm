@@ -572,6 +572,8 @@ class Interpreter:
             return self._eval_ask_request_call(expr, scope)
         if builtin_kind is BuiltinKind.EXEC:
             return self._eval_exec_call(expr, scope)
+        if builtin_kind is BuiltinKind.PARSE_JSON:
+            raise NotImplementedError("parse_json eval: M5")  # pragma: no cover
 
         # User-defined function or closure call.
         callee_val = self._eval_expr(expr.callee, scope)

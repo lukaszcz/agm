@@ -38,6 +38,7 @@ the type's kind in the ``HostCapabilities.codec_kinds`` maps.  E.g.
 
 from __future__ import annotations
 
+import enum as _enum
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -543,6 +544,24 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "limit": IntType(),
         },
     ),
+    "CastError": ExceptionType(
+        name="CastError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "source_type": TextType(),
+            "target_type": TextType(),
+            "raw": TextType(),
+        },
+    ),
+    "JsonParseError": ExceptionType(
+        name="JsonParseError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "raw": TextType(),
+        },
+    ),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).
@@ -632,3 +651,87 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).
 BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
+
+
+# ---------------------------------------------------------------------------
+# Cast classification (M3b)
+# ---------------------------------------------------------------------------
+
+
+
+class CastKind(_enum.Enum):
+    """Classification of a cast operation from cast_classification()."""
+
+    TOTAL_NOOP = "TOTAL_NOOP"      # source already assignable to target (no-op/widen)
+    TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text
+    TOTAL_JSON = "TOTAL_JSON"      # canonicalize JSON-shaped value to json
+    FALLIBLE = "FALLIBLE"          # runtime-fallible conversion
+    STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
+
+
+@dataclass(frozen=True, slots=True)
+class CastSpec:
+    """Resolved runtime cast descriptor stored in CheckedProgram.cast_specs."""
+
+    target_type: Type
+    kind: CastKind
+
+
+def cast_classification(source: Type, target: Type) -> CastKind:
+    """Classify a cast from source to target type.
+
+    Returns the CastKind for the (source, target) pair.
+    """
+    # Non-data types never participate
+    _non_data = (UnitType, AgentType, FunctionType, BottomType)
+    if isinstance(source, _non_data) or isinstance(target, _non_data):
+        return CastKind.STATIC_ERROR
+    # ExceptionType as target is not in the matrix
+    if isinstance(target, ExceptionType):
+        return CastKind.STATIC_ERROR
+
+    # Handle is_assignable cases first (no-op / widen / json-absorb).
+    # Note: is_assignable(X, TextType) is true only when X is TextType itself
+    # (no implicit widening to text), so the only assignable-to-text case is noop.
+    # is_assignable(X, JsonType) is true for all json-shaped types.
+    if is_assignable(source, target):
+        if isinstance(target, JsonType):
+            # json → json: noop; all other json-shaped sources → canonicalize
+            if isinstance(source, JsonType):
+                return CastKind.TOTAL_NOOP
+            return CastKind.TOTAL_JSON
+        # All other assignable cases are no-ops (including int→decimal widen,
+        # same-type identity, etc.)
+        return CastKind.TOTAL_NOOP
+
+    # Now source is NOT assignable to target.
+    _text_or_json = (TextType, JsonType)
+
+    if isinstance(target, TextType):
+        # renderable types: json, bool, int, decimal, list, dict, record, enum
+        # ExceptionType NOT renderable via casts; non-data types filtered above.
+        if isinstance(source, (JsonType, BoolType, IntType, DecimalType, ListType, DictType,
+                               RecordType, EnumType)):
+            return CastKind.TOTAL_RENDER
+        return CastKind.STATIC_ERROR
+
+    if isinstance(target, JsonType):
+        # All json-shaped sources are assignable to json (handled above), so
+        # anything reaching here is NOT json-shaped → static error.
+        return CastKind.STATIC_ERROR
+
+    if isinstance(target, (BoolType, IntType, DecimalType)):
+        # decimal → int is a narrowing cast (fallible); text/json → numeric is fallible.
+        if isinstance(source, _text_or_json) or (
+            isinstance(target, IntType) and isinstance(source, DecimalType)
+        ):
+            return CastKind.FALLIBLE
+        return CastKind.STATIC_ERROR
+
+    if isinstance(target, (ListType, DictType, RecordType, EnumType)):
+        if isinstance(source, _text_or_json):
+            return CastKind.FALLIBLE
+        return CastKind.STATIC_ERROR
+
+    # All target types are covered above; this is a safety fallback.
+    return CastKind.STATIC_ERROR  # pragma: no cover

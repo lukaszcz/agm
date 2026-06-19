@@ -824,6 +824,7 @@ class TestWarningsThreadedOnFailurePaths:
                 warnings=(*checked.warnings, warning),
                 type_env=checked.type_env,
                 function_signatures=checked.function_signatures,
+                cast_specs=checked.cast_specs,
             )
 
         monkeypatch.setattr(tc_mod, "check", check_with_warning)

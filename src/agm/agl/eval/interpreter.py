@@ -90,6 +90,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.typecheck.types import (
+    CastKind,
     DecimalType,
     DictType,
     EnumType,
@@ -1416,7 +1417,10 @@ class Interpreter:
                     span=expr.span,
                 ) from e
         else:
-            # as?: trial conversion — only catch CastConversionError
+            # as?: total casts always succeed — short-circuit without converting.
+            if spec.kind in (CastKind.TOTAL_NOOP, CastKind.TOTAL_RENDER, CastKind.TOTAL_JSON):
+                return BoolValue(True)
+            # Fallible cast: trial conversion — only catch CastConversionError.
             try:
                 convert_value(value, source_type, target)
                 return BoolValue(True)

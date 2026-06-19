@@ -53,7 +53,7 @@ from agm.agl.eval.values import (
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.schema import derive_schema
-from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 from agm.agl.typecheck.types import (
     BoolType,
     DecimalType,
@@ -308,16 +308,6 @@ def parse_json_strict(text: str) -> object:
 # ---------------------------------------------------------------------------
 
 
-def _clean_value_repr(obj: object) -> str:
-    """Return a clean, human-readable representation of a JSON-shaped value.
-
-    Avoids leaking Python internal reprs such as ``Decimal('3.5')``;
-    uses JSON serialization with a ``default`` fallback that renders
-    Decimal as a plain number string.
-    """
-    return json.dumps(obj, ensure_ascii=False, default=str)
-
-
 def json_obj_to_value(obj: object, typ: Type) -> Value:
     """Convert a JSON-shaped Python object *obj* into the typed ``Value`` for *typ*.
 
@@ -345,7 +335,7 @@ def json_obj_to_value(obj: object, typ: Type) -> Value:
         # Build a clean message that does not leak Python Decimal(...) reprs.
         # We use the clean rendering of the source object and the target type
         # name instead of the raw jsonschema instance repr.
-        clean_raw = _clean_value_repr(obj)
+        clean_raw = dumps_exact(obj, indent=None)
         msgs = "; ".join(_clean_validation_message(e) for e in errors)
         raise CastConversionError(
             f"Schema validation failed: {msgs}",
@@ -363,7 +353,7 @@ def json_obj_to_value(obj: object, typ: Type) -> Value:
             f"Value conversion failed: {exc}",
             source_type="json",
             target_type=repr(typ),
-            raw=_clean_value_repr(obj),
+            raw=dumps_exact(obj, indent=None),
         ) from exc
 
 
@@ -382,6 +372,13 @@ def _clean_validation_message(error: JsonschemaValidationError) -> str:
 # ---------------------------------------------------------------------------
 # convert_value — the single conversion entry point (D1 matrix)
 # ---------------------------------------------------------------------------
+
+
+def _rewrap_conversion_error(
+    exc: CastConversionError, src_name: str, tgt_name: str, raw: str
+) -> CastConversionError:
+    """Return a new CastConversionError with the correct source/target/raw context."""
+    return CastConversionError(exc.message, source_type=src_name, target_type=tgt_name, raw=raw)
 
 
 def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
@@ -421,8 +418,6 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
         All other exceptions propagate unchanged.
     """
     raw = render_value(value)
-    src_name = repr(source_type)
-    tgt_name = repr(target_type)
 
     # ------------------------------------------------------------------
     # → text (total): render any value to text
@@ -451,6 +446,10 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
         assert isinstance(value, IntValue)
         return DecimalValue(Decimal(value.value))
 
+    # Fallible paths below need source/target names for error context.
+    src_name = repr(source_type)
+    tgt_name = repr(target_type)
+
     # ------------------------------------------------------------------
     # decimal → int narrowing (D4: must be integral)
     # ------------------------------------------------------------------
@@ -460,12 +459,7 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
         try:
             return json_obj_to_value(obj, target_type)
         except CastConversionError as exc:
-            raise CastConversionError(
-                exc.message,
-                source_type=src_name,
-                target_type=tgt_name,
-                raw=raw,
-            ) from exc
+            raise _rewrap_conversion_error(exc, src_name, tgt_name, raw) from exc
 
     # ------------------------------------------------------------------
     # text → T (fallible, T is not json — handled above)
@@ -484,12 +478,7 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
         try:
             return json_obj_to_value(parsed_obj, target_type)
         except CastConversionError as exc:
-            raise CastConversionError(
-                exc.message,
-                source_type=src_name,
-                target_type=tgt_name,
-                raw=raw,
-            ) from exc
+            raise _rewrap_conversion_error(exc, src_name, tgt_name, raw) from exc
 
     # ------------------------------------------------------------------
     # json → T (fallible, T is not json)
@@ -499,12 +488,7 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
         try:
             return json_obj_to_value(value.raw, target_type)
         except CastConversionError as exc:
-            raise CastConversionError(
-                exc.message,
-                source_type=src_name,
-                target_type=tgt_name,
-                raw=raw,
-            ) from exc
+            raise _rewrap_conversion_error(exc, src_name, tgt_name, raw) from exc
 
     # ------------------------------------------------------------------
     # Fallthrough: should not be reached for valid (typechecked) casts.

@@ -658,7 +658,6 @@ BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
 # ---------------------------------------------------------------------------
 
 
-
 class CastKind(_enum.Enum):
     """Classification of a cast operation from cast_classification()."""
 

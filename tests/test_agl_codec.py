@@ -1727,92 +1727,92 @@ class TestJsonToValueErrorBranches:
 
     def test_text_type_got_non_string(self) -> None:
         # Schema accepts any string but we can test _json_to_value directly.
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="string"):
             _json_to_value(42, TextType())
 
     def test_int_type_got_bool(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="bool"):
             _json_to_value(True, IntType())
 
     def test_int_type_got_non_integer_decimal(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="integer"):
             _json_to_value(Decimal("1.5"), IntType())
 
     def test_decimal_type_got_bool(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="bool"):
             _json_to_value(True, DecimalType())
 
     def test_decimal_type_got_string(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="decimal"):
             _json_to_value("not a number", DecimalType())
 
     def test_bool_type_got_int(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="bool"):
             _json_to_value(1, BoolType())
 
     def test_list_type_got_non_list(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="array"):
             _json_to_value("not a list", ListType(elem=TextType()))
 
     def test_dict_type_got_non_dict(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="object"):
             _json_to_value([1, 2], DictType(value=TextType()))
 
     def test_dict_non_string_key(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         # Construct a dict with a non-str key (not normally from json.loads but defensive).
         with pytest.raises(ValueError, match="Dict key must be string"):
             _json_to_value({1: "val"}, DictType(value=TextType()))
 
     def test_record_type_got_non_dict(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="record"):
             _json_to_value([1, 2], RecordType(name="R", fields={"x": IntType()}))
 
     def test_record_missing_field(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="Missing field"):
             _json_to_value({}, RecordType(name="R", fields={"x": IntType()}))
 
     def test_enum_type_got_non_dict(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="object for enum"):
             _json_to_value("oops", EnumType(name="E", variants={"A": {}}))
 
     def test_enum_missing_case_tag(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match=r"\$case"):
             _json_to_value({}, EnumType(name="E", variants={"A": {}}))
 
     def test_enum_unknown_variant(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="Unknown enum variant"):
             _json_to_value({"$case": "X"}, EnumType(name="E", variants={"A": {}}))
 
     def test_enum_missing_payload_field(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
 
         with pytest.raises(ValueError, match="missing field"):
             _json_to_value(
@@ -1821,7 +1821,7 @@ class TestJsonToValueErrorBranches:
             )
 
     def test_exception_type_not_supported(self) -> None:
-        from agm.agl.runtime.codec import _json_to_value
+        from agm.agl.runtime.convert import json_to_value as _json_to_value
         from agm.agl.typecheck.types import ExceptionType
 
         with pytest.raises(ValueError, match="Cannot deserialise"):

@@ -175,6 +175,30 @@ class EntryResult:
 
 
 # ---------------------------------------------------------------------------
+# ReplSessionTypeLookup — read-only TypeLookup facade over ReplSession
+# ---------------------------------------------------------------------------
+
+
+class ReplSessionTypeLookup:
+    """Read-only :class:`~agm.agl.runtime.render.TypeLookup` facade over a session.
+
+    Delegates to the session's ``_type_env.get_type`` lazily so it always
+    reflects the CURRENT environment, even after ``:reset`` reassigns
+    ``ReplSession._type_env``.  Presentation code can query types but cannot
+    mutate the type environment through this object.
+    """
+
+    __slots__ = ("_session",)
+
+    def __init__(self, session: "ReplSession") -> None:
+        self._session = session
+
+    def get_type(self, name: str) -> "Type | None":
+        """Return the named type from the session's current type environment."""
+        return self._session._type_env.get_type(name)
+
+
+# ---------------------------------------------------------------------------
 # ReplSession — the persistent incremental driver
 # ---------------------------------------------------------------------------
 
@@ -252,6 +276,19 @@ class ReplSession:
         # Declarations from a failed/rolled-back entry never land here (merged
         # only on successful promotion).
         self._declared_agents: set[str] = set()
+        # Read-only TypeLookup facade: created once and reused — it reads
+        # self._type_env lazily so post-:reset reassignments are transparent.
+        self._type_lookup_facade = ReplSessionTypeLookup(self)
+
+    @property
+    def type_lookup(self) -> "ReplSessionTypeLookup":
+        """Read-only :class:`ReplSessionTypeLookup` facade over the session's type env.
+
+        Always reflects the current environment — safe to call after ``:reset``.
+        Passes to ``render_value_repl`` / ``format_typed_value`` /
+        ``render_entry_result`` so nominal values render in declaration order.
+        """
+        return self._type_lookup_facade
 
     @staticmethod
     def _make_agent_type() -> "Type":

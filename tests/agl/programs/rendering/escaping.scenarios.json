@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "use_raw_variant",
+      "params": {"use_raw": true},
+      "expect": {
+        "stdout": "Template(body: \"use \\${x} here\", tag: \"has \\\"quotes\\\"\")\nTemplate(body: \"line1\\nline2\", tag: \"ok\")\n[Snippet.Raw(src: \"\\${var}\"), Snippet.Wrapped(prefix: \">>\", src: \"a\\\"b\")]\ntag=has \"quotes\"\nSnippet.Raw(src: \"plain \\${x}\")\n"
+      }
+    },
+    {
+      "name": "use_wrapped_variant",
+      "params": {"use_raw": false},
+      "expect": {
+        "stdout": "Template(body: \"use \\${x} here\", tag: \"has \\\"quotes\\\"\")\nTemplate(body: \"line1\\nline2\", tag: \"ok\")\n[Snippet.Raw(src: \"\\${var}\"), Snippet.Wrapped(prefix: \">>\", src: \"a\\\"b\")]\ntag=has \"quotes\"\nSnippet.Wrapped(prefix: \"**\", src: \"bold \\${x}\")\n"
+      }
+    }
+  ]
+}

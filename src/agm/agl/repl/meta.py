@@ -125,10 +125,13 @@ def _handle_bindings(arg: str, ctx: MetaContext) -> MetaOutcome:
     del arg
     from agm.agl.repl.render import format_typed_value
 
+    lookup = ctx.session.type_lookup
     bindings = ctx.session.bindings()
     if not bindings:
         return MetaOutcome(text="No bindings.")
-    lines = [format_typed_value(name, typ, value) for name, typ, value in bindings]
+    lines = [
+        format_typed_value(name, typ, value, lookup) for name, typ, value in bindings
+    ]
     return MetaOutcome(text="\n".join(lines))
 
 
@@ -151,10 +154,13 @@ def _handle_params(arg: str, ctx: MetaContext) -> MetaOutcome:
     del arg
     from agm.agl.repl.render import format_typed_value
 
+    lookup = ctx.session.type_lookup
     params = ctx.session.declared_params()
     if not params:
         return MetaOutcome(text="No params declared.")
-    lines = [format_typed_value(name, typ, value) for name, typ, value in params]
+    lines = [
+        format_typed_value(name, typ, value, lookup) for name, typ, value in params
+    ]
     return MetaOutcome(text="\n".join(lines))
 
 
@@ -223,10 +229,16 @@ def _handle_load(arg: str, ctx: MetaContext) -> MetaOutcome:
         return MetaOutcome(text=f"Error: cannot read {arg}: {exc.strerror or exc}")
     if not results:
         return MetaOutcome(text=f"Loaded {arg} (no statements to run).")
+    lookup = ctx.session.type_lookup
     rendered = [
         text
         for r in results
-        if (text := render_entry_result(r, echo=ctx.echo, check_only=False)) is not None
+        if (
+            text := render_entry_result(
+                r, echo=ctx.echo, check_only=False, type_lookup=lookup
+            )
+        )
+        is not None
     ]
     return MetaOutcome(text="\n".join(rendered) if rendered else None)
 

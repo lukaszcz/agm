@@ -22,6 +22,7 @@ from agm.agl.eval.values import (
     DecimalValue,
     DictValue,
     EnumValue,
+    ExceptionValue,
     IntValue,
     JsonValue,
     ListValue,
@@ -35,17 +36,39 @@ from agm.agl.runtime.convert import (
     json_obj_to_value,
     parse_json_strict,
 )
+from agm.agl.runtime.render import TypeLookup
 from agm.agl.typecheck.types import (
     BoolType,
     DecimalType,
     DictType,
     EnumType,
+    ExceptionType,
     IntType,
     JsonType,
     ListType,
     RecordType,
     TextType,
+    Type,
 )
+
+# ---------------------------------------------------------------------------
+# Minimal TypeLookup for tests that involve nominal values
+# ---------------------------------------------------------------------------
+
+
+class _MapLookup:
+    """Simple TypeLookup backed by a dict — used in convert_value tests."""
+
+    def __init__(self, types: dict[str, Type]) -> None:
+        self._types = types
+
+    def get_type(self, name: str) -> Type | None:
+        return self._types.get(name)
+
+
+# Structural conformance assertion: verifies _MapLookup satisfies TypeLookup at
+# type-check time (mypy validates the Protocol assignment; no runtime purpose).
+_lookup: TypeLookup = _MapLookup({})
 
 # ---------------------------------------------------------------------------
 # parse_json_strict
@@ -609,3 +632,134 @@ class TestDecimalErrorMessage:
             convert_value(JsonValue(Decimal("3.5")), JsonType(), IntType())
         err = exc_info.value
         assert "Decimal(" not in err.message
+
+
+# ---------------------------------------------------------------------------
+# M2: Nominal value → text produces AgL form (D1 / D10)
+# ---------------------------------------------------------------------------
+
+
+class TestConvertValueNominalToText:
+    """convert_value(record/enum/exception, ..., TextType()) returns AgL-form text."""
+
+    def test_record_to_text_agl_form(self) -> None:
+        rec_type = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
+        lookup: TypeLookup = _MapLookup({"Point": rec_type})
+        rv = RecordValue(type_name="Point", fields={"x": IntValue(3), "y": IntValue(4)})
+        result = convert_value(rv, rec_type, TextType(), lookup)
+        assert result == TextValue("Point(x: 3, y: 4)")
+
+    def test_enum_to_text_agl_form(self) -> None:
+        enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
+        lookup: TypeLookup = _MapLookup({"Color": enum_type})
+        ev = EnumValue(type_name="Color", variant="Red", fields={})
+        result = convert_value(ev, enum_type, TextType(), lookup)
+        assert result == TextValue("Color.Red")
+
+    def test_enum_with_fields_to_text_agl_form(self) -> None:
+        enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
+        lookup: TypeLookup = _MapLookup({"Color": enum_type})
+        ev = EnumValue(type_name="Color", variant="Blue", fields={"n": IntValue(7)})
+        result = convert_value(ev, enum_type, TextType(), lookup)
+        assert result == TextValue("Color.Blue(n: 7)")
+
+    def test_exception_to_text_agl_form(self) -> None:
+        exc_type = ExceptionType(
+            name="CastError",
+            fields={"message": TextType(), "trace_id": TextType(),
+                    "source_type": TextType(), "target_type": TextType(), "raw": TextType()},
+        )
+        lookup: TypeLookup = _MapLookup({"CastError": exc_type})
+        exc_val = ExceptionValue(
+            type_name="CastError",
+            fields={
+                "message": TextValue("cannot parse"),
+                "trace_id": TextValue("evt-1"),
+                "source_type": TextValue("text"),
+                "target_type": TextValue("int"),
+                "raw": TextValue("x"),
+            },
+        )
+        result = convert_value(exc_val, exc_type, TextType(), lookup)
+        assert isinstance(result, TextValue)
+        assert result.value.startswith("CastError(")
+        assert "trace_id" in result.value
+
+    def test_list_to_text_agl_form(self) -> None:
+        lv = ListValue(elements=(IntValue(1), IntValue(2), IntValue(3)))
+        result = convert_value(lv, ListType(elem=IntType()), TextType())
+        assert result == TextValue("[1, 2, 3]")
+
+    def test_dict_to_text_agl_form(self) -> None:
+        dv = DictValue(entries={"k": IntValue(9)})
+        result = convert_value(dv, DictType(value=IntType()), TextType())
+        assert result == TextValue('{"k": 9}')
+
+
+# ---------------------------------------------------------------------------
+# M2: Nominal value → json (D10 — TOTAL_JSON explicit cast)
+# ---------------------------------------------------------------------------
+
+
+class TestConvertValueNominalToJson:
+    """convert_value(record/enum/exception, ..., JsonType()) produces structural JSON."""
+
+    def test_record_to_json(self) -> None:
+        rec_type = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
+        rv = RecordValue(type_name="Point", fields={"x": IntValue(3), "y": IntValue(4)})
+        result = convert_value(rv, rec_type, JsonType())
+        # Record → json: field object (construction-order keys from fields dict)
+        assert result == JsonValue({"x": 3, "y": 4})
+
+    def test_enum_to_json(self) -> None:
+        enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
+        ev = EnumValue(type_name="Color", variant="Blue", fields={"n": IntValue(7)})
+        result = convert_value(ev, enum_type, JsonType())
+        # Enum → json: "$case"-tagged object
+        assert result == JsonValue({"$case": "Blue", "n": 7})
+
+    def test_enum_nullary_to_json(self) -> None:
+        enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {}})
+        ev = EnumValue(type_name="Color", variant="Red", fields={})
+        result = convert_value(ev, enum_type, JsonType())
+        assert result == JsonValue({"$case": "Red"})
+
+    def test_exception_to_json(self) -> None:
+        exc_type = ExceptionType(
+            name="Abort",
+            fields={"message": TextType(), "trace_id": TextType()},
+        )
+        exc_val = ExceptionValue(
+            type_name="Abort",
+            fields={"message": TextValue("stop"), "trace_id": TextValue("evt-2")},
+        )
+        result = convert_value(exc_val, exc_type, JsonType())
+        # Exception → json: all fields including trace_id
+        assert result == JsonValue({"message": "stop", "trace_id": "evt-2"})
+
+    # as? coverage: total casts always return True (no CastConversionError raised)
+
+    def test_record_to_json_is_total(self) -> None:
+        """record → json is TOTAL_JSON — convert_value never raises CastConversionError."""
+        rec_type = RecordType(name="P", fields={"x": IntType()})
+        rv = RecordValue(type_name="P", fields={"x": IntValue(1)})
+        # Must not raise
+        result = convert_value(rv, rec_type, JsonType())
+        assert isinstance(result, JsonValue)
+
+    def test_enum_to_json_is_total(self) -> None:
+        enum_type = EnumType(name="E", variants={"A": {}})
+        ev = EnumValue(type_name="E", variant="A", fields={})
+        result = convert_value(ev, enum_type, JsonType())
+        assert isinstance(result, JsonValue)
+
+    def test_exception_to_json_is_total(self) -> None:
+        exc_type = ExceptionType(
+            name="TypeError", fields={"message": TextType(), "trace_id": TextType()}
+        )
+        exc_val = ExceptionValue(
+            type_name="TypeError",
+            fields={"message": TextValue("oops"), "trace_id": TextValue("t1")},
+        )
+        result = convert_value(exc_val, exc_type, JsonType())
+        assert isinstance(result, JsonValue)

@@ -537,7 +537,7 @@ def run_console(
 
         result = session.eval_entry(entry, check_only=check_only)
         rendered = render_mod.render_entry_result(
-            result, echo=ctx.echo, check_only=check_only
+            result, echo=ctx.echo, check_only=check_only, type_lookup=session.type_lookup
         )
         if rendered is not None:
             print(rendered)

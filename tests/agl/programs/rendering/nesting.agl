@@ -1,0 +1,63 @@
+# Native rendering: nested records, enums, lists, dicts, json fields,
+# declaration-order normalization, and "as json" opt-in.
+record Author
+  name: text
+  active: bool
+
+record Issue
+  title: text
+  severity: int
+  tags: list[text]
+  author: Author
+
+enum Status
+  | Open
+  | Closed(by: text, reason: text)
+
+record Annotated
+  label: text
+  meta: json
+
+# --- declaration-order normalization ---
+# Construct Issue with fields in reverse of declaration order; rendered order
+# must match declaration (title, severity, tags, author).
+let author = Author(active: true, name: "Ada")
+let issue = Issue(
+  author: author,
+  tags: ["tests", "coverage"],
+  severity: 3,
+  title: "Missing tests",
+)
+print author
+print issue
+
+# --- nested containers ---
+let team = [Author(name: "Bo", active: false), Author(name: "Ada", active: true)]
+print team
+
+let scores: dict[text, int] = {"Bo": 0, "Ada": 3}
+print scores
+
+# --- enum variants ---
+let s1: Status = Open
+let s2: Status = Closed(by: "Ada", reason: "fixed")
+print s1
+print s2
+
+# --- nested json field renders compact; top-level json renders pretty ---
+let ann = Annotated(label: "note", meta: {"key": "value", "n": 1})
+print ann
+let top_json: json = {"key": "value", "n": 1}
+print top_json
+
+# --- as json opt-in: record and enum produce pretty-printed JSON ---
+print(author as json)
+print(s2 as json)
+
+# --- function combining nesting + rendering ---
+def describe(a: Author) -> text =
+  if a.active => "active: ${a.name}"
+  else => "inactive: ${a.name}"
+
+print(describe(Author(name: "Xe", active: false)))
+print(describe(Author(name: "Ada", active: true)))

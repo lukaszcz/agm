@@ -555,7 +555,7 @@ class Interpreter:
                 parts.append(seg.text)
             elif isinstance(seg, InterpSegment):
                 value = self._eval_expr(seg.expr, scope)
-                parts.append(render_value(value))
+                parts.append(render_value(value, self._checked.type_env))
             else:
                 assert_never(seg)  # pragma: no cover
         return "".join(parts)
@@ -835,14 +835,14 @@ class Interpreter:
             return val.value
         from agm.agl.runtime.render import render_value
 
-        return render_value(val)
+        return render_value(val, self._checked.type_env)
 
     def _eval_print_call(self, expr: Call, scope: Scope) -> Value:
         """Evaluate ``print(expr)`` — output and return unit."""
         from agm.agl.runtime.render import render_value
 
         arg = self._eval_expr(expr.args[0], scope)
-        rendered = render_value(arg)
+        rendered = render_value(arg, self._checked.type_env)
         print(rendered)
         self._trace.print_stmt(rendered=rendered, span=expr.span)
         return UNIT_VALUE
@@ -1403,7 +1403,7 @@ class Interpreter:
         if not expr.test_only:
             # as: convert; on failure raise CastError
             try:
-                return convert_value(value, source_type, target)
+                return convert_value(value, source_type, target, self._checked.type_env)
             except CastConversionError as e:
                 raise AglRaise(
                     _make_exc_value(
@@ -1422,7 +1422,7 @@ class Interpreter:
                 return BoolValue(True)
             # Fallible cast: trial conversion — only catch CastConversionError.
             try:
-                convert_value(value, source_type, target)
+                convert_value(value, source_type, target, self._checked.type_env)
                 return BoolValue(True)
             except CastConversionError:
                 return BoolValue(False)

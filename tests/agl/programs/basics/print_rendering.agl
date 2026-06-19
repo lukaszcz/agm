@@ -1,5 +1,5 @@
 # print console rendering: text verbatim, scalars as scalar text,
-# structured values as pretty JSON, no boundary markers.
+# structured values in AgL-native form; JSON is opt-in via "as json".
 record Pair
   name: text
   score: int
@@ -24,3 +24,6 @@ print(Pair(name: "x", score: 3))
 print(Verdict.Bad(reason: "slow"))
 let j: json = null
 print j
+# JSON opt-in via "as json": produces pretty multi-line JSON.
+print(Pair(name: "x", score: 3) as json)
+print(Verdict.Bad(reason: "slow") as json)

@@ -18,7 +18,7 @@ We want structured values to render **in the AgL syntax used to define them**:
 
 ```agl
 print(r)              # new  → R(x: 1)
-print(r as json)      # JSON is still reachable, via an explicit cast → {"x": 1}
+print(r as json)      # JSON still reachable via explicit cast → pretty multi-line {"x": 1}
 ```
 
 JSON output becomes an explicit opt-in through `as json`: casting any data

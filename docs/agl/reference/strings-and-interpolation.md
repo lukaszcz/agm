@@ -25,24 +25,43 @@ argument, an `exec` command, or any other position.
 
 | Value type | Rendered as |
 | ---------- | ----------- |
-| `text` | verbatim text |
+| `text` | verbatim (no quotes) |
 | `int`, `decimal`, `bool` | plain scalar text |
-| `json` | pretty JSON (2-space indent) |
-| `list`, `dict` | pretty JSON (2-space indent) |
-| records | pretty JSON of the fields (2-space indent) |
-| enums | pretty JSON with the `"$case"` tag (2-space indent) |
-| exceptions | pretty JSON of the diagnostic fields (2-space indent) |
-| `ExecResult` | pretty JSON of the record fields (2-space indent) |
+| `json` | pretty JSON (2-space indent, multi-line) |
+| `list[E]` | `[e1, e2, …]` — AgL list syntax |
+| `dict[text, V]` | `{"k1": v1, "k2": v2}` — AgL dict syntax; keys always quoted |
+| record | `TypeName(f1: v1, f2: v2)` — AgL constructor form; fields in declaration order |
+| enum | `TypeName.Variant(f1: v1, …)` — qualified; nullary variant as `TypeName.Variant` (no parens) |
+| exception | `TypeName(f1: v1, …)` — record-style with all fields including `trace_id`, in declaration order |
+
+AgL structured values (`list`, `dict`, record, enum, exception) always render on
+a **single line** — no injected newlines. A `json` value that appears *nested*
+inside such a structured value renders compact (single-line) to preserve that
+property; a `json` value that is interpolated directly renders pretty (multi-line).
 
 Scalar text conventions:
 
 - `bool` renders as `true` / `false`.
 - `decimal` renders in plain fixed-point notation — never scientific
   notation — with trailing zeros dropped (`1.50` → `1.5`, `1E+2` → `100`).
-- Enum JSON uses the `"$case"` variant tag; exception JSON is the flat
-  object of the exception's fields.
+- Nested `text` values (a `text` field inside a record, list element, etc.)
+  are emitted as a quoted AgL string literal with full JSON escaping plus
+  `\$` for dollar signs, so they cannot be mis-read as interpolation syntax.
 
 No boundary tags or other wrappers are added around interpolated values.
+
+To obtain JSON output use an explicit `as json` cast inside the interpolation:
+
+```agl
+let r: R = R(x: 1)
+print "${r}"           # → R(x: 1)          (AgL form — the default)
+
+# A json value interpolated directly is top-level, so it renders pretty
+# (multi-line, 2-space indent):
+print "${r as json}"   # → {
+                       #      "x": 1
+                       #    }
+```
 
 ## Types that cannot be interpolated
 

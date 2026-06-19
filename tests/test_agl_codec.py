@@ -1036,26 +1036,28 @@ class TestValidationErrorsThroughRuntime:
             _field_def("severity", _int_ty()),
         )
         # v2: on_parse_error: Retry(n: 1) as a named arg to ask().
+        # Constructors are now Call nodes (no separate Constructor AST node).
+        retry_ctor = ast.Call(
+            callee=ast.VarRef(name="Retry", span=_sp(), node_id=_nid()),
+            args=(),
+            named_args=(
+                ast.NamedArg(
+                    name="n",
+                    value=ast.IntLit(value=1, span=_sp(), node_id=_nid()),
+                    span=_sp(),
+                    node_id=_nid(),
+                ),
+            ),
+            span=_sp(),
+            node_id=_nid(),
+        )
         retry_call = ast.Call(
             callee=ast.VarRef(name="ask", span=_sp(), node_id=_nid()),
             args=(_template(_text_seg("Get issue.")),),
             named_args=(
                 ast.NamedArg(
                     name="on_parse_error",
-                    value=ast.Constructor(
-                        qualifier=None,
-                        name="Retry",
-                        args=(
-                            ast.NamedArg(
-                                name="n",
-                                value=ast.IntLit(value=1, span=_sp(), node_id=_nid()),
-                                span=_sp(),
-                                node_id=_nid(),
-                            ),
-                        ),
-                        span=_sp(),
-                        node_id=_nid(),
-                    ),
+                    value=retry_ctor,
                     span=_sp(),
                     node_id=_nid(),
                 ),

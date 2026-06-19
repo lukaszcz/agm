@@ -48,8 +48,7 @@ from agm.agl.lexer.tokens import (
 
 _INDEX_PREDECESSORS = frozenset(
     {
-        "VAR_NAME",
-        "TYPE_NAME",
+        "NAME",
         INT,
         "DECIMAL",
         "TRUE",

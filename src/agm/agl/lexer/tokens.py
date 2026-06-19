@@ -17,14 +17,13 @@ Keywords:
     Reserved words that are always keywords.
 
 Contextual keywords:
-    ``ask`` and ``exec`` are NOT reserved; they lex as plain VAR_NAME tokens.
+    ``ask`` and ``exec`` are NOT reserved; they lex as plain NAME tokens.
     The scope pass gives them their built-in meaning.
 
 Identifiers:
-    TYPE_NAME -- starts with upper-case letter (records, enums, type aliases).
-    VAR_NAME  -- starts with lower-case letter or underscore (variables, fields).
+    NAME -- any identifier (case-neutral: both upper- and lower-case start are NAME).
     Policy: ``_`` (the wildcard) is NOT a distinct token -- it lexes as a plain
-    VAR_NAME; wildcard interpretation happens at the grammar / AST-builder level.
+    NAME; wildcard interpretation happens at the grammar / AST-builder level.
 
 Keyword convention:
     A keyword's token *type* is the keyword string itself (e.g. the ``let``
@@ -82,7 +81,7 @@ KW_CATCH = "catch"
 KW_RAISE = "raise"
 KW_AS = "as"
 # KW_PASS removed in v2: `pass` is now a plain identifier (role taken by `()`)
-# KW_PRINT removed in v2: `print` is now an ordinary function name (VAR_NAME)
+# KW_PRINT removed in v2: `print` is now an ordinary function name (NAME)
 KW_AND = "and"
 KW_OR = "or"
 KW_NOT = "not"
@@ -131,8 +130,7 @@ KEYWORDS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 # Identifiers
 # ---------------------------------------------------------------------------
-TYPE_NAME = "TYPE_NAME"  # /[A-Z][A-Za-z0-9_]*/
-VAR_NAME = "VAR_NAME"  # /[a-z_][A-Za-z0-9_]*/
+NAME = "NAME"  # any identifier (case-neutral)
 
 # ---------------------------------------------------------------------------
 # Numbers (no float type; decimal is exact fixed-point)

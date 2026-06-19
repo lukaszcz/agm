@@ -60,6 +60,7 @@ from agm.agl.lexer.tokens import (
     LSQB,
     LT,
     MINUS,
+    NAME,
     NEQ,
     NEWLINE,
     PIPE,
@@ -74,8 +75,6 @@ from agm.agl.lexer.tokens import (
     TEMPLATE_END,
     TEMPLATE_START,
     THIN_ARROW,
-    TYPE_NAME,
-    VAR_NAME,
 )
 
 # ---------------------------------------------------------------------------
@@ -735,10 +734,8 @@ class _Scanner:
             word = self._src[start_pos : self._pos]
             if word in KEYWORDS:
                 typ = word
-            elif word[0].isupper():
-                typ = TYPE_NAME
             else:
-                typ = VAR_NAME
+                typ = NAME
             yield self._make_token(typ, word, start_pos, start_line, start_col)
             return
 

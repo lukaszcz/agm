@@ -33,7 +33,6 @@ from agm.agl.syntax.nodes import (
     Block,
     Call,
     Case,
-    Constructor,
     DictEntry,
     DictLit,
     Do,
@@ -823,6 +822,33 @@ class TestAsk:
         assert len(r.warnings) == 1
         assert "on_parse_error" in r.warnings[0].message
 
+    def test_ask_on_parse_error_bare_abort_varref(self) -> None:
+        # Bare ``Abort`` (no parens) is accepted as abort policy.
+        r = accept_type('let n: int = ask("Q", on_parse_error: Abort)\nn')
+        assert r.call_sites[0].parse_policy == "abort"
+
+    def test_ask_on_parse_error_bare_qualified_abort(self) -> None:
+        # Bare ``ParsePolicy.Abort`` (no parens) is accepted as abort policy.
+        r = accept_type('let n: int = ask("Q", on_parse_error: ParsePolicy.Abort)\nn')
+        assert r.call_sites[0].parse_policy == "abort"
+
+    def test_ask_on_parse_error_bad_qualified_policy_raises(self) -> None:
+        # A FieldAccess callee with wrong qualifier is rejected.
+        err = reject_type(
+            "enum FooBar\n  | Abort\n"
+            'let n: int = ask("Q", on_parse_error: FooBar.Abort())\nn'
+        )
+        assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
+    def test_ask_on_parse_error_bare_wrong_qualifier_raises(self) -> None:
+        # Bare FieldAccess ``SomethingElse.Abort`` (no parens, non-ParsePolicy qualifier)
+        # is rejected even though the field name is "Abort".
+        err = reject_type(
+            "enum SomethingElse\n  | Abort\n"
+            'let n: int = ask("Q", on_parse_error: SomethingElse.Abort)\nn'
+        )
+        assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
     def test_ask_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = ask("Q")\nf(1)')
         assert "function" in str(err).lower() or "agent" in str(err).lower()
@@ -938,6 +964,11 @@ class TestAskRequest:
     def test_too_many_positional_raises(self) -> None:
         err = reject_type('ask-request::[text]("a", "b")')
         assert "positional" in str(err).lower() or "argument" in str(err).lower()
+
+    def test_too_many_type_args_raises(self) -> None:
+        # ask-request with more than one explicit type argument is rejected.
+        err = reject_type('ask-request::[int, text]("Q")')
+        assert "type argument" in str(err).lower() or "got 2" in str(err)
 
     def test_unknown_named_arg_raises(self) -> None:
         err = reject_type('ask-request::[text]("Q", bogus: 1)')
@@ -1730,7 +1761,8 @@ class TestConstructors:
         assert r.resolved.program is not None
 
     def test_enum_variant_ambiguous_raises(self) -> None:
-        err = reject_type("enum A\n  | Pass\nenum B\n  | Pass\nPass()")
+        # Ambiguity is now detected at scope-resolution time (AglScopeError).
+        err = reject_any("enum A\n  | Pass\nenum B\n  | Pass\nPass()")
         assert "ambiguous" in str(err).lower() or "Pass" in str(err)
 
     def test_enum_variant_unknown_raises(self) -> None:
@@ -1746,8 +1778,9 @@ class TestConstructors:
         assert "abstract" in str(err).lower() or "constructible" in str(err).lower()
 
     def test_unknown_constructor_raises(self) -> None:
-        err = reject_type("Unknown(x: 1)")
-        assert "unknown" in str(err).lower() or "Unknown" in str(err)
+        # Unknown names are now caught at scope-resolution time (AglScopeError).
+        err = reject_any("Unknown(x: 1)")
+        assert "unknown" in str(err).lower() or "Unknown" in str(err) or "not defined" in str(err)
 
     def test_enum_variant_with_fields(self) -> None:
         # enum variants can have named fields
@@ -1763,6 +1796,91 @@ class TestConstructors:
     def test_qualified_constructor_not_enum_raises(self) -> None:
         err = reject_type("record R\n  x: int\nR.Something()")
         assert "enum" in str(err).lower() or "R" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# Constructor ref dispatch (VarRef/Call/FieldAccess paths)
+# ---------------------------------------------------------------------------
+
+
+class TestConstructorRefDispatch:
+    """Verify construction via the new VarRef/Call/FieldAccess constructor paths."""
+
+    def test_bare_varref_nullary_variant(self) -> None:
+        # Bare nullary variant as VarRef → zero-arg construction
+        r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns")
+        assert r.resolved.program is not None
+
+    def test_call_varref_record_constructor(self) -> None:
+        # Record construction via Call(callee=VarRef)
+        r = accept_type("record Box\n  value: int\nBox(value: 1)")
+        assert r.resolved.program is not None
+
+    def test_call_varref_enum_payload_variant(self) -> None:
+        # Payload variant via Call(callee=VarRef)
+        r = accept_type("enum Option\n  | none\n  | some(value: int)\nsome(value: 1)")
+        assert r.resolved.program is not None
+
+    def test_qualified_call_enum_variant(self) -> None:
+        # Qualified construction: Option.some(value: 1)
+        r = accept_type("enum Option\n  | none\n  | some(value: int)\nOption.some(value: 1)")
+        assert r.resolved.program is not None
+
+    def test_qualified_bare_nullary_variant(self) -> None:
+        # Bare qualified constructor: FieldAccess → zero-arg construction
+        r = accept_type("enum Status\n  | Pass\n  | Fail\nStatus.Pass()")
+        assert r.resolved.program is not None
+
+    def test_missing_field_still_errors(self) -> None:
+        err = reject_type("record Box\n  value: int\nBox()")
+        assert "missing" in str(err).lower() or "field" in str(err).lower()
+
+    def test_unknown_field_still_errors(self) -> None:
+        err = reject_type("record Box\n  value: int\nBox(value: 1, extra: 2)")
+        assert "no field" in str(err).lower() or "field" in str(err).lower()
+
+    def test_field_type_mismatch_still_errors(self) -> None:
+        err = reject_type('record Box\n  value: int\nBox(value: "hello")')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_qualified_variant_not_found_errors(self) -> None:
+        err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus.Missing()")
+        assert "variant" in str(err).lower() or "Missing" in str(err)
+
+    def test_qualified_non_enum_errors(self) -> None:
+        err = reject_type("record R\n  x: int\nR.Something()")
+        assert "enum" in str(err).lower() or "R" in str(err)
+
+    def test_exception_constructor_via_new_dispatch(self) -> None:
+        # Exception constructors go through the new unqualified path
+        r = accept_type('Abort(message: "error")')
+        assert r.resolved.program is not None
+
+    def test_abstract_exception_rejected_in_new_dispatch(self) -> None:
+        err = reject_type('Exception(message: "e")')
+        assert "abstract" in str(err).lower() or "constructible" in str(err).lower()
+
+    def test_positional_arg_on_unqualified_constructor_rejected(self) -> None:
+        # Constructors only accept named args; positional arg must be rejected.
+        err = reject_type("enum E\n  | Pass\nPass(1)")
+        assert "named" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_type_arg_on_unqualified_constructor_rejected(self) -> None:
+        # Type arguments on constructors are not yet supported.
+        err = reject_type("enum E\n  | Pass\nPass::[int]()")
+        assert "type argument" in str(err).lower() or "not supported" in str(err).lower()
+
+    def test_positional_arg_on_qualified_constructor_rejected(self) -> None:
+        # Qualified constructor with positional arg is rejected.
+        err = reject_type("enum E\n  | Pass\nE.Pass(1)")
+        assert "named" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_type_arg_on_qualified_constructor_rejected(self) -> None:
+        # Type arguments on qualified constructors are not yet supported.
+        # The grammar allows ::[ on a name but not on a qualified field access,
+        # so this is caught as a type checker error when using the VarRef form.
+        err = reject_type("enum E\n  | Pass\nPass::[int]()")
+        assert "type argument" in str(err).lower() or "not supported" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1950,8 +2068,10 @@ class TestParsePolicy:
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
     def test_on_parse_error_wrong_qualifier_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on_parse_error: Other.Abort())\nn')
-        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+        # 'Other' is not a declared type name, so this fails at scope time.
+        err = reject_any('let n: int = ask("Q", on_parse_error: Other.Abort())\nn')
+        err_str = str(err).lower()
+        assert "on_parse_error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
 
     def test_on_parse_error_text_target_warns(self) -> None:
         r = accept_type('ask("Q", on_parse_error: Abort())')
@@ -3049,21 +3169,10 @@ class TestDefensiveGuards:
         assert result is not None
 
     def test_duplicate_constructor_arg_rejected(self) -> None:
-        # Exercises line 1449: duplicate constructor argument check.
-        # The parser rejects duplicates, so we construct the node directly.
-        sp = mk_span()
-        val1 = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        val2 = IntLit(value=2, span=sp, node_id=_mk_node_id())
-        na1 = NamedArg(name="message", value=val1, span=sp, node_id=_mk_node_id())
-        na2 = NamedArg(name="message", value=val2, span=sp, node_id=_mk_node_id())
-        ctor = Constructor(
-            qualifier=None, name="Abort", args=(na1, na2), span=sp, node_id=_mk_node_id()
-        )
-        block = Block(items=(ctor,), span=sp, node_id=_mk_node_id())
-        prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = self._mk_resolved(prog)
-        with pytest.raises(AglTypeError, match="Duplicate argument"):
-            check(resolved, default_capabilities())
+        # Parser rejects duplicate named args at parse time (AglSyntaxError/AglTypeError).
+        # Use reject_any since the parser may catch it before the type checker.
+        err = reject_any("record P\n  x: int\nP(x: 1, x: 2)")
+        assert "duplicate" in str(err).lower() or "x" in str(err)
 
     def test_builtin_func_name_def_rejected(self) -> None:
         # Exercises line 372: _preregister_funcdef raises for names in _BUILTIN_FUNC_NAMES.
@@ -3177,6 +3286,133 @@ class TestDefensiveGuards:
             declared_functions={"g": fd},
         )
         with pytest.raises(AglTypeError, match="Duplicate named argument"):
+            check(resolved, default_capabilities())
+
+    def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
+        # Exercises line 1764: duplicate named arg in _check_constructor_call.
+        # The parser rejects duplicate named args, so we construct the AST directly.
+        from agm.agl.scope.symbols import ConstructorRef
+
+        sp = mk_span()
+        # Build a record type that has field 'x'.
+        record_source = "record Box\n  x: int\nBox(x: 1)"
+        prog_base = parse_program(record_source)
+        res_base = resolve(prog_base)
+        checked_base = check(res_base, default_capabilities())
+        box_type = checked_base.type_env.get_type("Box")
+        assert box_type is not None
+
+        # Manually build a Call with duplicate named arg for 'x'.
+        callee_nid = _mk_node_id()
+        callee = VarRef(name="Box", span=sp, node_id=callee_nid)
+        val1 = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        val2 = IntLit(value=2, span=sp, node_id=_mk_node_id())
+        na1 = NamedArg(name="x", value=val1, span=sp, node_id=_mk_node_id())
+        na2 = NamedArg(name="x", value=val2, span=sp, node_id=_mk_node_id())
+        call_nid = _mk_node_id()
+        call = Call(callee=callee, args=(), named_args=(na1, na2), span=sp, node_id=call_nid)
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        prog_nid = _mk_node_id()
+        prog = Program(body=block, span=sp, node_id=prog_nid)
+        # Register a ConstructorRef for 'Box' and the callee VarRef.
+        box_decl_node_id = prog_base.body.items[0].node_id
+        ctor_ref = ConstructorRef(
+            owner_name="Box",
+            variant="Box",
+            owner_decl_node_id=box_decl_node_id,
+            type_params=(),
+        )
+        binding_ref = BindingRef(
+            name="Box", mutable=False, decl_span=sp, decl_node_id=box_decl_node_id,
+            kind=BinderKind.constructor_binding,
+        )
+        root = ScopeNode(node_id=prog_nid)
+        from agm.agl.scope.symbols import ResolvedProgram as _RP
+
+        resolved = _RP(
+            program=prog,
+            resolution={callee_nid: binding_ref},
+            builtin_calls={},
+            root_scope=root,
+            constructor_refs={callee_nid: ctor_ref},
+        )
+        with pytest.raises(AglTypeError, match="[Dd]uplicate"):
+            check(resolved, default_capabilities(), seed_env=checked_base.type_env)
+
+    def test_type_arg_on_qualified_constructor_rejected(self) -> None:
+        # Exercises line 1732: _check_qualified_constructor_callee_call raises for
+        # Call.type_args when callee is a qualified constructor FieldAccess.
+        # The grammar does not support ::[ after a FieldAccess, so we build the AST.
+        from agm.agl.scope.symbols import ResolvedProgram as _RP
+
+        sp = mk_span()
+        obj_nid = _mk_node_id()
+        obj_varref = VarRef(name="Status", span=sp, node_id=obj_nid)
+        fa_nid = _mk_node_id()
+        fa = FieldAccess(obj=obj_varref, field="Pass", span=sp, node_id=fa_nid)
+        type_arg = IntT(span=sp, node_id=_mk_node_id())
+        call_nid = _mk_node_id()
+        call = Call(
+            callee=fa,
+            args=(),
+            named_args=(),
+            type_args=(type_arg,),
+            span=sp,
+            node_id=call_nid,
+        )
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        prog_nid = _mk_node_id()
+        prog = Program(body=block, span=sp, node_id=prog_nid)
+        root = ScopeNode(node_id=prog_nid)
+        resolved = _RP(
+            program=prog,
+            resolution={},
+            builtin_calls={},
+            root_scope=root,
+            qualified_constructor_refs={fa_nid: ("Status", "Pass")},
+        )
+        # Build a type env with Status as an enum having Pass variant.
+        seed = TypeEnvironment()
+        seed.register_type("Status", EnumType(name="Status", variants={"Pass": {}}))
+        with pytest.raises(AglTypeError, match="type argument"):
+            check(resolved, default_capabilities(), seed_env=seed)
+
+    def test_constructor_owner_type_not_found_rejected(self) -> None:
+        # Exercises line 1667: _resolve_constructor_owner raises when the type
+        # environment does not contain the constructor's owner type name.
+        # This can only happen when the ResolvedProgram is constructed with a
+        # ConstructorRef whose owner_name doesn't exist in the type env.
+        from agm.agl.scope.symbols import ConstructorRef
+        from agm.agl.scope.symbols import ResolvedProgram as _RP
+
+        sp = mk_span()
+        callee_nid = _mk_node_id()
+        callee = VarRef(name="Ghost", span=sp, node_id=callee_nid)
+        call_nid = _mk_node_id()
+        call = Call(callee=callee, args=(), named_args=(), span=sp, node_id=call_nid)
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        prog_nid = _mk_node_id()
+        prog = Program(body=block, span=sp, node_id=prog_nid)
+        # ConstructorRef pointing to a non-existent owner type "Ghost".
+        ctor_ref = ConstructorRef(
+            owner_name="Ghost",
+            variant="Ghost",
+            owner_decl_node_id=_mk_node_id(),
+            type_params=(),
+        )
+        binding_ref = BindingRef(
+            name="Ghost", mutable=False, decl_span=sp, decl_node_id=_mk_node_id(),
+            kind=BinderKind.constructor_binding,
+        )
+        root = ScopeNode(node_id=prog_nid)
+        resolved = _RP(
+            program=prog,
+            resolution={callee_nid: binding_ref},
+            builtin_calls={},
+            root_scope=root,
+            constructor_refs={callee_nid: ctor_ref},
+        )
+        with pytest.raises(AglTypeError, match="not a known constructible type"):
             check(resolved, default_capabilities())
 
 

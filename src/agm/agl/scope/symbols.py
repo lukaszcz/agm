@@ -4,6 +4,8 @@ Data model
 ----------
 - ``BindingRef`` — a resolved variable reference: which scope introduced the
   binding, whether it is mutable, and its declaration span.
+- ``ConstructorRef`` — metadata about a resolved constructor reference (record
+  or enum variant).
 - ``ScopeNode`` — a node in the scope tree (one per scope-introducing
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
@@ -90,6 +92,8 @@ class BinderKind(enum.Enum):
         An ``agent`` declaration (immutable value binding of type ``agent``).
     ``param_binding``
         A function/lambda parameter binding (immutable, function-local).
+    ``constructor_binding``
+        A record constructor or enum variant binding (immutable value binding).
     """
 
     let_binding = "let_binding"
@@ -99,6 +103,33 @@ class BinderKind(enum.Enum):
     function_binding = "function_binding"
     agent_binding = "agent_binding"
     param_binding = "param_binding"
+    constructor_binding = "constructor_binding"
+
+
+# ---------------------------------------------------------------------------
+# ConstructorRef — metadata about a resolved constructor reference
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ConstructorRef:
+    """A resolved constructor reference's owner metadata.
+
+    ``owner_name``
+        The record or enum TYPE name.
+    ``variant``
+        The enum variant name; ``None`` for a record constructor.
+    ``owner_decl_node_id``
+        The ``node_id`` of the ``RecordDef`` / ``EnumDef`` that declares this
+        constructor.
+    ``type_params``
+        The owner's declared type parameters (empty tuple if non-generic).
+    """
+
+    owner_name: str
+    variant: str | None
+    owner_decl_node_id: int
+    type_params: tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +234,25 @@ class ResolvedProgram:
     ``warnings``
         Non-fatal scope-pass diagnostics (severity ``"warning"``), e.g. an
         agent that is declared but never referenced.  Empty by default.
+    ``declared_type_names``
+        Names of all root-level ``RecordDef`` / ``EnumDef`` / ``TypeAlias``
+        declarations.  Used by the scope pass to classify qualified
+        ``Owner.member`` field accesses.
+    ``constructor_candidates``
+        Maps each constructor name to an ordered tuple of all
+        :class:`ConstructorRef` candidates (one per record/enum that declares
+        it).  A single entry means the name is unambiguous; two or more mean
+        an overload set requiring qualification.
+    ``constructor_refs``
+        Maps a ``VarRef.node_id`` (or ``Call.node_id`` whose callee was a
+        constructor ``VarRef``) to the single :class:`ConstructorRef` it
+        resolved to (only present when the candidate set has exactly one entry
+        and no nearer non-constructor binding shadows it).
+    ``qualified_constructor_refs``
+        Maps a ``FieldAccess.node_id`` to ``(owner_name, member)`` when the
+        field access is a type-qualified constructor reference
+        (``Option.some``).  The checker validates that the owner is really an
+        enum and the member a real variant.
     """
 
     program: Program
@@ -214,6 +264,10 @@ class ResolvedProgram:
     config_pragmas: dict[str, PragmaValue] = field(default_factory=dict)
     program_name: str | None = None
     warnings: tuple[Diagnostic, ...] = ()
+    declared_type_names: frozenset[str] = frozenset()
+    constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)
+    constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
+    qualified_constructor_refs: dict[int, tuple[str, str]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

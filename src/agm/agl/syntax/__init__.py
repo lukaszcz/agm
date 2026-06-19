@@ -26,7 +26,6 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     CatchClause,
     ConfigPragma,
-    Constructor,
     ConstructorPattern,
     DecimalLit,
     Declaration,
@@ -82,6 +81,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
     AgentT,
+    AppliedT,
     BoolT,
     DecimalT,
     DictT,
@@ -139,7 +139,6 @@ __all__ = [
     "VarRef",
     "FieldAccess",
     "IndexAccess",
-    "Constructor",
     "NamedArg",
     "BinaryOp",
     "BinOp",
@@ -178,6 +177,7 @@ __all__ = [
     # sentinel
     "ELSE",
     "ElseSentinel",
+    "AppliedT",
     # union aliases
     "Expr",
     "Binder",

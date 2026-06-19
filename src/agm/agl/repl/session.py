@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.runtime import HostEnvironment, RunError
     from agm.agl.runtime.trace import TraceStore
-    from agm.agl.scope.symbols import ScopeNode
+    from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.syntax.nodes import Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
@@ -252,6 +252,13 @@ class ReplSession:
         # Declarations from a failed/rolled-back entry never land here (merged
         # only on successful promotion).
         self._declared_agents: set[str] = set()
+        # Constructor candidates from prior promoted entries, keyed by constructor
+        # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
+        # so that subsequent entries can reference constructors from prior entries.
+        self._ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
+        # Type names declared in prior promoted entries, for qualified constructor
+        # access (``Owner.variant``) across REPL entries.
+        self._ambient_type_names: frozenset[str] = frozenset()
 
     @staticmethod
     def _make_agent_type() -> "Type":
@@ -326,12 +333,16 @@ class ReplSession:
         # [2] Resolve against the session scope (refs fall through; new decls
         # shadow).  resolve does NOT mutate the parent scope.  Host-registered
         # agents and prior cross-entry ``agent`` declarations are ambient, so a
-        # call to them needs no in-entry declaration.
+        # call to them needs no in-entry declaration.  Constructor candidates
+        # and type names from prior entries are passed as ambient so that
+        # subsequent entries can reference constructors declared earlier.
         try:
             resolved = resolve(
                 pipeline_program,
                 parent_scope=self._session_scope,
                 ambient_agents=self._ambient_agents(host_env),
+                ambient_constructor_candidates=self._ambient_constructor_candidates,
+                ambient_type_names=self._ambient_type_names,
             )
         except AglScopeError as exc:
             return self._fail([exc.to_diagnostic()], list(tab_warnings))
@@ -818,6 +829,18 @@ class ReplSession:
                 assert param_type is not None
                 self._declared_params[item.name] = param_type
 
+        # Persist constructor candidates so subsequent entries can reference
+        # constructors from types declared in this entry.
+        for cname, crefs in checked.resolved.constructor_candidates.items():
+            existing = list(self._ambient_constructor_candidates.get(cname, ()))
+            # Merge: skip duplicates by owner_name.
+            for cref in crefs:
+                if not any(e.owner_name == cref.owner_name for e in existing):
+                    existing.append(cref)
+            self._ambient_constructor_candidates[cname] = tuple(existing)
+        # Persist type names for qualified constructor access.
+        self._ambient_type_names = self._ambient_type_names | checked.resolved.declared_type_names
+
         if entry_program_name is not None:
             self._program_name = entry_program_name
             self._active_config = entry_active_config
@@ -954,9 +977,15 @@ class ReplSession:
         """Return promoted user bindings as (name, declared type, current value).
 
         Includes params, which resolve eagerly and live in the value scope.
+        Constructor bindings are excluded — they are type-system entities with no
+        independent runtime value.
         """
+        from agm.agl.scope.symbols import BinderKind
+
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
+            if ref.kind == BinderKind.constructor_binding:
+                continue
             binding = self._value_scope.lookup(name)
             assert binding is not None
             typ = self._type_env.get_binding_type(ref.decl_node_id)
@@ -1007,6 +1036,8 @@ class ReplSession:
         self._declared_params = {}
         self._source_log = []
         self._declared_agents = set()
+        self._ambient_constructor_candidates = {}
+        self._ambient_type_names = frozenset()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
         """Evaluate the contents of *path* INCREMENTALLY, one item per entry.

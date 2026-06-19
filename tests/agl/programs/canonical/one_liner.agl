@@ -12,6 +12,6 @@ do[5]
   case review of
     | Fail(issues) =>
         artifact := ask("Fix ${issues} in ${artifact}", agent: impl)
-    | Pass => ()
+    | Pass() => ()
 until review is Pass
 print artifact

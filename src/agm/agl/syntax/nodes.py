@@ -162,21 +162,6 @@ class NamedArg:
 
 
 @dataclass(frozen=True, slots=True)
-class Constructor:
-    """A record or enum-variant constructor call.
-
-    ``qualifier`` is the enum type name when the variant is namespaced
-    (``Color.Red``); ``None`` when unqualified.
-    """
-
-    qualifier: str | None
-    name: str
-    args: tuple[NamedArg, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class BinaryOp:
     """A binary operation: ``left op right``."""
 
@@ -224,10 +209,10 @@ class Call:
     Also produced by the single-arg juxtaposition sugar ``f x``
     (which desugars to ``Call(callee=f, args=(x,), named_args=())``.
 
-    ``type_arg`` is set by the typed-call syntax ``callee::[T](args)``
-    (e.g. ``ask-request::[Review](...)``); it is ``None`` for ordinary calls.
-    The type argument is a static ``TypeExpr`` resolved by the type checker —
-    it is never evaluated at runtime.
+    ``type_args`` is set by the typed-call syntax ``callee::[T](args)``
+    (e.g. ``ask-request::[Review](...)``); it is ``()`` for ordinary calls.
+    The type arguments are static ``TypeExpr`` values resolved by the type checker —
+    they are never evaluated at runtime.
     """
 
     callee: Expr
@@ -235,7 +220,7 @@ class Call:
     named_args: tuple[NamedArg, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    type_arg: TypeExpr | None = None
+    type_args: tuple[TypeExpr, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +248,7 @@ class FuncDef:
     body: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    type_params: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,7 +482,6 @@ Expr = (
     | FieldAccess
     | IndexAccess
     | Template
-    | Constructor
     | BinaryOp
     | UnaryNot
     | UnaryNeg
@@ -671,6 +656,7 @@ class RecordDef:
     fields: tuple[FieldDef, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    type_params: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,6 +677,7 @@ class EnumDef:
     variants: tuple[VariantDef, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    type_params: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -701,6 +688,7 @@ class TypeAlias:
     type_expr: TypeExpr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    type_params: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

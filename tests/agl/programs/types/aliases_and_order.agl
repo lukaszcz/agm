@@ -11,7 +11,7 @@ if initial is Status.Approved => print "approved input" else => print "not appro
 let next: Status = ask("Re-judge it.", agent: judge)
 
 case next of
-  | Approved => print "ok"
+  | Approved() => print "ok"
   | Rejected(notes) => print "notes:\n${notes}"
 
 type Status = Verdict

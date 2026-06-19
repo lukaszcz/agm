@@ -36,7 +36,7 @@ try
     """, agent: reviewer, on_parse_error: Retry(n: 2))
 
     case review of
-      | Pass =>
+      | Pass() =>
           ()
 
       | Fail(issues) =>

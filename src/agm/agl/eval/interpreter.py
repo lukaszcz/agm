@@ -44,7 +44,6 @@ from agm.agl.syntax.nodes import (
     Case,
     CatchClause,
     ConfigPragma,
-    Constructor,
     DecimalLit,
     DictLit,
     Do,
@@ -62,6 +61,7 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
+    NamedArg,
     NameTarget,
     NullLit,
     ParamDecl,
@@ -373,8 +373,6 @@ class Interpreter:
             return self._eval_try(expr, scope)
         if isinstance(expr, Raise):
             return self._eval_raise(expr, scope)
-        if isinstance(expr, Constructor):
-            return self._eval_constructor(expr, scope)
         if isinstance(expr, BinaryOp):
             return self._eval_binary_op(expr, scope)
         if isinstance(expr, UnaryNot):
@@ -390,12 +388,21 @@ class Interpreter:
         assert_never(expr)  # pragma: no cover
 
     def _eval_var_ref(self, expr: VarRef, scope: Scope) -> Value:
+        # Check if this VarRef is a constructor reference.
+        cref = self._checked.resolved.constructor_refs.get(expr.node_id)
+        if cref is not None:
+            # Bare constructor (nullary): build with no args.
+            return self._build_constructor_value(expr.node_id, expr.name, (), scope)
         binding = scope.lookup(expr.name)
         if binding is None:  # pragma: no cover
             raise RuntimeError(f"Undefined variable at runtime: {expr.name!r}")
         return binding.value
 
     def _eval_field_access(self, expr: FieldAccess, scope: Scope) -> Value:
+        # Check for qualified constructor reference (e.g. Option.none).
+        if expr.node_id in self._checked.resolved.qualified_constructor_refs:
+            # Bare qualified constructor (nullary): build with no args.
+            return self._build_constructor_value(expr.node_id, expr.field, (), scope)
         obj = self._eval_expr(expr.obj, scope)
         if isinstance(obj, (RecordValue, ExceptionValue)):
             return obj.fields[expr.field]
@@ -567,6 +574,20 @@ class Interpreter:
             return self._eval_ask_request_call(expr, scope)
         if builtin_kind is BuiltinKind.EXEC:
             return self._eval_exec_call(expr, scope)
+
+        # Check for constructor call (callee is VarRef or FieldAccess resolving to a constructor).
+        callee = expr.callee
+        if isinstance(callee, VarRef):
+            cref = self._checked.resolved.constructor_refs.get(callee.node_id)
+            if cref is not None:
+                return self._build_constructor_value(
+                    expr.node_id, callee.name, expr.named_args, scope
+                )
+        elif isinstance(callee, FieldAccess):
+            if callee.node_id in self._checked.resolved.qualified_constructor_refs:
+                return self._build_constructor_value(
+                    expr.node_id, callee.field, expr.named_args, scope
+                )
 
         # User-defined function or closure call.
         callee_val = self._eval_expr(expr.callee, scope)
@@ -788,29 +809,40 @@ class Interpreter:
 
         The checker guarantees that ``on_parse_error`` is always a static
         ``ParsePolicy`` constructor (``Abort()`` or ``Retry(n: <int literal>)``).
-        We extract it directly from the constructor AST rather than evaluating it
-        through ``_eval_constructor``, because the checker special-cases these
-        constructors and does not record them in ``node_types``.
+        We extract it directly from the AST rather than general evaluation,
+        because the checker special-cases these constructors and does not record
+        them in ``node_types``.
 
         Returns an ``EnumValue`` for ``Retry(n: N)`` or ``None`` for absent /
-        ``Abort()`` (both map to a single-attempt abort policy).
+        ``Abort()`` / ``Abort`` (both map to a single-attempt abort policy).
         """
         if "on_parse_error" not in named_map:
             return None
         policy_expr = named_map["on_parse_error"]
-        if isinstance(policy_expr, Constructor) and policy_expr.name == "Retry":
-            # The checker guarantees exactly one NamedArg(name="n", value=IntLit).
-            n_val = next(
-                (arg.value.value for arg in policy_expr.args
-                 if arg.name == "n" and isinstance(arg.value, IntLit)),
-                0,  # pragma: no cover  – checker enforces IntLit; default unreachable
-            )
-            return EnumValue(
-                type_name="ParsePolicy",
-                variant="Retry",
-                fields={"n": IntValue(n_val)},
-            )
-        # Absent or Abort() → single-attempt abort.
+        # Retry can appear as:
+        #   Retry(n: N)             — Call(callee=VarRef("Retry"), named_args=[...])
+        #   ParsePolicy.Retry(n: N) — Call(callee=FieldAccess(..., field="Retry"), named_args=[...])
+        if isinstance(policy_expr, Call):
+            callee = policy_expr.callee
+            if isinstance(callee, VarRef):
+                callee_name: str | None = callee.name
+            elif isinstance(callee, FieldAccess):
+                callee_name = callee.field
+            else:  # pragma: no cover
+                callee_name = None
+            if callee_name == "Retry":
+                # The checker guarantees exactly one NamedArg(name="n", value=IntLit).
+                n_val = next(
+                    (arg.value.value for arg in policy_expr.named_args
+                     if arg.name == "n" and isinstance(arg.value, IntLit)),
+                    0,  # pragma: no cover – checker enforces IntLit; default unreachable
+                )
+                return EnumValue(
+                    type_name="ParsePolicy",
+                    variant="Retry",
+                    fields={"n": IntValue(n_val)},
+                )
+        # Absent, Abort (bare VarRef), or Abort() (Call with callee VarRef("Abort")) → abort.
         return None
 
     def _eval_to_text(self, expr: Expr, scope: Scope) -> str:
@@ -962,10 +994,10 @@ class Interpreter:
         prompt_text = self._eval_to_text(expr.args[0], scope)
 
         contract = self._contracts.get(expr.node_id)
-        if expr.type_arg is not None:
+        if expr.type_args:
             from agm.agl.syntax.types import UnitT
 
-            if isinstance(expr.type_arg, UnitT):
+            if isinstance(expr.type_args[0], UnitT):
                 return RecordValue(
                     type_name="AgentRequest",
                     fields={
@@ -1247,13 +1279,28 @@ class Interpreter:
     # Constructor and operator evaluation
     # ------------------------------------------------------------------
 
-    def _eval_constructor(self, expr: Constructor, scope: Scope) -> Value:
-        """Evaluate a record, enum-variant, or exception constructor."""
+    def _build_constructor_value(
+        self,
+        ref_node_id: int,
+        variant_name: str,
+        named_args: tuple[NamedArg, ...],
+        scope: Scope,
+    ) -> Value:
+        """Build a record/enum/exception runtime value from constructor reference.
+
+        ``ref_node_id`` is the node_id of the referencing expression (VarRef, Call, or
+        FieldAccess) whose type was recorded by the checker in ``node_types``.
+        ``variant_name`` is the constructor's own name (for enum variants; irrelevant for
+        records/exceptions).
+        ``named_args`` are the call-site named arguments (empty for nullary constructors).
+        """
         arg_values: dict[str, Value] = {}
-        for arg in expr.args:
+        for arg in named_args:
             arg_values[arg.name] = self._eval_expr(arg.value, scope)
 
-        typ = self._checked.node_types.get(expr.node_id)
+        from agm.agl.typecheck.types import ExceptionType as ExcType
+
+        typ = self._checked.node_types.get(ref_node_id)
 
         if isinstance(typ, RecordType):
             coerced = {
@@ -1261,8 +1308,6 @@ class Interpreter:
                 for fname, fval in arg_values.items()
             }
             return RecordValue(type_name=typ.name, fields=coerced)
-
-        from agm.agl.typecheck.types import ExceptionType as ExcType
 
         if isinstance(typ, ExcType):
             exc_trace_id = self._trace.new_event_id()
@@ -1276,7 +1321,6 @@ class Interpreter:
         assert isinstance(typ, EnumType), (
             "constructor type must be record, enum, or exception"
         )
-        variant_name = expr.name
         variant_fields = typ.variants.get(variant_name, {})
         coerced2 = {
             fname: _coerce(fval, variant_fields[fname])

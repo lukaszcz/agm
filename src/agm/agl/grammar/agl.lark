@@ -15,7 +15,7 @@
 //
 // Type annotation keywords (text, json, bool, int, decimal, list, dict, unit):
 // These are NOT reserved by the scanner.  The grammar accepts them as
-// VAR_NAME tokens; AstBuilder type handlers map the string value to the
+// NAME tokens; AstBuilder type handlers map the string value to the
 // appropriate TypeExpr node.
 //
 // v2 design notes:
@@ -72,7 +72,7 @@
 // Identifier / number / operator tokens (%declare — no regex; from custom lexer)
 // ---------------------------------------------------------------------------
 
-%declare VAR_NAME TYPE_NAME
+%declare NAME
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
 // string literal "agent") so it can be referenced by name in `field_name`,
 // where `agent` is admitted as a field/key name, and in `type_expr` where
@@ -128,25 +128,27 @@ _sep: _NEWLINE | SEMICOLON
 // ---------------------------------------------------------------------------
 
 // record_def: indented block of field definitions.
-// The custom lexer emits _INDENT directly after the TYPE_NAME (no _NEWLINE before _INDENT).
-record_def: "record" TYPE_NAME _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
+// The custom lexer emits _INDENT directly after the name (no _NEWLINE before _INDENT).
+record_def: "record" name type_params? _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
 
 field_def: field_name COLON type_expr
 
 // field_name: a record/struct field or named-key reference.  The reserved word
 // `agent` (which leads an agent_decl and is also a type) is also a legitimate
 // field name on built-in exception records (AgentCallError.agent), so it is
-// admitted here alongside ordinary lower-case identifiers.
+// admitted here alongside ordinary identifiers.
 // Inlined (`?`): each alternative is a single token, so the parent rule
-// receives the name Token (type VAR_NAME or AGENT) directly.
-?field_name: VAR_NAME | AGENT
+// receives the name Token (type NAME or AGENT) directly.
+?field_name: NAME | AGENT
+
+?name: NAME
 
 // enum_def: flat variant list using the |-continuation layout rule.
 // The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
 // before each | so the entire variant list is a flat token sequence.
-enum_def: "enum" TYPE_NAME variant_def+
+enum_def: "enum" name type_params? variant_def+
 
-variant_def: PIPE TYPE_NAME variant_payload?
+variant_def: PIPE name variant_payload?
 
 variant_payload: LPAR field_list? RPAR
 
@@ -154,22 +156,25 @@ field_list: field_inline (COMMA field_inline)* COMMA?
 
 field_inline: field_name COLON type_expr
 
-// type_alias: "type" TYPE_NAME = type_expr
-type_alias: "type" TYPE_NAME EQ type_expr
+// type_alias: "type" name type_params? = type_expr
+type_alias: "type" name type_params? EQ type_expr
 
-// param declaration: "param" VAR_NAME [: type_expr] [= default_expr]
-param_decl: "param" VAR_NAME type_ann? (EQ expr)?
+type_params: type_lsqb type_param_list RSQB
+type_param_list: name (COMMA name)*
 
-// program declaration: "program" VAR_NAME
-program_decl: "program" VAR_NAME
+// param declaration: "param" name [: type_expr] [= default_expr]
+param_decl: "param" name type_ann? (EQ expr)?
 
-// agent_decl: "agent" VAR_NAME [= template]
+// program declaration: "program" name
+program_decl: "program" name
+
+// agent_decl: "agent" name [= template]
 // The optional runner string must be a static literal (checked in transformer).
-agent_decl: AGENT VAR_NAME (EQ template)?
+agent_decl: AGENT name (EQ template)?
 
 // config_pragma: "config" KEY = VALUE (header-only; enforced in scope pass).
 // pragma_value covers bool, int, decimal, and static string literals.
-config_pragma: "config" VAR_NAME EQ pragma_value
+config_pragma: "config" name EQ pragma_value
 
 pragma_value: "true"     -> pragma_true
             | "false"    -> pragma_false
@@ -181,17 +186,17 @@ pragma_value: "true"     -> pragma_true
 // Function definition
 // ---------------------------------------------------------------------------
 
-// func_def: def name(params) -> RetType = body
+// func_def: def name type_params? (params) -> RetType = body
 // The return type is REQUIRED for def (not inferred).
 // func_body is either a suite (indented block starting with _NEWLINE) or an
 // inline expression.  The suite_expr alternative is unambiguous because
 // _NEWLINE does not start any expr form.
-func_def: "def" VAR_NAME LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body
+func_def: "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body
 
 param_list: param_def (COMMA param_def)* COMMA?
 
 // param_def default value uses or_expr (inside LPAR…RPAR, COMMA terminates).
-param_def: VAR_NAME COLON type_expr (EQ or_expr)?
+param_def: name COLON type_expr (EQ or_expr)?
 
 // func_body: indented suite OR inline expr (full expr, including if/case/do/try/lambda).
 // The suite_expr alternative starts with _INDENT; expr never starts with _INDENT,
@@ -204,8 +209,8 @@ func_body: suite_expr | expr
 
 ?binder: let_decl | var_decl | assign_stmt
 
-let_decl: "let" VAR_NAME type_ann? EQ expr
-var_decl: "var" VAR_NAME type_ann? EQ expr
+let_decl: "let" name type_ann? EQ expr
+var_decl: "var" name type_ann? EQ expr
 assign_stmt: postfix ASSIGN expr
 
 // Type annotation: COLON followed by a type_expr.
@@ -215,21 +220,24 @@ type_ann: COLON type_expr
 // Type expressions
 //
 // Type keywords (text, json, bool, int, decimal, list, dict, unit) are NOT
-// reserved by the scanner; they arrive as VAR_NAME tokens.  TYPE_NAME handles
-// named user types.  The AstBuilder maps VAR_NAME values to the right TypeExpr.
+// reserved by the scanner; they arrive as NAME tokens.
+// The AstBuilder maps NAME values to the right TypeExpr.
 //
 // `agent` type: AGENT terminal (declared, not string literal) so `agent` is
 // also admissible as field_name without conflict.
 //
 // func_type: (A, B) -> C — the unit func type () -> C uses empty type_list.
+//
+// applied_type: name[type_arg_list] — user-defined generic type application.
+//   Handles list[T], dict[text, V], and any user-defined generic like Pair[A, B].
 // ---------------------------------------------------------------------------
 
 type_expr: LPAR type_list? RPAR THIN_ARROW type_expr       -> func_type
-         | VAR_NAME type_lsqb type_expr RSQB               -> generic_type_1
-         | VAR_NAME type_lsqb VAR_NAME COMMA type_expr RSQB -> dict_type
-         | VAR_NAME                                    -> prim_type_or_name
-         | TYPE_NAME                                   -> named_type
-         | AGENT                                       -> agent_type
+         | name type_lsqb type_arg_list RSQB               -> applied_type
+         | name                                             -> prim_or_name
+         | AGENT                                            -> agent_type
+
+type_arg_list: type_expr (COMMA type_expr)*
 
 type_lsqb: LSQB | INDEX_LSQB
 
@@ -320,10 +328,9 @@ try_body: suite_expr | or_expr (SEMICOLON or_expr)*
 
 catch_clause: "catch" catch_pattern ARROW catch_body
 
-// catch_pattern: TYPE_NAME ("as" VAR_NAME)?  |  VAR_NAME ("as" VAR_NAME)?
-// "_" arrives as VAR_NAME; transformer dispatches on value.
-catch_pattern: TYPE_NAME ("as" VAR_NAME)?    -> catch_type_pattern
-             | VAR_NAME ("as" VAR_NAME)?     -> catch_wildcard_pattern
+// catch_pattern: name ("as" name)?
+// "_" arrives as NAME; transformer checks value for wildcard.
+catch_pattern: name ("as" name)?
 
 // catch_body: single or_expr (inline) or suite_expr (multi-statement indented block).
 // Suite form starts with _INDENT; or_expr never starts with _INDENT.
@@ -361,10 +368,11 @@ suite_expr: _INDENT block _DEDENT
          | comparison
 
 // comparison: non-associative.
-?comparison: additive "is" "not" TYPE_NAME                      -> is_not_test_simple
-           | additive "is" "not" TYPE_NAME DOT TYPE_NAME        -> is_not_test_qualified
-           | additive "is" TYPE_NAME                            -> is_test_simple
-           | additive "is" TYPE_NAME DOT TYPE_NAME              -> is_test_qualified
+// Qualified forms (name DOT name) must come BEFORE bare name forms.
+?comparison: additive "is" "not" name DOT name                  -> is_not_test_qualified
+           | additive "is" "not" name                           -> is_not_test_simple
+           | additive "is" name DOT name                        -> is_test_qualified
+           | additive "is" name                                 -> is_test_simple
            | additive "in" additive                             -> bin_in
            | additive EQ additive                               -> bin_eq
            | additive NEQ additive                              -> bin_neq
@@ -419,23 +427,15 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
           | lit_null
           | template
           | var_ref
-          | constructor
           | lit_list
           | lit_dict
 
 // ---------------------------------------------------------------------------
 // Postfix: paren-calls and field access (left-associative chain, transparent)
-//
-// Constructor application (Issue(title: x)) is handled by the `call` rule:
-// the transformer checks whether the callee is a Constructor node and routes
-// the named args into Constructor.args.  Removing the separate
-// `constructor_payload` rule eliminates the R/R conflict between
-// `LPAR constructor_args RPAR` and `LPAR arg_list RPAR`.
 // ---------------------------------------------------------------------------
 
 ?postfix: postfix LPAR arg_list? RPAR  -> call
         | postfix DOT field_name       -> field_access
-        | postfix DOT TYPE_NAME        -> type_access
         | postfix INDEX_LSQB expr RSQB -> index_access
         | atom
 
@@ -454,12 +454,12 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 // stop characters and delimit cleanly.  ``type_expr`` uses ``[]`` only for
 // generics (``list[T]``), so nested brackets stay balanced.
 //
-// Only a bare ``VAR_NAME`` callee is admitted (atom-level), which keeps the
+// Only a bare ``NAME`` callee is admitted (atom-level), which keeps the
 // form conflict-free: ``DCOLON`` never appears in ``FOLLOW(var_ref)``, so
 // there is no shift/reduce collision with juxtaposition or list literals.
 // ---------------------------------------------------------------------------
 
-typed_call_atom: VAR_NAME DCOLON LSQB type_expr RSQB LPAR arg_list? RPAR
+typed_call_atom: name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
 
 // ---------------------------------------------------------------------------
 // Atom: primary non-operator expressions (transparent)
@@ -474,7 +474,6 @@ typed_call_atom: VAR_NAME DCOLON LSQB type_expr RSQB LPAR arg_list? RPAR
      | template
      | lit_list
      | lit_dict
-     | constructor
      | var_ref
      | typed_call_atom
      | paren_expr_or_unit
@@ -497,16 +496,6 @@ pos_arg: expr
 named_arg: field_name COLON expr
 
 // ---------------------------------------------------------------------------
-// Constructor expressions
-// ---------------------------------------------------------------------------
-
-// Constructors start with TYPE_NAME. The bare form (no payload) is parsed here.
-// Constructor application Issue(title: x) is handled via the `call` rule at the
-// postfix level — the transformer routes named args into Constructor.args when
-// the callee is a Constructor node.
-constructor: TYPE_NAME    -> ctor_unqualified
-
-// ---------------------------------------------------------------------------
 // Literal nodes
 // ---------------------------------------------------------------------------
 
@@ -515,7 +504,7 @@ lit_decimal: DECIMAL
 lit_true:    "true"
 lit_false:   "false"
 lit_null:    "null"
-var_ref:     VAR_NAME
+var_ref:     name
 
 // ---------------------------------------------------------------------------
 // Template string
@@ -538,7 +527,7 @@ lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB
 
 // dict_literal: "{" (dict_entry ("," dict_entry)* ","?)? "}"
 // Inside LBRACE…RBRACE paren_level>0 (implicit continuation).
-// dict_entry key is either a template (quoted string) or a VAR_NAME identifier shorthand.
+// dict_entry key is either a template (quoted string) or a NAME identifier shorthand.
 lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE
 
 dict_entry: template COLON expr     -> dict_entry_str
@@ -550,20 +539,22 @@ dict_entry: template COLON expr     -> dict_entry_str
 
 // pattern: wildcard | literal | var_binder | constructor_pattern
 // Disambiguation:
-//   VAR_NAME with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
-//   TYPE_NAME (qualified or not) + optional fields → constructor pattern
-//   VAR_NAME (other) → var binder
+//   name with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
+//   name DOT name + optional fields → qualified constructor pattern
+//   name LPAR ... RPAR → unqualified constructor pattern with payload
+//   name (other) → var binder or bare constructor
 //   literal → literal pattern
-pattern: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?  -> pat_constructor
-       | VAR_NAME                                -> pat_var_or_wild
-       | INT                                     -> pat_lit_int
-       | DECIMAL                                 -> pat_lit_decimal
-       | "true"                                  -> pat_lit_true
-       | "false"                                 -> pat_lit_false
-       | "null"                                  -> pat_lit_null
-       | template                                -> pat_lit_str
+pattern: name DOT name (LPAR pattern_fields? RPAR)?  -> pat_qualified_constructor
+       | name LPAR pattern_fields? RPAR              -> pat_constructor
+       | name                                        -> pat_var_or_wild
+       | INT                                         -> pat_lit_int
+       | DECIMAL                                     -> pat_lit_decimal
+       | "true"                                      -> pat_lit_true
+       | "false"                                     -> pat_lit_false
+       | "null"                                      -> pat_lit_null
+       | template                                    -> pat_lit_str
 
 pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
-pattern_field: VAR_NAME COLON pattern   -> pat_field_full
-             | VAR_NAME                 -> pat_field_shorthand
+pattern_field: name COLON pattern   -> pat_field_full
+             | name                 -> pat_field_shorthand

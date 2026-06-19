@@ -45,6 +45,7 @@ from agm.agl.scope.symbols import (
     BinderKind,
     BindingRef,
     BuiltinKind,
+    ConstructorRef,
     ResolvedProgram,
     ScopeNode,
 )
@@ -58,7 +59,6 @@ from agm.agl.syntax.nodes import (
     Case,
     CatchClause,
     ConfigPragma,
-    Constructor,
     ConstructorPattern,
     DecimalLit,
     DictLit,
@@ -130,6 +130,7 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.function_binding: "it is a function (def) binding",
     BinderKind.agent_binding: "it is an agent binding",
     BinderKind.param_binding: "it is a parameter binding",
+    BinderKind.constructor_binding: "it is a constructor binding",
 }
 
 
@@ -229,6 +230,14 @@ class _Resolver:
         self._seen_non_pragma: bool = False
         # Source-declared program name.
         self._program_name: str | None = None
+        # Names of all root-level type declarations (RecordDef/EnumDef/TypeAlias).
+        self._declared_type_names: set[str] = set()
+        # Constructor candidates: name -> ordered list of ConstructorRef.
+        self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
+        # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
+        self._constructor_refs: dict[int, ConstructorRef] = {}
+        # Qualified constructor refs: FieldAccess.node_id -> (owner_name, member).
+        self._qualified_constructor_refs: dict[int, tuple[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -240,6 +249,8 @@ class _Resolver:
         *,
         parent_scope: ScopeNode | None = None,
         ambient_agents: frozenset[str] = frozenset(),
+        ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+        ambient_type_names: frozenset[str] = frozenset(),
     ) -> ResolvedProgram:
         """Execute the resolution pass over *program*.
 
@@ -252,13 +263,35 @@ class _Resolver:
         as valid call targets alongside this program's own ``agent``
         declarations, but never appear in ``ResolvedProgram.declared_agents``
         and never trigger an unused-agent warning.
+
+        *ambient_constructor_candidates* carries constructor candidates from
+        prior REPL entries so that constructor references to types declared in
+        earlier entries resolve correctly in subsequent entries.
+
+        *ambient_type_names* carries type names from prior entries so that
+        qualified constructor access (``Owner.variant``) resolves for types
+        declared in earlier REPL entries.
         """
+        # Seed ambient constructor candidates (from prior REPL entries) before
+        # running the local pre-passes so local declarations can shadow them.
+        if ambient_constructor_candidates:
+            for cname, crefs in ambient_constructor_candidates.items():
+                for cref in crefs:
+                    self._add_constructor_candidate(cname, cref)
+        # Seed ambient type names (from prior REPL entries).
+        if ambient_type_names:
+            self._declared_type_names.update(ambient_type_names)
+
         # Pre-pass 1: collect root-level agent declarations into the declared
         # table and define as value bindings (before body resolution).
         self._ambient_agents = ambient_agents
         self._collect_agent_decls(program)
         # Pre-pass 2: collect top-level def names for mutual recursion.
         self._collect_func_decls(program)
+        # Pre-pass 3: collect type-declaration names and validate type_params.
+        self._collect_type_decl_names(program)
+        # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
+        self._collect_constructor_candidates(program)
 
         root = ScopeNode(node_id=program.node_id, parent=parent_scope)
         self._push_scope(root)
@@ -268,6 +301,8 @@ class _Resolver:
         self._define_agent_bindings()
         self._define_ambient_agent_bindings()
         self._define_function_bindings()
+        # Define constructor bindings in root scope.
+        self._define_constructor_bindings()
 
         # Main walk: resolve all block items in order.
         self._resolve_block_items(program.body.items)
@@ -285,6 +320,13 @@ class _Resolver:
             config_pragmas=dict(self._config_pragmas),
             program_name=self._program_name,
             warnings=self._unused_agent_warnings(),
+            declared_type_names=frozenset(self._declared_type_names),
+            constructor_candidates={
+                name: tuple(refs)
+                for name, refs in self._constructor_candidates.items()
+            },
+            constructor_refs=dict(self._constructor_refs),
+            qualified_constructor_refs=dict(self._qualified_constructor_refs),
         )
 
     # ------------------------------------------------------------------
@@ -336,6 +378,169 @@ class _Resolver:
                 span=decl.span,
             )
         self._declared_functions[decl.name] = decl
+
+    def _collect_type_decl_names(self, program: Program) -> None:
+        """Collect names of root-level type declarations and validate type_params.
+
+        Populates ``_declared_type_names`` and raises ``AglScopeError`` when
+        a declaration has duplicate type-parameter names.
+
+        Builtin prelude type names are seeded first so that qualified
+        constructor access (e.g. ``ParsePolicy.Abort``) resolves correctly.
+        """
+        from agm.agl.typecheck.types import BUILTIN_PRELUDE_TYPES  # avoid circular dep
+
+        for type_name in BUILTIN_PRELUDE_TYPES:
+            self._declared_type_names.add(type_name)
+
+        for item in program.body.items:
+            if isinstance(item, (RecordDef, EnumDef, TypeAlias)):
+                self._declared_type_names.add(item.name)
+                self._validate_type_params(item)
+            elif isinstance(item, FuncDef):
+                self._validate_type_params(item)
+
+    def _validate_type_params(self, decl: FuncDef | RecordDef | EnumDef | TypeAlias) -> None:
+        """Raise AglScopeError if *decl* has duplicate type-parameter names."""
+        seen: set[str] = set()
+        for tp in decl.type_params:
+            if tp in seen:
+                raise AglScopeError(
+                    f"Duplicate type parameter '{tp}' in '{decl.name}'.",
+                    span=decl.span,
+                )
+            seen.add(tp)
+
+    def _seed_builtin_constructor_candidates(self) -> None:
+        """Seed constructor candidates for built-in types (exceptions and prelude types).
+
+        Built-in exception types (Abort, AgentParseError, …) and prelude record
+        types (ExecResult, AgentRequest) are available without a source-level
+        declaration.  We register each as a constructor candidate so that
+        VarRef nodes that refer to them (e.g. ``Abort(message: …)``) resolve
+        correctly and are placed in ``constructor_refs``.
+
+        For builtin prelude ENUM types (e.g. ParsePolicy), we register each
+        variant whose name does NOT conflict with any builtin exception type name.
+        Conflicting variants (like ``ParsePolicy.Abort``) must be accessed via
+        qualified syntax (e.g. ``ParsePolicy.Abort``).
+
+        The ``owner_decl_node_id`` is set to -1 (a sentinel) because these types have
+        no AST declaration node.
+        """
+        from agm.agl.typecheck.types import (  # local import avoids circular dep
+            BUILTIN_EXCEPTIONS,
+            BUILTIN_PRELUDE_TYPES,
+            EnumType,
+        )
+
+        exception_names: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
+
+        for exc_name in BUILTIN_EXCEPTIONS:
+            cref = ConstructorRef(
+                owner_name=exc_name,
+                variant=None,
+                owner_decl_node_id=-1,
+                type_params=(),
+            )
+            self._constructor_candidates.setdefault(exc_name, []).append(cref)
+
+        for type_name, type_val in BUILTIN_PRELUDE_TYPES.items():
+            if isinstance(type_val, EnumType):
+                # Register variants that don't conflict with exception names.
+                # Conflicting variants (e.g. ParsePolicy.Abort ↔ Abort exception)
+                # must be used in qualified form.
+                for variant_name in type_val.variants:
+                    if variant_name not in exception_names:
+                        cref = ConstructorRef(
+                            owner_name=type_name,
+                            variant=variant_name,
+                            owner_decl_node_id=-1,
+                            type_params=(),
+                        )
+                        self._constructor_candidates.setdefault(variant_name, []).append(cref)
+            else:
+                cref = ConstructorRef(
+                    owner_name=type_name,
+                    variant=None,
+                    owner_decl_node_id=-1,
+                    type_params=(),
+                )
+                self._constructor_candidates.setdefault(type_name, []).append(cref)
+
+    def _add_constructor_candidate(self, ctor_key: str, cref: ConstructorRef) -> None:
+        """Add *cref* to the candidates list for *ctor_key*.
+
+        Skips the entry if another candidate with the same ``owner_name`` is
+        already present (duplicate type declaration — the type-builder pass will
+        raise a clear "already declared" error for that; we must not conflate it
+        with genuine constructor overloading across distinct types).
+        """
+        existing = self._constructor_candidates.get(ctor_key, [])
+        if any(c.owner_name == cref.owner_name for c in existing):
+            return
+        existing.append(cref)
+        self._constructor_candidates[ctor_key] = existing
+
+    def _collect_constructor_candidates(self, program: Program) -> None:
+        """Build the constructor-candidates map from root-level RecordDef/EnumDef.
+
+        For each RecordDef, the record NAME is a constructor candidate.
+        For each EnumDef, each VARIANT NAME is a candidate (the enum name is NOT).
+        Multiple candidates for the same name form an ordered overload set.
+        Builtin exception and prelude types are seeded first.
+        """
+        self._seed_builtin_constructor_candidates()
+        for item in program.body.items:
+            if isinstance(item, RecordDef):
+                cref = ConstructorRef(
+                    owner_name=item.name,
+                    variant=None,
+                    owner_decl_node_id=item.node_id,
+                    type_params=item.type_params,
+                )
+                self._add_constructor_candidate(item.name, cref)
+            elif isinstance(item, EnumDef):
+                for variant in item.variants:
+                    cref = ConstructorRef(
+                        owner_name=item.name,
+                        variant=variant.name,
+                        owner_decl_node_id=item.node_id,
+                        type_params=item.type_params,
+                    )
+                    self._add_constructor_candidate(variant.name, cref)
+
+    def _define_constructor_bindings(self) -> None:
+        """Define each constructor name as a value binding in the current (root) scope.
+
+        Collision rules:
+        - Constructor-vs-constructor at the same scope: allowed (overload set).
+        - Constructor-vs-non-constructor at the same scope: duplicate error,
+          because the non-constructor binding was already defined before this
+          method is called (agents and defs are defined first).
+        """
+        scope = self._current_scope()
+        for name, crefs in self._constructor_candidates.items():
+            if name in scope.bindings:
+                # A non-constructor binding (def/agent) with the same name already
+                # occupies this slot — report a duplicate-binding error.
+                raise AglScopeError(
+                    f"Name '{name}' is already declared in this scope.",
+                    span=None,
+                )
+            # Use the first candidate's decl as the representative binding.
+            rep = crefs[0]
+            ref = BindingRef(
+                name=name,
+                mutable=False,
+                decl_span=SourceSpan(
+                    start_line=0, start_col=0, end_line=0, end_col=0,
+                    start_offset=0, end_offset=0,
+                ),
+                decl_node_id=rep.owner_decl_node_id,
+                kind=BinderKind.constructor_binding,
+            )
+            scope.define(name, ref)
 
     def _define_agent_bindings(self) -> None:
         """Define each collected agent as a value binding in the current scope."""
@@ -732,7 +937,7 @@ class _Resolver:
         elif isinstance(expr, Raise):
             self._resolve_expr(expr.exc)
         elif isinstance(expr, FieldAccess):
-            self._resolve_expr(expr.obj)
+            self._resolve_field_access(expr)
         elif isinstance(expr, IndexAccess):
             self._resolve_expr(expr.obj)
             self._resolve_expr(expr.index)
@@ -745,9 +950,6 @@ class _Resolver:
             self._resolve_expr(expr.operand)
         elif isinstance(expr, IsTest):
             self._resolve_expr(expr.expr)
-        elif isinstance(expr, Constructor):
-            for arg in expr.args:
-                self._resolve_expr(arg.value)
         elif isinstance(expr, ListLit):
             for elem in expr.elements:
                 self._resolve_expr(elem)
@@ -768,6 +970,10 @@ class _Resolver:
 
         Built-in names (print/exec/ask/ask-request) are only valid in call position; a
         bare VarRef to them is an error (D6: they are not first-class values).
+
+        When a VarRef resolves to a constructor_binding, look up the candidate set:
+        - Exactly 1 candidate → record in constructor_refs.
+        - ≥ 2 candidates → ambiguity error (D7).
         """
         if node.name in _RESERVED_NAMES:
             raise AglScopeError(
@@ -784,6 +990,21 @@ class _Resolver:
         if ref.kind == BinderKind.agent_binding and node.name in self._declared_agents:
             self._referenced_agents.add(node.name)
         self._resolution[node.node_id] = ref
+        # If the resolved binding is a constructor, check for overload ambiguity.
+        if ref.kind == BinderKind.constructor_binding:
+            candidates = self._constructor_candidates.get(node.name, [])
+            if len(candidates) >= 2:
+                owner_names = ", ".join(
+                    f"'{c.owner_name}'" for c in candidates
+                )
+                raise AglScopeError(
+                    f"'{node.name}' is ambiguous: it is declared as a constructor "
+                    f"in multiple types ({owner_names}). "
+                    f"Qualify the reference, e.g. '{candidates[0].owner_name}.{node.name}'.",
+                    span=node.span,
+                )
+            elif len(candidates) == 1:
+                self._constructor_refs[node.node_id] = candidates[0]
 
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
@@ -806,6 +1027,30 @@ class _Resolver:
         # Resolve named-arg values.
         for named in node.named_args:
             self._resolve_expr(named.value)
+
+    def _resolve_field_access(self, expr: FieldAccess) -> None:
+        """Resolve a field-access expression.
+
+        If ``expr.obj`` is a ``VarRef`` whose name is in ``declared_type_names``
+        AND is NOT shadowed by a visible non-type value binding, this is a
+        **type-qualified constructor access** (e.g. ``Option.some``).  In that
+        case record it in ``qualified_constructor_refs`` and skip resolving the
+        object as a value.
+
+        Otherwise resolve ``expr.obj`` normally as a value expression.
+        """
+        obj = expr.obj
+        if isinstance(obj, VarRef) and obj.name in self._declared_type_names:
+            # Check whether the name is shadowed by a nearer non-type value binding.
+            existing = self._current_scope().lookup(obj.name)
+            if existing is None or existing.kind == BinderKind.constructor_binding:
+                # Not shadowed by a non-constructor value binding — treat as
+                # a type-qualified constructor access.  Do NOT resolve obj as a
+                # value; record the qualification and return.
+                self._qualified_constructor_refs[expr.node_id] = (obj.name, expr.field)
+                return
+        # Ordinary field access: resolve the object as a value.
+        self._resolve_expr(obj)
 
     def _resolve_template(self, node: Template) -> None:
         for seg in node.segments:
@@ -951,6 +1196,8 @@ def resolve(
     *,
     parent_scope: ScopeNode | None = None,
     ambient_agents: frozenset[str] = frozenset(),
+    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    ambient_type_names: frozenset[str] = frozenset(),
 ) -> ResolvedProgram:
     """Run the full static name-resolution pass over *program*.
 
@@ -970,6 +1217,13 @@ def resolve(
         reported in ``ResolvedProgram.declared_agents`` and never produce an
         unused-agent warning.  Default empty → only in-program declarations
         are valid.
+    ambient_constructor_candidates:
+        Constructor candidates from prior REPL entries.  Seeded before the
+        local pre-passes so that references to constructors declared in earlier
+        entries resolve correctly.  Default ``None`` → no ambient candidates.
+    ambient_type_names:
+        Type names from prior REPL entries, used for qualified constructor
+        access (``Owner.variant``).  Default empty.
 
     Returns
     -------
@@ -982,5 +1236,9 @@ def resolve(
         On the first static scope violation (first-error abort).
     """
     return _Resolver().run(
-        program, parent_scope=parent_scope, ambient_agents=ambient_agents
+        program,
+        parent_scope=parent_scope,
+        ambient_agents=ambient_agents,
+        ambient_constructor_candidates=ambient_constructor_candidates,
+        ambient_type_names=ambient_type_names,
     )

@@ -41,7 +41,7 @@ class TestKeywordsAndIdentifiers:
         types = [t for t, _ in result]
         assert "let" in types
         assert "var" in types
-        assert ("VAR_NAME", "set") in result
+        assert ("NAME", "set") in result
         assert "do" in types
         assert "until" in types
         assert "if" in types
@@ -61,12 +61,12 @@ class TestKeywordsAndIdentifiers:
     def test_agent_not_var_name(self) -> None:
         # `agent` cannot be used as an identifier/variable name.
         types = [t for t, _ in tok("agent")]
-        assert "VAR_NAME" not in types
+        assert "NAME" not in types
 
     def test_agent_prefix_identifier(self) -> None:
         # "agentic" starts with "agent" but is a plain identifier.
         result = tok("agentic")
-        assert result == [("VAR_NAME", "agentic")]
+        assert result == [("NAME", "agentic")]
 
     def test_bool_and_null_keywords(self) -> None:
         result = tok("true false null")
@@ -78,30 +78,30 @@ class TestKeywordsAndIdentifiers:
     def test_type_name_uppercase(self) -> None:
         result = tok("Review Pass Fail")
         assert result == [
-            ("TYPE_NAME", "Review"),
-            ("TYPE_NAME", "Pass"),
-            ("TYPE_NAME", "Fail"),
+            ("NAME", "Review"),
+            ("NAME", "Pass"),
+            ("NAME", "Fail"),
         ]
 
     def test_var_name_lowercase(self) -> None:
         result = tok("artifact review x")
         assert result == [
-            ("VAR_NAME", "artifact"),
-            ("VAR_NAME", "review"),
-            ("VAR_NAME", "x"),
+            ("NAME", "artifact"),
+            ("NAME", "review"),
+            ("NAME", "x"),
         ]
 
     def test_var_name_underscore_prefix(self) -> None:
         result = tok("_x _foo")
         types = [t for t, _ in result]
-        assert types == ["VAR_NAME", "VAR_NAME"]
+        assert types == ["NAME", "NAME"]
 
     def test_ask_is_var_name_not_keyword(self) -> None:
         # ask/exec are contextual keywords — lex as VAR_NAME
         result = tok("ask exec")
         assert result == [
-            ("VAR_NAME", "ask"),
-            ("VAR_NAME", "exec"),
+            ("NAME", "ask"),
+            ("NAME", "exec"),
         ]
 
     def test_param_is_reserved_keyword(self) -> None:
@@ -111,7 +111,7 @@ class TestKeywordsAndIdentifiers:
 
     def test_param_not_var_name(self) -> None:
         types = [t for t, _ in tok("param")]
-        assert "VAR_NAME" not in types
+        assert "NAME" not in types
 
     def test_program_is_reserved_keyword(self) -> None:
         # `program` is a reserved keyword — its token type is the literal string.
@@ -120,21 +120,21 @@ class TestKeywordsAndIdentifiers:
 
     def test_program_not_var_name(self) -> None:
         types = [t for t, _ in tok("program")]
-        assert "VAR_NAME" not in types
+        assert "NAME" not in types
 
     def test_input_is_now_var_name(self) -> None:
         # `input` is no longer reserved — it lexes as a plain VAR_NAME.
         result = tok("input")
-        assert result == [("VAR_NAME", "input")]
+        assert result == [("NAME", "input")]
 
     def test_keyword_prefix_identifier(self) -> None:
         # "letter" starts with 'l' like "let", but is an identifier
         result = tok("letter")
-        assert result == [("VAR_NAME", "letter")]
+        assert result == [("NAME", "letter")]
 
     def test_type_name_mixed_case(self) -> None:
         result = tok("FooBar")
-        assert result == [("TYPE_NAME", "FooBar")]
+        assert result == [("NAME", "FooBar")]
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +249,8 @@ class TestOperators:
         # ``::`` breaks an identifier scan (``:`` is a stop character), so a
         # ``name::`` tail does not glue into the identifier.
         assert tok("ask-request::[Review]") == [
-            ("VAR_NAME", "ask-request"), ("DCOLON", "::"), ("LSQB", "["),
-            ("TYPE_NAME", "Review"), ("RSQB", "]"),
+            ("NAME", "ask-request"), ("DCOLON", "::"), ("LSQB", "["),
+            ("NAME", "Review"), ("RSQB", "]"),
         ]
 
     def test_comma(self) -> None:
@@ -292,17 +292,17 @@ class TestOperators:
 class TestIndexBracketRemap:
     def test_adjacent_lsqb_after_expression_ending_token_is_index_lsqb(self) -> None:
         assert lark_tok('xs[0] d["a"] make()[0] [1][0] {"a": 1}["a"]') == [
-            ("VAR_NAME", "xs"),
+            ("NAME", "xs"),
             ("INDEX_LSQB", "["),
             ("INT", "0"),
             ("RSQB", "]"),
-            ("VAR_NAME", "d"),
+            ("NAME", "d"),
             ("INDEX_LSQB", "["),
             ("TEMPLATE_START", '"'),
             ("STRING_FRAGMENT", "a"),
             ("TEMPLATE_END", '"'),
             ("RSQB", "]"),
-            ("VAR_NAME", "make"),
+            ("NAME", "make"),
             ("LPAR", "("),
             ("RPAR", ")"),
             ("INDEX_LSQB", "["),
@@ -330,7 +330,7 @@ class TestIndexBracketRemap:
 
     def test_spaced_lsqb_stays_list_literal_lsqb(self) -> None:
         assert lark_tok("f [2]") == [
-            ("VAR_NAME", "f"),
+            ("NAME", "f"),
             ("LSQB", "["),
             ("INT", "2"),
             ("RSQB", "]"),
@@ -338,14 +338,14 @@ class TestIndexBracketRemap:
 
     def test_newline_and_comment_separated_lsqb_stays_lsqb(self) -> None:
         assert lark_tok("xs\n[0]") == [
-            ("VAR_NAME", "xs"),
+            ("NAME", "xs"),
             ("_NEWLINE", "0"),
             ("LSQB", "["),
             ("INT", "0"),
             ("RSQB", "]"),
         ]
         assert lark_tok("xs # comment\n[0]") == [
-            ("VAR_NAME", "xs"),
+            ("NAME", "xs"),
             ("_NEWLINE", "0"),
             ("LSQB", "["),
             ("INT", "0"),
@@ -356,9 +356,9 @@ class TestIndexBracketRemap:
         assert lark_tok("do[3] tick until done") == [
             ("DO", "do"),
             ("LOOP_BOUND", "3"),
-            ("VAR_NAME", "tick"),
+            ("NAME", "tick"),
             ("UNTIL", "until"),
-            ("VAR_NAME", "done"),
+            ("NAME", "done"),
         ]
 
 
@@ -390,7 +390,7 @@ class TestSimpleTemplates:
             ("TEMPLATE_START", '"'),
             ("STRING_FRAGMENT", "hello "),
             ("INTERP_START", "${"),
-            ("VAR_NAME", "name"),
+            ("NAME", "name"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", ""),
             ("TEMPLATE_END", '"'),
@@ -402,11 +402,11 @@ class TestSimpleTemplates:
             ("TEMPLATE_START", '"'),
             ("STRING_FRAGMENT", ""),
             ("INTERP_START", "${"),
-            ("VAR_NAME", "a"),
+            ("NAME", "a"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", " and "),
             ("INTERP_START", "${"),
-            ("VAR_NAME", "b"),
+            ("NAME", "b"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", ""),
             ("TEMPLATE_END", '"'),
@@ -471,7 +471,7 @@ class TestSimpleTemplates:
                 in_interp = False
             elif in_interp:
                 inner_types.append(t)
-        assert "VAR_NAME" in inner_types
+        assert "NAME" in inner_types
         assert "PLUS" in inner_types
         assert "INT" in inner_types
 
@@ -486,8 +486,8 @@ class TestNestedBracesInInterp:
         # "${foo}" — the VAR_NAME is seen, not a dict literal brace confusion
         result = tok('"${foo}"')
         types = [t for t, _ in result]
-        assert types.index("INTERP_START") < types.index("VAR_NAME")
-        assert types.index("VAR_NAME") < types.index("INTERP_END")
+        assert types.index("INTERP_START") < types.index("NAME")
+        assert types.index("NAME") < types.index("INTERP_END")
 
     def test_dict_literal_inside_interp(self) -> None:
         # "${{}}" — empty dict literal inside interpolation
@@ -615,7 +615,7 @@ class TestSingleQuotedStrings:
             ("TEMPLATE_START", "'"),
             ("STRING_FRAGMENT", "hello "),
             ("INTERP_START", "${"),
-            ("VAR_NAME", "name"),
+            ("NAME", "name"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", ""),
             ("TEMPLATE_END", "'"),
@@ -964,13 +964,13 @@ class TestTokenPositions:
 
     def test_token_column_advances(self) -> None:
         tokens = list(tokenize("let x"))
-        x_tok = next(t for t in tokens if t.type == "VAR_NAME" and str(t) == "x")
+        x_tok = next(t for t in tokens if t.type == "NAME" and str(t) == "x")
         assert x_tok.line == 1
         assert x_tok.column == 5  # "let " = 4 chars, x at col 5
 
     def test_token_line_advances(self) -> None:
         tokens = list(tokenize("a\nb"))
-        b_tok = next(t for t in tokens if t.type == "VAR_NAME" and str(t) == "b")
+        b_tok = next(t for t in tokens if t.type == "NAME" and str(t) == "b")
         assert b_tok.line == 2
 
     def test_token_end_position(self) -> None:
@@ -1069,21 +1069,21 @@ class TestLexErrorSpan:
         # measurement).  Only the statement and a trailing _NEWLINE (level 0)
         # are produced -- no _INDENT/_DEDENT noise from the blank tail.
         result = tok("a\n   ")
-        assert result == [("VAR_NAME", "a"), ("_NEWLINE", "0")]
+        assert result == [("NAME", "a"), ("_NEWLINE", "0")]
 
     def test_peek_significant_eof_after_newline(self) -> None:
         # A trailing newline at EOF yields the statement plus a single trailing
         # _NEWLINE at level 0 (which the grammar's optional trailing separator
         # consumes); no _INDENT/_DEDENT is emitted.
         result = tok("a\n")
-        assert result == [("VAR_NAME", "a"), ("_NEWLINE", "0")]
+        assert result == [("NAME", "a"), ("_NEWLINE", "0")]
 
     def test_comment_at_eof_no_trailing_newline(self) -> None:
         # After a statement and newline, a comment that extends to EOF (no trailing newline)
         # Tests the _measure_indentation path where comment hits EOF without a newline.
         result = tok("a\n# comment at eof")
         types = [t for t, _ in result]
-        assert "VAR_NAME" in types
+        assert "NAME" in types
 
 
 # ---------------------------------------------------------------------------
@@ -1103,7 +1103,7 @@ class TestAglLexerClass:
         result = list(lexer.lex(state, None))
         types = [t.type for t in result]
         assert "LET" in types
-        assert "VAR_NAME" in types
+        assert "NAME" in types
         assert "EQ" in types
         assert "INT" in types
 
@@ -1112,7 +1112,7 @@ class TestAgLSnippets:
     def test_let_declaration(self) -> None:
         result = tok("let x = 42")
         types = [t for t, _ in result]
-        assert types == ["let", "VAR_NAME", "EQ", "INT"]
+        assert types == ["let", "NAME", "EQ", "INT"]
 
     def test_var_declaration(self) -> None:
         result = tok("var artifact: text = 1")
@@ -1123,7 +1123,7 @@ class TestAgLSnippets:
     def test_agent_call_expression(self) -> None:
         result = tok('reviewer "Review ${artifact}"')
         types = [t for t, _ in result]
-        assert types[0] == "VAR_NAME"
+        assert types[0] == "NAME"
         assert "TEMPLATE_START" in types
         assert "INTERP_START" in types
 
@@ -1134,7 +1134,7 @@ class TestAgLSnippets:
         result = tok(source)
         types = [t for t, _ in result]
         assert "enum" in types
-        assert "TYPE_NAME" in types
+        assert "NAME" in types
         assert "PIPE" in types
         # No _INDENT/_DEDENT: | variants are flat after the |‑continuation rule
         assert "_INDENT" not in types
@@ -1166,11 +1166,11 @@ class TestAgLSnippets:
         result = tok("let x: Review = foo")
         types = [t for t, _ in result]
         assert "COLON" in types
-        assert "TYPE_NAME" in types
+        assert "NAME" in types
 
     def test_field_access(self) -> None:
         result = tok("e.raw")
-        assert result == [("VAR_NAME", "e"), ("DOT", "."), ("VAR_NAME", "raw")]
+        assert result == [("NAME", "e"), ("DOT", "."), ("NAME", "raw")]
 
     def test_case_of_statement(self) -> None:
         # The |‑continuation rule makes the branch list flat (no _INDENT for branch header).
@@ -1246,7 +1246,7 @@ case review of
         # In v2, `print` is an ordinary function name (VAR_NAME), not a reserved keyword.
         result = tok('print "hello"')
         types = [t for t, _ in result]
-        assert types[0] == "VAR_NAME"
+        assert types[0] == "NAME"
         assert result[0][1] == "print"
         assert "TEMPLATE_START" in types
 
@@ -1254,7 +1254,7 @@ case review of
         result = tok("raise e")
         types = [t for t, _ in result]
         assert types[0] == "raise"
-        assert "VAR_NAME" in types
+        assert "NAME" in types
 
     def test_not_and_or_keywords(self) -> None:
         result = tok("not true and false or null")
@@ -1504,97 +1504,97 @@ class TestIdentifierUnicodeAndSymbols:
     tokens."""
 
     def test_latin_extended_lowercase_accepted(self) -> None:
-        # é (U+00E9) is a Unicode letter — a valid VAR_NAME start.
-        assert tok("é") == [("VAR_NAME", "é")]
+        # é (U+00E9) is a Unicode letter — a valid NAME start.
+        assert tok("é") == [("NAME", "é")]
 
     def test_greek_uppercase_accepted(self) -> None:
-        # Ω (U+03A9) — str.isupper() returns True, so it is a TYPE_NAME.
-        assert tok("Ω") == [("TYPE_NAME", "Ω")]
+        # Ω (U+03A9) — identifiers are case-neutral, so this is a NAME.
+        assert tok("Ω") == [("NAME", "Ω")]
 
     def test_cjk_identifier_accepted(self) -> None:
-        assert tok("中文变量") == [("VAR_NAME", "中文变量")]
+        assert tok("中文变量") == [("NAME", "中文变量")]
 
     def test_ascii_lowercase_identifier_still_valid(self) -> None:
-        assert tok("foo_bar") == [("VAR_NAME", "foo_bar")]
+        assert tok("foo_bar") == [("NAME", "foo_bar")]
 
     def test_ascii_uppercase_identifier_still_valid(self) -> None:
-        assert tok("FooBar") == [("TYPE_NAME", "FooBar")]
+        assert tok("FooBar") == [("NAME", "FooBar")]
 
     def test_identifier_with_digits_still_valid(self) -> None:
-        assert tok("x1") == [("VAR_NAME", "x1")]
+        assert tok("x1") == [("NAME", "x1")]
 
     def test_underscore_only_identifier_still_valid(self) -> None:
-        assert tok("_x") == [("VAR_NAME", "_x")]
+        assert tok("_x") == [("NAME", "_x")]
 
     def test_unicode_letter_in_identifier_continuation_accepted(self) -> None:
         # "aé" — starts with ASCII 'a', continues with Unicode 'é'.
-        assert tok("aé") == [("VAR_NAME", "aé")]
+        assert tok("aé") == [("NAME", "aé")]
 
     def test_hyphen_in_identifier(self) -> None:
-        assert tok("ask-prompt") == [("VAR_NAME", "ask-prompt")]
+        assert tok("ask-prompt") == [("NAME", "ask-prompt")]
 
     def test_question_mark_in_identifier(self) -> None:
-        assert tok("ask?") == [("VAR_NAME", "ask?")]
+        assert tok("ask?") == [("NAME", "ask?")]
 
     def test_exclamation_in_identifier(self) -> None:
-        assert tok("do-it-now!") == [("VAR_NAME", "do-it-now!")]
+        assert tok("do-it-now!") == [("NAME", "do-it-now!")]
 
     def test_operator_chars_in_identifier(self) -> None:
         # <, >, =, +, * are identifier-continuation characters, so a run of
         # them with no surrounding whitespace is one identifier.
-        assert tok("a->b") == [("VAR_NAME", "a->b")]
-        assert tok("x!=3") == [("VAR_NAME", "x!=3")]
-        assert tok("a+b") == [("VAR_NAME", "a+b")]
-        assert tok("n*x") == [("VAR_NAME", "n*x")]
-        assert tok("Pass=>()") == [("TYPE_NAME", "Pass=>"), ("LPAR", "("), ("RPAR", ")")]
+        assert tok("a->b") == [("NAME", "a->b")]
+        assert tok("x!=3") == [("NAME", "x!=3")]
+        assert tok("a+b") == [("NAME", "a+b")]
+        assert tok("n*x") == [("NAME", "n*x")]
+        assert tok("Pass=>()") == [("NAME", "Pass=>"), ("LPAR", "("), ("RPAR", ")")]
 
     def test_spaces_break_identifier_before_operator(self) -> None:
         # Whitespace is a stop character, so the operator tokens re-emerge.
         assert tok("a - b") == [
-            ("VAR_NAME", "a"), ("MINUS", "-"), ("VAR_NAME", "b"),
+            ("NAME", "a"), ("MINUS", "-"), ("NAME", "b"),
         ]
         assert tok("a -> b") == [
-            ("VAR_NAME", "a"), ("THIN_ARROW", "->"), ("VAR_NAME", "b"),
+            ("NAME", "a"), ("THIN_ARROW", "->"), ("NAME", "b"),
         ]
         assert tok("x != 3") == [
-            ("VAR_NAME", "x"), ("NEQ", "!="), ("INT", "3"),
+            ("NAME", "x"), ("NEQ", "!="), ("INT", "3"),
         ]
         assert tok("a + b") == [
-            ("VAR_NAME", "a"), ("PLUS", "+"), ("VAR_NAME", "b"),
+            ("NAME", "a"), ("PLUS", "+"), ("NAME", "b"),
         ]
         assert tok("a * b") == [
-            ("VAR_NAME", "a"), ("STAR", "*"), ("VAR_NAME", "b"),
+            ("NAME", "a"), ("STAR", "*"), ("NAME", "b"),
         ]
         assert tok("Pass => ()") == [
-            ("TYPE_NAME", "Pass"), ("ARROW", "=>"), ("LPAR", "("), ("RPAR", ")"),
+            ("NAME", "Pass"), ("ARROW", "=>"), ("LPAR", "("), ("RPAR", ")"),
         ]
 
     def test_string_quotes_inside_identifier(self) -> None:
         # Both " and ' are identifier-continuation characters, not delimiters.
-        assert tok('foo"bar') == [("VAR_NAME", 'foo"bar')]
-        assert tok("foo'bar") == [("VAR_NAME", "foo'bar")]
+        assert tok('foo"bar') == [("NAME", 'foo"bar')]
+        assert tok("foo'bar") == [("NAME", "foo'bar")]
         # A leading quote (or one after whitespace) still starts a template.
         assert tok('"hello"') == [
             ("TEMPLATE_START", '"'), ("STRING_FRAGMENT", "hello"),
             ("TEMPLATE_END", '"'),
         ]
         assert tok("ask 'x'") == [
-            ("VAR_NAME", "ask"),
+            ("NAME", "ask"),
             ("TEMPLATE_START", "'"), ("STRING_FRAGMENT", "x"), ("TEMPLATE_END", "'"),
         ]
 
     def test_structural_punctuators_break_identifier(self) -> None:
         # `.` `:` `,` `(` `)` etc. are stop characters even without spaces.
-        assert tok("a.b") == [("VAR_NAME", "a"), ("DOT", "."), ("VAR_NAME", "b")]
+        assert tok("a.b") == [("NAME", "a"), ("DOT", "."), ("NAME", "b")]
         assert tok("f(x)") == [
-            ("VAR_NAME", "f"), ("LPAR", "("), ("VAR_NAME", "x"), ("RPAR", ")"),
+            ("NAME", "f"), ("LPAR", "("), ("NAME", "x"), ("RPAR", ")"),
         ]
-        assert tok("a:b") == [("VAR_NAME", "a"), ("COLON", ":"), ("VAR_NAME", "b")]
+        assert tok("a:b") == [("NAME", "a"), ("COLON", ":"), ("NAME", "b")]
 
     def test_hyphen_cannot_start_identifier(self) -> None:
         # An identifier must start with a letter or _; a leading '-' is the
         # MINUS / THIN_ARROW operator path.
-        assert tok("-a") == [("MINUS", "-"), ("VAR_NAME", "a")]
+        assert tok("-a") == [("MINUS", "-"), ("NAME", "a")]
 
     def test_digit_cannot_start_identifier(self) -> None:
         # A leading digit begins a number, not an identifier.
@@ -1807,13 +1807,13 @@ class TestV2Keywords:
 
     def test_def_is_reserved_not_var_name(self) -> None:
         types = [t for t, _ in tok("def")]
-        assert "VAR_NAME" not in types
+        assert "NAME" not in types
         assert "def" in types
 
     def test_def_prefix_identifier_is_var_name(self) -> None:
         # "default" starts with "def" but must lex as a plain identifier.
         result = tok("default")
-        assert result == [("VAR_NAME", "default")]
+        assert result == [("NAME", "default")]
 
     def test_def_remapped_to_uppercase_in_lark_interface(self) -> None:
         # AglLexer.lex() remaps lowercase "def" → "DEF" for the grammar.
@@ -1831,14 +1831,14 @@ class TestV2Keywords:
 
     def test_fn_is_reserved_not_var_name(self) -> None:
         types = [t for t, _ in tok("fn")]
-        assert "VAR_NAME" not in types
+        assert "NAME" not in types
         assert "fn" in types
 
     def test_fn_prefix_identifier_is_var_name(self) -> None:
         # "find" starts with "fn"? No — "fn" would not prefix "find" anyway.
         # But "fnord" starts with "fn" and must be a plain identifier.
         result = tok("fnord")
-        assert result == [("VAR_NAME", "fnord")]
+        assert result == [("NAME", "fnord")]
 
     def test_fn_remapped_to_uppercase_in_lark_interface(self) -> None:
         lexer = AglLexer(None)
@@ -1851,45 +1851,45 @@ class TestV2Keywords:
 
     def test_pass_lexes_as_var_name(self) -> None:
         result = tok("pass")
-        assert result == [("VAR_NAME", "pass")]
+        assert result == [("NAME", "pass")]
 
     def test_pass_not_a_keyword_type(self) -> None:
         types = [t for t, _ in tok("pass")]
         assert "pass" not in types
-        assert "VAR_NAME" in types
+        assert "NAME" in types
 
     # --- print is no longer a reserved keyword (v2: ordinary function name) ---
 
     def test_print_lexes_as_var_name(self) -> None:
         result = tok("print")
-        assert result == [("VAR_NAME", "print")]
+        assert result == [("NAME", "print")]
 
     def test_print_not_a_keyword_type(self) -> None:
         types = [t for t, _ in tok("print")]
         assert "print" not in types
-        assert "VAR_NAME" in types
+        assert "NAME" in types
 
     def test_print_used_as_call_lexes_correctly(self) -> None:
-        # print(x) should now lex as: VAR_NAME LPAR VAR_NAME RPAR
+        # print(x) should now lex as: NAME LPAR NAME RPAR
         result = tok("print(x)")
         types = [t for t, _ in result]
-        assert types == ["VAR_NAME", "LPAR", "VAR_NAME", "RPAR"]
-        assert result[0] == ("VAR_NAME", "print")
+        assert types == ["NAME", "LPAR", "NAME", "RPAR"]
+        assert result[0] == ("NAME", "print")
 
-    # --- unit is non-reserved (like text/int/bool — just a VAR_NAME) ---
+    # --- unit is non-reserved (like text/int/bool — just a NAME) ---
 
     def test_unit_lexes_as_var_name(self) -> None:
-        # `unit` is a type keyword but not reserved — it lexes as VAR_NAME,
+        # `unit` is a type keyword but not reserved — it lexes as NAME,
         # exactly like `text`, `int`, `bool`, `json`, `decimal`, `list`, `dict`.
         result = tok("unit")
-        assert result == [("VAR_NAME", "unit")]
+        assert result == [("NAME", "unit")]
 
     def test_unit_usable_as_type_annotation_context(self) -> None:
-        # `unit` in a type annotation position lexes as VAR_NAME (grammar
+        # `unit` in a type annotation position lexes as NAME (grammar
         # handles it as a primitive type — same as "text", "int", etc.).
         result = tok("x: unit")
         types = [t for t, _ in result]
-        assert types == ["VAR_NAME", "COLON", "VAR_NAME"]
+        assert types == ["NAME", "COLON", "NAME"]
         values = [v for _, v in result]
         assert values[-1] == "unit"
 
@@ -1898,14 +1898,14 @@ class TestV2Keywords:
         result = tok("let unit = 1")
         types = [t for t, _ in result]
         assert "let" in types
-        assert "VAR_NAME" in types
+        assert "NAME" in types
 
     def test_existing_primitive_type_keywords_still_lex_as_var_name(self) -> None:
         # Regression guard: text, int, bool, json, decimal, list, dict
-        # must all still be VAR_NAME (unchanged from before).
+        # must all still be NAME (unchanged from before).
         for word in ("text", "int", "bool", "json", "decimal", "list", "dict"):
             result = tok(word)
-            assert result == [("VAR_NAME", word)], f"{word!r} should be VAR_NAME"
+            assert result == [("NAME", word)], f"{word!r} should be NAME"
 
     # --- mixed v2 keywords in a snippet ---
 
@@ -1944,10 +1944,10 @@ class TestV2ThinArrow:
         assert result[0][0] == "THIN_ARROW"
 
     def test_minus_then_var_is_minus_and_var(self) -> None:
-        # "- x" must still be MINUS VAR_NAME (not consumed as THIN_ARROW)
+        # "- x" must still be MINUS NAME (not consumed as THIN_ARROW)
         result = tok("- x")
         types = [t for t, _ in result]
-        assert types == ["MINUS", "VAR_NAME"]
+        assert types == ["MINUS", "NAME"]
 
     def test_minus_not_followed_by_gt_is_minus(self) -> None:
         # "-1" should still be MINUS INT
@@ -1970,10 +1970,10 @@ class TestV2ThinArrow:
         result = tok("(int) -> text")
         types = [t for t, _ in result]
         assert "LPAR" in types
-        assert "VAR_NAME" in types  # int
+        assert "NAME" in types  # int
         assert "RPAR" in types
         assert "THIN_ARROW" in types
-        assert "VAR_NAME" in types  # text
+        assert "NAME" in types  # text
 
     def test_thin_arrow_in_def_signature_context(self) -> None:
         # def f(x: int) -> text = body
@@ -2056,3 +2056,50 @@ class TestV2LoopBoundPreserved:
         types = [t for t, _ in result]
         assert "LOOP_BOUND" in types
         assert "THIN_ARROW" in types
+
+
+# ---------------------------------------------------------------------------
+# Case-neutral identifiers (M1 generics)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseNeutralNames:
+    """All identifiers lex as NAME regardless of case (M1: case-neutral names)."""
+
+    def test_box_uppercase_is_name(self) -> None:
+        result = tok("Box")
+        assert result == [("NAME", "Box")]
+
+    def test_foo_lowercase_is_name(self) -> None:
+        result = tok("foo")
+        assert result == [("NAME", "foo")]
+
+    def test_underscore_x_is_name(self) -> None:
+        result = tok("_x")
+        assert result == [("NAME", "_x")]
+
+    def test_box_lowercase_is_name(self) -> None:
+        result = tok("box")
+        assert result == [("NAME", "box")]
+
+    def test_foo_uppercase_is_name(self) -> None:
+        result = tok("Foo")
+        assert result == [("NAME", "Foo")]
+
+    def test_keywords_still_produce_keyword_tokens(self) -> None:
+        result = tok("let var def fn")
+        types = [t for t, _ in result]
+        assert "let" in types
+        assert "var" in types
+        assert "def" in types
+        assert "fn" in types
+        assert "NAME" not in types
+
+    def test_config_is_keyword(self) -> None:
+        result = tok("config")
+        assert result == [("config", "config")]
+
+    def test_agent_is_keyword_not_name(self) -> None:
+        result = tok("agent")
+        types = [t for t, _ in result]
+        assert "NAME" not in types

@@ -46,7 +46,6 @@ from agm.agl.syntax import (
     CaseBranch,
     CatchClause,
     ConfigPragma,
-    Constructor,
     ConstructorPattern,
     DecimalLit,
     DictEntry,
@@ -92,6 +91,7 @@ from agm.agl.syntax import (
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.types import (
     AgentT,
+    AppliedT,
     BoolT,
     DecimalT,
     DictT,
@@ -383,6 +383,30 @@ class TestTypeExpressions:
         assert isinstance(let, LetDecl)
         assert isinstance(let.type_ann, DictT)
         assert isinstance(let.type_ann.value, IntT)
+
+    def test_list_wrong_arg_count_raises(self) -> None:
+        from agm.agl.parser.errors import AglSyntaxError
+        with pytest.raises(AglSyntaxError, match="exactly one"):
+            parse("let x: list[int, text] = []")
+
+    def test_dict_wrong_arg_count_raises(self) -> None:
+        from agm.agl.parser.errors import AglSyntaxError
+        with pytest.raises(AglSyntaxError, match="exactly two"):
+            parse("let d: dict[int] = {}")
+
+    def test_dict_non_text_key_complex_type_raises(self) -> None:
+        # dict key type must be text; a complex key triggers _type_expr_spelling fallback
+        # (ListT → "list", covering the cls[:-1].lower() branch).
+        from agm.agl.parser.errors import AglSyntaxError
+        with pytest.raises(AglSyntaxError, match="text"):
+            parse("let d: dict[list[int], int] = {}")
+
+    def test_dict_named_type_key_raises(self) -> None:
+        # dict key type must be text; a named type key triggers _type_expr_spelling
+        # NameT branch (t.name path at line 1580).
+        from agm.agl.parser.errors import AglSyntaxError
+        with pytest.raises(AglSyntaxError, match="Review"):
+            parse("let d: dict[Review, int] = {}")
 
     def test_named_type(self) -> None:
         let = first(parse("let r: Review = x"))
@@ -780,7 +804,7 @@ class TestCalls:
 
 
 class TestTypedCalls:
-    """``callee::[Type](args)`` desugars to a Call with a static type_arg."""
+    """``callee::[Type](args)`` desugars to a Call with static type_args."""
 
     def test_typed_call_basic(self) -> None:
         call = first(parse('ask-request::[Review]("p")'))
@@ -789,65 +813,65 @@ class TestTypedCalls:
         assert call.callee.name == "ask-request"
         assert len(call.args) == 1
         assert call.named_args == ()
-        assert call.type_arg is not None
-        assert isinstance(call.type_arg, NameT)
-        assert call.type_arg.name == "Review"
+        assert len(call.type_args) == 1
+        assert isinstance(call.type_args[0], NameT)
+        assert call.type_args[0].name == "Review"
 
     def test_typed_call_type_brackets_survive_index_bracket_remap(self) -> None:
         call = first(parse('ask-request::[Review]("p")'))
         assert isinstance(call, Call)
-        assert isinstance(call.type_arg, NameT)
-        assert call.type_arg.name == "Review"
+        assert isinstance(call.type_args[0], NameT)
+        assert call.type_args[0].name == "Review"
 
         generic = first(parse('ask-request::[list[Review]]("p")'))
         assert isinstance(generic, Call)
-        assert isinstance(generic.type_arg, ListT)
-        assert isinstance(generic.type_arg.elem, NameT)
-        assert generic.type_arg.elem.name == "Review"
+        assert isinstance(generic.type_args[0], ListT)
+        assert isinstance(generic.type_args[0].elem, NameT)
+        assert generic.type_args[0].elem.name == "Review"
 
     def test_typed_call_no_type_arg(self) -> None:
-        # ``ask-request("p")`` (no ``::[...]``) is an ordinary Call with no type_arg.
+        # ``ask-request("p")`` (no ``::[...]``) is an ordinary Call with no type_args.
         call = first(parse('ask-request("p")'))
         assert isinstance(call, Call)
-        assert call.type_arg is None
+        assert call.type_args == ()
 
     def test_typed_call_primitive_type(self) -> None:
         call = first(parse('ask-request::[text]("p")'))
         assert isinstance(call, Call)
-        assert isinstance(call.type_arg, TextT)
+        assert isinstance(call.type_args[0], TextT)
 
     def test_typed_call_agent_type(self) -> None:
         call = first(parse('ask-request::[agent]("p")'))
         assert isinstance(call, Call)
-        assert isinstance(call.type_arg, AgentT)
+        assert isinstance(call.type_args[0], AgentT)
 
     def test_typed_call_generic_type(self) -> None:
         call = first(parse('ask-request::[list[Review]]("p")'))
         assert isinstance(call, Call)
-        assert isinstance(call.type_arg, ListT)
-        assert isinstance(call.type_arg.elem, NameT)
-        assert call.type_arg.elem.name == "Review"
+        assert isinstance(call.type_args[0], ListT)
+        assert isinstance(call.type_args[0].elem, NameT)
+        assert call.type_args[0].elem.name == "Review"
 
     def test_typed_call_dict_type(self) -> None:
         call = first(parse('ask-request::[dict[text, Review]]("p")'))
         assert isinstance(call, Call)
-        assert isinstance(call.type_arg, DictT)
-        assert isinstance(call.type_arg.value, NameT)
-        assert call.type_arg.value.name == "Review"
+        assert isinstance(call.type_args[0], DictT)
+        assert isinstance(call.type_args[0].value, NameT)
+        assert call.type_args[0].value.name == "Review"
 
     def test_typed_call_with_named_args(self) -> None:
         call = first(parse('ask-request::[Review]("p", agent: reviewer)'))
         assert isinstance(call, Call)
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "agent"
-        assert call.type_arg is not None
+        assert len(call.type_args) == 1
 
     def test_typed_call_no_args(self) -> None:
         # An empty arg list is syntactically valid (the checker rejects it).
         call = first(parse("ask-request::[Review]()"))
         assert isinstance(call, Call)
         assert call.args == ()
-        assert call.type_arg is not None
+        assert len(call.type_args) == 1
 
     def test_typed_call_trailing_comma(self) -> None:
         call = first(parse('ask-request::[Review]("p",)'))
@@ -894,30 +918,22 @@ class TestFieldAccessAndConstructors:
 
     def test_constructor_bare(self) -> None:
         c = first(parse("Pass"))
-        assert isinstance(c, Constructor)
-        assert c.qualifier is None
+        assert isinstance(c, VarRef)
         assert c.name == "Pass"
-        assert c.args == ()
 
     def test_constructor_with_args(self) -> None:
         c = first(parse("Issue(title: x, severity: 1)"))
-        assert isinstance(c, Constructor)
-        assert c.name == "Issue"
-        assert len(c.args) == 2
+        assert isinstance(c, Call)
+        assert isinstance(c.callee, VarRef)
+        assert c.callee.name == "Issue"
+        assert len(c.named_args) == 2
 
     def test_qualified_constructor(self) -> None:
         c = first(parse("Review.Pass"))
-        assert isinstance(c, Constructor)
-        assert c.qualifier == "Review"
-        assert c.name == "Pass"
-
-    def test_double_payload_raises(self) -> None:
-        with pytest.raises(AglSyntaxError, match="single argument list"):
-            parse("Issue(a: 1)(b: 2)")
-
-    def test_bad_qualification_raises(self) -> None:
-        with pytest.raises(AglSyntaxError):
-            parse("x.Done")
+        assert isinstance(c, FieldAccess)
+        assert isinstance(c.obj, VarRef)
+        assert c.obj.name == "Review"
+        assert c.field == "Pass"
 
 
 class TestIndexAccess:
@@ -1118,7 +1134,7 @@ class TestIfExpr:
 
 class TestCaseExpr:
     def test_case_simple(self) -> None:
-        src = "case x of | Pass => ok | Fail => err"
+        src = "case x of | Pass() => ok | Fail() => err"
         e = first(parse(src))
         assert isinstance(e, Case)
         assert isinstance(e.subject, VarRef)
@@ -1138,7 +1154,7 @@ class TestCaseExpr:
         assert isinstance(e.branches[0].pattern, WildcardPattern)
 
     def test_case_branch_body_is_expr(self) -> None:
-        src = "case x of | Pass => ok | Fail => err"
+        src = "case x of | Pass() => ok | Fail() => err"
         e = first(parse(src))
         assert isinstance(e, Case)
         branch = e.branches[0]
@@ -1245,7 +1261,7 @@ class TestRaiseExpr:
     def test_raise_constructor(self) -> None:
         e = first(parse("raise Error(msg: m)"))
         assert isinstance(e, Raise)
-        assert isinstance(e.exc, Constructor)
+        assert isinstance(e.exc, Call)
 
 
 # ---------------------------------------------------------------------------
@@ -1434,11 +1450,6 @@ class TestNegativeCases:
         e = first(parse("n = 2"))
         assert isinstance(e, BinaryOp)
         assert e.op == BinOp.EQ
-
-    def test_unknown_catch_var_raises(self) -> None:
-        """catch lowercase (not _ or TYPE_NAME) is a parse error."""
-        with pytest.raises(AglSyntaxError):
-            parse("try x catch err => x")
 
     def test_duplicate_constructor_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="duplicate"):
@@ -1647,29 +1658,17 @@ class TestTypeExprCoverage:
         assert isinstance(let.type_ann, NameT)
         assert let.type_ann.name == "mytype"
 
-    def test_generic_type_unknown_raises(self) -> None:
-        """foo[int] raises AglSyntaxError — only list[T] is valid."""
-        with pytest.raises(AglSyntaxError, match="Unknown generic type"):
-            parse("let x: foo[int] = 1")
-
     def test_dict_type_bad_key_raises(self) -> None:
-        """dict[int, text] raises — dict keys must be text."""
-        with pytest.raises(AglSyntaxError, match="text"):
+        """dict[int, text] raises — dict keys must be text; message shows source spelling."""
+        with pytest.raises(AglSyntaxError) as exc_info:
             parse("let x: dict[int, text] = 1")
-
-    def test_dict_type_bad_head_raises(self) -> None:
-        """foo[text, int] raises — only dict[] is valid for two-param generic."""
-        with pytest.raises(AglSyntaxError, match="Unknown generic type"):
-            parse("let x: foo[text, int] = 1")
+        msg = str(exc_info.value)
+        assert "'int'" in msg
+        assert "IntT" not in msg
 
 
 class TestCallsCoverage:
     """Covers call paths not yet tested."""
-
-    def test_constructor_positional_arg_raises(self) -> None:
-        """Constructor called with positional arg raises AglSyntaxError."""
-        with pytest.raises(AglSyntaxError, match="named"):
-            parse("Issue(1)")
 
     def test_paren_expr_unwrap(self) -> None:
         """(expr) parses as the inner expr (paren_expr rule unwraps)."""
@@ -1844,3 +1843,265 @@ class TestSyntaxErrorFromLarkDirect:
         assert span is not None
         assert span.start_line == 1
         assert span.start_col == 1
+
+
+# ---------------------------------------------------------------------------
+# Generics / parametric polymorphism
+# ---------------------------------------------------------------------------
+
+
+class TestGenerics:
+    """Tests for parametric polymorphism: record/enum/def/type with type_params."""
+
+    def test_generic_record_def(self) -> None:
+        """record Pair[A, B] with two type params."""
+        prog = parse("record Pair[A, B]\n  first: A\n  second: B")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Pair"
+        assert rec.type_params == ("A", "B")
+        assert len(rec.fields) == 2
+
+    def test_generic_enum_def(self) -> None:
+        """enum Option[T] with one type param."""
+        prog = parse("enum Option[T]\n  | None\n  | Some(value: T)")
+        en = first(prog)
+        assert isinstance(en, EnumDef)
+        assert en.name == "Option"
+        assert en.type_params == ("T",)
+        assert len(en.variants) == 2
+
+    def test_generic_type_alias(self) -> None:
+        """type Map[K] = dict[text, K] — type alias with type param."""
+        prog = parse("type Map[K] = dict[text, K]")
+        alias = first(prog)
+        assert isinstance(alias, TypeAlias)
+        assert alias.name == "Map"
+        assert alias.type_params == ("K",)
+        assert isinstance(alias.type_expr, DictT)
+
+    def test_generic_func_def(self) -> None:
+        """def identity[T](x: T) -> T = x — polymorphic function."""
+        prog = parse("def identity[T](x: T) -> T = x")
+        fn = first(prog)
+        assert isinstance(fn, FuncDef)
+        assert fn.name == "identity"
+        assert fn.type_params == ("T",)
+        assert len(fn.params) == 1
+
+    def test_applied_type_in_annotation(self) -> None:
+        """let x: Option[int] = y produces AppliedT in type_ann."""
+        let = first(parse("let x: Option[int] = y"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, AppliedT)
+        assert let.type_ann.name == "Option"
+        assert len(let.type_ann.args) == 1
+        assert isinstance(let.type_ann.args[0], IntT)
+
+    def test_applied_type_multi_arg(self) -> None:
+        """let x: Pair[int, text] = y produces AppliedT with 2 args."""
+        let = first(parse("let x: Pair[int, text] = y"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, AppliedT)
+        assert let.type_ann.name == "Pair"
+        assert len(let.type_ann.args) == 2
+        assert isinstance(let.type_ann.args[0], IntT)
+        assert isinstance(let.type_ann.args[1], TextT)
+
+    def test_non_generic_record_has_empty_type_params(self) -> None:
+        """Plain record Issue has type_params == ()."""
+        prog = parse("record Issue\n  title: text")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.type_params == ()
+
+    def test_typed_call_multi_type_args(self) -> None:
+        """callee::[A, B](x) produces Call with two type_args."""
+        call = first(parse("f::[int, text](x)"))
+        assert isinstance(call, Call)
+        assert len(call.type_args) == 2
+        assert isinstance(call.type_args[0], IntT)
+        assert isinstance(call.type_args[1], TextT)
+
+
+class TestSpacedBrackets:
+    """type_lsqb accepts both adjacent and spaced brackets for type params/args."""
+
+    def test_spaced_type_params_func_def(self) -> None:
+        """def identity [T](x: T) -> T = x — spaced bracket form."""
+        fn = first(parse("def identity [T](x: T) -> T = x"))
+        assert isinstance(fn, FuncDef)
+        assert fn.type_params == ("T",)
+
+    def test_spaced_type_params_equals_adjacent(self) -> None:
+        """Spaced and adjacent forms produce identical type_params tuples."""
+        adjacent = first(parse("def identity[T](x: T) -> T = x"))
+        spaced = first(parse("def identity [T](x: T) -> T = x"))
+        assert isinstance(adjacent, FuncDef)
+        assert isinstance(spaced, FuncDef)
+        assert spaced.type_params == adjacent.type_params
+
+    def test_spaced_applied_type_annotation(self) -> None:
+        """let x: Option [int] = y — spaced bracket in type annotation."""
+        let = first(parse("let x: Option [int] = y"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, AppliedT)
+        assert let.type_ann.name == "Option"
+        assert len(let.type_ann.args) == 1
+        assert isinstance(let.type_ann.args[0], IntT)
+
+    def test_spaced_applied_type_equals_adjacent(self) -> None:
+        """Spaced applied type produces the same AST as adjacent."""
+        adjacent = first(parse("let x: Option[int] = y"))
+        spaced = first(parse("let x: Option [int] = y"))
+        assert isinstance(adjacent, LetDecl)
+        assert isinstance(spaced, LetDecl)
+        assert spaced.type_ann == adjacent.type_ann
+
+    def test_spaced_type_params_record_def(self) -> None:
+        """record Pair [A, B] — spaced bracket in record definition."""
+        rec = first(parse("record Pair [A, B]\n  first: A\n  second: B"))
+        assert isinstance(rec, RecordDef)
+        assert rec.type_params == ("A", "B")
+
+
+# ---------------------------------------------------------------------------
+# Case-neutral names (M1 generics)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseNeutralNamesParser:
+    """Case-neutral names: uppercase and lowercase identifiers are both NAME tokens."""
+
+    def test_uppercase_let_binding(self) -> None:
+        # Names are case-neutral; uppercase is just a NAME
+        prog = parse("let X = 1")
+        d = first(prog)
+        assert isinstance(d, LetDecl)
+        assert d.name == "X"
+
+    def test_lowercase_type_in_type_ann(self) -> None:
+        prog = parse("let x: mytype = 1")
+        d = first(prog)
+        assert isinstance(d, LetDecl)
+        assert isinstance(d.type_ann, NameT)
+        assert d.type_ann.name == "mytype"
+
+    def test_uppercase_type_in_type_ann(self) -> None:
+        prog = parse("let x: MyType = 1")
+        d = first(prog)
+        assert isinstance(d, LetDecl)
+        assert isinstance(d.type_ann, NameT)
+        assert d.type_ann.name == "MyType"
+
+    def test_constructor_as_var_ref(self) -> None:
+        # Uppercase name in expression position -> VarRef
+        prog = parse("Foo")
+        ref = first(prog)
+        assert isinstance(ref, VarRef)
+        assert ref.name == "Foo"
+
+    def test_lowercase_name_as_var_ref(self) -> None:
+        prog = parse("none")
+        ref = first(prog)
+        assert isinstance(ref, VarRef)
+        assert ref.name == "none"
+
+    def test_constructor_call_becomes_call(self) -> None:
+        # some(value: 1) -> Call(callee=VarRef("some"), named_args=(...))
+        prog = parse("some(value: 1)")
+        c = first(prog)
+        assert isinstance(c, Call)
+        assert isinstance(c.callee, VarRef)
+        assert c.callee.name == "some"
+        assert len(c.named_args) == 1
+        assert c.named_args[0].name == "value"
+
+    def test_uppercase_constructor_call_becomes_call(self) -> None:
+        prog = parse("Some(value: 1)")
+        c = first(prog)
+        assert isinstance(c, Call)
+        assert isinstance(c.callee, VarRef)
+        assert c.callee.name == "Some"
+
+    def test_qualified_access_becomes_field_access(self) -> None:
+        # Option.some -> FieldAccess(VarRef("Option"), "some")
+        prog = parse("Option.some")
+        fa = first(prog)
+        assert isinstance(fa, FieldAccess)
+        assert isinstance(fa.obj, VarRef)
+        assert fa.obj.name == "Option"
+        assert fa.field == "some"
+
+    def test_qualified_call_becomes_call_with_field_access(self) -> None:
+        # Option.some(value: 1) -> Call(callee=FieldAccess(VarRef("Option"), "some"), ...)
+        prog = parse("Option.some(value: 1)")
+        c = first(prog)
+        assert isinstance(c, Call)
+        assert isinstance(c.callee, FieldAccess)
+        assert c.callee.field == "some"
+
+
+class TestCaseNeutralPatterns:
+    """Case-neutral pattern matching: both upper- and lower-case names work the same."""
+
+    def test_bare_lowercase_name_is_var_pattern(self) -> None:
+        prog = parse("case x of | y => y")
+        case = first(prog)
+        assert isinstance(case, Case)
+        pat = case.branches[0].pattern
+        assert isinstance(pat, VarPattern)
+        assert pat.name == "y"
+
+    def test_bare_uppercase_name_is_var_pattern(self) -> None:
+        # With case-neutral names, bare uppercase is also a VarPattern
+        prog = parse("case x of | Y => Y")
+        case = first(prog)
+        assert isinstance(case, Case)
+        pat = case.branches[0].pattern
+        assert isinstance(pat, VarPattern)
+        assert pat.name == "Y"
+
+    def test_underscore_is_wildcard(self) -> None:
+        prog = parse("case x of | _ => 1")
+        case = first(prog)
+        assert isinstance(case, Case)
+        pat = case.branches[0].pattern
+        assert isinstance(pat, WildcardPattern)
+
+    def test_constructor_pattern_with_parens(self) -> None:
+        prog = parse("case x of | none() => 1")
+        case = first(prog)
+        assert isinstance(case, Case)
+        pat = case.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier is None
+        assert pat.name == "none"
+        assert pat.fields == ()
+
+    def test_uppercase_constructor_pattern_with_parens(self) -> None:
+        prog = parse("case x of | None() => 1")
+        case = first(prog)
+        assert isinstance(case, Case)
+        pat = case.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.name == "None"
+
+    def test_qualified_constructor_pattern(self) -> None:
+        prog = parse("case x of | Option.none => 1")
+        case = first(prog)
+        assert isinstance(case, Case)
+        pat = case.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier == "Option"
+        assert pat.name == "none"
+
+    def test_constructor_pattern_with_fields(self) -> None:
+        prog = parse("case x of | some(value: v) => v")
+        case = first(prog)
+        assert isinstance(case, Case)
+        pat = case.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.name == "some"
+        assert len(pat.fields) == 1
+        assert pat.fields[0].name == "value"

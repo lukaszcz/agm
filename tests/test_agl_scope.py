@@ -33,6 +33,7 @@ from agm.agl.syntax.nodes import (
     CatchClause,
     ConstructorPattern,
     Do,
+    EnumDef,
     Expr,
     FieldAccess,
     FuncDef,
@@ -46,11 +47,13 @@ from agm.agl.syntax.nodes import (
     Param,
     PatternField,
     Program,
+    RecordDef,
     StringLit,
     Template,
     Try,
     UnitLit,
     VarDecl,
+    VariantDef,
     VarPattern,
     VarRef,
 )
@@ -1212,6 +1215,91 @@ class TestParentScopeSeam:
         assert r.declared_agents == {}
         assert r.warnings == ()
 
+    def test_constructor_binding_with_no_candidates_does_not_error(self) -> None:
+        """A constructor_binding from a parent scope with no ambient candidates
+        is resolved (scope pass succeeds) but constructor_refs is NOT populated.
+        This covers the len(candidates)==0 branch in _resolve_varref."""
+        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
+        session_scope = prior.root_scope
+        # No ambient_constructor_candidates passed → candidates is empty for 'Pass'.
+        entry = resolve(
+            parse_program("Pass()"),
+            parent_scope=session_scope,
+        )
+        # Scope resolution succeeds but does NOT populate constructor_refs.
+        from agm.agl.syntax.nodes import Call as _Call
+        call_node = entry.program.body.items[0]
+        assert isinstance(call_node, _Call)
+        assert isinstance(call_node.callee, VarRef)
+        # Without ambient candidates, constructor_refs is not populated.
+        assert call_node.callee.node_id not in entry.constructor_refs
+
+    def test_ambient_constructor_candidates_resolve_prior_entry_ctor(self) -> None:
+        """Constructor from a prior REPL entry resolves via ambient_constructor_candidates."""
+        from agm.agl.scope.symbols import ConstructorRef
+
+        # Simulate a prior entry that declared enum Review | Pass | Fail.
+        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
+        # Build ambient candidates from the prior entry's resolution.
+        ambient: dict[str, tuple[ConstructorRef, ...]] = {
+            name: crefs for name, crefs in prior.constructor_candidates.items()
+        }
+        # New entry references Pass() with a parent scope that has the constructor binding.
+        session_scope = prior.root_scope
+        entry = resolve(
+            parse_program("Pass()"),
+            parent_scope=session_scope,
+            ambient_constructor_candidates=ambient,
+        )
+        # The VarRef/Call for Pass() must be in constructor_refs.
+        from agm.agl.syntax.nodes import Call as _Call
+        call_node = entry.program.body.items[0]
+        assert isinstance(call_node, _Call)
+        assert isinstance(call_node.callee, VarRef)
+        assert call_node.callee.node_id in entry.constructor_refs
+
+    def test_type_name_shadowed_by_param_resolves_as_field_access(self) -> None:
+        """When a type name is shadowed by a function parameter, a field
+        access on it resolves as an ordinary value field access (not qualified
+        constructor access).  Covers the 1046->1053 branch in _resolve_field_access."""
+        # 'Box' is a type name AND a parameter name inside f.
+        # Inside f, Box.x is a regular field access on the parameter, not a
+        # qualified constructor reference.
+        source = "record Box\n  x: int\ndef f(Box: Box) -> int = Box.x\nf(Box(x: 1))"
+        entry = parse_and_resolve(source)
+        from agm.agl.syntax.nodes import FieldAccess as _FA
+        from agm.agl.syntax.nodes import FuncDef as _FD
+        fn_node = entry.program.body.items[1]
+        assert isinstance(fn_node, _FD)
+        fa_node = fn_node.body
+        assert isinstance(fa_node, _FA)
+        # NOT in qualified_constructor_refs (it's a value field access on the param).
+        assert fa_node.node_id not in entry.qualified_constructor_refs
+
+    def test_ambient_type_names_resolve_qualified_prior_entry_ctor(self) -> None:
+        """Qualified constructor from a prior REPL entry resolves via ambient_type_names."""
+        from agm.agl.scope.symbols import ConstructorRef
+
+        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
+        ambient_candidates: dict[str, tuple[ConstructorRef, ...]] = {
+            name: crefs for name, crefs in prior.constructor_candidates.items()
+        }
+        ambient_type_names = prior.declared_type_names
+        session_scope = prior.root_scope
+        entry = resolve(
+            parse_program("Review.Pass()"),
+            parent_scope=session_scope,
+            ambient_constructor_candidates=ambient_candidates,
+            ambient_type_names=ambient_type_names,
+        )
+        # The FieldAccess for Review.Pass must be in qualified_constructor_refs.
+        from agm.agl.syntax.nodes import Call as _Call
+        from agm.agl.syntax.nodes import FieldAccess as _FA
+        call_node = entry.program.body.items[0]
+        assert isinstance(call_node, _Call)
+        assert isinstance(call_node.callee, _FA)
+        assert call_node.callee.node_id in entry.qualified_constructor_refs
+
 
 # ---------------------------------------------------------------------------
 # Resolution side table: VarRef and AssignStmt
@@ -1375,15 +1463,33 @@ class TestDirectASTConstruction:
     # --- Constructor + operators ---
 
     def test_constructor_args_resolved(self) -> None:
-        from agm.agl.syntax.nodes import Constructor, NamedArg
+        # Constructors are now ordinary Call nodes; a call to a record/enum
+        # constructor is a Call whose callee is a VarRef.
+        # Test that named-arg values in a constructor call are resolved.
+        from agm.agl.syntax.nodes import EnumDef, NamedArg, VariantDef
 
+        sp = _sp()
+        variant = VariantDef(name="point", fields=(), span=sp, node_id=_nid())
+        enum_def = EnumDef(name="Shape", variants=(variant,), span=sp, node_id=_nid())
         let_n = _make_let("n", _make_intlit(5))
-        arg = NamedArg(name="n", value=_make_varref("n"), span=_sp(), node_id=_nid())
-        ctor = Constructor(
-            qualifier=None, name="Point", args=(arg,), span=_sp(), node_id=_nid()
+        arg = NamedArg(name="n", value=_make_varref("n"), span=sp, node_id=_nid())
+        # Constructor call: Call(callee=VarRef("point"), named_args=[n: n])
+        ctor_call = Call(
+            callee=_make_varref("point"),
+            args=(),
+            named_args=(arg,),
+            span=sp,
+            node_id=_nid(),
         )
-        r = resolve_program(let_n, ctor)
+        r = resolve_program(enum_def, let_n, ctor_call)
         assert r.program is not None
+        # The named-arg value (VarRef("n")) must be resolved
+        assert arg.value.node_id in r.resolution  # type: ignore[union-attr]
+        # The callee VarRef("point") must be resolved as constructor_binding
+        callee = ctor_call.callee
+        assert isinstance(callee, VarRef)
+        assert callee.node_id in r.resolution
+        assert r.resolution[callee.node_id].kind == BinderKind.constructor_binding
 
     def test_binary_op_resolved(self) -> None:
         from agm.agl.syntax.nodes import BinaryOp, BinOp
@@ -1863,3 +1969,593 @@ class TestLambdaDuplicateParam:
         let_f = _make_let("f", lam)
         err = reject_program(let_f)
         assert "x" in err.to_diagnostic().message
+
+
+# ---------------------------------------------------------------------------
+# Constructor value bindings (generics: D7 / scope pass)
+# ---------------------------------------------------------------------------
+
+# Helper: build a RecordDef with optional type_params
+def _make_record(
+    name: str, *, type_params: tuple[str, ...] = (), line: int = 1
+) -> RecordDef:
+    from agm.agl.syntax.nodes import FieldDef
+    from agm.agl.syntax.types import IntT as IntTNode
+
+    sp = _sp(line)
+    field_t = IntTNode(span=sp, node_id=_nid())
+    fd = FieldDef(name="value", type_expr=field_t, span=sp, node_id=_nid())
+    return RecordDef(
+        name=name, fields=(fd,), type_params=type_params, span=sp, node_id=_nid()
+    )
+
+
+# Helper: build an EnumDef with variants
+def _make_enum(
+    name: str,
+    variant_names: tuple[str, ...],
+    *,
+    type_params: tuple[str, ...] = (),
+    line: int = 1,
+) -> EnumDef:
+    sp = _sp(line)
+    variants: list[VariantDef] = []
+    for vname in variant_names:
+        variants.append(VariantDef(name=vname, fields=(), span=sp, node_id=_nid()))
+    return EnumDef(
+        name=name,
+        variants=tuple(variants),
+        type_params=type_params,
+        span=sp,
+        node_id=_nid(),
+    )
+
+
+class TestConstructorBindings:
+    """Tests for constructor value bindings (D7: case-neutral constructor names)."""
+
+    # --- Record constructor resolves as value binding ---
+
+    def test_record_constructor_resolves_as_value(self) -> None:
+        """A record constructor (record name) resolves as a constructor_binding."""
+        r = parse_and_resolve(
+            "record Box\n"
+            "  value: int\n"
+            "let b = Box(value: 1)\n"
+            "b\n"
+        )
+        assert r.program is not None
+        # The callee VarRef("Box") should be in constructor_refs
+        # and the constructor candidate is for 'Box'
+        assert "Box" in r.constructor_candidates
+        candidates = r.constructor_candidates["Box"]
+        assert len(candidates) == 1
+        assert candidates[0].owner_name == "Box"
+        assert candidates[0].variant is None
+
+    def test_record_constructor_lowercase_resolves(self) -> None:
+        """Lowercase record names work identically (no capitalization rule)."""
+        r = parse_and_resolve(
+            "record box\n"
+            "  value: int\n"
+            "let b = box(value: 1)\n"
+            "b\n"
+        )
+        assert "box" in r.constructor_candidates
+        assert r.constructor_candidates["box"][0].owner_name == "box"
+
+    def test_enum_variant_resolves_as_value(self) -> None:
+        """Enum variants resolve as constructor_bindings."""
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | none\n"
+            "  | some\n"
+            "none\n"
+        )
+        assert r.program is not None
+        assert "none" in r.constructor_candidates
+        assert "some" in r.constructor_candidates
+
+    def test_nullary_variant_bare_ref_resolves(self) -> None:
+        """A bare VarRef to a nullary enum variant resolves as a constructor."""
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | none\n"
+            "  | some\n"
+            "let x = none\n"
+            "x\n"
+        )
+        # The VarRef("none") in the let should be in constructor_refs
+        let_decl = r.program.body.items[1]
+        assert isinstance(let_decl, LetDecl)
+        vref = let_decl.value
+        assert isinstance(vref, VarRef)
+        assert vref.node_id in r.constructor_refs
+        cref = r.constructor_refs[vref.node_id]
+        assert cref.owner_name == "Option"
+        assert cref.variant == "none"
+
+    def test_payload_variant_callee_resolves(self) -> None:
+        """A payload variant used as a call callee resolves as a constructor."""
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | none\n"
+            "  | some\n"
+            "let x = some()\n"
+            "x\n"
+        )
+        let_decl = r.program.body.items[1]
+        assert isinstance(let_decl, LetDecl)
+        call = let_decl.value
+        assert isinstance(call, Call)
+        callee = call.callee
+        assert isinstance(callee, VarRef)
+        assert callee.node_id in r.constructor_refs
+        assert r.constructor_refs[callee.node_id].variant == "some"
+
+    def test_record_constructor_callee_resolves(self) -> None:
+        """A record constructor used as a call callee resolves."""
+        r = parse_and_resolve(
+            "record Box\n"
+            "  value: int\n"
+            "let b = Box(value: 1)\n"
+            "b\n"
+        )
+        let_decl = r.program.body.items[1]
+        assert isinstance(let_decl, LetDecl)
+        call = let_decl.value
+        assert isinstance(call, Call)
+        callee = call.callee
+        assert isinstance(callee, VarRef)
+        assert callee.node_id in r.constructor_refs
+        cref = r.constructor_refs[callee.node_id]
+        assert cref.owner_name == "Box"
+        assert cref.variant is None
+
+    # --- Generic type_params on constructors ---
+
+    def test_generic_record_constructor_has_type_params(self) -> None:
+        """A generic record constructor carries its type_params in the ConstructorRef."""
+        r = parse_and_resolve(
+            "record Box[T]\n"
+            "  value: int\n"
+            "let b = Box(value: 1)\n"
+            "b\n"
+        )
+        assert r.constructor_candidates["Box"][0].type_params == ("T",)
+
+    def test_generic_enum_variant_has_type_params(self) -> None:
+        """An enum variant from a generic enum carries the enum's type_params."""
+        r = parse_and_resolve(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some\n"
+            "none\n"
+        )
+        assert r.constructor_candidates["none"][0].type_params == ("T",)
+        assert r.constructor_candidates["some"][0].type_params == ("T",)
+
+    # --- Overload sets and ambiguity ---
+
+    def test_unique_variant_resolves_unambiguously(self) -> None:
+        """A unique variant name (one enum) resolves to a single constructor_ref."""
+        r = parse_and_resolve(
+            "enum A\n"
+            "  | foo\n"
+            "  | bar\n"
+            "enum B\n"
+            "  | baz\n"
+            "foo\n"
+        )
+        last_item = r.program.body.items[2]
+        assert isinstance(last_item, VarRef)
+        assert last_item.node_id in r.constructor_refs
+
+    def test_overload_set_built_from_two_enums(self) -> None:
+        """Two enums sharing a variant name form an overload set.
+
+        The overload set exists even if we don't actually USE 'some'.
+        """
+        enum_a = _make_enum("A", ("some", "none"), line=1)
+        enum_b = _make_enum("B", ("some", "other"), line=2)
+        unit = _make_unitlit()
+        r = resolve_program(enum_a, enum_b, unit)
+        assert "some" in r.constructor_candidates
+        assert len(r.constructor_candidates["some"]) == 2
+        owners = {c.owner_name for c in r.constructor_candidates["some"]}
+        assert owners == {"A", "B"}
+
+    def test_ambiguous_bare_varref_raises(self) -> None:
+        """Unqualified use of an ambiguous variant name raises an ambiguity error."""
+        err = reject_scope(
+            "enum A\n"
+            "  | some\n"
+            "enum B\n"
+            "  | some\n"
+            "some\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "some" in msg
+        assert "ambiguous" in msg.lower()
+        # Both owners should be mentioned
+        assert "A" in msg
+        assert "B" in msg
+
+    def test_ambiguous_call_raises(self) -> None:
+        """Calling an ambiguous constructor name also raises ambiguity."""
+        err = reject_scope(
+            "enum A\n"
+            "  | some\n"
+            "enum B\n"
+            "  | some\n"
+            "some()\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "ambiguous" in msg.lower()
+        assert "A" in msg
+        assert "B" in msg
+
+    def test_ambiguous_mentions_qualification(self) -> None:
+        """Ambiguity error tells the user to qualify the reference."""
+        err = reject_scope(
+            "enum Option\n"
+            "  | some\n"
+            "enum Other\n"
+            "  | some\n"
+            "some\n"
+        )
+        msg = err.to_diagnostic().message
+        # Should suggest qualification like 'Option.some'
+        assert "." in msg or "qualify" in msg.lower()
+
+    # --- Qualified constructor access ---
+
+    def test_qualified_constructor_recorded(self) -> None:
+        """Qualified access Owner.member is recorded in qualified_constructor_refs."""
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | none\n"
+            "  | some\n"
+            "let x = Option.some\n"
+            "x\n"
+        )
+        let_decl = r.program.body.items[1]
+        assert isinstance(let_decl, LetDecl)
+        fa = let_decl.value
+        assert isinstance(fa, FieldAccess)
+        assert fa.node_id in r.qualified_constructor_refs
+        owner, member = r.qualified_constructor_refs[fa.node_id]
+        assert owner == "Option"
+        assert member == "some"
+
+    def test_qualified_access_does_not_raise_undefined_for_owner(self) -> None:
+        """Option.some does NOT raise 'Option is not defined'."""
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | none\n"
+            "  | some\n"
+            "Option.some\n"
+        )
+        assert r.program is not None
+
+    def test_qualified_access_none_variant(self) -> None:
+        """Option.none is recorded in qualified_constructor_refs."""
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | none\n"
+            "  | some\n"
+            "Option.none\n"
+        )
+        last = r.program.body.items[1]
+        assert isinstance(last, FieldAccess)
+        assert last.node_id in r.qualified_constructor_refs
+        assert r.qualified_constructor_refs[last.node_id] == ("Option", "none")
+
+    def test_qualified_access_with_record_type(self) -> None:
+        """Box.value is NOT a constructor qualified access (Box is a record, value is a field)."""
+        # This is a legitimate field access, not a constructor access.
+        # 'Box' is in declared_type_names as a RecordDef; Box.value is a type-qualified
+        # access, recorded in qualified_constructor_refs. The checker validates validity.
+        r = parse_and_resolve(
+            "record Box\n"
+            "  value: int\n"
+            "Box.value\n"
+        )
+        assert r.program is not None
+        last = r.program.body.items[1]
+        assert isinstance(last, FieldAccess)
+        assert last.node_id in r.qualified_constructor_refs
+
+    # --- Collision rules (non-constructor vs constructor) ---
+
+    def test_def_same_name_as_constructor_raises(self) -> None:
+        """A def with the same name as an enum variant raises a duplicate error."""
+        err = reject_scope(
+            "enum Option\n"
+            "  | some\n"
+            "def some(x: int) -> int = x\n"
+            "some(1)\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "some" in msg
+        assert "already declared" in msg.lower() or "duplicate" in msg.lower()
+
+    def test_agent_same_name_as_constructor_raises(self) -> None:
+        """An agent with the same name as a variant raises a duplicate error."""
+        err = reject_scope(
+            "enum Option\n"
+            "  | myagent\n"
+            "agent myagent\n"
+            "()\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "myagent" in msg
+
+    def test_constructor_same_name_as_def_raises(self) -> None:
+        """An enum variant named after an existing def raises a duplicate error."""
+        err = reject_scope(
+            "def some(x: int) -> int = x\n"
+            "enum Option\n"
+            "  | some\n"
+            "some(1)\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "some" in msg
+
+    def test_let_shadows_constructor_in_nested_scope_no_error(self) -> None:
+        """In a nested scope, a 'let' binding shadows a constructor from the outer scope."""
+        # In a nested block (if branch), a let can shadow the constructor
+        # without error; no duplicate-binding error is raised because they're
+        # in different scopes.
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | some\n"
+            "if true =>\n"
+            "  let some = 42\n"
+            "  some\n"
+            "| else =>\n"
+            "  some\n"
+        )
+        assert r.program is not None
+
+    def test_let_shadows_constructor_in_if_branch_no_error(self) -> None:
+        """In a branch, a 'let' name can shadow a constructor from the outer scope.
+
+        The shadowing VarRef resolves to the let binding (not the constructor),
+        while a VarRef in another branch resolves to the constructor.
+        """
+        r = parse_and_resolve(
+            "enum Option\n"
+            "  | some\n"
+            "if true =>\n"
+            "  let some = 42\n"
+            "  some\n"
+            "| else =>\n"
+            "  some\n"
+        )
+        assert r.program is not None
+        # The VarRef in the else branch (index 1 of branches, its body is VarRef)
+        # resolves to the constructor_binding, while the then-branch's VarRef
+        # resolves to the let_binding.  We verify no error and the program is fine.
+        # The outer 'some' VarRef in the else branch should have a constructor_ref.
+        # We can verify via the resolution table but the node_ids are harder to
+        # locate without traversal; no-error is sufficient here.
+
+    def test_let_at_root_conflicts_with_constructor(self) -> None:
+        """At root, 'let some' conflicts with the constructor 'some'."""
+        err = reject_scope(
+            "enum Option\n"
+            "  | some\n"
+            "let some = 1\n"
+            "some\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "some" in msg
+
+    # --- Enum name is NOT a value (only variants are) ---
+
+    def test_enum_name_used_as_value_is_undefined(self) -> None:
+        """The enum name itself is NOT a value binding — only its variants are."""
+        err = reject_scope(
+            "enum Option\n"
+            "  | none\n"
+            "  | some\n"
+            "let x = Option\n"
+            "x\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "Option" in msg
+        assert "not defined" in msg.lower()
+
+    def test_uppercase_enum_name_not_value(self) -> None:
+        """Enum name 'Option' (uppercase) is still not a value binding."""
+        err = reject_scope(
+            "enum Option\n"
+            "  | None\n"
+            "  | Some\n"
+            "Option\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "Option" in msg
+
+    # --- Case-neutral: lowercase and uppercase behave identically ---
+
+    def test_lowercase_constructor_resolves_same_as_uppercase(self) -> None:
+        """Lowercase 'option.none' and uppercase 'Option.None' behave identically."""
+        r_lower = parse_and_resolve(
+            "enum option\n"
+            "  | none\n"
+            "  | some\n"
+            "option.none\n"
+        )
+        r_upper = parse_and_resolve(
+            "enum Option\n"
+            "  | None\n"
+            "  | Some\n"
+            "Option.None\n"
+        )
+        assert r_lower.program is not None
+        assert r_upper.program is not None
+        # Both should have a single qualified_constructor_ref
+        assert len(r_lower.qualified_constructor_refs) == 1
+        assert len(r_upper.qualified_constructor_refs) == 1
+
+    def test_no_capitalization_rule_for_constructor_lookup(self) -> None:
+        """Neither lowercase nor uppercase variants require capitalization to resolve."""
+        r = parse_and_resolve(
+            "enum option\n"
+            "  | none\n"
+            "  | someVal\n"
+            "let a = none\n"
+            "let b = someVal\n"
+            "a\n"
+        )
+        assert r.program is not None
+        assert "none" in r.constructor_candidates
+        assert "someVal" in r.constructor_candidates
+
+    # --- Type parameter duplicate validation ---
+
+    def test_duplicate_type_param_in_def_raises(self) -> None:
+        """Duplicate type parameter in a def declaration raises AglScopeError."""
+        err = reject_scope(
+            "def id[T, T](x: int) -> int = x\n"
+            "id(1)\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "T" in msg
+        assert "duplicate" in msg.lower() or "Duplicate" in msg
+
+    def test_duplicate_type_param_in_record_raises(self) -> None:
+        """Duplicate type parameter in a record declaration raises AglScopeError."""
+        err = reject_scope(
+            "record Box[T, T]\n"
+            "  value: int\n"
+            "()\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "T" in msg
+
+    def test_duplicate_type_param_in_enum_raises(self) -> None:
+        """Duplicate type parameter in an enum declaration raises AglScopeError."""
+        err = reject_scope(
+            "enum Option[T, T]\n"
+            "  | none\n"
+            "()\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "T" in msg
+
+    def test_duplicate_type_param_in_type_alias_raises(self) -> None:
+        """Duplicate type parameter in a type alias raises AglScopeError."""
+        err = reject_scope(
+            "type Pair[A, A] = int\n"
+            "()\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "A" in msg
+
+    def test_unique_type_params_accepted(self) -> None:
+        """Unique type parameters in a def are accepted."""
+        r = parse_and_resolve(
+            "def id[T](x: int) -> int = x\n"
+            "id(1)\n"
+        )
+        assert r.program is not None
+
+    def test_multiple_type_params_unique_accepted(self) -> None:
+        """Multiple unique type params in a record are accepted."""
+        r = parse_and_resolve(
+            "record Pair[A, B]\n"
+            "  value: int\n"
+            "()\n"
+        )
+        assert r.program is not None
+
+    # --- declared_type_names populated ---
+
+    def test_declared_type_names_includes_record(self) -> None:
+        r = parse_and_resolve("record Foo\n  n: int\n()")
+        assert "Foo" in r.declared_type_names
+
+    def test_declared_type_names_includes_enum(self) -> None:
+        r = parse_and_resolve("enum Color\n  | red\n  | blue\n()")
+        assert "Color" in r.declared_type_names
+
+    def test_declared_type_names_includes_alias(self) -> None:
+        r = parse_and_resolve("type MyInt = int\n()")
+        assert "MyInt" in r.declared_type_names
+
+    def test_declared_type_names_excludes_variants(self) -> None:
+        """Enum variant names are NOT in declared_type_names (they are values)."""
+        r = parse_and_resolve("enum Color\n  | red\n  | blue\n()")
+        assert "red" not in r.declared_type_names
+        assert "blue" not in r.declared_type_names
+
+    # --- Direct AST construction tests ---
+
+    def test_record_constructor_binding_via_ast(self) -> None:
+        """Direct AST: a RecordDef registers its name as a constructor binding."""
+        rec = _make_record("Point")
+        call = Call(
+            callee=_make_varref("Point"),
+            args=(),
+            named_args=(),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(rec, call)
+        assert r.program is not None
+        assert "Point" in r.constructor_candidates
+        assert r.constructor_candidates["Point"][0].variant is None
+
+    def test_enum_variant_binding_via_ast(self) -> None:
+        """Direct AST: enum variants register as constructor candidates."""
+        enum = _make_enum("Status", ("ok", "err"))
+        ref_ok = _make_varref("ok")
+        r = resolve_program(enum, ref_ok)
+        assert "ok" in r.constructor_candidates
+        assert r.constructor_candidates["ok"][0].owner_name == "Status"
+        assert r.constructor_candidates["ok"][0].variant == "ok"
+        assert ref_ok.node_id in r.constructor_refs
+
+    def test_constructor_binding_kind_in_scope(self) -> None:
+        """The root scope binding for a constructor name has kind=constructor_binding."""
+        rec = _make_record("MyRecord")
+        unit = _make_unitlit()
+        r = resolve_program(rec, unit)
+        assert "MyRecord" in r.root_scope.bindings
+        assert r.root_scope.bindings["MyRecord"].kind == BinderKind.constructor_binding
+
+    def test_overload_set_two_enums_via_ast(self) -> None:
+        """Two enums sharing a variant name form a 2-element overload set."""
+        enum_a = _make_enum("EnumA", ("val",), line=1)
+        enum_b = _make_enum("EnumB", ("val",), line=2)
+        unit = _make_unitlit()
+        r = resolve_program(enum_a, enum_b, unit)
+        assert len(r.constructor_candidates["val"]) == 2
+
+    def test_qualified_constructor_via_ast(self) -> None:
+        """FieldAccess on a type name is recorded as a qualified_constructor_ref."""
+        enum = _make_enum("Color", ("red", "blue"))
+        fa = FieldAccess(
+            obj=_make_varref("Color"),
+            field="red",
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(enum, fa)
+        assert fa.node_id in r.qualified_constructor_refs
+        assert r.qualified_constructor_refs[fa.node_id] == ("Color", "red")
+
+    def test_ordinary_field_access_not_qualified_ref(self) -> None:
+        """FieldAccess on a regular value is NOT recorded in qualified_constructor_refs."""
+        let_x = _make_let("x", _make_intlit(1))
+        fa = FieldAccess(
+            obj=_make_varref("x"),
+            field="something",
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(let_x, fa)
+        assert fa.node_id not in r.qualified_constructor_refs

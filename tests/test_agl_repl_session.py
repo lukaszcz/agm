@@ -645,11 +645,10 @@ class TestDumpSource:
 
 class TestWarnings:
     def test_non_exhaustive_case_warning_surfaced(self) -> None:
-        # In v2, ``pass`` is not a keyword; use ``()`` (unit literal) instead.
         s = ReplSession()
         s.eval_entry("enum R\n  | Pass\n  | Fail")
         s.eval_entry("let r: R = Pass")
-        r = s.eval_entry("case r of\n  | Pass => ()")
+        r = s.eval_entry("case r of\n  | Pass() => ()")
         assert r.ok  # warnings never fail an entry
         assert len(r.warnings) == 1
         assert "Fail" in r.warnings[0].message
@@ -663,11 +662,10 @@ class TestWarnings:
         assert any("TAB" in w.message or "tab" in w.message for w in r.warnings)
 
     def test_warning_on_check_only_path(self) -> None:
-        # In v2, ``pass`` is not a keyword; use ``()`` (unit literal) instead.
         s = ReplSession()
         s.eval_entry("enum R\n  | Pass\n  | Fail")
         s.eval_entry("let r: R = Pass")
-        r = s.eval_entry("case r of\n  | Pass => ()", check_only=True)
+        r = s.eval_entry("case r of\n  | Pass() => ()", check_only=True)
         assert r.ok
         assert len(r.warnings) == 1
 

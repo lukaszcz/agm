@@ -563,10 +563,9 @@ class TestTokenConstants:
         assert TEMPLATE_END == "TEMPLATE_END"
 
     def test_identifier_tokens_defined(self) -> None:
-        from agm.agl.lexer.tokens import TYPE_NAME, VAR_NAME
+        from agm.agl.lexer.tokens import NAME
 
-        assert TYPE_NAME == "TYPE_NAME"
-        assert VAR_NAME == "VAR_NAME"
+        assert NAME == "NAME"
 
     def test_number_tokens_defined(self) -> None:
         from agm.agl.lexer.tokens import DECIMAL, INT
@@ -1848,9 +1847,9 @@ class TestExhaustivenessWarningSurfaces:
             "enum R\n"
             "  | Pass\n"
             "  | Fail\n"
-            "let r: R = Pass\n"
+            "let r: R = Pass()\n"
             "case r of\n"
-            '  | Pass => print "ok"\n'
+            '  | Pass() => print "ok"\n'
         )
         result = rt.run(program)
         # Warning, not error: the run still succeeds.

@@ -17,7 +17,7 @@ if
   | else => print "failed"
 
 case first of
-  | Done => print "no work left"
+  | Done() => print "no work left"
   | Partial(left) => print "remaining ${left}"
   | Failed(reason, fatal) =>
       if fatal => print "fatal: ${reason}"

@@ -128,9 +128,7 @@ def _style_class_for(token_type: str) -> str | None:
         return "class:agl.number"
     if token_type in _OPERATOR_TOKENS:
         return "class:agl.operator"
-    if token_type == "TYPE_NAME":
-        return "class:agl.type"
-    if token_type == "VAR_NAME":
+    if token_type == "NAME":
         return "class:agl.name"
     return None
 

@@ -546,9 +546,9 @@ class TestExecCommandEdgePaths:
             "enum R\n"
             "  | Pass\n"
             "  | Fail\n"
-            "let r: R = Pass\n"
+            "let r: R = Pass()\n"
             "case r of\n"
-            "  | Pass => print \"passed\"\n"
+            '  | Pass() => print "passed"\n'
         )
 
         assert exec_command.run(_exec_args(agl_file)) is None

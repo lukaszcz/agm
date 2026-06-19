@@ -39,7 +39,6 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     CatchClause,
     ConfigPragma,
-    Constructor,
     ConstructorPattern,
     DecimalLit,
     DictEntry,
@@ -87,6 +86,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.types import (
     AgentT,
+    AppliedT,
     BoolT,
     DecimalT,
     DictT,
@@ -150,6 +150,7 @@ class Visitor:
     def visit_UnitT(self, node: UnitT) -> None: ...
     def visit_AgentT(self, node: AgentT) -> None: ...
     def visit_FuncT(self, node: FuncT) -> None: ...
+    def visit_AppliedT(self, node: AppliedT) -> None: ...
 
     # Declaration nodes
     def visit_FieldDef(self, node: FieldDef) -> None: ...
@@ -191,7 +192,6 @@ class Visitor:
     def visit_FieldAccess(self, node: FieldAccess) -> None: ...
     def visit_IndexAccess(self, node: IndexAccess) -> None: ...
     def visit_NamedArg(self, node: NamedArg) -> None: ...
-    def visit_Constructor(self, node: Constructor) -> None: ...
     def visit_BinaryOp(self, node: BinaryOp) -> None: ...
     def visit_UnaryNot(self, node: UnaryNot) -> None: ...
     def visit_UnaryNeg(self, node: UnaryNeg) -> None: ...
@@ -242,6 +242,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         UnitT,
         AgentT,
         FuncT,
+        AppliedT,
         # declaration nodes
         FieldDef,
         RecordDef,
@@ -278,7 +279,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         FieldAccess,
         IndexAccess,
         NamedArg,
-        Constructor,
         BinaryOp,
         UnaryNot,
         UnaryNeg,
@@ -349,6 +349,10 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for param_t in node.params:
             walk(param_t, callback)
         walk(node.result, callback)
+
+    elif isinstance(node, AppliedT):
+        for arg in node.args:
+            walk(arg, callback)
 
     # --- Declaration nodes ---
     elif isinstance(node, FieldDef):
@@ -453,10 +457,6 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, NamedArg):
         walk(node.value, callback)
 
-    elif isinstance(node, Constructor):
-        for ctor_arg in node.args:
-            walk(ctor_arg, callback)
-
     elif isinstance(node, BinaryOp):
         walk(node.left, callback)
         walk(node.right, callback)
@@ -476,8 +476,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(call_arg, callback)
         for call_named in node.named_args:
             walk(call_named, callback)
-        if node.type_arg is not None:
-            walk(node.type_arg, callback)
+        for ta in node.type_args:
+            walk(ta, callback)
 
     elif isinstance(node, Param):
         walk(node.type_expr, callback)

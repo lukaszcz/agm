@@ -400,7 +400,13 @@ class TypeEnvironment:
         )
 
     def all_declared_type_names(self) -> frozenset[str]:
-        """Return the set of all registered type names (including built-ins)."""
+        """Return the full declared type-name set for type-namespace enumeration.
+
+        Combines registered nominal types (records, enums, exceptions, and
+        built-ins) with registered alias names.  Retained for generic type
+        resolution in later milestones, where the complete type-namespace must
+        be enumerable to validate applied-type names (e.g. ``Pair[int, text]``).
+        """
         return frozenset(self._types) | frozenset(self._alias_targets)
 
     # --- Seeding support (incremental REPL sessions) ---

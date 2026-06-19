@@ -18,7 +18,7 @@ catch ArithmeticError as e =>
 try
   let flip: Coin = ask("Flip a coin.", agent: tosser)
   case flip of
-    | Heads => print "heads"
+    | Heads() => print "heads"
 catch MatchError as e =>
   print "no match for ${e.scrutinee_type}"
 

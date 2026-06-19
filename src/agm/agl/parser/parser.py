@@ -139,6 +139,10 @@ def is_incomplete_source(text: str) -> bool:
         token: Token = exc.token
         if token.type == "$END":
             result = True
+        elif token.type == "EQ_EQ":
+            # ``==`` is always a real error (never a valid token); never a
+            # continuation prompt even if ``_INDENT`` appears in expected.
+            result = False
         else:
             result = "_INDENT" in exc.expected
     except (LarkError, LexError):

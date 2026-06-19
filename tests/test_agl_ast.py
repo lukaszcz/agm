@@ -35,6 +35,7 @@ from agm.agl.syntax import (
     ELSE,
     AgentDecl,
     AgentT,
+    AppliedT,
     AssignStmt,
     AssignTarget,
     BinaryOp,
@@ -48,7 +49,6 @@ from agm.agl.syntax import (
     CaseBranch,
     CatchClause,
     ConfigPragma,
-    Constructor,
     ConstructorPattern,
     DecimalLit,
     DecimalT,
@@ -290,7 +290,8 @@ class TestTypeExprs:
     def test_type_expr_union_contains_all_types(self) -> None:
         import typing
         args = typing.get_args(TypeExpr)
-        for tp in (TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT):
+        for tp in (TextT, JsonT, BoolT, IntT, DecimalT, NameT,
+                   ListT, DictT, UnitT, AgentT, FuncT, AppliedT):
             assert tp in args, f"{tp.__name__} missing from TypeExpr union"
 
 
@@ -426,28 +427,6 @@ class TestExpressions:
         node = IndexAccess(obj=obj, index=index, span=self._s(), node_id=1)
         assert node.obj is obj
         assert node.index is index
-
-    def test_constructor(self) -> None:
-        arg = NamedArg(
-            name="field",
-            value=IntLit(value=1, span=self._s(), node_id=3),
-            span=self._s(),
-            node_id=2,
-        )
-        node = Constructor(qualifier=None, name="MyType", args=(arg,), span=self._s(), node_id=1)
-        assert isinstance(node.args, tuple)
-        assert node.qualifier is None
-
-    def test_constructor_with_qualifier(self) -> None:
-        node = Constructor(
-            qualifier="Ns",
-            name="Variant",
-            args=(),
-            span=self._s(),
-            node_id=1,
-        )
-        assert node.qualifier == "Ns"
-        assert node.name == "Variant"
 
     def test_binary_op(self) -> None:
         left = IntLit(value=1, span=self._s(), node_id=2)
@@ -939,7 +918,7 @@ class TestBinders:
 
     def test_raise_is_expr(self) -> None:
         # Raise is in the Expr union (bottom type).
-        expr = Constructor(qualifier=None, name="MyErr", args=(), span=self._s(), node_id=2)
+        expr = VarRef(name="err", span=self._s(), node_id=2)
         node = Raise(exc=expr, span=self._s(), node_id=1)
         assert node.exc is expr
 
@@ -1145,7 +1124,7 @@ class TestVisitorWalk:
         """
         s = self._s()
 
-        # --- Type nodes (all 11 must appear) ---
+        # --- Type nodes (all 12 must appear) ---
         text_t = TextT(span=s, node_id=100)
         int_t = IntT(span=s, node_id=101)
         bool_t = BoolT(span=s, node_id=102)
@@ -1157,6 +1136,7 @@ class TestVisitorWalk:
         unit_t = UnitT(span=s, node_id=108)
         agent_t = AgentT(span=s, node_id=109)
         func_t = FuncT(params=(int_t, text_t), result=bool_t, span=s, node_id=110)
+        applied_t = AppliedT(name="Pair", args=(int_t, text_t), span=s, node_id=111)
 
         # Declarations — each field uses a different type so all types appear.
         field_int = FieldDef(name="x", type_expr=int_t, span=s, node_id=200)
@@ -1221,10 +1201,6 @@ class TestVisitorWalk:
         # --- Expressions ---
         var_ref = VarRef(name="x", span=s, node_id=400)
         field_access = FieldAccess(obj=var_ref, field="y", span=s, node_id=401)
-        named_arg = NamedArg(name="a", value=int_lit, span=s, node_id=402)
-        constructor = Constructor(
-            qualifier=None, name="Point", args=(named_arg,), span=s, node_id=403
-        )
         index_access = IndexAccess(obj=var_ref, index=int_lit, span=s, node_id=417)
 
         binary_op = BinaryOp(op=BinOp.ADD, left=int_lit, right=int_lit, span=s, node_id=404)
@@ -1308,11 +1284,12 @@ class TestVisitorWalk:
         try_node = Try(body=int_lit, handlers=(catch_clause,), span=s, node_id=515)
 
         # Raise
-        raise_node = Raise(exc=constructor, span=s, node_id=516)
+        raise_node = Raise(exc=var_ref, span=s, node_id=516)
 
         # --- Binders ---
         let_decl = LetDecl(name="a", type_ann=None, value=int_lit, span=s, node_id=600)
         let_with_type = LetDecl(name="c", type_ann=bool_t, value=bool_lit, span=s, node_id=601)
+        let_applied = LetDecl(name="p", type_ann=applied_t, value=null_lit, span=s, node_id=608)
         var_decl = VarDecl(name="b", type_ann=None, value=str_lit, span=s, node_id=602)
         var_with_type = VarDecl(name="d", type_ann=json_t, value=null_lit, span=s, node_id=603)
         name_target = NameTarget(name="b", span=s, node_id=604)
@@ -1331,10 +1308,10 @@ class TestVisitorWalk:
             items=(
                 record_def, enum_def, type_alias, param_decl, input_no_ann,
                 agent_decl, config_pragma, func_def,
-                let_decl, let_with_type, var_decl, var_with_type,
+                let_decl, let_with_type, let_applied, var_decl, var_with_type,
                 assign_stmt, indexed_assign_stmt,
                 # expressions directly in block
-                var_ref, field_access, index_access, constructor,
+                var_ref, field_access, index_access,
                 binary_op, unary_not, unary_neg, is_test,
                 call_node, lam, lam_no_ret,
                 case_node, if_node, do_node, try_node, raise_node,
@@ -1390,7 +1367,7 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         expr_kinds = {
-            VarRef, FieldAccess, IndexAccess, Constructor, NamedArg,
+            VarRef, FieldAccess, IndexAccess, NamedArg,
             BinaryOp, UnaryNot, UnaryNeg, IsTest,
             Call, Lambda, Block, If, IfBranch, Case, CaseBranch,
             Do, Try, CatchClause, Raise,
@@ -1409,7 +1386,8 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         type_kinds = {
-            TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT
+            TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT,
+            AppliedT,
         }
         for kind in type_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
@@ -1417,15 +1395,15 @@ class TestVisitorWalk:
     def test_walk_visits_typed_call_type_arg(self) -> None:
         from agm.agl.syntax.visitor import walk
 
-        # A Call with ``type_arg`` set: walk must descend into the type_arg so
-        # the TypeExpr node is visited (covers the type_arg traversal branch).
+        # A Call with ``type_args`` set: walk must descend into each type_arg so
+        # the TypeExpr nodes are visited (covers the type_args traversal branch).
         callee = VarRef(name="ask-request", span=self._s(), node_id=700)
         type_arg = NameT(name="Review", span=self._s(), node_id=701)
         call = Call(
             callee=callee,
             args=(StringLit(value="q", span=self._s(), node_id=702),),
             named_args=(),
-            type_arg=type_arg,
+            type_args=(type_arg,),
             span=self._s(),
             node_id=703,
         )
@@ -1953,6 +1931,10 @@ class TestRemovedNodes:
     def test_call_options_not_importable(self) -> None:
         with pytest.raises((ImportError, AttributeError)):
             from agm.agl.syntax import CallOptions  # type: ignore[attr-defined]  # noqa: F401
+
+    def test_constructor_not_importable(self) -> None:
+        with pytest.raises((ImportError, AttributeError)):
+            from agm.agl.syntax import Constructor  # type: ignore[attr-defined]  # noqa: F401
 
     def test_stmt_union_not_importable(self) -> None:
         with pytest.raises((ImportError, AttributeError)):

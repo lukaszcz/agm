@@ -111,5 +111,18 @@ class FuncT:
     node_id: int = field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class AppliedT:
+    """A type application ``Name[args]`` (user generic type or alias)."""
+
+    name: str
+    args: tuple[TypeExpr, ...]
+    span: SourceSpan = field(compare=False)
+    node_id: int = field(compare=False)
+
+
 # Closed union of all type-expression nodes.
-TypeExpr = TextT | JsonT | BoolT | IntT | DecimalT | NameT | ListT | DictT | UnitT | AgentT | FuncT
+TypeExpr = (
+    TextT | JsonT | BoolT | IntT | DecimalT | NameT
+    | ListT | DictT | UnitT | AgentT | FuncT | AppliedT
+)

@@ -200,24 +200,28 @@ and adjacent (`def id[T]`) forms are accepted.
 
 ### Case-neutral names
 
-The scanner may continue emitting `VAR_NAME` and `TYPE_NAME` as lexical token
-classes, but grammar and semantic passes must not attach meaning to that
-distinction. Add one shared helper and use it in every identifier position:
+**The `VAR_NAME`/`TYPE_NAME` distinction is abolished at the source.** The
+scanner emits a **single `NAME` token** for every identifier; the case of the
+first letter has **no** lexical, grammatical, or semantic meaning. There is no
+longer a separate "type name" token class — `record box`, `let X = 1`, and
+`enum option | none | some(value: T)` all lex and parse identically regardless
+of capitalization. Keywords remain reserved as today (matched by exact spelling
+before the `NAME` fallback).
 
-```ebnf
-name: VAR_NAME | TYPE_NAME
-```
+The grammar uses the `NAME` terminal directly in every identifier position:
+type declarations and expressions, function/parameter declarations, `let`,
+`var`, `param`, agent, loop/catch/pattern binder, assignment-target,
+named-argument, enum variant, field, and ordinary-reference productions. The
+grammar provides syntax; the scope/type passes decide which semantic namespace a
+name occupies from its position and declaration kind — never from its
+capitalization.
 
-This replaces `VAR_NAME`/`TYPE_NAME` in type declarations and expressions,
-function/parameter declarations, `let`, `var`, `param`, agent, loop/catch/
-pattern binder, assignment-target, named-argument, enum variant, field, and
-ordinary-reference productions. Keywords remain reserved as today. The grammar
-provides syntax; the scope/type passes decide which semantic namespace a name
-occupies from its position and declaration kind.
-
-This grammar-level union is preferred over duplicating every production. A
-later lexer cleanup may collapse the two token classes into one `NAME`, but that
-mechanical change is not required for the language semantics.
+Concretely this means the lexer (`scanner.py`/`tokens.py`/`lexer.py`) drops the
+`word[0].isupper()` branch and the `TYPE_NAME`/`VAR_NAME` token constants in
+favor of one `NAME` constant, the grammar `%declare`s `NAME` instead of the two
+old terminals, and every consumer of the token stream (the parser transform, the
+REPL syntax highlighter) treats identifiers uniformly. No code anywhere may
+branch on identifier capitalization.
 
 ### Declaration type-parameter lists
 
@@ -694,12 +698,15 @@ green e2e gate.
 
 Commit per milestone once `just check` passes (lint + tests + strict mypy).
 
-- **M1 — Syntax, names & AST.** Case-neutral `name` grammar;
-  constructor declarations/references as normal values; deterministic pattern
-  syntax; type-parameter lists; `applied_type`; multi-argument typed calls;
-  parser transform; removal of expression-level `Constructor`; `Call.type_args`;
-  visitor + exports; scope binding/collision/overload resolution; conflict-guard,
-  AST, and scope tests. Gate: parser produces correct AST; 0 grammar conflicts.
+- **M1 — Syntax, names & AST.** Single `NAME` token (lexer drops the
+  `VAR_NAME`/`TYPE_NAME` split and the capitalization branch); case-neutral
+  grammar built on `NAME`; constructor declarations/references as normal values;
+  deterministic pattern syntax; type-parameter lists; `applied_type`;
+  multi-argument typed calls; parser transform; removal of expression-level
+  `Constructor`; `Call.type_args`; visitor + exports; REPL highlighter collapses
+  to one identifier style; scope binding/collision/overload resolution;
+  lexer, conflict-guard, AST, and scope tests. Gate: full `just check` green;
+  0 grammar conflicts.
 - **M2 — Semantic types & environment.** `TypeVarType`; `type_args` on
   `RecordType`/`EnumType` with name+args identity; `GenericTypeDef` templates +
   eager non-recursive instantiation; parameterized aliases; rejection of bare

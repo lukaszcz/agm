@@ -12,26 +12,26 @@ agent grader
 let grade: Grade = ask("Grade the work.", agent: grader)
 
 let points: int = case grade of
-  | Top => 100
+  | Top() => 100
   | Mid(score) => score + bonus
-  | Low => 0
+  | Low() => 0
 print points
 
 let width: decimal = case grade of
-  | Top => 2.5
+  | Top() => 2.5
   | _ => 1
 print width
 
 let note = case grade of
-  | Top => "perfect"
+  | Top() => "perfect"
   | Mid(score) => "mid ${score}"
-  | Low => "low"
+  | Low() => "low"
 print note
 
 var tries: int = 0
 do[3]
   tries := tries + 1
 until (case grade of
-  | Top => true
+  | Top() => true
   | _ => tries >= 2)
 print tries

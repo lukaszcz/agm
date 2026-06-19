@@ -20,12 +20,12 @@ var status: text = "working"
 do[3]
   let review: Review = ask("Review:\n${artifact}", agent: reviewer)
   case review of
-    | Pass =>
+    | Pass() =>
         status := "accepted"
     | Fail(issues) =>
         let plan: Plan = ask("Plan for:\n${issues}", agent: planner)
         case plan of
-          | Retry =>
+          | Retry() =>
               artifact := ask("Fix ${issues} in ${artifact}", agent: impl)
           | GiveUp(why) =>
               if why = "hopeless" =>

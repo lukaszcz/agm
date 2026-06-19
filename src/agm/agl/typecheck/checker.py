@@ -48,6 +48,7 @@ from agm.agl.scope.symbols import (
     BinderKind,
     BindingRef,
     BuiltinKind,
+    ConstructorRef,
     ResolvedProgram,
 )
 from agm.agl.syntax.nodes import (
@@ -61,7 +62,6 @@ from agm.agl.syntax.nodes import (
     Case,
     CatchClause,
     ConfigPragma,
-    Constructor,
     ConstructorPattern,
     DecimalLit,
     DictLit,
@@ -652,8 +652,6 @@ class _Checker:
             return self._check_field_access(expr)
         if _is_index_like(expr):
             return self._check_index_access(expr)
-        if isinstance(expr, Constructor):
-            return self._check_constructor(expr, expected=expected)
         if isinstance(expr, ListLit):
             return self._check_list_lit(expr, expected=expected)
         # DictLit is the last Expr union member.
@@ -663,6 +661,13 @@ class _Checker:
     # --- VarRef ---
 
     def _check_varref(self, node: VarRef) -> Type:
+        # Bare constructor reference → zero-arg construction.
+        if node.node_id in self._resolved.constructor_refs:
+            ctor_ref = self._resolved.constructor_refs[node.node_id]
+            owner = self._resolve_constructor_owner(ctor_ref, node.span)
+            return self._check_constructor_call(
+                owner=owner, variant=ctor_ref.variant, args=(), span=node.span
+            )
         ref = self._resolved.resolution[node.node_id]
         return self._require_binding_type(ref)
 
@@ -689,6 +694,18 @@ class _Checker:
                 return self._check_ask_request_call(node)
             # EXEC
             return self._check_exec_call(node, expected=expected)
+
+        # Constructor call?
+        if (
+            isinstance(node.callee, VarRef)
+            and node.callee.node_id in self._resolved.constructor_refs
+        ):
+            return self._check_constructor_callee_call(node)
+        if (
+            isinstance(node.callee, FieldAccess)
+            and node.callee.node_id in self._resolved.qualified_constructor_refs
+        ):
+            return self._check_qualified_constructor_callee_call(node)
 
         # Declared function by name?
         # Take the declared-name (named/default) path ONLY when the callee is a
@@ -827,8 +844,14 @@ class _Checker:
         assert agent_request_type is not None, "AgentRequest prelude type missing"
 
         # Target type: explicit type argument, else text default.
-        if node.type_arg is not None:
-            target_type = self._env.resolve_type_expr(node.type_arg, span=node.span)
+        if node.type_args:
+            if len(node.type_args) > 1:
+                raise AglTypeError(
+                    "ask-request expects a single explicit type argument; "
+                    f"got {len(node.type_args)}.",
+                    span=node.span,
+                )
+            target_type = self._env.resolve_type_expr(node.type_args[0], span=node.span)
         else:
             target_type = TextType()
 
@@ -1069,31 +1092,52 @@ class _Checker:
 
     def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
         """Extract a static ``ParsePolicy`` constructor as an inventory string."""
-        if isinstance(arg, Constructor):
-            qualifier = arg.qualifier
-            if qualifier is not None and qualifier != "ParsePolicy":
+        if isinstance(arg, Call) and isinstance(arg.callee, FieldAccess):
+            qualifier = arg.callee.obj
+            if not (isinstance(qualifier, VarRef) and qualifier.name == "ParsePolicy"):
                 raise AglTypeError(
                     "'on_parse_error' must be a static ParsePolicy constructor "
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
-            if arg.name == "Abort":
-                if arg.args:
-                    raise AglTypeError(
-                        "'on_parse_error' must be a static ParsePolicy constructor "
-                        "(Abort or Retry(n: <int>)).",
-                        span=span,
-                    )
+            return self._extract_parse_policy_variant(arg.callee.field, arg.named_args, span)
+        if isinstance(arg, Call) and isinstance(arg.callee, VarRef):
+            return self._extract_parse_policy_variant(arg.callee.name, arg.named_args, span)
+        # Bare VarRef: ``Abort`` (no parens) is also accepted as abort policy.
+        if isinstance(arg, VarRef) and arg.name == "Abort":
+            return "abort"
+        # Bare FieldAccess: ``ParsePolicy.Abort`` (no parens) is also accepted.
+        if isinstance(arg, FieldAccess) and arg.field == "Abort":
+            qualifier = arg.obj
+            if isinstance(qualifier, VarRef) and qualifier.name == "ParsePolicy":
                 return "abort"
-            if arg.name == "Retry":
-                n_arg = next((a for a in arg.args if a.name == "n"), None)
-                if n_arg is None or not isinstance(n_arg.value, IntLit):
-                    raise AglTypeError(
-                        "'on_parse_error' must be a static ParsePolicy constructor "
-                        "(Abort or Retry(n: <int>)).",
-                        span=span,
-                    )
-                return f"retry[{n_arg.value.value}]"
+        raise AglTypeError(
+            "'on_parse_error' must be a static ParsePolicy constructor "
+            "(Abort or Retry(n: <int>)).",
+            span=span,
+        )
+
+    def _extract_parse_policy_variant(
+        self, name: str, named_args: tuple[NamedArg, ...], span: SourceSpan
+    ) -> str:
+        """Extract Abort or Retry variant from ParsePolicy call."""
+        if name == "Abort":
+            if named_args:
+                raise AglTypeError(
+                    "'on_parse_error' must be a static ParsePolicy constructor "
+                    "(Abort or Retry(n: <int>)).",
+                    span=span,
+                )
+            return "abort"
+        if name == "Retry":
+            n_arg = next((a for a in named_args if a.name == "n"), None)
+            if n_arg is None or not isinstance(n_arg.value, IntLit):
+                raise AglTypeError(
+                    "'on_parse_error' must be a static ParsePolicy constructor "
+                    "(Abort or Retry(n: <int>)).",
+                    span=span,
+                )
+            return f"retry[{n_arg.value.value}]"
         raise AglTypeError(
             "'on_parse_error' must be a static ParsePolicy constructor "
             "(Abort or Retry(n: <int>)).",
@@ -1558,6 +1602,12 @@ class _Checker:
     # --- field access ---
 
     def _check_field_access(self, node: FieldAccess) -> Type:
+        # Bare qualified constructor reference → zero-arg construction.
+        if node.node_id in self._resolved.qualified_constructor_refs:
+            owner_name, variant = self._resolved.qualified_constructor_refs[node.node_id]
+            return self._resolve_qualified_constructor_and_call(
+                owner_name=owner_name, variant=variant, args=(), span=node.span
+            )
         obj_type = self._check_expr(node.obj, expected=None)
         if isinstance(obj_type, ExceptionType):
             if node.field not in obj_type.fields:
@@ -1608,65 +1658,92 @@ class _Checker:
 
     # --- constructor ---
 
-    def _check_constructor(self, node: Constructor, *, expected: Type | None) -> Type:
-        if node.qualifier is not None:
-            enum_type = self._env.resolve_named_type(node.qualifier)
-            if not isinstance(enum_type, EnumType):
-                raise AglTypeError(
-                    f"'{node.qualifier}' is not a known enum type.",
-                    span=node.span,
-                )
-            if node.name not in enum_type.variants:
-                raise AglTypeError(
-                    f"Variant '{node.name}' does not exist in enum '{node.qualifier}'.",
-                    span=node.span,
-                )
-            return self._check_constructor_call(node, enum_type, variant=node.name)
-        return self._check_unqualified_constructor(node, expected=expected)
-
-    def _check_unqualified_constructor(
-        self, node: Constructor, *, expected: Type | None
-    ) -> Type:
-        name = node.name
-        named_type = self._env.get_type(name)
-        if isinstance(named_type, RecordType):
-            return self._check_constructor_call(node, named_type)
-        if isinstance(named_type, ExceptionType):
-            if named_type.abstract:
-                raise AglTypeError(
-                    "The abstract 'Exception' base type is not constructible. "
-                    "Use a concrete exception type (e.g. 'Abort').",
-                    span=node.span,
-                )
-            return self._check_constructor_call(node, named_type)
-        candidates: list[tuple[EnumType, str]] = []
-        for type_name in self._env.all_declared_type_names():
-            t = self._env.get_type(type_name)
-            if isinstance(t, EnumType) and name in t.variants:
-                candidates.append((t, name))
-        if isinstance(expected, EnumType) and (expected, name) in candidates:
-            return self._check_constructor_call(node, expected, variant=name)
-        if len(candidates) == 1:
-            enum_t, variant = candidates[0]
-            return self._check_constructor_call(node, enum_t, variant=variant)
-        if len(candidates) > 1:
-            enum_names = ", ".join(sorted(et.name for et, _ in candidates))
+    def _resolve_constructor_owner(
+        self, ref: ConstructorRef, span: SourceSpan
+    ) -> RecordType | EnumType | ExceptionType:
+        """Resolve the owner type for a constructor ref."""
+        owner = self._env.get_type(ref.owner_name)
+        if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
             raise AglTypeError(
-                f"Constructor '{name}' is ambiguous: it appears in multiple enums "
-                f"({enum_names}). Use a qualified name (e.g. EnumName.{name}).",
+                f"'{ref.owner_name}' is not a known constructible type.",
+                span=span,
+            )
+        return owner
+
+    def _resolve_qualified_constructor_and_call(
+        self,
+        *,
+        owner_name: str,
+        variant: str,
+        args: tuple[NamedArg, ...],
+        span: SourceSpan,
+    ) -> Type:
+        """Validate and dispatch a qualified constructor (EnumName.variant)."""
+        enum_type = self._env.resolve_named_type(owner_name)
+        if not isinstance(enum_type, EnumType):
+            raise AglTypeError(
+                f"'{owner_name}' is not a known enum type.",
+                span=span,
+            )
+        if variant not in enum_type.variants:
+            raise AglTypeError(
+                f"Variant '{variant}' does not exist in enum '{owner_name}'.",
+                span=span,
+            )
+        return self._check_constructor_call(
+            owner=enum_type, variant=variant, args=args, span=span
+        )
+
+    def _check_constructor_callee_call(self, node: Call) -> Type:
+        """Handle a Call whose callee is an unqualified constructor VarRef."""
+        assert isinstance(node.callee, VarRef)
+        ctor_ref = self._resolved.constructor_refs[node.callee.node_id]
+        if node.args:
+            raise AglTypeError(
+                "Constructor arguments must be named; positional arguments are not allowed.",
                 span=node.span,
             )
-        raise AglTypeError(
-            f"Unknown constructor '{name}'.",
-            span=node.span,
+        if node.type_args:
+            raise AglTypeError(
+                "Explicit type arguments on constructors are not supported yet.",
+                span=node.span,
+            )
+        owner = self._resolve_constructor_owner(ctor_ref, node.span)
+        if isinstance(owner, ExceptionType) and owner.abstract:
+            raise AglTypeError(
+                "The abstract 'Exception' base type is not constructible. "
+                "Use a concrete exception type (e.g. 'Abort').",
+                span=node.span,
+            )
+        return self._check_constructor_call(
+            owner=owner, variant=ctor_ref.variant, args=node.named_args, span=node.span
+        )
+
+    def _check_qualified_constructor_callee_call(self, node: Call) -> Type:
+        """Handle a Call whose callee is a qualified constructor FieldAccess."""
+        assert isinstance(node.callee, FieldAccess)
+        owner_name, variant = self._resolved.qualified_constructor_refs[node.callee.node_id]
+        if node.args:
+            raise AglTypeError(
+                "Constructor arguments must be named; positional arguments are not allowed.",
+                span=node.span,
+            )
+        if node.type_args:
+            raise AglTypeError(
+                "Explicit type arguments on constructors are not supported yet.",
+                span=node.span,
+            )
+        return self._resolve_qualified_constructor_and_call(
+            owner_name=owner_name, variant=variant, args=node.named_args, span=node.span
         )
 
     def _check_constructor_call(
         self,
-        node: Constructor,
-        owner: RecordType | EnumType | ExceptionType,
         *,
-        variant: str | None = None,
+        owner: RecordType | EnumType | ExceptionType,
+        variant: str | None,
+        args: tuple[NamedArg, ...],
+        span: SourceSpan,
     ) -> RecordType | EnumType | ExceptionType:
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
@@ -1679,10 +1756,10 @@ class _Checker:
             fields = owner.fields
             type_label = f"Exception type '{owner.name}'"
 
-        provided = {arg.name: arg for arg in node.args}
+        provided = {arg.name: arg for arg in args}
 
         seen_args: set[str] = set()
-        for arg in node.args:
+        for arg in args:
             if arg.name in seen_args:
                 raise AglTypeError(
                     f"Duplicate argument '{arg.name}' in constructor call.",
@@ -1704,10 +1781,10 @@ class _Checker:
                 raise AglTypeError(
                     f"Missing field '{field_name}' in constructor call for "
                     f"{type_label}.",
-                    span=node.span,
+                    span=span,
                 )
 
-        for arg in node.args:
+        for arg in args:
             expected_field_type = fields[arg.name]
             arg_type = self._check_expr(arg.value, expected=expected_field_type)
             self._assert_assignable(arg_type, expected_field_type, arg.span)

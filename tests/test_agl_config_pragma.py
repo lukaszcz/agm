@@ -63,16 +63,16 @@ def diag(err: AglScopeError) -> tuple[int, str]:
 
 class TestLexerConfigKeyword:
     def test_config_is_keyword_not_var_name(self) -> None:
-        """bare 'config' must lex as the keyword token, not VAR_NAME."""
+        """bare 'config' must lex as the keyword token, not NAME."""
         result = tok("config")
         assert result == [("config", "config")]
         types = [t for t, _ in result]
-        assert "VAR_NAME" not in types
+        assert "NAME" not in types
 
     def test_config_prefix_identifier(self) -> None:
         """'configure' starts with 'config' but is a plain identifier."""
         result = tok("configure")
-        assert result == [("VAR_NAME", "configure")]
+        assert result == [("NAME", "configure")]
 
     def test_config_in_sequence(self) -> None:
         """'config' is a keyword even when surrounded by other tokens."""

@@ -7704,7 +7704,7 @@ class TestExecCommand:
             "do[3]\n"
             '  review := ask("Review ${artifact}", agent: reviewer)\n'
             "  case review of\n"
-            "    | Pass => ()\n"
+            "    | Pass() => ()\n"
             "    | Fail(issues) =>\n"
             '        let fix: Fix = ask("Fix ${issues} in ${artifact}", agent: impl)\n'
             "        case fix of\n"

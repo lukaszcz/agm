@@ -1995,6 +1995,38 @@ def test_ask_with_abort_parse_policy() -> None:
     assert call_count[0] == 1
 
 
+def test_ask_with_qualified_retry_parse_policy() -> None:
+    # Exercises interpreter.py line 830-831: ``elif isinstance(callee, FieldAccess)``
+    # in _extract_parse_policy, covering the qualified ParsePolicy.Retry(n: N) path.
+    # Use on_parse_error: ParsePolicy.Retry(n: 1) which parses as
+    # Call(callee=FieldAccess(VarRef("ParsePolicy"), "Retry"), named_args=[n=1]).
+    source = 'let r: text = ask("prompt", on_parse_error: ParsePolicy.Retry(n: 1))\nr'
+    call_count = [0]
+
+    def agent(req: AgentRequest) -> str:
+        call_count[0] += 1
+        return "qualified_retry_answer"
+
+    snap = _run_source(source, default_agent=agent)
+    assert snap["r"] == TextValue("qualified_retry_answer")
+    assert call_count[0] == 1
+
+
+def test_call_via_field_access_closure() -> None:
+    # Exercises interpreter.py line 587→593: a Call whose callee is a FieldAccess
+    # that is NOT in qualified_constructor_refs (i.e., a closure stored in a field).
+    source = (
+        "record Handler\n"
+        "  apply: (int) -> int\n"
+        "def identity(n: int) -> int = n\n"
+        "let h = Handler(apply: identity)\n"
+        "let result = h.apply(42)\n"
+        "result"
+    )
+    snap = _run_source(source)
+    assert snap["result"] == IntValue(42)
+
+
 # ---------------------------------------------------------------------------
 # 72. interpreter.py — AgentParseError on parse failure (line 863-883)
 # ---------------------------------------------------------------------------

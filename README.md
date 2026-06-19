@@ -170,6 +170,45 @@ workspace, and branch workspaces.
 agm sync pull
 ```
 
+### `agm exec`
+
+Execute an AgL (Agent Language) workflow program. AgL is a statically-typed, expression-oriented
+DSL for composable agent workflows: it supports typed params and outputs, user-defined functions
+(`def`/`fn`), structured JSON targets, do-loops with retry/abort policies, control flow
+(if/case/try), shell execution (`exec`), and named agents declared in the source (`agent NAME`,
+optionally `= "runner"`). All calls — including `ask`, `print`, and `exec` — use the uniform
+`f(arg, name: val)` syntax. The runner command for each declared agent is resolved from
+`[exec.agents]` (per-agent), the source runner hint, `--runner`, `[exec] runner`,
+`[loop] runner`, or `claude -p` (built-in default).
+
+```bash
+agm exec workflow.agl
+agm exec --name Alice --max-iters 10 workflow.agl   # --<param> per declared param
+agm exec -c 'print "hello"'       # run inline program text instead of a file
+agm exec --dry-run workflow.agl   # static check only — no agent calls
+```
+
+See `agm help exec` for options, exit codes, and config. The AgL language itself is
+documented in the [AgL language reference](docs/agl/reference/index.md).
+
+### `agm repl`
+
+Start an interactive read-eval-print loop for AgL. The REPL keeps a persistent session:
+each entry is parsed, type-checked, and evaluated once against an environment that
+accumulates bindings, types, and declarations, so earlier results stay available and agent
+calls fire exactly once. By default it fires agent calls immediately; `--confirm-agents`
+asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
+built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
+
+```bash
+agm repl                        # launch; type :help for commands, :quit to exit
+agm repl --confirm-agents       # confirm each agent call; params from config/defaults
+agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
+```
+
+See `agm help repl` and [docs/commands.md](docs/commands.md) for the full reference, and the
+[AgL language reference](docs/agl/reference/index.md) for the language.
+
 ### `agm review`
 
 Run the review prompt. Review output is saved to a timestamped file by default.
@@ -269,19 +308,6 @@ Create missing project and workspace `config.toml` files and commit generated ch
 agm config update
 ```
 
-### `agm worktree`
-
-Low-level worktree operations for the main project repo.
-
-```bash
-agm worktree new feat/search
-agm wt new --dir /tmp/worktrees feat/search
-agm worktree remove --force old-branch
-agm wt rm old-branch
-```
-
-Use `agm workspace setup` to run the configured setup scripts for the current workspace.
-
 ### `agm dep`
 
 Manage dependency checkouts under the project dependency directory.
@@ -296,6 +322,17 @@ agm dep rm mylib/feat/update
 agm dep rm --all mylib
 ```
 
+### `agm worktree`
+
+Low-level worktree operations for the main project repo.
+
+```bash
+agm worktree new feat/search
+agm wt new --dir /tmp/worktrees feat/search
+agm worktree remove --force old-branch
+agm wt rm old-branch
+```
+
 ### `agm tmux`
 
 Manage tmux sessions and apply AGM pane layouts directly.
@@ -307,51 +344,13 @@ agm tmux close my-session
 agm tmux layout 4 --window @1
 ```
 
-### `agm exec`
-
-Execute an AgL (Agent Language) workflow program. AgL is a statically-typed, expression-oriented
-DSL for composable agent workflows: it supports typed params and outputs, user-defined functions
-(`def`/`fn`), structured JSON targets, do-loops with retry/abort policies, control flow
-(if/case/try), shell execution (`exec`), and named agents declared in the source (`agent NAME`,
-optionally `= "runner"`). All calls — including `ask`, `print`, and `exec` — use the uniform
-`f(arg, name: val)` syntax. The runner command for each declared agent is resolved from
-`[exec.agents]` (per-agent), the source runner hint, `--runner`, `[exec] runner`,
-`[loop] runner`, or `claude -p` (built-in default).
-
-```bash
-agm exec workflow.agl
-agm exec --name Alice --max-iters 10 workflow.agl   # --<param> per declared param
-agm exec -c 'print "hello"'       # run inline program text instead of a file
-agm exec --dry-run workflow.agl   # static check only — no agent calls
-```
-
-See `agm help exec` for options, exit codes, and config. The AgL language itself is
-documented in the [AgL language reference](docs/agl/reference/index.md).
-
-### `agm repl`
-
-Start an interactive read-eval-print loop for AgL. The REPL keeps a persistent session:
-each entry is parsed, type-checked, and evaluated once against an environment that
-accumulates bindings, types, and declarations, so earlier results stay available and agent
-calls fire exactly once. By default it fires agent calls immediately; `--confirm-agents`
-asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
-built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
-
-```bash
-agm repl                        # launch; type :help for commands, :quit to exit
-agm repl --confirm-agents       # confirm each agent call; params from config/defaults
-agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
-```
-
-See `agm help repl` and [docs/commands.md](docs/commands.md) for the full reference, and the
-[AgL language reference](docs/agl/reference/index.md) for the language.
-
 ## Aliases
 
-- `agm wt` → `agm worktree`
-- `agm config cp` → `agm config copy`
-- `agm wt rm` / `agm worktree rm` → `agm worktree remove`
+- `agm wsp` → `agm workspace`
 - `agm dep remove` → `agm dep rm`
+- `agm config cp` → `agm config copy`
+- `agm wt` → `agm worktree`
+- `agm wt rm` / `agm worktree rm` → `agm worktree remove`
 
 ## Help
 

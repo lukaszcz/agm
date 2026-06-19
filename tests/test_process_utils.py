@@ -31,6 +31,7 @@ from agm.core.process import (
     run_foreground,
     run_subprocess,
 )
+from tests._proc_helpers import interrupt_self_when_ready, ready_then_sleep_command
 
 # ---------------------------------------------------------------------------
 # _write_stream
@@ -614,13 +615,14 @@ class TestRunSubprocess:
         assert popen_kwargs.get("start_new_session") is not True
 
     def test_interrupt_cleanup_cmd_is_run_on_keyboard_interrupt(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
     ) -> None:
         """Verify that interrupt_cleanup_cmd is invoked when a BaseException is raised.
 
         We monkeypatch _run_cleanup_command at the module level to track calls without
-        executing a real subprocess, and send SIGINT to the main process via a background
-        thread to trigger the BaseException path inside run_subprocess.
+        executing a real subprocess, and send SIGINT to the main process once the child
+        signals readiness — guaranteeing the interrupt lands inside run_subprocess'
+        BaseException path even when the machine is heavily loaded.
         """
         import agm.core.process as process_module
 
@@ -638,19 +640,15 @@ class TestRunSubprocess:
 
         cleanup_cmd = ["echo", "cleanup"]
 
-        def send_interrupt() -> None:
-            import time
-
-            time.sleep(0.05)
-            os.kill(os.getpid(), signal.SIGINT)
-
-        interrupter = threading.Thread(target=send_interrupt, daemon=True)
-        interrupter.start()
+        ready_file = tmp_path / "ready"
+        interrupter = interrupt_self_when_ready(ready_file)
 
         with pytest.raises(KeyboardInterrupt):
-            run_subprocess(["sleep", "30"], interrupt_cleanup_cmd=cleanup_cmd)
+            run_subprocess(
+                ready_then_sleep_command(ready_file), interrupt_cleanup_cmd=cleanup_cmd
+            )
 
-        interrupter.join(timeout=2)
+        interrupter.join(timeout=10)
 
         assert cleanup_calls, "cleanup command must be invoked on KeyboardInterrupt"
         called_cmd, _, _ = cleanup_calls[0]
@@ -1259,7 +1257,7 @@ class TestRunSubprocessBaseExceptionWithCapture:
     """Exercise _drain_process_streams' except BaseException path."""
 
     def test_interrupt_cleanup_cmd_with_capture_output(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
     ) -> None:
         """BaseException raised while draining captured streams still runs cleanup."""
         import agm.core.process as process_module
@@ -1278,28 +1276,24 @@ class TestRunSubprocessBaseExceptionWithCapture:
 
         cleanup_cmd = ["echo", "cleanup"]
 
-        def send_interrupt() -> None:
-            time.sleep(0.05)
-            os.kill(os.getpid(), signal.SIGINT)
-
-        interrupter = threading.Thread(target=send_interrupt, daemon=True)
-        interrupter.start()
+        ready_file = tmp_path / "ready"
+        interrupter = interrupt_self_when_ready(ready_file)
 
         with pytest.raises(KeyboardInterrupt):
             run_subprocess(
-                ["sleep", "30"],
+                ready_then_sleep_command(ready_file),
                 capture_output=True,
                 interrupt_cleanup_cmd=cleanup_cmd,
             )
 
-        interrupter.join(timeout=2)
+        interrupter.join(timeout=10)
 
         assert cleanup_calls, "cleanup command must be invoked on KeyboardInterrupt"
         called_cmd, _, _ = cleanup_calls[0]
         assert called_cmd == cleanup_cmd
 
     def test_interrupt_with_isolate_process_group_and_capture(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
     ) -> None:
         """BaseException path in _drain_process_streams calls _kill_process_group when isolated."""
         import agm.core.process as process_module
@@ -1313,21 +1307,17 @@ class TestRunSubprocessBaseExceptionWithCapture:
 
         monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
 
-        def send_interrupt() -> None:
-            time.sleep(0.05)
-            os.kill(os.getpid(), signal.SIGINT)
-
-        interrupter = threading.Thread(target=send_interrupt, daemon=True)
-        interrupter.start()
+        ready_file = tmp_path / "ready"
+        interrupter = interrupt_self_when_ready(ready_file)
 
         with pytest.raises(KeyboardInterrupt):
             run_subprocess(
-                ["sleep", "30"],
+                ready_then_sleep_command(ready_file),
                 capture_output=True,
                 isolate_process_group=True,
             )
 
-        interrupter.join(timeout=2)
+        interrupter.join(timeout=10)
         assert killed, "_kill_process_group must be called"
 
 
@@ -1335,7 +1325,7 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
     """Exercise run_subprocess no-readers BaseException path with isolate_process_group."""
 
     def test_interrupt_with_isolated_process_group_no_capture(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
     ) -> None:
         """BaseException in no-capture mode with isolate_process_group calls _kill_process_group."""
         import agm.core.process as process_module
@@ -1350,17 +1340,15 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
 
         monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
 
-        def send_interrupt() -> None:
-            time.sleep(0.05)
-            os.kill(os.getpid(), signal.SIGINT)
-
-        interrupter = threading.Thread(target=send_interrupt, daemon=True)
-        interrupter.start()
+        ready_file = tmp_path / "ready"
+        interrupter = interrupt_self_when_ready(ready_file)
 
         with pytest.raises(KeyboardInterrupt):
-            run_subprocess(["sleep", "30"], isolate_process_group=True)
+            run_subprocess(
+                ready_then_sleep_command(ready_file), isolate_process_group=True
+            )
 
-        interrupter.join(timeout=2)
+        interrupter.join(timeout=10)
         assert killed, "_kill_process_group must be called with isolate_process_group"
 
 

@@ -28,6 +28,7 @@ from typing import TypedDict, cast
 import pytest
 
 from agm.project.workspace_shell import _sanitize_session_key
+from tests._proc_helpers import wait_for_path
 
 HAS_ZSH = shutil.which("zsh") is not None
 
@@ -526,13 +527,7 @@ def _install_fake_tmux(bin_dir: Path, log_path: Path, env: dict[str, str]) -> No
     env["TMUX_LOG"] = str(log_path)
 
 
-def _wait_for_path(path: Path, *, timeout: float = 10.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.exists():
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"timed out waiting for {path}")
+_wait_for_path = wait_for_path
 
 
 def _assert_pid_gone(pid: int) -> None:
@@ -559,7 +554,7 @@ def _assert_pid_gone(pid: int) -> None:
 
 def _interrupt_agm_process(process: subprocess.Popen[str], *, child_pid: int) -> None:
     os.kill(process.pid, signal.SIGINT)
-    stdout, stderr = process.communicate(timeout=5)
+    stdout, stderr = process.communicate(timeout=60)
 
     assert process.returncode == 130
     assert "Interrupted" in stdout
@@ -4021,7 +4016,9 @@ class TestSandbox:
         assert _srt_command(result) == "printf hello"
         assert _srt_settings(result)["network"]["allowedDomains"] == ["echo.com"]
 
-    def test_interrupt_kills_run_process_tree(self, tmp_path: Path, env: dict[str, str]) -> None:
+    def test_interrupt_kills_run_process_tree(
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
+    ) -> None:
         ready_file = tmp_path / "run.ready"
         child_pid_file = tmp_path / "run-child.pid"
 
@@ -4062,7 +4059,7 @@ class TestSandbox:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)
@@ -4070,7 +4067,7 @@ class TestSandbox:
                     pass
 
     def test_interrupt_kills_run_process_tree_with_real_systemd_run_scope(
-        self, tmp_path: Path, env: dict[str, str]
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
     ) -> None:
         ready_file = tmp_path / "wrapped-run.ready"
         child_pid_file = tmp_path / "wrapped-run-child.pid"
@@ -4122,7 +4119,7 @@ class TestSandbox:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)
@@ -5540,7 +5537,7 @@ class TestLoop:
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
     def test_interrupt_kills_loop_runner_process_tree(
-        self, tmp_path: Path, env: dict[str, str]
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
     ) -> None:
         ready_file = tmp_path / "runner.ready"
         child_pid_file = tmp_path / "runner-child.pid"
@@ -5588,7 +5585,7 @@ class TestLoop:
             child_pid = int(child_pid_file.read_text().strip())
 
             os.kill(process.pid, signal.SIGINT)
-            stdout, stderr = process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=60)
 
             assert process.returncode == 130
             assert "Interrupted" in stdout
@@ -5597,7 +5594,7 @@ class TestLoop:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)
@@ -5605,7 +5602,7 @@ class TestLoop:
                     pass
 
     def test_interrupt_kills_loop_selector_process_tree(
-        self, tmp_path: Path, env: dict[str, str]
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
     ) -> None:
         ready_file = tmp_path / "selector.ready"
         child_pid_file = tmp_path / "selector-child.pid"
@@ -5664,7 +5661,7 @@ class TestLoop:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)

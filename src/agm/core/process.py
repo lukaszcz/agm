@@ -268,52 +268,62 @@ def _start_process_with_readers(
     )
 
     stdin_writer: threading.Thread | None = None
-    if stdin_text is not None and process.stdin is not None:
-        stdin_pipe_ref = process.stdin
-
-        def _write_stdin(data: bytes, pipe: IO[bytes]) -> None:
-            try:
-                with pipe:
-                    pipe.write(data)
-            except BrokenPipeError:
-                # Child exited before reading all stdin — normal outcome, not an error.
-                pass
-
-        stdin_writer = threading.Thread(
-            target=_write_stdin,
-            args=(stdin_text.encode(), stdin_pipe_ref),
-            daemon=True,
-        )
-        stdin_writer.start()
-
     readers: list[threading.Thread] = []
     stream_queue: queue.Queue[tuple[str, bytes | None]] = queue.Queue()
 
-    if process.stdout is not None:
-        reader = threading.Thread(
-            target=partial(
-                _read_pipe_chunks,
-                process.stdout,
-                name="stdout",
-                output_queue=stream_queue,
-            ),
-            daemon=True,
-        )
-        reader.start()
-        readers.append(reader)
+    # Block SIGINT while the worker threads are created so they inherit a
+    # blocked signal mask.  A process-directed SIGINT (e.g. Ctrl-C) may be
+    # delivered to any thread that has it unblocked; if it lands on a reader
+    # thread, the main thread stays blocked in wait()/get() and the interrupt
+    # is effectively lost.  By blocking it in the workers, the kernel must
+    # deliver it to the main thread, which restores its own mask below.
+    previous_sigmask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    try:
+        if stdin_text is not None and process.stdin is not None:
+            stdin_pipe_ref = process.stdin
 
-    if process.stderr is not None:
-        reader = threading.Thread(
-            target=partial(
-                _read_pipe_chunks,
-                process.stderr,
-                name="stderr",
-                output_queue=stream_queue,
-            ),
-            daemon=True,
-        )
-        reader.start()
-        readers.append(reader)
+            def _write_stdin(data: bytes, pipe: IO[bytes]) -> None:
+                try:
+                    with pipe:
+                        pipe.write(data)
+                except BrokenPipeError:
+                    # Child exited before reading all stdin — normal outcome, not an error.
+                    pass
+
+            stdin_writer = threading.Thread(
+                target=_write_stdin,
+                args=(stdin_text.encode(), stdin_pipe_ref),
+                daemon=True,
+            )
+            stdin_writer.start()
+
+        if process.stdout is not None:
+            reader = threading.Thread(
+                target=partial(
+                    _read_pipe_chunks,
+                    process.stdout,
+                    name="stdout",
+                    output_queue=stream_queue,
+                ),
+                daemon=True,
+            )
+            reader.start()
+            readers.append(reader)
+
+        if process.stderr is not None:
+            reader = threading.Thread(
+                target=partial(
+                    _read_pipe_chunks,
+                    process.stderr,
+                    name="stderr",
+                    output_queue=stream_queue,
+                ),
+                daemon=True,
+            )
+            reader.start()
+            readers.append(reader)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_sigmask)
 
     return process, readers, stream_queue, stdin_writer
 

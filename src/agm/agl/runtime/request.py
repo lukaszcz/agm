@@ -97,8 +97,8 @@ class AgentRequest:
     ``output_contract``
         The materialized output contract for this call site (design §7.5).
         Carries ``format_instructions`` and ``json_schema`` so agents can
-        relay them to the underlying model.  ``None`` for untyped text calls
-        that have no explicit contract (rare; normally always set in M2+).
+        relay them to the underlying model.  ``None`` for ``unit`` calls,
+        whose response is intentionally ignored.
     """
 
     agent: str

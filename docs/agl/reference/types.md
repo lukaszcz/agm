@@ -184,8 +184,17 @@ record AgentRequest
   agent:           text
   prompt:          text
   attempt:         int
-  output_contract: OutputContract
+  output_contract: OutputContractOption
 ```
+
+```text
+enum OutputContractOption
+  | None
+  | Some(value: OutputContract)
+```
+
+`None` is used for a `unit` response target. `Some` contains the contract for
+all response types that are parsed.
 
 `OutputContract` carries the materialized contract for the call site:
 

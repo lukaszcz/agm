@@ -596,6 +596,17 @@ _OUTPUT_CONTRACT_TYPE = RecordType(
     },
 )
 
+# ``OutputContractOption`` — an explicit optional output contract.  ``unit``
+# agent calls use ``None`` because their response is intentionally discarded;
+# all parsed-output calls use ``Some``.
+_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(
+    name="OutputContractOption",
+    variants={
+        "None": {},
+        "Some": {"value": _OUTPUT_CONTRACT_TYPE},
+    },
+)
+
 # ``AgentRequest`` — the request that the corresponding ``ask`` call would
 # dispatch to its agent, surfaced as an AgL value by ``ask-request``.  This is
 # the first-attempt request: ``attempt`` is always ``0`` and there is no
@@ -607,7 +618,7 @@ _AGENT_REQUEST_TYPE = RecordType(
         "agent": TextType(),
         "prompt": TextType(),
         "attempt": IntType(),
-        "output_contract": _OUTPUT_CONTRACT_TYPE,
+        "output_contract": _OUTPUT_CONTRACT_OPTION_TYPE,
     },
 )
 
@@ -615,6 +626,7 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,
     "ParsePolicy": _PARSE_POLICY_TYPE,
     "OutputContract": _OUTPUT_CONTRACT_TYPE,
+    "OutputContractOption": _OUTPUT_CONTRACT_OPTION_TYPE,
     "AgentRequest": _AGENT_REQUEST_TYPE,
 }
 

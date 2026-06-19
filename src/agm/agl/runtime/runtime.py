@@ -64,7 +64,7 @@ class CallSiteInfo:
     ``callee``        Agent or executor name (``"ask"``, ``"exec"``, or a
                       registered agent name).
     ``target_type``   The target type name (e.g. ``"text"``, ``"Review"``).
-    ``codec_name``    Selected codec (``"text"`` or ``"json"``).
+    ``codec_name``    Selected codec, or ``"none"`` for a ``unit`` target.
     ``has_schema``    ``True`` when the contract carries a JSON Schema.
     ``parse_policy``  ``"abort"`` / ``"retry[N]"`` / ``"default"``.
     ``line``          1-based source line of the call site.
@@ -1142,9 +1142,9 @@ def _build_call_inventory(
 
     The inventory is derived entirely from the checker's work: each
     ``CallSiteRecord`` (recorded in source order while type-checking) supplies the
-    callee, parse policy, and span; ``contract_specs`` supplies the codec and
-    target type; and the materialized ``contracts`` table supplies schema
-    presence.  No second AST walk is performed.
+    callee, target type, codec, parse policy, and span; the materialized
+    ``contracts`` table supplies schema presence. No second AST walk is
+    performed.
 
     Returns one ``CallSiteInfo`` per agent-call/exec site, in source order.
     """
@@ -1153,12 +1153,6 @@ def _build_call_inventory(
     inventory: list[CallSiteInfo] = []
 
     for record in checked.call_sites:
-        # The checker records a CallSiteRecord and an OutputContractSpec together
-        # in ``_check_agent_call`` (both keyed by the call's node_id), so every
-        # recorded call site has a spec.  A missing spec is a checker-invariant
-        # violation, not a normal skip.
-        spec = checked.contract_specs[record.node_id]
-
         contract = contracts.get(record.node_id)
         has_schema = (
             isinstance(contract, OutputContract) and contract.json_schema is not None
@@ -1167,8 +1161,8 @@ def _build_call_inventory(
         inventory.append(
             CallSiteInfo(
                 callee=record.callee,
-                target_type=repr(spec.target_type),
-                codec_name=spec.codec_name,
+                target_type=repr(record.target_type),
+                codec_name=record.codec_name,
                 has_schema=has_schema,
                 parse_policy=record.parse_policy,
                 line=record.line,

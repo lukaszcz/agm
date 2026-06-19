@@ -852,6 +852,26 @@ class Interpreter:
 
         call_span = expr.span
         contract = self._contracts.get(expr.node_id)
+        result_type = self._checked.node_types.get(expr.node_id)
+        if isinstance(result_type, UnitType):
+            self._trace.agent_call_attempt(
+                agent=agent_name,
+                attempt=0,
+                prompt=prompt_text,
+                span=call_span,
+            )
+            request = AgentRequest(
+                agent=agent_name,
+                prompt=prompt_text,
+                output_contract=None,
+            )
+            try:
+                self._registry.dispatch(agent_name, request)
+            except AglRaise as exc:
+                if exc.span is None:
+                    exc.span = call_span
+                raise
+            return UNIT_VALUE
         if contract is None:
             from agm.agl.runtime.codec import TextCodec
             from agm.agl.runtime.contract import OutputContract
@@ -942,6 +962,23 @@ class Interpreter:
         prompt_text = self._eval_to_text(expr.args[0], scope)
 
         contract = self._contracts.get(expr.node_id)
+        if expr.type_arg is not None:
+            from agm.agl.syntax.types import UnitT
+
+            if isinstance(expr.type_arg, UnitT):
+                return RecordValue(
+                    type_name="AgentRequest",
+                    fields={
+                        "agent": TextValue(agent_name),
+                        "prompt": TextValue(prompt_text),
+                        "attempt": IntValue(0),
+                        "output_contract": EnumValue(
+                            type_name="OutputContractOption",
+                            variant="None",
+                            fields={},
+                        ),
+                    },
+                )
         if contract is None:
             from agm.agl.runtime.codec import TextCodec
             from agm.agl.runtime.contract import OutputContract
@@ -971,7 +1008,11 @@ class Interpreter:
                 "agent": TextValue(agent_name),
                 "prompt": TextValue(prompt_text),
                 "attempt": IntValue(0),
-                "output_contract": output_contract_value,
+                "output_contract": EnumValue(
+                    type_name="OutputContractOption",
+                    variant="Some",
+                    fields={"value": output_contract_value},
+                ),
             },
         )
 

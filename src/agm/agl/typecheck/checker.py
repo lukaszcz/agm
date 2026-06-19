@@ -778,17 +778,26 @@ class _Checker:
                     span=node.span,
                 )
 
-        codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
-            node, target_type, named
-        )
-        spec = OutputContractSpec(
-            target_type=target_type, codec_name=codec_name, strict_json=effective_strict
-        )
-        self._contract_specs[node.node_id] = spec
+        if isinstance(target_type, UnitType):
+            self._reject_unit_parse_options(named, callee="ask")
+            codec_name = "none"
+            parse_policy_str = "default"
+        else:
+            codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
+                node, target_type, named
+            )
+            spec = OutputContractSpec(
+                target_type=target_type,
+                codec_name=codec_name,
+                strict_json=effective_strict,
+            )
+            self._contract_specs[node.node_id] = spec
         self._call_sites.append(
             CallSiteRecord(
                 node_id=node.node_id,
                 callee="ask",
+                target_type=target_type,
+                codec_name=codec_name,
                 parse_policy=parse_policy_str,
                 line=node.span.start_line,
                 col=node.span.start_col,
@@ -866,17 +875,26 @@ class _Checker:
 
         # Build the same output contract spec an ``ask`` call would, so the
         # materialized contract (and thus the returned request) matches exactly.
-        codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
-            node, target_type, named
-        )
-        spec = OutputContractSpec(
-            target_type=target_type, codec_name=codec_name, strict_json=effective_strict
-        )
-        self._contract_specs[node.node_id] = spec
+        if isinstance(target_type, UnitType):
+            self._reject_unit_parse_options(named, callee="ask-request")
+            codec_name = "none"
+            parse_policy_str = "default"
+        else:
+            codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
+                node, target_type, named
+            )
+            spec = OutputContractSpec(
+                target_type=target_type,
+                codec_name=codec_name,
+                strict_json=effective_strict,
+            )
+            self._contract_specs[node.node_id] = spec
         self._call_sites.append(
             CallSiteRecord(
                 node_id=node.node_id,
                 callee="ask-request",
+                target_type=target_type,
+                codec_name=codec_name,
                 parse_policy=parse_policy_str,
                 line=node.span.start_line,
                 col=node.span.start_col,
@@ -966,6 +984,8 @@ class _Checker:
             CallSiteRecord(
                 node_id=node.node_id,
                 callee="exec",
+                target_type=target_type,
+                codec_name=spec.codec_name,
                 parse_policy=parse_policy_str,
                 line=node.span.start_line,
                 col=node.span.start_col,
@@ -974,6 +994,17 @@ class _Checker:
         return target_type
 
     # --- shared parse-option handling (ask / exec) ---
+
+    def _reject_unit_parse_options(
+        self, named: dict[str, NamedArg], *, callee: str
+    ) -> None:
+        for option in ("format", "strict_json", "on_parse_error"):
+            if option in named:
+                raise AglTypeError(
+                    f"{callee} returning unit does not accept '{option}'; "
+                    "unit responses are ignored and have no output contract.",
+                    span=named[option].span,
+                )
 
     def _resolve_parse_options(
         self, node: Call, target_type: Type, named: dict[str, NamedArg]

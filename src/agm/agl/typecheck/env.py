@@ -82,11 +82,14 @@ class CallSiteRecord:
     rather than from a second AST walk.
 
     ``node_id``
-        The ``AgentCall`` node id; keys into ``contract_specs`` (codec / target
-        type) and into the host's materialized-contract table (schema presence).
+        The ``AgentCall`` node id; keys into ``contract_specs`` and the host's
+        materialized-contract table when the call has an output contract.
     ``callee``
         The agent or executor name (``"ask"``, ``"exec"``, or a registered
         agent name).
+    ``target_type`` / ``codec_name``
+        Inventory data for the call. ``codec_name`` is ``"none"`` for a
+        ``unit`` target, which has no output contract.
     ``parse_policy``
         ``"abort"`` / ``"retry[N]"`` / ``"default"`` (when the call set no
         explicit ``on_parse_error`` policy).
@@ -96,6 +99,8 @@ class CallSiteRecord:
 
     node_id: int
     callee: str
+    target_type: Type
+    codec_name: str
     parse_policy: str
     line: int
     col: int
@@ -146,8 +151,9 @@ class CheckedProgram:
         Maps ``node_id`` → resolved ``Type`` for every expression node that
         was type-checked.  Statement nodes are not entered here.
     ``contract_specs``
-        Maps ``AgentCall.node_id`` → ``OutputContractSpec`` for every agent
-        call site.
+        Maps ``AgentCall.node_id`` → ``OutputContractSpec`` for call sites that
+        parse output. ``unit`` agent calls are omitted because they have no
+        output contract.
     ``call_sites``
         Tuple of ``CallSiteRecord`` — one per agent-call/exec site, in source
         order — captured by the checker.  The ``--dry-run`` inventory (§10.1) is

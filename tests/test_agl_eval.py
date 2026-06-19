@@ -18,6 +18,7 @@ from agm.agl.eval.values import (
     DecimalValue,
     DictValue,
     EnumValue,
+    ExceptionValue,
     IntValue,
     ListValue,
     RecordValue,
@@ -731,11 +732,59 @@ def test_ask_request_text_default() -> None:
     assert r.fields["agent"] == TextValue("ask")
     assert r.fields["prompt"] == TextValue("hello")
     assert r.fields["attempt"] == IntValue(0)
-    oc = r.fields["output_contract"]
+    option = r.fields["output_contract"]
+    assert isinstance(option, EnumValue)
+    assert option.variant == "Some"
+    oc = option.fields["value"]
     assert isinstance(oc, RecordValue)
     assert oc.type_name == "OutputContract"
     assert oc.fields["target_type"] == TextValue("text")
     assert oc.fields["codec_name"] == TextValue("text")
+
+
+def test_ask_unit_ignores_output_without_contract() -> None:
+    requests: list[AgentRequest] = []
+
+    def agent(request: AgentRequest) -> str:
+        requests.append(request)
+        return "ignored"
+
+    snap = _run_source('let result: unit = ask("Q")\nresult', default_agent=agent)
+    assert isinstance(snap["result"], UnitValue)
+    assert len(requests) == 1
+    assert requests[0].output_contract is None
+
+
+@pytest.mark.parametrize("has_span", (False, True))
+def test_ask_unit_preserves_agent_exception_span(has_span: bool) -> None:
+    from agm.agl.syntax.spans import SourceSpan
+
+    existing_span = SourceSpan(9, 1, 9, 2, 0, 1) if has_span else None
+
+    def agent(request: AgentRequest) -> str:
+        raise AglRaise(
+            ExceptionValue(type_name="AgentError", fields={}),
+            span=existing_span,
+        )
+
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source('let result: unit = ask("Q")\nresult', default_agent=agent)
+
+    if existing_span is None:
+        assert exc_info.value.span is not None
+        assert exc_info.value.span.start_line == 1
+    else:
+        assert exc_info.value.span is existing_span
+
+
+def test_ask_request_unit_has_no_output_contract() -> None:
+    snap = _run_source('let r = ask-request::[unit]("Q")\nr')
+    option = snap["r"].fields["output_contract"]
+    assert option == EnumValue(
+        type_name="OutputContractOption",
+        variant="None",
+        fields={},
+    )
 
 
 def test_ask_request_uses_fallback_contract_when_missing() -> None:
@@ -776,7 +825,10 @@ def test_ask_request_uses_fallback_contract_when_missing() -> None:
     interp.execute(root)
     r = root.snapshot()["r"]
     assert isinstance(r, RecordValue)
-    oc = r.fields["output_contract"]
+    option = r.fields["output_contract"]
+    assert isinstance(option, EnumValue)
+    assert option.variant == "Some"
+    oc = option.fields["value"]
     assert isinstance(oc, RecordValue)
     assert oc.fields["target_type"] == TextValue("text")
     assert oc.fields["codec_name"] == TextValue("text")
@@ -800,7 +852,10 @@ def test_ask_request_explicit_type_arg_drives_contract() -> None:
     snap = _run_source_with_json(source)
     r = snap["r"]
     assert isinstance(r, RecordValue)
-    oc = r.fields["output_contract"]
+    option = r.fields["output_contract"]
+    assert isinstance(option, EnumValue)
+    assert option.variant == "Some"
+    oc = option.fields["value"]
     assert isinstance(oc, RecordValue)
     assert oc.fields["target_type"] == TextValue("R")
     assert oc.fields["codec_name"] == TextValue("json")
@@ -815,7 +870,10 @@ def test_ask_request_explicit_type_arg_drives_contract() -> None:
 def test_ask_request_text_type_arg_has_no_schema() -> None:
     source = 'let r = ask-request::[text]("Q")\nr'
     snap = _run_source(source)
-    oc = snap["r"].fields["output_contract"]
+    option = snap["r"].fields["output_contract"]
+    assert isinstance(option, EnumValue)
+    assert option.variant == "Some"
+    oc = option.fields["value"]
     from agm.agl.eval.values import JsonValue
 
     assert oc.fields["json_schema"] == JsonValue(None)

@@ -109,6 +109,7 @@ let x = ask "A"                          # target: text
 let review: Review = ask("…", agent: reviewer)   # target: Review
 var proposal: Turn = ask("…", agent: researcher)
 proposal := ask("Revise.", agent: researcher)  # target: Turn
+let _: unit = ask("Perform this task")          # response ignored
 ```
 
 The target type drives the call's **output contract**:
@@ -119,6 +120,11 @@ The target type drives the call's **output contract**:
 - format instructions delivered to the agent alongside the prompt,
 - runtime validation, the parse policy on failure, and the typed value bound
   on success.
+
+`unit` is the exception: the call is dispatched once without an output
+contract, its response is ignored, and the expression evaluates to `()`.
+Because nothing is parsed, `format`, `strict_json`, and `on_parse_error` are
+invalid for a `unit` target.
 
 You normally never write "Return JSON matching …" yourself — the type
 annotation is the source of truth.
@@ -369,7 +375,16 @@ let r = ask-request("Anything goes")   # target type is text
 The target type drives the output contract exactly as it would for `ask`:
 a `Review` target selects the JSON codec, derives a JSON Schema, and produces
 format instructions; a `text` target selects the text codec. The contract is
-surfaced on the returned `AgentRequest.output_contract`.
+surfaced as `Some(value: ...)` on the returned
+`AgentRequest.output_contract`. A `unit` target produces `None` because its
+response is ignored and it has no output contract:
+
+```agl
+let r = ask-request::[unit]("Perform this task")
+```
+
+`format`, `strict_json`, and `on_parse_error` are invalid for a `unit` target
+because there is no response to parse.
 
 ### Typed-call syntax
 

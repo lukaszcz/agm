@@ -761,6 +761,13 @@ class TestAsk:
         assert spec.target_type == IntType()
         assert spec.codec_name == "json"
 
+    def test_ask_with_unit_target_has_no_contract(self) -> None:
+        r = accept_type('let result: unit = ask("Q")\nresult')
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert decl.value.node_id not in r.contract_specs
+        assert r.node_types[decl.value.node_id] == UnitType()
+
     def test_ask_with_explicit_agent(self) -> None:
         r = accept_type('agent reviewer\nask("Q", agent: reviewer)')
         assert r.resolved.program is not None
@@ -881,6 +888,27 @@ class TestAskRequest:
         spec = r.contract_specs[call.node_id]
         assert spec.codec_name == "json"
         assert spec.target_type == r.type_env.get_type("R")
+
+    def test_unit_target_has_no_contract(self) -> None:
+        r = accept_type('ask-request::[unit]("Q")')
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        assert call.node_id not in r.contract_specs
+        option_type = r.type_env.get_type("OutputContractOption")
+        assert isinstance(option_type, EnumType)
+        assert option_type.variants == {
+            "None": {},
+            "Some": {"value": r.type_env.get_type("OutputContract")},
+        }
+
+    @pytest.mark.parametrize(
+        "option",
+        ('format: "text"', "strict_json: true", "on_parse_error: Abort()"),
+    )
+    def test_unit_target_rejects_parse_options(self, option: str) -> None:
+        err = reject_type(f'ask-request::[unit]("Q", {option})')
+        assert "unit" in str(err)
+        assert "no output contract" in str(err)
 
     def test_returns_agent_request_type(self) -> None:
         r = accept_type('let r = ask-request::[text]("Q")\nr')

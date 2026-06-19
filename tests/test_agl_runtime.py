@@ -737,6 +737,16 @@ class TestDryRunCheckOnly:
         # The agent must never be invoked during a dry run.
         assert calls == []
 
+    def test_check_only_unit_ask_reports_no_codec(self) -> None:
+        rt = WorkflowRuntime(default_agent=lambda request: "ignored")
+        result = rt.run('let result: unit = ask "hi"\nresult', check_only=True)
+        assert result.ok is True
+        assert len(result.call_sites) == 1
+        site = result.call_sites[0]
+        assert site.target_type == "unit"
+        assert site.codec_name == "none"
+        assert site.has_schema is False
+
     def test_check_only_param_validation_still_runs(self) -> None:
         rt = WorkflowRuntime()
         # Missing declared param is caught even under check_only.

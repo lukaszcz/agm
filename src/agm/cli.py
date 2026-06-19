@@ -35,6 +35,7 @@ import agm.commands.workspace.close as workspace_close_command
 import agm.commands.workspace.list as workspace_list_command
 import agm.commands.workspace.open as workspace_open_command
 import agm.commands.workspace.setup as workspace_setup_command
+import agm.commands.workspace.shell_regen as workspace_shell_regen_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 from agm import completion
@@ -909,6 +910,23 @@ def workspace_list(
     del _help
     del _dry_run
     workspace_list_command.run(verbose=verbose)
+
+
+@workspace_app.command(name="shell-regen")
+def workspace_shell_regen(
+    shell_dir: str | None = typer.Argument(
+        None, metavar="SHELL_DIR", help="Per-session shell directory to regenerate."
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    workspace_shell_regen_command.run(
+        shell_dir=_require_value(
+            shell_dir, command_path=["workspace", "shell-regen"], name="shell_dir"
+        )
+    )
 
 
 @worktree_app.callback(invoke_without_command=True)

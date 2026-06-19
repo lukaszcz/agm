@@ -138,8 +138,8 @@ class TestCommitConfigDirChanges:
         project_dir = tmp_path / "proj"
         config_dir = project_dir / "config"
         config_dir.mkdir(parents=True)
-        branch_config = config_dir / "feature"
-        branch_config.mkdir()
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
 
         monkeypatch.setattr(
             git_helpers, "exact_repo_root", lambda path, env=None: config_dir
@@ -161,7 +161,7 @@ class TestCommitConfigDirChanges:
         env = {"HOME": "/tmp"}
         commit_config_dir_changes(
             project_dir, "chore: add config for feature",
-            add_paths=[branch_config], env=env,
+            add_paths=[workspace_config], env=env,
         )
 
         # Should have one require_success call for the commit
@@ -237,8 +237,8 @@ class TestCommitConfigDirChanges:
         project_dir = tmp_path / "proj"
         config_dir = project_dir / "config"
         config_dir.mkdir(parents=True)
-        branch_config = config_dir / "feature"
-        branch_config.mkdir()
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
 
         monkeypatch.setattr(
             git_helpers, "exact_repo_root", lambda path, env=None: config_dir
@@ -256,7 +256,7 @@ class TestCommitConfigDirChanges:
         )
 
         commit_config_dir_changes(
-            project_dir, "chore: test", add_paths=[branch_config], env={},
+            project_dir, "chore: test", add_paths=[workspace_config], env={},
         )
 
         # No commit, _add_paths was called but no require_success calls
@@ -288,8 +288,8 @@ class TestCommitConfigDirChanges:
         project_dir = tmp_path / "proj"
         config_dir = project_dir / "config"
         config_dir.mkdir(parents=True)
-        branch_config = config_dir / "feature"
-        branch_config.mkdir()
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
 
         monkeypatch.setattr(
             git_helpers, "exact_repo_root", lambda path, env=None: config_dir
@@ -309,7 +309,7 @@ class TestCommitConfigDirChanges:
         )
 
         commit_config_dir_changes(
-            project_dir, "chore: test", add_paths=[branch_config],
+            project_dir, "chore: test", add_paths=[workspace_config],
         )
 
         assert commands_run[0][1] is None
@@ -376,19 +376,19 @@ class TestCommitConfigDirChangesRealRepo:
         # global config reachable through HOME.
         return project_dir, env
 
-    def test_commits_new_branch_config_using_env_identity(
+    def test_commits_new_workspace_config_using_env_identity(
         self, tmp_path: Path
     ) -> None:
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir()
-        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
+        (workspace_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
 
         commit_config_dir_changes(
             project_dir,
             "chore: add config for feature",
-            add_paths=[branch_config],
+            add_paths=[workspace_config],
             env=env,
         )
 
@@ -406,15 +406,15 @@ class TestCommitConfigDirChangesRealRepo:
     ) -> None:
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir()
-        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
+        (workspace_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
 
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         commit_config_dir_changes(
             project_dir,
             "chore: add config for feature",
-            add_paths=[branch_config],
+            add_paths=[workspace_config],
             env=env,
         )
 
@@ -448,14 +448,14 @@ class TestCommitConfigDirChangesRealRepo:
             ["git", "-C", str(config_dir), "add", "unrelated.txt"], check=True, env=env
         )
 
-        branch_config = config_dir / "feature"
-        branch_config.mkdir()
-        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
+        (workspace_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
 
         commit_config_dir_changes(
             project_dir,
             "chore: add config for feature",
-            add_paths=[branch_config],
+            add_paths=[workspace_config],
             env=env,
         )
 
@@ -481,9 +481,9 @@ class TestCommitConfigDirChangesRealRepo:
     def test_fails_when_env_lacks_identity_and_home(self, tmp_path: Path) -> None:
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
-        branch_config = config_dir / "feature"
-        branch_config.mkdir()
-        (branch_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
+        (workspace_config / "config.toml").write_text("[deps]\n", encoding="utf-8")
 
         # An environment without HOME (the previous open.py regression
         # passed env={}) cannot resolve the global git identity and must
@@ -494,7 +494,7 @@ class TestCommitConfigDirChangesRealRepo:
             commit_config_dir_changes(
                 project_dir,
                 "chore: add config for feature",
-                add_paths=[branch_config],
+                add_paths=[workspace_config],
                 env=broken_env,
             )
         assert exc_info.value.code != 0

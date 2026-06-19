@@ -227,8 +227,8 @@ def test_load_workspace_env_applies_dotenv_precedence_before_env_sh(
 ) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
-    branch_config_dir = config_dir / "feat"
-    branch_config_dir.mkdir(parents=True)
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
     workspace_dir = project / "worktrees" / "feat"
     workspace_dir.mkdir(parents=True)
 
@@ -242,15 +242,15 @@ def test_load_workspace_env_applies_dotenv_precedence_before_env_sh(
         encoding="utf-8",
     )
 
-    (branch_config_dir / ".env").write_text(
+    (workspace_config_dir / ".env").write_text(
         "SHARED=branch-dotenv\nBRANCH_ONLY=1\n",
         encoding="utf-8",
     )
-    (branch_config_dir / ".env.local").write_text(
+    (workspace_config_dir / ".env.local").write_text(
         "SHARED=branch-local\nBRANCH_LOCAL_ONLY=1\n",
         encoding="utf-8",
     )
-    (branch_config_dir / "env.sh").write_text(
+    (workspace_config_dir / "env.sh").write_text(
         'export BRANCH_ENV_SH="$SHARED"\nexport SHARED="branch-env-sh"\n',
         encoding="utf-8",
     )

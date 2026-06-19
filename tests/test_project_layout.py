@@ -830,14 +830,14 @@ def test_copy_config_copies_config_files_to_target(tmp_path: Path) -> None:
 def test_copy_config_merges_branch_env_when_branch_given(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
-    branch_config_dir = config_dir / "feat"
-    branch_config_dir.mkdir(parents=True)
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
     (project / "repo").mkdir()
     target = tmp_path / "checkout"
     target.mkdir()
 
     (config_dir / ".env").write_text("BASE_KEY=base\n", encoding="utf-8")
-    (branch_config_dir / ".env").write_text("BRANCH_KEY=branch\n", encoding="utf-8")
+    (workspace_config_dir / ".env").write_text("BRANCH_KEY=branch\n", encoding="utf-8")
 
     copy_config(project_dir=project, target=target, branch="feat", cwd=None)
 
@@ -952,8 +952,8 @@ def test_copy_config_copies_arbitrary_dot_files_and_directories(tmp_path: Path) 
 def test_copy_config_branch_dot_entries_override_base_entries(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
-    branch_config_dir = config_dir / "feat"
-    branch_config_dir.mkdir(parents=True)
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
     (project / "repo").mkdir()
     target = tmp_path / "checkout"
     target.mkdir()
@@ -961,9 +961,9 @@ def test_copy_config_branch_dot_entries_override_base_entries(tmp_path: Path) ->
     (config_dir / ".tool").mkdir()
     (config_dir / ".tool" / "settings.json").write_text("base\n", encoding="utf-8")
     (config_dir / ".base-only").write_text("base\n", encoding="utf-8")
-    (branch_config_dir / ".tool").mkdir()
-    (branch_config_dir / ".tool" / "settings.json").write_text("branch\n", encoding="utf-8")
-    (branch_config_dir / ".branch-only").write_text("branch\n", encoding="utf-8")
+    (workspace_config_dir / ".tool").mkdir()
+    (workspace_config_dir / ".tool" / "settings.json").write_text("branch\n", encoding="utf-8")
+    (workspace_config_dir / ".branch-only").write_text("branch\n", encoding="utf-8")
 
     copy_config(project_dir=project, target=target, branch="feat", cwd=None)
 
@@ -975,8 +975,8 @@ def test_copy_config_branch_dot_entries_override_base_entries(tmp_path: Path) ->
 def test_copy_config_merges_dotenv_files_with_config_env_precedence(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
-    branch_config_dir = config_dir / "feat"
-    branch_config_dir.mkdir(parents=True)
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
     (project / "repo").mkdir()
     target = tmp_path / "checkout"
     target.mkdir()
@@ -989,11 +989,11 @@ def test_copy_config_merges_dotenv_files_with_config_env_precedence(tmp_path: Pa
         "LOCAL_ONLY=base-local\nSHARED=base-local\n",
         encoding="utf-8",
     )
-    (branch_config_dir / ".env").write_text(
+    (workspace_config_dir / ".env").write_text(
         "BRANCH_ONLY=branch\nSHARED=branch-env\n",
         encoding="utf-8",
     )
-    (branch_config_dir / ".env.local").write_text(
+    (workspace_config_dir / ".env.local").write_text(
         "BRANCH_LOCAL_ONLY=branch-local\nSHARED=branch-local\n",
         encoding="utf-8",
     )
@@ -1014,14 +1014,14 @@ def test_copy_config_merges_dotenv_files_with_config_env_precedence(tmp_path: Pa
 def test_copy_config_replaces_existing_target_env_local_when_merging(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
-    branch_config_dir = config_dir / "feat"
-    branch_config_dir.mkdir(parents=True)
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
     (project / "repo").mkdir()
     target = tmp_path / "checkout"
     target.mkdir()
 
     (config_dir / ".env").write_text("CONFIGURED=yes\n", encoding="utf-8")
-    (branch_config_dir / ".env").write_text("BRANCH=yes\n", encoding="utf-8")
+    (workspace_config_dir / ".env").write_text("BRANCH=yes\n", encoding="utf-8")
     (target / ".env.local").write_text("STALE=value\n", encoding="utf-8")
 
     copy_config(project_dir=project, target=target, branch="feat", cwd=None)
@@ -1037,15 +1037,15 @@ def test_copy_config_detects_current_workspace_branch_when_branch_not_given(
 ) -> None:
     project = tmp_path / "proj"
     config_dir = project / "config"
-    branch_config_dir = config_dir / "feat"
-    branch_config_dir.mkdir(parents=True)
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
     workspace_dir = project / "worktrees" / "feat"
     workspace_dir.mkdir(parents=True)
     (project / "repo").mkdir()
     target = tmp_path / "target"
     target.mkdir()
 
-    (branch_config_dir / ".branch-tool").write_text("branch\n", encoding="utf-8")
+    (workspace_config_dir / ".branch-tool").write_text("branch\n", encoding="utf-8")
     monkeypatch.setattr(
         layout_module,
         "current_workspace",
@@ -1945,13 +1945,13 @@ def test_copy_config_copies_dot_env_directly_when_branch_given(tmp_path: Path) -
     to the target (the 'if (config_dir / ".env").exists():' branch)."""
     project = tmp_path / "proj"
     config_dir = project / "config"
-    branch_config_dir = config_dir / "feat"
-    branch_config_dir.mkdir(parents=True)
+    workspace_config_dir = config_dir / "feat"
+    workspace_config_dir.mkdir(parents=True)
     (project / "repo").mkdir()
     target = tmp_path / "checkout"
     target.mkdir()
 
-    # Place a .env in config_dir (not in branch_config_dir)
+    # Place a .env in config_dir (not in workspace_config_dir)
     (config_dir / ".env").write_text("DIRECT_KEY=direct\n", encoding="utf-8")
 
     copy_config(project_dir=project, target=target, branch="feat", cwd=None)
@@ -1961,7 +1961,7 @@ def test_copy_config_copies_dot_env_directly_when_branch_given(tmp_path: Path) -
 
 
 def test_copy_config_skips_branch_dir_when_not_a_dir(tmp_path: Path) -> None:
-    """When branch_config_dir is not a directory, the 'if branch_config_dir.is_dir()'
+    """When workspace_config_dir is not a directory, the 'if workspace_config_dir.is_dir()'
     branch on line 422 is False and we skip to _merge_config_dotenv_files."""
     project = tmp_path / "proj"
     config_dir = project / "config"
@@ -1970,7 +1970,7 @@ def test_copy_config_skips_branch_dir_when_not_a_dir(tmp_path: Path) -> None:
     target = tmp_path / "checkout"
     target.mkdir()
 
-    # branch_config_dir ("config/feat") does NOT exist
+    # workspace_config_dir ("config/feat") does NOT exist
     copy_config(project_dir=project, target=target, branch="feat", cwd=None)
 
     # No crash, and target has no copied branch files (only possibly merged env)

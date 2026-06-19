@@ -432,10 +432,10 @@ def copy_config(
         if resolved_branch is None:
             _copy_existing_config_files(config_dir, resolved_target)
             return
-        branch_config_dir = config_dir / resolved_branch
+        workspace_config_dir = config_dir / resolved_branch
         _copy_existing_config_files(config_dir, resolved_target, include_dotenv=False)
         if (config_dir / ".env").exists():
             require_success(["cp", "-r", str(config_dir / ".env"), str(resolved_target)])
-        if branch_config_dir.is_dir():
-            _copy_existing_config_files(branch_config_dir, resolved_target, include_dotenv=False)
-        _merge_config_dotenv_files([config_dir, branch_config_dir], resolved_target)
+        if workspace_config_dir.is_dir():
+            _copy_existing_config_files(workspace_config_dir, resolved_target, include_dotenv=False)
+        _merge_config_dotenv_files([config_dir, workspace_config_dir], resolved_target)

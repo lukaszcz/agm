@@ -25,7 +25,7 @@ def current_config_branch(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> str | None:
-    """Return the current branch config name, or ``None`` for the main workspace."""
+    """Return the current workspace config name, or ``None`` for the main workspace."""
 
     result = current_workspace(project_dir, cwd=cwd, env=env)
     return result.branch if result is not None else None
@@ -205,7 +205,7 @@ def update_dependency_configs_for_branch(
     project_dir: Path,
     branch: str,
 ) -> None:
-    """Update branch config TOML values for all project dependencies."""
+    """Update workspace config TOML values for all project dependencies."""
 
     deps_dir = project_deps_dir(project_dir)
     if not is_dir(deps_dir):
@@ -245,7 +245,7 @@ def update_all_project_dependency_configs(
     *,
     env: dict[str, str] | None = None,
 ) -> None:
-    """Create/update main and branch config TOML files for the project."""
+    """Create/update main and workspace config TOML files for the project."""
 
     repo_dir = project_repo_dir(project_dir)
     main_branch = git_helpers.current_branch(repo_dir, env=env)
@@ -264,7 +264,7 @@ def _seed_from_parent_config(
     parent_branch: str,
     branch: str,
 ) -> None:
-    """Seed the new branch config directory from the parent branch config."""
+    """Seed the new workspace config directory from the parent workspace config."""
 
     config_dir = project_config_dir(project_dir)
     parent_config = config_dir / parent_branch
@@ -287,7 +287,7 @@ def ensure_dependency_configs_for_branch(
     branch: str,
     parent_branch: str | None = None,
 ) -> None:
-    """Create missing branch config TOML values for project dependencies."""
+    """Create missing workspace config TOML values for project dependencies."""
 
     deps_dir = project_deps_dir(project_dir)
     if not is_dir(deps_dir):

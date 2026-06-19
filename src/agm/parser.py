@@ -106,7 +106,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm wsp list        [-v|--verbose]
 
         Manage AGM workspaces. A workspace may be the main repo or a linked
-        Git worktree, interpreted with AGM project config, branch config,
+        Git worktree, interpreted with AGM project config, workspace config,
         dependency environment, setup scripts, and tmux session lifecycle.
     """),
     "sync": textwrap.dedent("""\
@@ -344,9 +344,9 @@ _HELP_TEXTS: dict[str, str] = {
 
         Copy project dot configuration files into an existing target directory.
         Print shell statements that refresh the current workspace environment
-        from project and branch config.toml [deps] tables, .env,
+        from project and workspace config.toml [deps] tables, .env,
         .env.local, and env.sh files.
-        Create missing project and branch config.toml files under the project
+        Create missing project and workspace config.toml files under the project
         config directory.
 
         To apply the environment to the current shell:
@@ -608,7 +608,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("workspace", "close"): textwrap.dedent("""\
         agm workspace close [-f|--force] [-D] BRANCH
 
-        Close a branch workspace, remove its Git worktree, remove branch config,
+        Close a branch workspace, remove its Git worktree, remove workspace config,
         and kill its tmux session.
     """),
     ("wsp", "close"): textwrap.dedent("""\
@@ -663,7 +663,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm config env
 
         Print shell statements that refresh the current workspace environment
-        from project and branch config.toml [deps] tables, .env,
+        from project and workspace config.toml [deps] tables, .env,
         .env.local, and env.sh files.
 
         To apply the environment to the current shell:
@@ -672,7 +672,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("config", "update"): textwrap.dedent("""\
         agm config update
 
-        Create missing project and branch config.toml files under the project
+        Create missing project and workspace config.toml files under the project
         config directory.
     """),
     ("wt", "new"): textwrap.dedent("""\

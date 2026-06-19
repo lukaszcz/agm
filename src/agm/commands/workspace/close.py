@@ -21,20 +21,20 @@ from agm.project.worktree import remove_worktree
 from agm.tmux.session import close_tmux_session
 
 
-def _remove_branch_config(*, proj_dir: Path, branch: str, env: dict[str, str]) -> None:
+def _remove_workspace_config(*, proj_dir: Path, branch: str, env: dict[str, str]) -> None:
     config_dir = project_config_dir(proj_dir)
-    branch_config_dir = config_dir / branch
-    if not branch_config_dir.exists():
+    workspace_config_dir = config_dir / branch
+    if not workspace_config_dir.exists():
         return
 
-    if branch_config_dir.is_dir():
-        fs.rmtree(branch_config_dir)
+    if workspace_config_dir.is_dir():
+        fs.rmtree(workspace_config_dir)
     else:
-        fs.unlink(branch_config_dir)
+        fs.unlink(workspace_config_dir)
 
     commit_config_dir_changes(
         proj_dir, f"chore: remove config for {branch}",
-        add_paths=[branch_config_dir], env=env,
+        add_paths=[workspace_config_dir], env=env,
     )
 
 
@@ -74,7 +74,7 @@ def close_workspace(
         repo_dir=repo_dir, force=force, branch=branch, force_delete=effective_force_delete
     )
     env = load_workspace_env(proj_dir, None, workspace_dir=repo_dir)
-    _remove_branch_config(proj_dir=proj_dir, branch=branch, env=env)
+    _remove_workspace_config(proj_dir=proj_dir, branch=branch, env=env)
     session_name = branch_session_name(proj_dir, branch)
     close_tmux_session(session_name=session_name, cwd=repo_dir, env=env)
 

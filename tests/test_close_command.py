@@ -77,11 +77,11 @@ def _install_fake_tmux(
     return log_path
 
 # ===========================================================================
-# close_workspace branch config removal
+# close_workspace workspace config removal
 # ===========================================================================
 
 
-class TestCloseSessionRemovesBranchConfig:
+class TestCloseSessionRemovesWorkspaceConfig:
     def _setup_close_dependencies(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, branch: str
     ) -> tuple[Path, Path]:
@@ -115,24 +115,24 @@ class TestCloseSessionRemovesBranchConfig:
         monkeypatch.setattr(close_module, "close_tmux_session", lambda **kw: None)
         return proj_dir, proj_dir / "config" / branch
 
-    def test_missing_branch_config_is_left_uncommitted(
+    def test_missing_workspace_config_is_left_uncommitted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _, branch_config = self._setup_close_dependencies(
+        _, workspace_config = self._setup_close_dependencies(
             tmp_path, monkeypatch, branch="feature"
         )
 
         close_workspace(branch="feature", cwd=tmp_path)
 
-        assert not branch_config.exists()
+        assert not workspace_config.exists()
 
     def test_removes_branch_dir_and_commits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        proj_dir, branch_config = self._setup_close_dependencies(
+        proj_dir, workspace_config = self._setup_close_dependencies(
             tmp_path, monkeypatch, branch="feature"
         )
-        branch_config.mkdir()
+        workspace_config.mkdir()
 
         commit_calls: list[tuple[Path, str, list[Path]]] = []
         monkeypatch.setattr(
@@ -143,19 +143,19 @@ class TestCloseSessionRemovesBranchConfig:
 
         close_workspace(branch="feature", cwd=tmp_path)
 
-        assert not branch_config.exists()
+        assert not workspace_config.exists()
         assert len(commit_calls) == 1
         assert commit_calls[0][0] == proj_dir
         assert "remove config for feature" in commit_calls[0][1]
-        assert commit_calls[0][2] == [branch_config]
+        assert commit_calls[0][2] == [workspace_config]
 
-    def test_removes_branch_config_file_and_commits(
+    def test_removes_workspace_config_file_and_commits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _, branch_config = self._setup_close_dependencies(
+        _, workspace_config = self._setup_close_dependencies(
             tmp_path, monkeypatch, branch="feature"
         )
-        branch_config.write_text("data", encoding="utf-8")
+        workspace_config.write_text("data", encoding="utf-8")
 
         commit_calls: list[str] = []
         monkeypatch.setattr(
@@ -166,16 +166,16 @@ class TestCloseSessionRemovesBranchConfig:
 
         close_workspace(branch="feature", cwd=tmp_path)
 
-        assert not branch_config.exists()
+        assert not workspace_config.exists()
         assert len(commit_calls) == 1
 
     def test_commit_message_names_removed_branch(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _, branch_config = self._setup_close_dependencies(
+        _, workspace_config = self._setup_close_dependencies(
             tmp_path, monkeypatch, branch="my-feature"
         )
-        branch_config.mkdir()
+        workspace_config.mkdir()
 
         commit_calls: list[str] = []
         monkeypatch.setattr(
@@ -186,7 +186,7 @@ class TestCloseSessionRemovesBranchConfig:
 
         close_workspace(branch="my-feature", cwd=tmp_path)
 
-        assert not branch_config.exists()
+        assert not workspace_config.exists()
         assert len(commit_calls) == 1
         assert "my-feature" in commit_calls[0]
 
@@ -222,7 +222,7 @@ class TestCloseSession:
         )
         monkeypatch.setattr(close_module, "remove_worktree", lambda **kw: None)
         monkeypatch.setattr(
-            close_module, "_remove_branch_config", lambda *, proj_dir, branch, env: None
+            close_module, "_remove_workspace_config", lambda *, proj_dir, branch, env: None
         )
         monkeypatch.setattr(
             close_module, "branch_session_name", lambda pd, branch: f"{pd.name}/{branch}"

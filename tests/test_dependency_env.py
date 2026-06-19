@@ -104,7 +104,7 @@ class TestConfigTomlFile:
         result = config_toml_file(project_dir, None)
         assert result == project_dir / "config" / "config.toml"
 
-    def test_branch_returns_config_dir_branch_config_toml(self, tmp_path: Path) -> None:
+    def test_branch_returns_config_dir_workspace_config_toml(self, tmp_path: Path) -> None:
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
         (project_dir / "repo").mkdir()
@@ -327,16 +327,16 @@ class TestLoadDependencyTomlEnv:
         project_dir = self._workspace_project(tmp_path)
         config_dir = project_dir / "config"
         config_dir.mkdir()
-        branch_config_dir = config_dir / "feat"
-        branch_config_dir.mkdir()
+        workspace_config_dir = config_dir / "feat"
+        workspace_config_dir.mkdir()
         main_file = config_dir / "config.toml"
         main_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
-        branch_file = branch_config_dir / "config.toml"
-        branch_file.write_text('[deps]\nmylib = "feat"\n', encoding="utf-8")
+        workspace_config_file = workspace_config_dir / "config.toml"
+        workspace_config_file.write_text('[deps]\nmylib = "feat"\n', encoding="utf-8")
         env: dict[str, str] = {}
         result = load_dependency_toml_env(
             project_dir=project_dir,
-            config_files=[main_file, branch_file],
+            config_files=[main_file, workspace_config_file],
             env=env,
         )
         expected_path = str(project_dir / "deps" / "mylib" / "feat")
@@ -470,7 +470,7 @@ class TestUpdateDependencyTomlConfig:
 
     def test_creates_parent_directories(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
-        # Branch config directories don't exist yet
+        # Workspace config directories don't exist yet
         update_dependency_toml_config(
             project_dir=project_dir,
             dep_name="mylib",
@@ -523,7 +523,7 @@ class TestEnsureConfigTomlFile:
         content = config_file.read_text(encoding="utf-8")
         assert 'mylib = "main"' in content
 
-    def test_creates_branch_config_toml_when_missing(self, tmp_path: Path) -> None:
+    def test_creates_workspace_config_toml_when_missing(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
         _ensure_config_toml_file(project_dir, "feat")
         config_file = project_dir / "config" / "feat" / "config.toml"
@@ -791,7 +791,7 @@ class TestEnsureDependencyConfigsForBranch:
             main_dir.mkdir()
             subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
-        # Create parent branch config with a specific dep version
+        # Create parent workspace config with a specific dep version
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
         parent_config_file = parent_config_dir / "config.toml"
@@ -812,7 +812,7 @@ class TestEnsureDependencyConfigsForBranch:
         project_dir = self._workspace_project(tmp_path)
         deps_dir = project_dir / "deps"
         deps_dir.mkdir()
-        # Create parent branch config with a .env file
+        # Create parent workspace config with a .env file
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
         (parent_config_dir / "config.toml").write_text(
@@ -844,14 +844,14 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
-        # Create parent branch config
+        # Create parent workspace config
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
         parent_config_file = parent_config_dir / "config.toml"
         parent_config_file.write_text(
             '[deps]\nmylib = "dev"\n', encoding="utf-8"
         )
-        # Pre-create child branch config with different content
+        # Pre-create child workspace config with different content
         child_config_dir = project_dir / "config" / "child-branch"
         child_config_dir.mkdir(parents=True)
         child_config_file = child_config_dir / "config.toml"
@@ -907,7 +907,7 @@ class TestSeedFromParentConfig:
         project_dir = self._workspace_project(tmp_path)
         deps_dir = project_dir / "deps"
         deps_dir.mkdir()
-        # Create parent branch config
+        # Create parent workspace config
         parent_config_dir = project_dir / "config" / "parent"
         parent_config_dir.mkdir(parents=True)
         (parent_config_dir / "config.toml").write_text(
@@ -1037,7 +1037,7 @@ class TestUpdateAllProjectDependencyConfigs:
         config_file = project_dir / "config" / "config.toml"
         assert config_file.exists()
 
-    def test_creates_branch_config_toml_for_worktrees(
+    def test_creates_workspace_config_toml_for_worktrees(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1061,10 +1061,10 @@ class TestUpdateAllProjectDependencyConfigs:
             ],
         )
         update_all_project_dependency_configs(project_dir)
-        branch_config_file = project_dir / "config" / "feat" / "config.toml"
-        assert branch_config_file.exists()
+        workspace_config_file = project_dir / "config" / "feat" / "config.toml"
+        assert workspace_config_file.exists()
 
-    def test_skips_branch_config_for_main_branch_worktree(
+    def test_skips_workspace_config_for_main_branch_worktree(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1088,9 +1088,9 @@ class TestUpdateAllProjectDependencyConfigs:
             ],
         )
         update_all_project_dependency_configs(project_dir)
-        # Branch config for "main" should NOT be created
-        branch_config_file = project_dir / "config" / "main" / "config.toml"
-        assert not branch_config_file.exists()
+        # Workspace config for "main" should NOT be created
+        workspace_config_file = project_dir / "config" / "main" / "config.toml"
+        assert not workspace_config_file.exists()
 
     def test_skips_worktree_with_no_branch(
         self,
@@ -1116,7 +1116,7 @@ class TestUpdateAllProjectDependencyConfigs:
             ],
         )
         update_all_project_dependency_configs(project_dir)
-        # No branch config should be created
+        # No workspace config should be created
         assert not (project_dir / "config" / "detached").exists()
 
     def test_skips_worktree_outside_worktrees_dir(
@@ -1142,9 +1142,9 @@ class TestUpdateAllProjectDependencyConfigs:
             ],
         )
         update_all_project_dependency_configs(project_dir)
-        # No branch config should be created for external worktrees
-        branch_config_file = project_dir / "config" / "feat" / "config.toml"
-        assert not branch_config_file.exists()
+        # No workspace config should be created for external worktrees
+        workspace_config_file = project_dir / "config" / "feat" / "config.toml"
+        assert not workspace_config_file.exists()
 
     def test_passes_env_to_git_calls(
         self,
@@ -1199,8 +1199,8 @@ class TestUpdateAllProjectDependencyConfigs:
             ],
         )
         update_all_project_dependency_configs(project_dir)
-        branch_config = project_dir / "config" / "feat" / "config.toml"
-        assert branch_config.exists()
+        workspace_config = project_dir / "config" / "feat" / "config.toml"
+        assert workspace_config.exists()
 
 
 class TestDependencyConfigCheckoutNameFallback:

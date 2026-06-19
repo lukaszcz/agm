@@ -896,17 +896,17 @@ class TestConfigEnv:
             "REMOVE_ME=unset",
         ]
 
-    def test_eval_refreshes_current_shell_from_branch_config(
+    def test_eval_refreshes_current_shell_from_workspace_config(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env)
         config = project / "config"
         (config / ".env").write_text("VALUE=project\n", encoding="utf-8")
-        branch_config = config / "feat" / "env"
-        branch_config.mkdir(parents=True)
-        (branch_config / ".env").write_text("VALUE=branch\n", encoding="utf-8")
-        (branch_config / "env.sh").write_text(
+        workspace_config = config / "feat" / "env"
+        workspace_config.mkdir(parents=True)
+        (workspace_config / ".env").write_text("VALUE=branch\n", encoding="utf-8")
+        (workspace_config / "env.sh").write_text(
             'export VALUE="$VALUE-env-sh"\n',
             encoding="utf-8",
         )
@@ -1026,13 +1026,13 @@ class TestConfigEnv:
 
         run_agm(["wt", "new", "feat/env"], env=env, cwd=project / "repo")
         worktree = project / "worktrees" / "feat" / "env"
-        branch_config = config / "feat" / "env"
-        branch_config.mkdir(parents=True, exist_ok=True)
-        (branch_config / "config.toml").write_text(
+        workspace_config = config / "feat" / "env"
+        workspace_config.mkdir(parents=True, exist_ok=True)
+        (workspace_config / "config.toml").write_text(
             '[deps]\nvyper-automation = "feat/app"\n',
             encoding="utf-8",
         )
-        (branch_config / "env.sh").write_text(
+        (workspace_config / "env.sh").write_text(
             'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
             encoding="utf-8",
         )
@@ -1122,9 +1122,9 @@ class TestConfigUpdate:
         with (project / "config" / "config.toml").open("rb") as handle:
             main_config = cast(dict[str, object], tomllib.load(handle))
         with (project / "config" / "feat" / "app" / "config.toml").open("rb") as handle:
-            branch_config = cast(dict[str, object], tomllib.load(handle))
+            workspace_config = cast(dict[str, object], tomllib.load(handle))
         assert main_config.get("deps") == {"vyper-automation": "main"}
-        assert branch_config.get("deps") == {"vyper-automation": "main"}
+        assert workspace_config.get("deps") == {"vyper-automation": "main"}
         assert (project / "deps" / "vyper-automation" / "main").is_dir()
         assert not (project / "config" / "feat" / "not-checked-out" / "config.toml").exists()
 
@@ -1213,9 +1213,9 @@ class TestConfigUpdate:
         with (project / "config" / "config.toml").open("rb") as handle:
             main_config = cast(dict[str, object], tomllib.load(handle))
         with (project / "config" / branch / "config.toml").open("rb") as handle:
-            branch_config = cast(dict[str, object], tomllib.load(handle))
+            workspace_config = cast(dict[str, object], tomllib.load(handle))
         assert main_config.get("deps") == {"vyper-automation": "main"}
-        assert branch_config.get("deps") == {"vyper-automation": branch}
+        assert workspace_config.get("deps") == {"vyper-automation": branch}
         assert (project / "deps" / "vyper-automation" / "main").is_dir()
         assert (project / "deps" / "vyper-automation" / branch).is_dir()
 
@@ -1800,15 +1800,15 @@ class TestClose:
 
         run_agm(["wt", "new", "feat/close-me"], env=env, cwd=str(project / "repo"))
         worktree = project / "worktrees" / "feat/close-me"
-        branch_config = project / "config" / "feat" / "close-me"
-        branch_config.mkdir(parents=True)
-        (branch_config / ".env").write_text("BRANCH_CONFIG=1\n", encoding="utf-8")
+        workspace_config = project / "config" / "feat" / "close-me"
+        workspace_config.mkdir(parents=True)
+        (workspace_config / ".env").write_text("WORKSPACE_CONFIG=1\n", encoding="utf-8")
         assert worktree.is_dir()
 
         result = run_agm(["close", "feat/close-me"], env=env, cwd=str(project))
 
         assert not worktree.exists()
-        assert not branch_config.exists()
+        assert not workspace_config.exists()
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/close-me" not in branches
         assert "Closed session proj/feat/close-me" in result.stdout
@@ -1825,9 +1825,9 @@ class TestClose:
 
         run_agm(["wt", "new", "feat/dirty-close"], env=env, cwd=str(project / "repo"))
         worktree = project / "worktrees" / "feat/dirty-close"
-        branch_config = project / "config" / "feat" / "dirty-close"
-        branch_config.mkdir(parents=True)
-        (branch_config / ".env").write_text("BRANCH_CONFIG=1\n", encoding="utf-8")
+        workspace_config = project / "config" / "feat" / "dirty-close"
+        workspace_config.mkdir(parents=True)
+        (workspace_config / ".env").write_text("WORKSPACE_CONFIG=1\n", encoding="utf-8")
 
         side_effect = tmp_path / "close-env-sourced"
         env["AGM_CLOSE_SIDE_EFFECT"] = str(side_effect)
@@ -1842,11 +1842,11 @@ class TestClose:
 
         assert result.returncode != 0
         assert worktree.is_dir()
-        assert branch_config.is_dir()
+        assert workspace_config.is_dir()
         assert not side_effect.exists()
         assert not tmux_log.exists()
 
-    def test_removes_branch_config_and_commits_when_config_is_versioned(
+    def test_removes_workspace_config_and_commits_when_config_is_versioned(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -1855,16 +1855,16 @@ class TestClose:
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
         run_agm(["wt", "new", "feat/close-config"], env=env, cwd=str(project / "repo"))
-        branch_config = project / "config" / "feat" / "close-config"
-        branch_config.mkdir(parents=True)
-        (branch_config / ".env").write_text("BRANCH_CONFIG=1\n", encoding="utf-8")
+        workspace_config = project / "config" / "feat" / "close-config"
+        workspace_config.mkdir(parents=True)
+        (workspace_config / ".env").write_text("WORKSPACE_CONFIG=1\n", encoding="utf-8")
         _git("init", "-b", "main", cwd=project / "config", env=env)
         _git("add", ".", cwd=project / "config", env=env)
-        _git("commit", "-m", "add branch config", cwd=project / "config", env=env)
+        _git("commit", "-m", "add workspace config", cwd=project / "config", env=env)
 
         run_agm(["close", "feat/close-config"], env=env, cwd=str(project))
 
-        assert not branch_config.exists()
+        assert not workspace_config.exists()
         assert _git("status", "--short", cwd=project / "config", env=env).stdout == ""
         assert (
             _git("log", "-1", "--pretty=%s", cwd=project / "config", env=env).stdout.strip()
@@ -1876,10 +1876,10 @@ class TestClose:
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
 
-    def test_close_succeeds_when_branch_config_not_tracked_by_git(
+    def test_close_succeeds_when_workspace_config_not_tracked_by_git(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Regression: branch config dir exists but is not tracked by git."""
+        """Regression: workspace config dir exists but is not tracked by git."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env, name="proj")
         tmux_log = tmp_path / "tmux.log"
@@ -1891,9 +1891,9 @@ class TestClose:
         (project / "config" / "README.md").write_text("config\n", encoding="utf-8")
         _git("add", "README.md", cwd=project / "config", env=env)
         _git("commit", "-m", "init config", cwd=project / "config", env=env)
-        branch_config = project / "config" / "feat" / "untracked-config"
-        branch_config.mkdir(parents=True)
-        (branch_config / ".env").write_text("UNTRACKED=1\n", encoding="utf-8")
+        workspace_config = project / "config" / "feat" / "untracked-config"
+        workspace_config.mkdir(parents=True)
+        (workspace_config / ".env").write_text("UNTRACKED=1\n", encoding="utf-8")
 
         result = run_agm(
             ["close", "feat/untracked-config"],
@@ -1902,7 +1902,7 @@ class TestClose:
         )
 
         assert result.returncode == 0
-        assert not branch_config.exists()
+        assert not workspace_config.exists()
         assert "fatal" not in (result.stdout + result.stderr)
 
     def test_removes_embedded_project_worktree_from_repo_subdir(
@@ -2117,9 +2117,9 @@ class TestDepSwitch:
             cwd=str(project / "repo"),
             env=env,
         )
-        branch_config = project / "config" / branch
-        branch_config.mkdir(parents=True)
-        (branch_config / "config.toml").write_text(
+        workspace_config = project / "config" / branch
+        workspace_config.mkdir(parents=True)
+        (workspace_config / "config.toml").write_text(
             '[deps]\nvyper-automation = "main"\nother = "stable"\n',
             encoding="utf-8",
         )
@@ -2131,7 +2131,7 @@ class TestDepSwitch:
             cwd=str(worktree),
         )
 
-        with (branch_config / "config.toml").open("rb") as handle:
+        with (workspace_config / "config.toml").open("rb") as handle:
             parsed = cast(dict[str, object], tomllib.load(handle))
         assert parsed.get("deps") == {"vyper-automation": branch, "other": "stable"}
 
@@ -6151,8 +6151,8 @@ class TestOpen:
 
         run_agm(["open", "feat/test"], env=env, cwd=str(project))
 
-        branch_config = project / "config" / "feat/test" / "config.toml"
-        with branch_config.open("rb") as handle:
+        workspace_config = project / "config" / "feat/test" / "config.toml"
+        with workspace_config.open("rb") as handle:
             parsed = cast(dict[str, object], tomllib.load(handle))
         assert parsed.get("deps") == {"vyper-automation": "main"}
         assert (project / "deps" / "vyper-automation" / "main").is_dir()
@@ -6194,9 +6194,9 @@ class TestOpen:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
         run_agm(["dep", "new", str(bare_dep)], env=env, cwd=str(project))
-        branch_config = project / "config" / "feat/test"
-        branch_config.mkdir(parents=True)
-        (branch_config / "config.toml").write_text(
+        workspace_config = project / "config" / "feat/test"
+        workspace_config.mkdir(parents=True)
+        (workspace_config / "config.toml").write_text(
             '[deps]\nvyper-automation = "main"\n',
             encoding="utf-8",
         )

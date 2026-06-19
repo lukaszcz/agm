@@ -117,7 +117,7 @@ class TestDepsForBranch:
         result = dep_list_cmd._deps_for_branch(tmp_path, None)
         assert result == {"mylib": "main"}
 
-    def test_feature_branch_reads_branch_config(self, tmp_path: Path) -> None:
+    def test_feature_branch_reads_workspace_config(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         branch_dir = config_dir / "feature"
         branch_dir.mkdir(parents=True)
@@ -224,7 +224,7 @@ class TestListAllDepCheckouts:
 
 
 class TestListDepsCurrentWorkspace:
-    def test_lists_deps_from_branch_config(
+    def test_lists_deps_from_workspace_config(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,

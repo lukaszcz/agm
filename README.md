@@ -134,7 +134,7 @@ When only `REPO_URL` is provided, AGM derives the project name from the reposito
 ### `agm workspace`
 
 Manage AGM workspaces. A workspace may be the main repo or a linked Git worktree, interpreted
-with AGM project config, branch config, dependency environment, setup scripts, and tmux session
+with AGM project config, workspace config, dependency environment, setup scripts, and tmux session
 lifecycle.
 
 ```bash
@@ -254,7 +254,7 @@ Known files currently include `.setup.sh`, `.env`, `.env.local`, `.config`, `.ag
 
 ### `agm config env`
 
-Print shell statements that refresh the current workspace environment from project and branch
+Print shell statements that refresh the current workspace environment from project and workspace
 `.env`, `.env.local`, and `env.sh` files. Apply them to the current shell with:
 
 ```bash
@@ -263,7 +263,7 @@ eval "$(agm config env)"
 
 ### `agm config update`
 
-Create missing project and branch `config.toml` files and commit generated changes.
+Create missing project and workspace `config.toml` files and commit generated changes.
 
 ```bash
 agm config update

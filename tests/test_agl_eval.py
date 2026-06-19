@@ -3577,3 +3577,99 @@ def test_text_exec_timeout_raises_exec_error() -> None:
 def test_required_param_without_runtime_value_is_interpreter_invariant() -> None:
     with pytest.raises(AssertionError, match="pre-execution validation"):
         _run_source("param missing\nmissing")
+
+
+# ---------------------------------------------------------------------------
+# M4: first-class constructor values (type erasure at runtime)
+# ---------------------------------------------------------------------------
+
+
+def test_record_constructor_value_called_positionally() -> None:
+    snap = _run_source(
+        "record Box\n  item: int\nlet make = Box\nlet b = make(5)\nb"
+    )
+    assert snap["b"] == RecordValue(type_name="Box", fields={"item": IntValue(5)})
+
+
+def test_record_constructor_value_field_access() -> None:
+    snap = _run_source(
+        "record Box\n  item: int\nlet make = Box\nlet n = make(5).item\nn"
+    )
+    assert snap["n"] == IntValue(5)
+
+
+def test_enum_payload_variant_value_called_positionally() -> None:
+    snap = _run_source(
+        "enum E\n  | Nope\n  | Wrap(value: int)\nlet w = Wrap\nlet v = w(7)\nv"
+    )
+    assert snap["v"] == EnumValue(
+        type_name="E", variant="Wrap", fields={"value": IntValue(7)}
+    )
+
+
+def test_qualified_enum_payload_variant_value_called_positionally() -> None:
+    snap = _run_source(
+        "enum E\n  | Nope\n  | Wrap(value: int)\nlet w = E.Wrap\nlet v = w(7)\nv"
+    )
+    assert snap["v"] == EnumValue(
+        type_name="E", variant="Wrap", fields={"value": IntValue(7)}
+    )
+
+
+def test_generic_constructor_value_erasure_two_instantiations() -> None:
+    # A single generic enum constructor, bound at two distinct instantiations,
+    # builds two correctly-typed runtime values from a type-agnostic mechanism.
+    snap = _run_source(
+        "enum Opt[T]\n"
+        "  | Nope\n"
+        "  | Wrap(value: T)\n"
+        "let wi: (int) -> Opt[int] = Wrap\n"
+        "let wt: (text) -> Opt[text] = Wrap\n"
+        'let a = wi(7)\n'
+        'let b = wt("hi")\n'
+        "a"
+    )
+    assert snap["a"] == EnumValue(
+        type_name="Opt", variant="Wrap", fields={"value": IntValue(7)}
+    )
+    assert snap["b"] == EnumValue(
+        type_name="Opt", variant="Wrap", fields={"value": TextValue("hi")}
+    )
+
+
+def test_generic_qualified_constructor_value_erasure() -> None:
+    snap = _run_source(
+        "enum Opt[T]\n"
+        "  | Nope\n"
+        "  | Wrap(value: T)\n"
+        "let wi: (int) -> Opt[int] = Opt.Wrap\n"
+        "let a = wi(42)\n"
+        "a"
+    )
+    assert snap["a"] == EnumValue(
+        type_name="Opt", variant="Wrap", fields={"value": IntValue(42)}
+    )
+
+
+def test_constructor_value_render_and_serialize() -> None:
+    from agm.agl.eval.values import ConstructorValue
+    from agm.agl.runtime.render import render_value, render_value_repl
+    from agm.agl.runtime.serialize import value_to_json_obj
+
+    record_cv = ConstructorValue(owner_name="Box", variant=None)
+    enum_cv = ConstructorValue(owner_name="E", variant="Wrap")
+
+    assert render_value(record_cv) == "<constructor Box>"
+    assert render_value(enum_cv) == "<constructor E.Wrap>"
+    assert render_value_repl(record_cv) == "<constructor Box>"
+    assert render_value_repl(enum_cv) == "<constructor E.Wrap>"
+
+    with pytest.raises(TypeError, match="ConstructorValue has no JSON representation"):
+        value_to_json_obj(record_cv)
+
+
+def test_constructor_value_describe_value_is_function() -> None:
+    from agm.agl.eval.interpreter import _describe_value
+    from agm.agl.eval.values import ConstructorValue
+
+    assert _describe_value(ConstructorValue(owner_name="Box", variant=None)) == "function"

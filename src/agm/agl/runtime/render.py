@@ -24,6 +24,7 @@ from agm.agl.eval.values import (
     AgentValue,
     BoolValue,
     Closure,
+    ConstructorValue,
     DecimalValue,
     IntValue,
     TextValue,
@@ -114,6 +115,8 @@ def render_value(value: Value) -> str:
     - ``int`` / ``decimal`` / ``bool`` → plain scalar text via ``_scalar_text``.
     - ``unit`` (``()``)               → the literal text ``"()"``.
     - ``agent``                       → ``"<agent NAME>"``.
+    - ``ConstructorValue``            → ``"<constructor Owner>"`` (record) or
+                                        ``"<constructor Owner.variant>"`` (enum).
     - ``function`` (``Closure``)      → ``"<function/N -> T>"``.
     - Everything else (``list``, ``dict``, record, enum, ``json``, exception)
                                       → pretty-printed JSON, 2-space indent.
@@ -132,6 +135,10 @@ def render_value(value: Value) -> str:
         return _scalar_text(value)
     if isinstance(value, AgentValue):
         return f"<agent {value.name}>"
+    if isinstance(value, ConstructorValue):
+        if value.variant is not None:
+            return f"<constructor {value.owner_name}.{value.variant}>"
+        return f"<constructor {value.owner_name}>"
     if isinstance(value, Closure):
         return _closure_surface(value)
     # Structured / json / exception: pretty JSON.

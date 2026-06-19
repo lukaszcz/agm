@@ -4837,6 +4837,103 @@ class TestNonGenericConstructorsUnchanged:
         )
 
 
+class TestNonGenericConstructorAsValue:
+    """M4 Gap 1: non-generic constructor with fields used in value position."""
+
+    def test_record_ctor_with_fields_as_value_is_function_type(self) -> None:
+        r = accept_type(
+            "record Box\n  item: int\nlet make = Box\nmake"
+        )
+        prog = r.resolved.program
+        assert prog is not None
+        make_ref = prog.body.items[-1]
+        assert isinstance(make_ref, VarRef)
+        t = r.node_types[make_ref.node_id]
+        assert isinstance(t, FunctionType)
+        assert t.params == (IntType(),)
+        assert isinstance(t.result, RecordType)
+        assert t.result.name == "Box"
+
+    def test_record_ctor_value_called_positionally(self) -> None:
+        r = accept_type(
+            "record Box\n  item: int\nlet make = Box\nmake(5)"
+        )
+        assert r.resolved.program is not None
+
+    def test_record_ctor_value_called_with_named_arg_rejected(self) -> None:
+        err = reject_type(
+            "record Box\n  item: int\nlet make = Box\nmake(item: 5)"
+        )
+        assert (
+            "named" in str(err).lower()
+            or "positional" in str(err).lower()
+            or "keyword" in str(err).lower()
+        )
+
+    def test_record_ctor_value_arity_mismatch_rejected(self) -> None:
+        err = reject_type(
+            "record Box\n  item: int\nlet make = Box\nmake(1, 2)"
+        )
+        assert "argument" in str(err).lower() or "too many" in str(err).lower()
+
+    def test_enum_payload_variant_as_value_is_function_type(self) -> None:
+        r = accept_type(
+            "enum E\n  | Nope\n  | Wrap(value: int)\nlet w = Wrap\nw"
+        )
+        prog = r.resolved.program
+        assert prog is not None
+        w_ref = prog.body.items[-1]
+        assert isinstance(w_ref, VarRef)
+        t = r.node_types[w_ref.node_id]
+        assert isinstance(t, FunctionType)
+        assert t.params == (IntType(),)
+        assert isinstance(t.result, EnumType)
+        assert t.result.name == "E"
+
+    def test_qualified_enum_payload_variant_as_value_is_function_type(self) -> None:
+        r = accept_type(
+            "enum E\n  | Nope\n  | Wrap(value: int)\nlet w = E.Wrap\nw"
+        )
+        prog = r.resolved.program
+        assert prog is not None
+        w_ref = prog.body.items[-1]
+        assert isinstance(w_ref, VarRef)
+        t = r.node_types[w_ref.node_id]
+        assert isinstance(t, FunctionType)
+        assert t.params == (IntType(),)
+        assert isinstance(t.result, EnumType)
+        assert t.result.name == "E"
+
+    def test_nullary_variant_as_value_stays_nominal(self) -> None:
+        r = accept_type("enum E\n  | Nope\n  | Wrap(value: int)\nlet n = Nope\nn")
+        prog = r.resolved.program
+        assert prog is not None
+        n_ref = prog.body.items[-1]
+        assert isinstance(n_ref, VarRef)
+        t = r.node_types[n_ref.node_id]
+        assert isinstance(t, EnumType)
+        assert t.name == "E"
+
+    def test_exception_ctor_as_value_rejected(self) -> None:
+        err = reject_type("let f = Abort\nf")
+        assert "exception" in str(err).lower()
+        assert "first-class" in str(err).lower() or "directly" in str(err).lower()
+
+    def test_qualified_record_field_as_value_rejected(self) -> None:
+        # A `RecordName.field` reference in value position routes through the
+        # qualified-constructor-as-value path; the record is not an enum.
+        err = reject_type('record Box\n  item: int\nlet f = Box.item\n"x"')
+        assert "not a known enum" in str(err).lower()
+
+    def test_qualified_unknown_variant_as_value_rejected(self) -> None:
+        # An `EnumName.bogus` reference in value position names a variant that
+        # does not exist; scope defers this to the checker.
+        err = reject_type(
+            'enum E\n  | Nope\n  | Wrap(value: int)\nlet f = E.Bogus\n"x"'
+        )
+        assert "does not exist in enum" in str(err).lower()
+
+
 # ---------------------------------------------------------------------------
 # M3b: additional coverage tests
 # ---------------------------------------------------------------------------

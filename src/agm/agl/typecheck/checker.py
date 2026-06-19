@@ -789,8 +789,8 @@ class _Checker:
                     ctor_ref=ctor_ref, span=node.span, expected=expected
                 )
             owner = self._resolve_constructor_owner(ctor_ref, node.span)
-            return self._check_constructor_call(
-                owner=owner, variant=ctor_ref.variant, args=(), span=node.span
+            return self._check_constructor_as_value(
+                owner=owner, variant=ctor_ref.variant, span=node.span
             )
         ref = self._resolved.resolution[node.node_id]
         typ = self._require_binding_type(ref)
@@ -2193,11 +2193,11 @@ class _Checker:
     # --- field access ---
 
     def _check_field_access(self, node: FieldAccess, expected: Type | None = None) -> Type:
-        # Bare qualified constructor reference → zero-arg construction.
+        # Bare qualified constructor reference → value-position construction.
         if node.node_id in self._resolved.qualified_constructor_refs:
             owner_name, variant = self._resolved.qualified_constructor_refs[node.node_id]
-            return self._resolve_qualified_constructor_and_call(
-                owner_name=owner_name, variant=variant, args=(), span=node.span,
+            return self._check_qualified_constructor_as_value(
+                owner_name=owner_name, variant=variant, span=node.span,
                 expected=expected,
             )
         obj_type = self._check_expr(node.obj, expected=None)
@@ -2274,6 +2274,88 @@ class _Checker:
             )
         return owner
 
+    def _check_qualified_constructor_as_value(
+        self,
+        *,
+        owner_name: str,
+        variant: str,
+        span: SourceSpan,
+        expected: Type | None,
+    ) -> Type:
+        """Type a qualified constructor (``Owner.variant``) used in value position."""
+        gdef = self._env.get_generic_type(owner_name)
+        if gdef is not None:
+            # owner_decl_node_id is unused on the as-value path (only owner_name,
+            # variant, and type_params are consumed); pass the 0 placeholder.
+            ctor_ref = ConstructorRef(
+                owner_name=owner_name,
+                variant=variant,
+                owner_decl_node_id=0,
+                type_params=gdef.type_params,
+            )
+            return self._check_generic_constructor_as_value(
+                ctor_ref=ctor_ref, span=span, expected=expected
+            )
+        enum_type = self._resolve_qualified_enum_owner(owner_name, variant, span)
+        return self._check_constructor_as_value(
+            owner=enum_type, variant=variant, span=span
+        )
+
+    def _resolve_qualified_enum_owner(
+        self, owner_name: str, variant: str, span: SourceSpan
+    ) -> EnumType:
+        """Resolve a non-generic qualified constructor's owner to a validated enum.
+
+        Scope records ``Owner.member`` for any declared type name without
+        checking enum-ness or variant existence, so both are validated here.
+        """
+        enum_type = self._env.resolve_named_type(owner_name)
+        if not isinstance(enum_type, EnumType):
+            raise AglTypeError(
+                f"'{owner_name}' is not a known enum type.",
+                span=span,
+            )
+        if variant not in enum_type.variants:
+            raise AglTypeError(
+                f"Variant '{variant}' does not exist in enum '{owner_name}'.",
+                span=span,
+            )
+        return enum_type
+
+    def _check_constructor_as_value(
+        self,
+        *,
+        owner: RecordType | EnumType | ExceptionType,
+        variant: str | None,
+        span: SourceSpan,
+    ) -> Type:
+        """Type a non-generic constructor used in value position (not directly called).
+
+        A constructor with fields becomes a ``FunctionType`` (field types →
+        owner type) so it can be passed around and called positionally.  A
+        zero-field record or nullary variant keeps its bare nominal value (a
+        zero-arg construction).  An exception constructor is rejected — its
+        construction has special trace-id semantics and is out of scope as a
+        first-class value.
+        """
+        if isinstance(owner, ExceptionType):
+            raise AglTypeError(
+                "Exception constructors cannot be used as a first-class value; "
+                "construct the exception directly (e.g. `Abort(message: ...)`).",
+                span=span,
+            )
+        if isinstance(owner, EnumType):
+            assert variant is not None, "variant is required for EnumType"
+            fields = owner.variants[variant]
+        else:
+            fields = owner.fields
+        if fields:
+            params = tuple(fields.values())
+            return FunctionType(params=params, result=owner)
+        return self._check_constructor_call(
+            owner=owner, variant=variant, args=(), span=span
+        )
+
     def _resolve_qualified_constructor_and_call(
         self,
         *,
@@ -2300,17 +2382,7 @@ class _Checker:
                 span=span,
                 expected=expected,
             )
-        enum_type = self._env.resolve_named_type(owner_name)
-        if not isinstance(enum_type, EnumType):
-            raise AglTypeError(
-                f"'{owner_name}' is not a known enum type.",
-                span=span,
-            )
-        if variant not in enum_type.variants:
-            raise AglTypeError(
-                f"Variant '{variant}' does not exist in enum '{owner_name}'.",
-                span=span,
-            )
+        enum_type = self._resolve_qualified_enum_owner(owner_name, variant, span)
         return self._check_constructor_call(
             owner=enum_type, variant=variant, args=args, span=span
         )

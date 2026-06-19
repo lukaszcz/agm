@@ -19,6 +19,7 @@ from agm.agl.eval.values import (
     AgentValue,
     BoolValue,
     Closure,
+    ConstructorValue,
     DecimalValue,
     DictValue,
     EnumValue,
@@ -391,7 +392,10 @@ class Interpreter:
         # Check if this VarRef is a constructor reference.
         cref = self._checked.resolved.constructor_refs.get(expr.node_id)
         if cref is not None:
-            # Bare constructor (nullary): build with no args.
+            # Constructor with fields used as a value → callable ConstructorValue;
+            # a nullary/zero-field constructor builds the bare value directly.
+            if isinstance(self._checked.node_types.get(expr.node_id), FunctionType):
+                return ConstructorValue(owner_name=cref.owner_name, variant=cref.variant)
             return self._build_constructor_value(expr.node_id, expr.name, (), scope)
         binding = scope.lookup(expr.name)
         if binding is None:  # pragma: no cover
@@ -401,7 +405,13 @@ class Interpreter:
     def _eval_field_access(self, expr: FieldAccess, scope: Scope) -> Value:
         # Check for qualified constructor reference (e.g. Option.none).
         if expr.node_id in self._checked.resolved.qualified_constructor_refs:
-            # Bare qualified constructor (nullary): build with no args.
+            # Qualified constructor with fields used as a value → ConstructorValue;
+            # a nullary/zero-field constructor builds the bare value directly.
+            if isinstance(self._checked.node_types.get(expr.node_id), FunctionType):
+                owner_name, variant = self._checked.resolved.qualified_constructor_refs[
+                    expr.node_id
+                ]
+                return ConstructorValue(owner_name=owner_name, variant=variant)
             return self._build_constructor_value(expr.node_id, expr.field, (), scope)
         obj = self._eval_expr(expr.obj, scope)
         if isinstance(obj, (RecordValue, ExceptionValue)):
@@ -589,8 +599,10 @@ class Interpreter:
                     expr.node_id, callee.field, expr.named_args, scope
                 )
 
-        # User-defined function or closure call.
+        # User-defined function, constructor value, or closure call.
         callee_val = self._eval_expr(expr.callee, scope)
+        if isinstance(callee_val, ConstructorValue):
+            return self._build_constructor_value_positional(expr, callee_val, scope)
         if not isinstance(callee_val, Closure):
             raise RuntimeError(  # pragma: no cover
                 f"Call on non-closure: {type(callee_val).__name__}"
@@ -1298,9 +1310,48 @@ class Interpreter:
         for arg in named_args:
             arg_values[arg.name] = self._eval_expr(arg.value, scope)
 
-        from agm.agl.typecheck.types import ExceptionType as ExcType
-
         typ = self._checked.node_types.get(ref_node_id)
+        return self._construct_runtime_value(typ, variant_name, arg_values)
+
+    def _build_constructor_value_positional(
+        self, call: Call, cv: ConstructorValue, scope: Scope
+    ) -> Value:
+        """Build a record/enum value from a first-class ``ConstructorValue`` call.
+
+        Positional arguments are matched to the constructor's fields in
+        declaration order, using the call's checked result type
+        (``RecordType``/``EnumType``) for the field names/types.  Exceptions
+        never reach here — the checker rejects exception-constructor-as-value.
+        """
+        typ = self._checked.node_types[call.node_id]
+        if isinstance(typ, EnumType):
+            assert cv.variant is not None, "enum ConstructorValue requires a variant"
+            field_names = list(typ.variants.get(cv.variant, {}).keys())
+        else:
+            assert isinstance(typ, RecordType), (
+                "positional constructor value must build a record or enum"
+            )
+            field_names = list(typ.fields.keys())
+        arg_values: dict[str, Value] = {
+            fname: self._eval_expr(arg, scope)
+            for fname, arg in zip(field_names, call.args, strict=True)
+        }
+        return self._construct_runtime_value(typ, cv.variant, arg_values)
+
+    def _construct_runtime_value(
+        self,
+        typ: Type | None,
+        variant_name: str | None,
+        arg_values: dict[str, Value],
+    ) -> Value:
+        """Build a record/enum/exception runtime value from evaluated field values.
+
+        Shared construction core for both the named-arg path
+        (``_build_constructor_value``) and the positional value-call path
+        (``_build_constructor_value_positional``).  Performs per-field coercion
+        against the resolved ``typ`` (the checked result type).
+        """
+        from agm.agl.typecheck.types import ExceptionType as ExcType
 
         if isinstance(typ, RecordType):
             coerced = {
@@ -1321,6 +1372,7 @@ class Interpreter:
         assert isinstance(typ, EnumType), (
             "constructor type must be record, enum, or exception"
         )
+        assert variant_name is not None, "variant is required for EnumType"
         variant_fields = typ.variants.get(variant_name, {})
         coerced2 = {
             fname: _coerce(fval, variant_fields[fname])
@@ -1717,6 +1769,9 @@ def _describe_value(value: Value) -> str:
         return "unit"
     if isinstance(value, AgentValue):
         return "agent"
+    if isinstance(value, ConstructorValue):
+        # A first-class constructor's static type is a FunctionType.
+        return "function"
     # Closure is the only remaining Value member.
     assert isinstance(value, Closure), f"unexpected value kind: {type(value).__name__}"
     return "function"

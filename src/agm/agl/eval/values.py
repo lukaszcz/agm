@@ -267,6 +267,24 @@ class AgentValue:
     name: str
 
 
+@dataclass(frozen=True, slots=True)
+class ConstructorValue:
+    """A first-class constructor used as a callable value — opaque.
+
+    Carries only the owner/variant identity needed to build a record or enum
+    at the call site.  Field order and types (and concreteness) come from the
+    call site's checked result type; type arguments are erased — never
+    represented at runtime.  Like ``AgentValue`` it is not renderable or
+    comparable by the language.
+
+    ``owner_name`` is the owning type name; ``variant`` is the enum variant
+    name, or ``None`` for a record constructor.
+    """
+
+    owner_name: str
+    variant: str | None
+
+
 @dataclass(slots=True)
 class Closure:
     """A first-class function value — a lambda or def closure.
@@ -306,5 +324,6 @@ Value = (
     | ExceptionValue
     | UnitValue
     | AgentValue
+    | ConstructorValue
     | Closure
 )

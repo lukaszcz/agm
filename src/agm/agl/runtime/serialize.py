@@ -27,6 +27,7 @@ from agm.agl.eval.values import (
     AgentValue,
     BoolValue,
     Closure,
+    ConstructorValue,
     DecimalValue,
     DictValue,
     EnumValue,
@@ -74,6 +75,8 @@ def value_to_json_obj(value: Value) -> object:
         raise TypeError("UnitValue has no JSON representation")
     if isinstance(value, AgentValue):
         raise TypeError("AgentValue has no JSON representation")
+    if isinstance(value, ConstructorValue):
+        raise TypeError("ConstructorValue has no JSON representation")
     if isinstance(value, Closure):
         raise TypeError("Closure has no JSON representation")
     assert_never(value)  # pragma: no cover

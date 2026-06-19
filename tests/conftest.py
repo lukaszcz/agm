@@ -12,6 +12,53 @@ import pytest
 
 from agm.core import dry_run
 
+# Set to ``True`` once :func:`pytest_configure` has successfully detached the
+# current (test-running) process from its controlling terminal.  Consulted by
+# the ``tests/test_tty_isolation.py`` regression guard.
+CONTROLLING_TTY_DETACHED = False
+
+
+def _detach_from_controlling_terminal() -> None:
+    """Put this process in a new session so it has no controlling terminal.
+
+    Tests spawn many external processes — interactive shells through the
+    workspace-shell wrapper (``bash -i`` / ``zsh -i``), the fake ``tmux`` shell
+    script, runner/selector scripts, ``git``.  Each of these opens ``/dev/tty``
+    on startup.  When the suite runs in a real terminal and one of those
+    processes reads the controlling terminal while *not* in the foreground
+    process group, the kernel raises ``SIGTTIN`` and suspends the whole
+    ``just check`` job — the intermittent ``zsh: suspended (tty input)`` hang.
+
+    ``os.setsid`` drops the controlling terminal entirely, so ``/dev/tty`` opens
+    fail with ``ENXIO`` (exactly as under CI / an agent harness) and ``SIGTTIN``
+    can never fire.  This makes the suite behave identically regardless of how
+    it is launched and removes a whole class of concurrency-sensitive hangs.
+
+    ``setsid`` fails for a process-group leader; the project always runs tests
+    via ``uv run`` (so pytest is a child, never the leader), but we degrade
+    gracefully if that ever changes.
+    """
+    global CONTROLLING_TTY_DETACHED
+    try:
+        os.setsid()
+    except OSError:
+        # Already a session/group leader — leave the disposition unchanged.
+        return
+    CONTROLLING_TTY_DETACHED = True
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Detach test-running processes from the controlling terminal.
+
+    Runs once per process.  Under ``-n auto`` only the xdist *workers* execute
+    tests, so the controller stays attached (it owns terminal reporting); each
+    worker detaches.  Without xdist the single process runs tests and detaches.
+    """
+    is_xdist_worker = hasattr(config, "workerinput")
+    xdist_active = getattr(config.option, "dist", "no") != "no"
+    if is_xdist_worker or not xdist_active:
+        _detach_from_controlling_terminal()
+
 
 @pytest.fixture()
 def default_sigint() -> Generator[None, None, None]:

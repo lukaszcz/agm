@@ -13,8 +13,4 @@ Parser-contract tests may mock handlers to verify the CLI surface maps accepted 
 and arguments to command fields. Private helper tests should remain only when the helper
 is a pure, stable contract that is clearer to verify directly than through a command.
 
-The e2e backbone in `tests/test_e2e.py` covers command behavior for `close`,
-`open`, `dep new`, `setup`, `config cp/env`, `wt new/remove`, `loop`, `run`
-with sandbox limits, `pull`, `fetch`, and the `tmux` subcommands. Add new
-command-behavior coverage there before deleting lower-level tests for the
-same path.
+The e2e backbone in `tests/test_e2e.py` covers command behavior for all commands. Add new command-behavior coverage there before deleting lower-level tests for the same path.

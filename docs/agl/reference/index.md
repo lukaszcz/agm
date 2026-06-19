@@ -26,8 +26,8 @@ oriented orchestration language whose core ideas are:
   passed, and returned.
 - **Mutability is explicit.** `let` binds immutably, `var` binds mutably,
   `:=` updates; a single `=` is the equality operator, never assignment.
-- **Failures are exceptions.** Parse failures, loop exhaustion, match
-  failures, recursion depth, and shell errors are typed, catchable exceptions.
+- **Failures are exceptions.** Parse failures, cast failures, loop exhaustion,
+  match failures, recursion depth, and shell errors are typed, catchable exceptions.
 - **Blocks use indentation**, with deterministic inline forms for one-liner
   workflows.
 
@@ -70,9 +70,9 @@ until final is Pass
 | ------- | -------- |
 | [Lexical structure](lexical-structure.md) | Source text, comments, indentation and layout, keywords, tokens, operator precedence |
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, `agent`, function types), `record`/`enum`/`type` declarations, prelude types (`ExecResult`, `ParsePolicy`), assignability |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, `agent`, function types), `record`/`enum`/`type` declarations, prelude types (`ExecResult`, `ParsePolicy`), assignability, casts and convertibility (`as`/`as?`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `program`, `agent`, `def`, lexical scoping, shadowing |
-| [Expressions](expressions.md) | Literals, constructors, calls, operators, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
+| [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `parse_json`, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Pattern matching](pattern-matching.md) | Patterns, matching semantics, exhaustiveness |
 | [Control flow](control-flow.md) | `if`, `case`, `do … until` loops |

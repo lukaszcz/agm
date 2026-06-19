@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "invalid_int_cast_exposes_fields",
+      "params": {"value": "abc", "target": "int"},
+      "expect": {
+        "stdout": "source: text\ntarget: int\nraw: abc\nhas_message: true\nhas_trace_id: true\n"
+      }
+    },
+    {
+      "name": "valid_int_cast_no_error",
+      "params": {"value": "42", "target": "int"},
+      "expect": {
+        "stdout": "int: 42\n"
+      }
+    },
+    {
+      "name": "invalid_decimal_cast_exposes_fields",
+      "params": {"value": "xyz", "target": "decimal"},
+      "expect": {
+        "stdout": "source: text\ntarget: decimal\nraw: xyz\nhas_message: true\nhas_trace_id: true\n"
+      }
+    },
+    {
+      "name": "valid_decimal_cast_no_error",
+      "params": {"value": "3.14", "target": "decimal"},
+      "expect": {
+        "stdout": "decimal: 3.14\n"
+      }
+    }
+  ]
+}

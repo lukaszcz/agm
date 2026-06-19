@@ -1,0 +1,30 @@
+# Casts as sub-expressions: inside let/var bindings, string interpolation,
+# arithmetic, and accumulation loops.  Demonstrates that cast expressions
+# compose naturally with the rest of the language.
+param a
+param b
+param label
+
+# Cast in let: parse two text params into ints, do arithmetic
+let x = a as int
+let y = b as int
+let sum = x + y
+let product = x * y
+
+# Cast in string interpolation: render an int as text inline
+let msg = "sum of ${a} and ${b} is ${sum as text}"
+print msg
+
+# Chained: int as json as text (renders through JSON representation)
+print "json-repr of sum: ${sum as json as text}"
+
+# Cast in var + accumulation
+var total: int = 0
+total := total + (a as int)
+total := total + (b as int)
+total := total + (a as int)
+print "accumulated: ${total as text}"
+
+# label annotated with int cast rendered in interpolation
+let annotated = "${label}: result=${product as text}"
+print annotated

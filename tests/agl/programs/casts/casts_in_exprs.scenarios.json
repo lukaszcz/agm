@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "small_positive",
+      "params": {"a": "3", "b": "5", "label": "test"},
+      "expect": {
+        "stdout": "sum of 3 and 5 is 8\njson-repr of sum: 8\naccumulated: 11\ntest: result=15\n"
+      }
+    },
+    {
+      "name": "mixed_sign",
+      "params": {"a": "10", "b": "-2", "label": "calc"},
+      "expect": {
+        "stdout": "sum of 10 and -2 is 8\njson-repr of sum: 8\naccumulated: 18\ncalc: result=-20\n"
+      }
+    },
+    {
+      "name": "both_zero",
+      "params": {"a": "0", "b": "0", "label": "zeros"},
+      "expect": {
+        "stdout": "sum of 0 and 0 is 0\njson-repr of sum: 0\naccumulated: 0\nzeros: result=0\n"
+      }
+    }
+  ]
+}

@@ -63,8 +63,13 @@ variable, agent, or function names:
 
 ```text
 record enum type param program agent config def fn let var do until if else
-case of try catch raise as and or not is in true false null unit
+case of try catch raise as as? and or not is in true false null unit
 ```
+
+**`as?`** is a single reserved keyword/token — the `?` is part of the
+lexeme. There is no whitespace permitted between `as` and `?`; with
+whitespace, `as` is the cast keyword and `?` would start a separate (invalid)
+token. `as?` is always reserved and cannot be used as an identifier.
 
 **Removed from v1:** `pass` and `print` are **no longer reserved** in v2.
 `pass`'s role is taken by the unit literal `()`. `print` is a built-in
@@ -218,18 +223,24 @@ From loosest to tightest binding (the bottom binds tightest):
 | 4 | `=` `!=` `<` `<=` `>` `>=` `in` `is` `is not` | **non-associative** |
 | 5 | `+` `-` | left |
 | 6 | `*` `/` | left |
-| 7 | `-` (unary prefix) | — |
-| 8 | function application (single-arg sugar) | **non-chaining** |
-| 9 | `.field` access, `.Variant` qualification, `[index]`, `( args )` call | left |
-| 10 | atoms: literals, names, `( expr )`, `()` unit, templates | — |
+| 7 | `as` `as?` (cast / convertibility test) | left |
+| 8 | `-` (unary prefix) | — |
+| 9 | function application (single-arg sugar) | **non-chaining** |
+| 10 | `.field` access, `.Variant` qualification, `[index]`, `( args )` call | left |
+| 11 | atoms: literals, names, `( expr )`, `()` unit, templates | — |
 
-**Application (level 8)** is the single-argument call sugar (`print x`,
+**Cast operators (level 7)** — `as` and `as?` — sit between unary `-` and
+`* /`. They are left-associative: `x as json as text` = `(x as json) as text`.
+See [Types](types.md#casts-and-convertibility) and
+[Expressions](expressions.md#casts-as-and-as) for semantics and examples.
+
+**Application (level 9)** is the single-argument call sugar (`print x`,
 `ask "…"`, `f val`). It binds tighter than all binary operators:
 `print x + 1` parses as `(print x) + 1`. Application is **non-chaining**:
 `f g x` is a parse error — only one juxtaposition per expression. To chain,
 use parentheses: `f(g(x))`.
 
-**Calls with parentheses (level 9)** are left-associative postfix and
+**Calls with parentheses (level 10)** are left-associative postfix and
 support multiple arguments: `f(a, b)`, `f(a)(b)` (curried — not yet
 supported, but syntactically the grammar allows it for future use).
 

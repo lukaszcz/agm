@@ -36,9 +36,14 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
   statement/expression variants. `If` without `else` yields `unit`; `If` with
   `else` yields the common branch type.
 - `Call(callee, args, named_args)` — the single call node for all invocations
-  (user `def`s, built-ins `print`/`exec`/`ask`, function values). Both the
-  parenthesized form `f(a, b, name: v)` and the single-arg sugar `f x` desugar
-  to `Call`.
+  (user `def`s, built-ins `print`/`exec`/`ask`/`parse_json`, function values).
+  Both the parenthesized form `f(a, b, name: v)` and the single-arg sugar `f x`
+  desugar to `Call`.
+- `Cast(expr, type_expr, is_test)` — the `as` / `as?` cast node. `is_test=True`
+  for `as?` (yields `bool`, never raises); `is_test=False` for `as` (converts
+  or raises `CastError`). The typechecker validates the source–target pair
+  against the cast specification side table (`cast_specs`) and records whether
+  the cast is total or fallible.
 - `IndexAccess` — postfix list/dictionary indexing. The lexer emits a distinct
   adjacent-bracket token so `xs[0]` indexes while `f [0]` remains call sugar
   with a list literal argument.
@@ -87,7 +92,7 @@ a `let`/`var` binder scopes over the remaining items of the enclosing `Block`.
 A block ending in a `let` with no continuation is a static error.
 
 Built-in call classification: when the `Call.callee` is a `VarRef` whose name
-is `print`, `exec`, or `ask`, the resolver records the `BuiltinKind` in
+is `print`, `exec`, `ask`, or `parse_json`, the resolver records the `BuiltinKind` in
 `builtin_calls` and skips the ordinary variable lookup for that name.
 
 ## Type system
@@ -115,6 +120,14 @@ Built-in typing rules (in `agm.agl.typecheck.checker`) consult `builtin_calls`:
   expected type exists), the checker sets `OutputContractSpec.structured_exec =
   True`; otherwise the parsed form is selected and stdout is parsed into the
   target type.
+- **`PARSE_JSON`** — single-argument `text → json` rule; always strict parsing;
+  raises `JsonParseError` on malformed input.
+
+**Cast type checking.** `Cast` nodes are checked against a `cast_specs` side
+table in `agm.agl.typecheck.casts` that encodes the permitted source–target
+pairs and their total/fallible classification. Invalid pairs (e.g. `record as
+json`, `bool as int`, casts to/from `unit`/`agent`/function types) are static
+errors. `as?` nodes are always typed as `bool` regardless of source/target.
 
 The prelude types `ExecResult` (a record with `stdout`, `stderr`, `exit_code`,
 `timed_out`) and `ParsePolicy` (enum `Abort | Retry(n: int)`) are registered as
@@ -165,6 +178,14 @@ All calls go through the unified call dispatch in `Interpreter._eval_call`:
 - **Parsed form** — parses stdout into the target type via the codec pipeline,
   raises `ExecError` on nonzero exit or parse failure; mirrors the pre-v2
   behavior.
+
+**Cast and `parse_json` evaluation** share a strict-parse/validate conversion
+helper in `agm.agl.runtime.convert` (`convert_value`). This helper handles
+strict JSON parsing (no lenient recovery), schema validation, and the full
+source→target conversion matrix. Both `as` casts on `text`/`json` sources and
+the `parse_json` built-in call into this helper — they always use strict
+parsing. Agent-output and `exec`-output parsing continues to use the
+existing configurable strict/lenient codec pipeline and is not affected.
 
 Agent-value dispatch: `_eval_ask_call` extracts the `AgentValue` from the
 `agent:` named argument (or uses the default agent when absent) and issues the

@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "integral_decimal_succeeds",
+      "params": {"d": 3.0},
+      "expect": {
+        "stdout": "ok: 3\nnext: 4\n"
+      }
+    },
+    {
+      "name": "non_integral_decimal_raises",
+      "params": {"d": 3.5},
+      "expect": {
+        "stdout": "not integral: 3.5\ndecimal\nint\n"
+      }
+    },
+    {
+      "name": "zero_decimal_is_integral",
+      "params": {"d": 0.0},
+      "expect": {
+        "stdout": "ok: 0\nnext: 1\n"
+      }
+    },
+    {
+      "name": "negative_integral_decimal",
+      "params": {"d": -2.0},
+      "expect": {
+        "stdout": "ok: -2\nnext: -1\n"
+      }
+    },
+    {
+      "name": "nearly_whole_is_non_integral",
+      "params": {"d": 1.99},
+      "expect": {
+        "stdout": "not integral: 1.99\ndecimal\nint\n"
+      }
+    }
+  ]
+}

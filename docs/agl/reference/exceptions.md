@@ -224,6 +224,30 @@ prevented statically in normal programs — type errors, reads of undefined
 names, and `:=` on immutable bindings are all static errors — but the types
 exist, are catchable, and may be constructed and raised explicitly.
 
+### `CastError`
+
+A fallible `as` cast failed at runtime: the source value did not conform to
+the target type.
+
+```text
+source_type: text   # name of the source type, e.g. "json"
+target_type: text   # name of the target type, e.g. "int"
+raw: text           # text representation of the value that failed to convert
+```
+
+`CastError` is raised by `as` casts that are fallible (see
+[Types](types.md#casts-and-convertibility)). The `as?` form never raises —
+it reports failure as `false`.
+
+### `JsonParseError`
+
+The `parse_json` built-in received text that is not a well-formed JSON
+document ([Expressions](expressions.md#parse_json)).
+
+```text
+raw: text   # the input text that failed to parse
+```
+
 ### `Abort`
 
 The general-purpose user abort; carries only the base fields.
@@ -246,6 +270,8 @@ The general-purpose user abort; carries only the base fields.
 | Call-depth limit exceeded | `RecursionError` |
 | Non-exhaustive `case` at runtime | `MatchError` |
 | Division by zero | `ArithmeticError` |
+| Fallible `as` cast — source does not conform to target type | `CastError` |
+| `parse_json` — input is not well-formed JSON | `JsonParseError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 
 An exception that reaches the top of the program uncaught terminates the

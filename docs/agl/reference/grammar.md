@@ -168,7 +168,13 @@ cmp_op     ::= "=" | "!=" | "<" | "<=" | ">" | ">=" | "in"
               (* at most one comparison per expression: non-associative *)
 
 additive       ::= multiplicative (("+" | "-") multiplicative)*
-multiplicative ::= unary (("*" | "/") unary)*
+multiplicative ::= cast (("*" | "/") cast)*
+
+cast           ::= cast "as" type_expr      (* type cast; may raise CastError *)
+               | cast "as?" type_expr      (* convertibility test; yields bool *)
+               | unary
+               (* left-associative; "as?" is a single token — no whitespace *)
+
 unary          ::= "-" unary | juxt
 
 juxt           ::= postfix juxt_arg     (* single-arg sugar; non-chaining *)

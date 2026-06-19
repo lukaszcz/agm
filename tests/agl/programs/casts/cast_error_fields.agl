@@ -1,0 +1,24 @@
+# CastError field access: verifies that a caught CastError carries the correct
+# source_type, target_type, raw, message, and trace_id fields, and that they
+# can be used in downstream logic (interpolation, conditions, re-raise).
+param value
+param target
+
+# Attempt cast and inspect all fields on failure
+try
+  if target = "int" =>
+    let n = value as int
+    print "int: ${n}"
+  else =>
+    let d = value as decimal
+    print "decimal: ${d as text}"
+catch CastError as e =>
+  print "source: ${e.source_type}"
+  print "target: ${e.target_type}"
+  print "raw: ${e.raw}"
+  # message is non-empty
+  let has_msg = e.message as? text and e.message != ""
+  print "has_message: ${has_msg as text}"
+  # trace_id is a hex string (non-empty)
+  let has_id = e.trace_id != ""
+  print "has_trace_id: ${has_id as text}"

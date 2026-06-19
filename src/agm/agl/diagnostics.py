@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 # Re-export the canonical definition so existing callers keep working.
+from agm.agl.syntax.spans import UNKNOWN_SOURCE as UNKNOWN_SOURCE
 from agm.agl.syntax.spans import SourceSpan as SourceSpan
 
 
@@ -28,6 +29,12 @@ class Diagnostic:
     ``severity`` is ``"error"`` (the default) or ``"warning"``: warnings are
     reported to the user but, unlike errors, do not cause the run to fail (see
     ``RunResult.ok`` and the exit-code contract).
+    ``source_label`` is the display label of the source file this diagnostic
+    originated from (e.g. a canonical file path, ``"<agl>"``, ``"<repl>"``).
+    When set, it takes precedence over the ambient ``source_name`` argument
+    passed to :func:`format_diagnostic_location` / :func:`format_diagnostic`.
+    Populated automatically by :func:`diagnostic_from_span` from
+    ``span.source.label``.
     """
 
     message: str
@@ -36,6 +43,7 @@ class Diagnostic:
     end_line: int | None = None
     end_column: int | None = None
     severity: Literal["error", "warning"] = "error"
+    source_label: str | None = None
 
 
 def diagnostic_from_span(
@@ -44,7 +52,18 @@ def diagnostic_from_span(
     *,
     severity: Literal["error", "warning"] = "error",
 ) -> Diagnostic:
-    """Build a diagnostic pinned to a concrete source span."""
+    """Build a diagnostic pinned to a concrete source span.
+
+    When ``span.source`` is a real (non-default) ``SourceId``, the diagnostic's
+    ``source_label`` is populated from ``span.source.label`` so that multi-file
+    diagnostics identify their origin file.  When the span carries the default
+    ``UNKNOWN_SOURCE``, ``source_label`` is left as ``None`` so that callers
+    can still supply a ``source_name`` argument to the formatting functions —
+    preserving full backward compatibility for single-source callers.
+    """
+    source_label: str | None = (
+        span.source.label if span.source is not UNKNOWN_SOURCE else None
+    )
     return Diagnostic(
         message=message,
         line=span.start_line,
@@ -52,14 +71,24 @@ def diagnostic_from_span(
         end_line=span.end_line,
         end_column=span.end_col,
         severity=severity,
+        source_label=source_label,
     )
 
 
 def format_diagnostic_location(
     diagnostic: Diagnostic, *, source_name: str | None = "<agl>"
 ) -> str:
-    """Return a compiler-style source location for a diagnostic."""
-    prefix = f"{source_name}:" if source_name is not None else ""
+    """Return a compiler-style source location for a diagnostic.
+
+    The effective source identifier is determined in priority order:
+    1. ``diagnostic.source_label`` (set by :func:`diagnostic_from_span` from
+       the span's ``SourceId``) — takes precedence when set.
+    2. The ``source_name`` argument — used when ``source_label`` is ``None``.
+    """
+    effective_source: str | None = (
+        diagnostic.source_label if diagnostic.source_label is not None else source_name
+    )
+    prefix = f"{effective_source}:" if effective_source is not None else ""
     if diagnostic.column is None:
         return f"{prefix}{diagnostic.line}"
     if diagnostic.end_line is None or diagnostic.end_column is None:

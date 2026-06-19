@@ -323,6 +323,81 @@ always the floor, so every declared agent resolves and also backs `ask`.
 Runner strings (config or source hint) share the `%%` / `%{PROMPT_FILE}`
 prompt-file placeholder handling.
 
+## Source-aware spans
+
+Every `SourceSpan` carries a `SourceId` (a frozen dataclass with a `label: str`)
+in its `source` field (default: `UNKNOWN_SOURCE = SourceId("<agl>")`). The field
+is `compare=False` so spans from different files with identical positions compare
+equal — consistent with how `node_id` is excluded from AST-node equality.
+
+`parse_program` and `parse_program_seeded` accept an optional `source: SourceId`
+parameter. When supplied, every span the `AstBuilder` constructs — and the span
+of any `AglSyntaxError` raised during parsing — is stamped with that `SourceId`.
+The module loader (M2 Task C) passes `SourceId(label=str(canonical_path))` here so
+multi-file diagnostics identify the origin file.
+
+`Diagnostic` has an optional `source_label: str | None` field. `diagnostic_from_span`
+populates it from `span.source.label` for any non-default `SourceId`; for
+`UNKNOWN_SOURCE` spans it leaves `source_label` as `None`, preserving backward
+compatibility — existing callers that pass `source_name=` to `format_diagnostic`
+continue to see their supplied label.
+
+## Module-graph loading (`agm.agl.modules`)
+
+The `modules/` package implements the file-based module system load-and-graph
+layer (M2). It sits between the parser and the scope/typecheck passes; it
+produces no resolved or typed output — that is M3+.
+
+**Module identity.** A module is identified by a `ModuleId` (tuple of segments)
+in `modules/ids.py`. The `ENTRY_ID` sentinel (contains a NUL byte) keys the
+entry program. `ModuleId.relpath()` maps a module id to its relative file path
+(`foo/bar/baz.agl`).
+
+**Root set.** `modules/roots.py` provides `RootSet` — an unordered,
+canonicalized, deduplicated set of search roots. Roots are assembled from the
+invocation directory, global library root (`~/.agm/lib`), configured roots
+(origin-relative), and `-I` CLI flags. The set is unordered by design;
+`sorted_roots()` provides a stable order for diagnostics.
+
+**Resolver.** `modules/resolver.py` provides:
+- `resolve_module(module_id, roots)` — searches all roots for the file;
+  canonicalizes and deduplicates by canonical path; exactly one → ok; zero →
+  `ModuleNotFound` listing all searched roots; ≥2 distinct canonical files →
+  `AmbiguousModule`. No first-root-wins shadowing.
+- `expand_wildcard(prefix, roots)` — globs `<root>/<prefix>.agl` and
+  `<root>/<prefix>/**/*.agl` across all roots; maps each file to its `ModuleId`;
+  enforces global uniqueness; empty result → `ModulePrefixNotFound`. Returns a
+  `dict[ModuleId, Path]` ordered by `ModuleId`.
+
+**Loader.** `modules/loader.py` provides `load_graph(entry_source, *, entry_path, roots)`:
+1. Parse the entry source with `parse_program_seeded(start_id=0)`.
+2. BFS over transitive `ImportDecl`s; wildcard imports expand via
+   `expand_wildcard`. Each file is parsed with a monotonically growing
+   `start_id` seed so **node ids are globally unique (disjoint) across all
+   modules**.
+3. Terminate when a module id is already loaded — makes **cycles finite and
+   safe** (D8).
+4. Reject any import that resolves to the entry file's canonical path —
+   `ImportEntryError` (D9). No rejection for inline (`-c`) entries (no file
+   path).
+5. Compute SCCs via Tarjan's algorithm for diagnostics.
+6. Return `ModuleGraph{modules, entry_id, sccs}` where `modules` is
+   `{ModuleId: LoadedModule}` (entry keyed by `ENTRY_ID`).
+
+Each `LoadedModule` carries: `module_id`, `program` (the `Program` AST), `path`
+(canonical file path, `None` for inline entries), `source` (the `SourceId`
+stamped on every span), and `imports` (top-level `ImportDecl` nodes).
+
+**Errors.** `modules/errors.py` defines `ModuleNotFound`, `AmbiguousModule`,
+`ModulePrefixNotFound`, and `ImportEntryError` — all subclasses of `AglError`,
+each carrying a `SourceSpan` from the triggering import declaration so
+diagnostics are file-attributed.
+
+**Determinism.** All traversal is deterministic regardless of root-set or
+filesystem-discovery order: `sorted_roots()` orders roots, BFS queues are
+sorted by `ModuleId` before enqueuing, and `expand_wildcard` results are ordered
+by `ModuleId`. The SCC algorithm visits nodes in sorted order.
+
 ## Package layout and test locations
 
 | Package | Component | Tests |
@@ -336,6 +411,8 @@ prompt-file placeholder handling.
 | `agm.agl.runtime` | host API | `tests/test_agl_runtime.py` |
 | `agm.agl.repl` | incremental REPL session (UI-free) | `tests/test_agl_repl_session.py` |
 | `agm.commands.exec` | CLI command | `tests/test_exec_command.py` |
+| `agm.agl.syntax.spans` | `SourceId` / source-aware spans | `tests/test_agl_source_identity.py` |
+| `agm.agl.modules` | module-graph loading | `tests/test_agl_modules_ids.py`, `tests/test_agl_modules_roots.py`, `tests/test_agl_modules_resolver.py`, `tests/test_agl_modules_loader.py` |
 
 The end-to-end acceptance suite lives in `tests/test_agl_e2e.py` and
 `tests/agl/`. It is **green and part of the standing gate** — `just test` /

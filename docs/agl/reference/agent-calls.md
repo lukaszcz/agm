@@ -73,7 +73,7 @@ to `ask` except via the `agent:` parameter.
 ### Agent declarations
 
 ```ebnf
-agent_decl ::= "agent" VAR_NAME ("=" STRING)?
+agent_decl ::= "agent" NAME ("=" STRING)?
 ```
 
 `agent` declarations are valid **only at the program root**. Each declared
@@ -128,6 +128,37 @@ invalid for a `unit` target.
 
 You normally never write "Return JSON matching …" yourself — the type
 annotation is the source of truth.
+
+### Target types may not be type variables
+
+The target type of `ask`, of `exec`, and of the `ask-request` builder must be
+a **concrete** type. It may not be — and may not contain — a type variable of
+an enclosing generic `def` ([Generics](generics.md)). The contract for an
+agent call (codec, derived JSON Schema, format instructions, validation) is
+built from the type that is statically known at the call site, and a type
+variable is opaque at that point: there is nothing to derive a schema from.
+
+```agl
+def fetch[T]() -> T =
+  ask::[T]("give me a value")   # static error: target type is a type variable
+```
+
+This applies whether the type variable is the whole target (`ask::[T](…)`) or
+merely appears inside it (`ask::[list[T]](…)` is equally rejected). It also
+applies when the target is inferred from an enclosing annotation typed by a
+type variable (`let r: T = ask(…)`).
+
+A **concrete instance** of a generic type is perfectly fine, because it is no
+longer a type variable — only its erased instantiation matters to the
+contract:
+
+```agl
+enum Option[T]
+  | none
+  | some(value: T)
+
+let n: Option[int] = ask("Pick a number, or nothing.", agent: picker)
+```
 
 ## Named parameters
 

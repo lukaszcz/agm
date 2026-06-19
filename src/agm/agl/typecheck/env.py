@@ -510,6 +510,11 @@ class TypeEnvironment:
                 return self.instantiate_nominal(name, resolved_args)
             alias_expr = self._alias_targets.get(name)
             if alias_expr is not None:
+                if name in _resolving:
+                    raise AglTypeError(
+                        f"Type alias '{name}' is part of a cycle.",
+                        span=eff_span,
+                    )
                 alias_params = self._alias_type_params.get(name, ())
                 if len(resolved_args) != len(alias_params):
                     raise AglTypeError(

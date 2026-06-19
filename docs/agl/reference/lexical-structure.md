@@ -77,8 +77,8 @@ arguments, dict shorthand keys, and postfix field access). It cannot be used
 as a variable binder, pattern binder, or catch binder.
 
 **Contextual keywords** — `ask` and `exec` are NOT reserved; they lex as
-plain `VAR_NAME` tokens and are given their built-in meaning by the scope
-pass. They may not be declared with `let`, `var`, or `param`, may not be
+plain `NAME` tokens and are given their built-in meaning during scope
+resolution. They may not be declared with `let`, `var`, or `param`, may not be
 declared as agents or functions, and may not appear as pattern or catch
 binders — but they remain legal as field names.
 
@@ -109,17 +109,28 @@ the operator characters `-`, `?`, `!`, `<`, `>`, `=` may appear *inside*
 an identifier, so names like `ask-prompt`, `ask?`, and `do-it-now!` scan as a
 single token.
 
+There is a **single** lexical class of identifier — the grammar terminal
+`NAME`. It is used for every name in the language: type names, record/enum
+declarations and their variant constructors, type aliases, variables, fields,
+agent names, function names, parameter names, and type-parameter names.
+
 | Token | Start | Used for |
 | ----- | ----- | -------- |
-| `TYPE_NAME` | an uppercase letter (`A`–`Z` or any Unicode letter whose first character `.isupper()`) | Record, enum, alias, and exception type names; enum variant constructors |
-| `VAR_NAME` | a lowercase letter (`a`–`z`), any Unicode letter that is not uppercase, or `_` | Variables, fields, agent names, function names, parameter names |
+| `NAME` | a letter (any Unicode letter, not just ASCII) or `_` | Every kind of name: types, constructors, variables, fields, agents, functions, parameters, type parameters |
 
-Capitalization is significant: a name starting with an uppercase letter is a
-type/constructor name; anything else is a value-level name.  Scripts without
-case (e.g. CJK ideographs) have no uppercase form and therefore always lex as
-`VAR_NAME`.
+**Capitalization carries no syntactic or semantic meaning.** The case of an
+identifier's first letter never classifies it: `option` and `Option`, `some`
+and `Some`, `box` and `Box` are all equally valid as type names, value names,
+constructors, or functions. Whether a name denotes a type or a value is
+determined entirely by how it is declared and the position it appears in, not
+by its spelling.
 
-The single underscore `_` is lexically an ordinary `VAR_NAME`; in pattern
+Type names and value names live in **separate namespaces**, so a `record` or
+`enum` declaration may introduce a type name and a same-spelled value
+constructor without collision (see
+[Bindings and scope](bindings-and-scope.md)).
+
+The single underscore `_` is lexically an ordinary `NAME`; in pattern
 and `catch` positions it is interpreted as the wildcard
 ([Pattern matching](pattern-matching.md)).
 
@@ -133,17 +144,17 @@ characters that break an identifier scan.
 
 | Source | Tokens | |
 | ----- | ----- | - |
-| `ask-prompt` | `VAR_NAME "ask-prompt"` | one identifier |
-| `a - b` | `VAR_NAME "a"`, `MINUS "-"`, `VAR_NAME "b"` | spaces break the identifier, `-` is an operator |
-| `a.b` | `VAR_NAME "a"`, `DOT "."`, `VAR_NAME "b"` | `.` is a delimiter, always an operator |
-| `a -> b` | `VAR_NAME "a"`, `THIN_ARROW "->"`, `VAR_NAME "b"` | arrow operator, whitespace-delimited |
-| `a->b` | `VAR_NAME "a->b"` | one identifier (no spaces) |
-| `x != 3` | `VAR_NAME "x"`, `NEQ "!="`, `INT "3"` | not-equal operator, whitespace-delimited |
-| `x!=3` | `VAR_NAME "x!=3"` | one identifier (no spaces) |
-| `a+b` | `VAR_NAME "a+b"` | one identifier (`+` is not a delimiter) |
-| `a + b` | `VAR_NAME "a"`, `PLUS "+"`, `VAR_NAME "b"` | spaces break the identifier, `+` is an operator |
-| `n*x` | `VAR_NAME "n*x"` | one identifier (`*` is not a delimiter) |
-| `foo"bar` | `VAR_NAME "foo\"bar"` | one identifier (`"` is not a delimiter) |
+| `ask-prompt` | `NAME "ask-prompt"` | one identifier |
+| `a - b` | `NAME "a"`, `MINUS "-"`, `NAME "b"` | spaces break the identifier, `-` is an operator |
+| `a.b` | `NAME "a"`, `DOT "."`, `NAME "b"` | `.` is a delimiter, always an operator |
+| `a -> b` | `NAME "a"`, `THIN_ARROW "->"`, `NAME "b"` | arrow operator, whitespace-delimited |
+| `a->b` | `NAME "a->b"` | one identifier (no spaces) |
+| `x != 3` | `NAME "x"`, `NEQ "!="`, `INT "3"` | not-equal operator, whitespace-delimited |
+| `x!=3` | `NAME "x!=3"` | one identifier (no spaces) |
+| `a+b` | `NAME "a+b"` | one identifier (`+` is not a delimiter) |
+| `a + b` | `NAME "a"`, `PLUS "+"`, `NAME "b"` | spaces break the identifier, `+` is an operator |
+| `n*x` | `NAME "n*x"` | one identifier (`*` is not a delimiter) |
+| `foo"bar` | `NAME "foo\"bar"` | one identifier (`"` is not a delimiter) |
 
 This mirrors a Lisp-like maximal-munch identifier rule: scan for as long as
 possible until a disallowed character.  Use spaces around operators when you

@@ -3,7 +3,8 @@
 # the generic `def` bound as a first-class value through an expected function
 # type (D5) and then applied. Also exercises a `let` annotation inside a generic
 # def body that references the def's type variable to build a `list[T]`
-# (`singleton`), instantiated at int and text.
+# (`singleton`), instantiated at int and text. Also exercises a parameterized
+# type alias (`Seq[A]`) instantiated at a concrete element type.
 def id[T](x: T) -> T = x
 
 # A generic def whose body uses a `let` annotation referencing the def's own
@@ -11,6 +12,9 @@ def id[T](x: T) -> T = x
 def singleton[T](x: T) -> list[T] =
   let single: list[T] = [x]
   single
+
+# A parameterized type alias: `Seq[A]` abbreviates `list[A]`.
+type Seq[A] = list[A]
 
 record Tag
   name: text
@@ -39,3 +43,7 @@ let ys = singleton(11)
 print ys[0]
 let zs = singleton("solo")
 print zs[0]
+
+# A value annotated with the parameterized alias instantiated at `text`.
+let names: Seq[text] = ["alpha", "beta"]
+print names[1]

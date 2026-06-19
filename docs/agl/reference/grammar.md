@@ -3,8 +3,9 @@
 [← Index](index.md)
 
 The collected surface grammar. Lexical tokens (`NEWLINE`, `INDENT`,
-`DEDENT`, identifiers, numbers, template tokens) and the layout rules that
-produce them are specified in [Lexical structure](lexical-structure.md).
+`DEDENT`, the single identifier terminal `NAME`, numbers, template tokens)
+and the layout rules that produce them are specified in
+[Lexical structure](lexical-structure.md).
 
 Notation: `::=` defines a production; `|` separates alternatives; `?`, `*`,
 `+` mark optional and repeated elements; quoted strings are literal tokens.
@@ -38,23 +39,29 @@ suite ::= NEWLINE INDENT block DEDENT
 ## Type declarations
 
 ```ebnf
-record_def      ::= "record" TYPE_NAME NEWLINE INDENT field_def
+record_def      ::= "record" NAME type_params? NEWLINE INDENT field_def
                     (NEWLINE field_def)* NEWLINE? DEDENT
-field_def       ::= VAR_NAME ":" type_expr
+field_def       ::= NAME ":" type_expr
 
-enum_def        ::= "enum" TYPE_NAME variant_def+
-variant_def     ::= "|" TYPE_NAME variant_payload?
+enum_def        ::= "enum" NAME type_params? variant_def+
+variant_def     ::= "|" NAME variant_payload?
 variant_payload ::= "(" field_list? ")"
 field_list      ::= field_inline ("," field_inline)* ","?
-field_inline    ::= VAR_NAME ":" type_expr
+field_inline    ::= NAME ":" type_expr
 
-type_alias      ::= "type" TYPE_NAME "=" type_expr
+type_alias      ::= "type" NAME type_params? "=" type_expr
 
-param_decl      ::= "param" VAR_NAME (":" type_expr)? ("=" expr)?
-program_decl    ::= "program" VAR_NAME
+type_params     ::= "[" NAME ("," NAME)* "]"
 
-agent_decl      ::= "agent" VAR_NAME ("=" STRING)?
+param_decl      ::= "param" NAME (":" type_expr)? ("=" expr)?
+program_decl    ::= "program" NAME
+
+agent_decl      ::= "agent" NAME ("=" STRING)?
 ```
+
+A `type_params` list declares the declaration's type parameters; each is an
+ordinary `NAME` in scope as a type throughout the declaration's body. See
+[Generics](generics.md).
 
 The runner string of an `agent` declaration must be a literal string with no
 `${…}` interpolation; an interpolation hole is a static error.
@@ -64,7 +71,8 @@ The runner string of an `agent` declaration must be a literal string with no
 ```ebnf
 type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
-            | TYPE_NAME
+            | NAME
+            | NAME "[" type_expr ("," type_expr)* "]"   (* applied type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | func_type
@@ -73,24 +81,30 @@ func_type ::= "(" type_list? ")" "->" type_expr
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
+`NAME "[" … "]"` is an applied type: a generic declaration instantiated at
+concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
+`list[T]` and `dict[text, V]` are the same form.
+
 ## Function declarations
 
 ```ebnf
-func_def   ::= "def" VAR_NAME "(" params? ")" "->" type_expr "=" expr
+func_def   ::= "def" NAME type_params? "(" params? ")" "->" type_expr "=" expr
 params     ::= param ("," param)* ","?
-param      ::= VAR_NAME ":" type_expr ("=" expr)?
+param      ::= NAME ":" type_expr ("=" expr)?
 ```
 
 The `def` body is a single expression (which may be a `block`). Defaulted
-parameters must follow all required parameters.
+parameters must follow all required parameters. An optional `type_params` list
+after the function name makes the `def` generic (e.g. `def id[T](x: T) -> T`);
+see [Generics](generics.md).
 
 ## Bindings and mutation
 
 ```ebnf
-let_decl ::= "let" VAR_NAME (":" type_expr)? "=" expr
-var_decl ::= "var" VAR_NAME (":" type_expr)? "=" expr
+let_decl ::= "let" NAME (":" type_expr)? "=" expr
+var_decl ::= "var" NAME (":" type_expr)? "=" expr
 assign_expr ::= assign_target ":=" expr
-assign_target ::= VAR_NAME ("[" expr "]")*
+assign_target ::= NAME ("[" expr "]")*
 ```
 
 Assignment yields `unit`. In an indexed assignment target, each opening `[` must be
@@ -131,8 +145,8 @@ case_branch  ::= pattern "=>" (suite | or_expr)
 ```ebnf
 try_expr      ::= "try" (suite | inline_body) catch_clause+
 catch_clause  ::= "catch" catch_pattern "=>" (suite | or_expr)
-catch_pattern ::= TYPE_NAME ("as" VAR_NAME)?
-                | "_" ("as" VAR_NAME)?
+catch_pattern ::= NAME ("as" NAME)?
+                | "_" ("as" NAME)?
 ```
 
 ## Patterns
@@ -140,14 +154,19 @@ catch_pattern ::= TYPE_NAME ("as" VAR_NAME)?
 ```ebnf
 pattern        ::= "_"
                  | INT | DECIMAL | "true" | "false" | "null" | STRING
-                 | VAR_NAME
+                 | NAME
                  | constructor_pattern
 
-constructor_pattern ::= TYPE_NAME ("." TYPE_NAME)? ("(" pattern_fields? ")")?
+constructor_pattern ::= NAME ("." NAME)? ("(" pattern_fields? ")")?
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
-pattern_field  ::= VAR_NAME
-                 | VAR_NAME ":" pattern
+pattern_field  ::= NAME
+                 | NAME ":" pattern
 ```
+
+A `constructor_pattern` with the `NAME "." NAME` form is a **qualified**
+variant pattern (`Option.some(value)`), naming the owning enum and the variant;
+it is required when an unqualified variant name is ambiguous across enums
+([Generics](generics.md), [Pattern matching](pattern-matching.md)).
 
 A `STRING` pattern may not contain interpolation.
 
@@ -176,21 +195,19 @@ juxt           ::= postfix juxt_arg     (* single-arg sugar; non-chaining *)
 
 juxt_arg       ::= atom_no_call        (* excludes "("-led forms and calls *)
 
-postfix        ::= postfix "." VAR_NAME            (* field access *)
-               | postfix "." TYPE_NAME             (* variant qualification *)
+postfix        ::= postfix "." NAME                (* field access OR variant qualification *)
                | postfix "(" arg_list? ")"         (* call with parentheses *)
                | postfix "[" expr "]"              (* adjacent bracket only *)
                | atom
 
-typed_call     ::= VAR_NAME "::" "[" type_expr "]" "(" arg_list? ")"  (* typed call *)
+typed_call     ::= NAME "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" ")"                           (* unit literal *)
                | list_literal
                | dict_literal
-               | TYPE_NAME                         (* bare constructor *)
-               | VAR_NAME                          (* variable reference *)
-               | typed_call                        (* e.g. ask-request::[Review](…) *)
+               | NAME                              (* variable / constructor reference *)
+               | typed_call                        (* e.g. id::[int](5), some::[int](value: 1) *)
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | lambda_expr
@@ -200,13 +217,21 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"
-               | list_literal | dict_literal | TYPE_NAME | VAR_NAME
-               | template | postfix "." VAR_NAME | postfix "." TYPE_NAME
+               | list_literal | dict_literal | NAME
+               | template | postfix "." NAME
 
-qualified_constructor ::= TYPE_NAME ("." TYPE_NAME)?
+qualified_constructor ::= NAME ("." NAME)?
 
 raise_expr ::= "raise" expr
 ```
+
+A bare `NAME` atom is resolved by scope and position: it may name a variable,
+an agent, a record constructor, an enum variant, or a generic `def`/constructor
+used as a first-class value. The `typed_call` form carries explicit type
+arguments to a generic `def` or constructor (`id::[int](5)`,
+`some::[int](value: 1)`, `apply::[int, int](…)`); see [Generics](generics.md).
+A `postfix "." NAME` is either a field access or a variant qualification,
+disambiguated by the resolved type of the left operand.
 
 ## Lambda expressions
 
@@ -222,7 +247,7 @@ the body. Parameter types are always required.
 ```ebnf
 arg_list  ::= arg ("," arg)* ","?
 arg       ::= expr                  (* positional *)
-            | VAR_NAME ":" expr     (* named *)
+            | NAME ":" expr         (* named *)
 ```
 
 Named arguments are available at declared-name call sites (`def`s and
@@ -235,7 +260,7 @@ list_literal ::= "[" (expr ("," expr)* ","?)? "]"
 
 dict_literal ::= "{" (dict_entry ("," dict_entry)* ","?)? "}"
 dict_entry   ::= STRING ":" expr        (* no interpolation in keys *)
-               | VAR_NAME ":" expr      (* shorthand for the string key *)
+               | NAME ":" expr          (* shorthand for the string key *)
 ```
 
 ## Templates
@@ -253,7 +278,7 @@ dedented as described in [Lexical structure](lexical-structure.md).
 ## Config pragmas
 
 ```ebnf
-config_pragma ::= "config" VAR_NAME "=" config_value
+config_pragma ::= "config" NAME "=" config_value
 config_value  ::= "true" | "false" | INT | DECIMAL | STRING
 ```
 

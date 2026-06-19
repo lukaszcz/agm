@@ -24,13 +24,18 @@ binder     ::= let_decl | var_decl
 The following are **root-only**: a static error if nested inside a block.
 
 - **Type declarations** (`record`, `enum`, `type`) — collected program-wide
-  before checking begins; forward references are fine.
+  before checking begins; forward references are fine. Each may be **generic**,
+  declaring type parameters in a bracketed list after the name
+  (`record Box[T]`, `enum Option[T]`, `type Pair[A, B] = …`); see
+  [Generics](generics.md).
 - **`param` declarations** — the program's host/config/CLI-supplied parameters.
 - **`program` declaration** — the program name used for params config lookup.
 - **`agent` declarations** — the names of the agents the program may call.
 - **`def` declarations** — user-defined functions. Like type declarations,
   all `def`s at the program root are collected before any expression is
-  evaluated, enabling mutual recursion (see [Functions](functions.md)).
+  evaluated, enabling mutual recursion (see [Functions](functions.md)). A `def`
+  may also be **generic** (`def id[T](x: T) -> T = x`); see
+  [Generics](generics.md).
 
 ### The block's value
 

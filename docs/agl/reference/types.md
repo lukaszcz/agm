@@ -27,7 +27,8 @@ Type expressions:
 ```ebnf
 type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
-            | TYPE_NAME
+            | NAME
+            | NAME "[" type_expr ("," type_expr)* "]"   (* applied type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | func_type
@@ -36,10 +37,20 @@ func_type ::= "(" type_list? ")" "->" type_expr
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
-`dict[text, T]` is the only dictionary form: keys are always `text`, and the
-key position must be spelled literally as `text`. There are no union types,
-no string-literal types, no optional/nullable types, and no user-defined
-generics. Model alternatives and optionality with enums.
+A bare `NAME` in type position names a built-in type, a user type, an alias,
+or — inside a generic declaration — one of that declaration's type parameters.
+`NAME "[" … "]"` is an **applied type**: it instantiates a generic declaration
+at concrete type arguments, e.g. `Box[int]`, `Option[text]`,
+`Outcome[int, text]`, or nested `Box[Box[int]]`. The built-in `list[T]` and
+`dict[text, V]` are the same applied-type form.
+
+`dict[text, T]` keys are always `text`, and the key position must be spelled
+literally as `text`. There are no union types, no string-literal types, and no
+optional/nullable types; model alternatives and optionality with enums.
+
+User declarations may themselves be **generic** — `record`, `enum`, `type`
+aliases, and `def` functions can declare type parameters. See
+[Generics](generics.md).
 
 ### `unit`
 
@@ -233,7 +244,8 @@ let issue = Issue(
 ```
 
 Two record types with identical fields are still distinct types (nominal
-typing).
+typing). A record may be generic — `record Box[T]` then a field `value: T`
+(see [Generics](generics.md)).
 
 ## Enum types
 
@@ -274,6 +286,44 @@ type Metadata = dict[text, json]
 Aliases never create a new nominal type: a value of type `Status` *is* a
 value of type `Review`. Aliases are transparent everywhere, including
 qualified variant access. Alias chains resolve transitively.
+
+## Type parameters and applied types
+
+`record`, `enum`, `type`, and `def` declarations may take **type parameters**
+in a bracketed list immediately after the declared name:
+
+```agl
+record Box[T]
+  value: T
+
+enum Option[T]
+  | none
+  | some(value: T)
+
+type Pair[A, B] = dict[text, json]
+```
+
+Each type parameter is an ordinary `NAME` in scope as a type throughout the
+declaration's body. A generic type is **used** by applying it to type
+arguments — `Box[int]`, `Option[text]`, `Outcome[int, text]` — producing a
+distinct concrete type for each instantiation.
+
+### Invariance
+
+Type arguments are **invariant**: an applied type matches another only when
+their type arguments match exactly, with no variance or subtyping. The
+`int → decimal` widening (below) does **not** propagate through type
+arguments.
+
+```agl
+let xs: list[int] = [1, 2]
+# let ys: list[decimal] = xs   # static error: list[int] ≠ list[decimal]
+```
+
+`Box[int]` and `Box[text]` are unrelated types, and `list[int]` is not
+assignable to `list[json]`. The full generics model — declaration syntax,
+inference, the `::[…]` override, and what may be done with a value of a type
+parameter — is covered in [Generics](generics.md).
 
 ## Declaration validity
 

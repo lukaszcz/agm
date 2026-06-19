@@ -11,7 +11,7 @@ operator ([Expressions](expressions.md)).
 ## `let` — immutable binding
 
 ```ebnf
-let_decl ::= "let" VAR_NAME (":" type_expr)? "=" expr
+let_decl ::= "let" NAME (":" type_expr)? "=" expr
 ```
 
 `let` evaluates the initializer, checks it against the annotation (if any),
@@ -31,7 +31,7 @@ let count = 3
 ## `var` — mutable binding
 
 ```ebnf
-var_decl ::= "var" VAR_NAME (":" type_expr)? "=" expr
+var_decl ::= "var" NAME (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
@@ -45,7 +45,7 @@ var artifact: text = ask("Implement ${spec}", agent: impl)
 
 ```ebnf
 assign_stmt ::= assign_target ":=" expr
-assign_target ::= VAR_NAME ("[" expr "]")*
+assign_target ::= NAME ("[" expr "]")*
 ```
 
 `:=` updates the nearest visible **mutable** binding and yields `unit`. It
@@ -92,7 +92,7 @@ Static rules, all checked before execution:
 ## `def` — function declarations
 
 ```ebnf
-func_def ::= "def" VAR_NAME "(" params? ")" "->" type_expr "=" expr
+func_def ::= "def" NAME type_params? "(" params? ")" "->" type_expr "=" expr
 ```
 
 `def` is a root-only declaration. It introduces an immutable binding of
@@ -107,6 +107,9 @@ def is_even(n: int) -> bool =
 def is_odd(n: int) -> bool =
   if n = 0 => false else => is_even(n - 1)
 ```
+
+A `def` may be **generic** — it can declare type parameters in a bracketed
+list after its name (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
 
 A `def` inside a nested block is a static error. See
 [Functions](functions.md) for full details.
@@ -136,7 +139,7 @@ A `def` inside a nested block is a static error. See
 ## `param` — declared program parameters
 
 ```ebnf
-param_decl ::= "param" VAR_NAME (":" type_expr)? ("=" expr)?
+param_decl ::= "param" NAME (":" type_expr)? ("=" expr)?
 ```
 
 `param` declarations are root-only. Each enters the root scope as an
@@ -159,7 +162,7 @@ the runtime after CLI/config resolution.
 ## `agent` — declared agents
 
 ```ebnf
-agent_decl ::= "agent" VAR_NAME ("=" STRING)?
+agent_decl ::= "agent" NAME ("=" STRING)?
 ```
 
 `agent` declarations are root-only. Each declared name enters the root scope
@@ -191,6 +194,69 @@ Rules:
 4. `ask` and `exec` cannot be declared as agents.
 5. An unused declared agent produces a non-fatal **warning**.
 6. The runner hint must be a static string literal with no interpolation.
+
+## Names, namespaces, and constructors
+
+Identifier capitalization carries **no** meaning: a name's case never
+determines whether it denotes a type, a value, or a constructor
+([Lexical structure](lexical-structure.md)). What a name denotes is fixed by
+how it is declared and the position it appears in.
+
+AgL keeps **two namespaces**: a *type* namespace and a *value* namespace. A
+name may exist in both at once without collision. A `record` or `enum`
+declaration introduces a type name *and* a same-spelled value binding for its
+constructor:
+
+```agl
+record Box[T]
+  value: T
+# 'Box' the type lives in the type namespace;
+# 'Box' the constructor lives in the value namespace.
+let b: Box[int] = Box(value: 1)
+```
+
+### Constructors are ordinary value bindings
+
+Record constructors and enum variants are normal bindings in the value
+namespace. They can be referenced bare, stored, and passed like any value:
+
+```agl
+let mk: (int) -> Box[int] = Box   # the constructor as a first-class value
+let one = mk(1)                    # called positionally, in field order
+```
+
+Direct construction uses **named** arguments (`Box(value: 1)`,
+`some(value: x)`); a constructor reached **through a variable** is an ordinary
+function value invoked **positionally**, in declaration order. Nullary enum
+variants are ordinary values (`let e: Option[int] = none`). See
+[Generics](generics.md) for the full constructor-value story (including when a
+generic constructor needs an expected-type annotation).
+
+### Overload sets, shadowing, and ambiguity
+
+Two enums may declare the **same** unqualified variant name; that name then
+resolves to an *overload set*. An unqualified reference is a **static
+ambiguity error** — regardless of payload, surrounding context, or explicit
+type arguments. **Qualify** the reference with the owning enum to disambiguate:
+
+```agl
+enum Holder[T]
+  | empty
+  | tagged(by: T)
+
+enum Other
+  | tagged(label: text)      # same unqualified name 'tagged'
+
+let h: Holder[int] = Holder.tagged(by: 7)   # qualified — unambiguous
+```
+
+A **nearer ordinary binding shadows** a constructor (or an overload set): an
+inner `let`, `var`, or function parameter named `tagged` hides the outer
+constructor for the rest of its scope, exactly like any other shadowing.
+
+```agl
+def shadow(tagged: int) -> int = tagged * 10   # parameter hides the constructor
+```
 
 ## Lexical scoping
 

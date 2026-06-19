@@ -3,7 +3,7 @@
     {
       "name": "all_instantiations",
       "expect": {
-        "stdout": "5\nhi\n1\ncore\n7\n9\nvia value\n11\nsolo\n",
+        "stdout": "5\nhi\n1\ncore\n7\n9\nvia value\n11\nsolo\nbeta\n",
         "calls": {}
       }
     }

@@ -4,7 +4,8 @@
 
 ```
 source (.agl)
-  → [1] custom lexer  (INDENT/DEDENT, multiline strings, string interpolation)
+  → [1] custom lexer  (INDENT/DEDENT, multiline strings, string interpolation;
+                        one case-neutral NAME token for all identifiers)
   → [2] Lark LALR parser  (grammar in grammar/agl.lark)
   → [3] AST  (pure dataclasses, NO Lark types)   ◄── stable contract / firewall
   → [4] scope / name resolution  (full static pass)
@@ -21,6 +22,12 @@ Components **1→2** are the only Lark-aware code. Component **3** (the AST in
 **only** on the AST dataclasses, **never** on Lark. This is what makes the
 lexer+parser replaceable (e.g. by a tree-sitter front end) without touching
 scope, typecheck, or eval.
+
+The lexer emits a single `NAME` token for every identifier: capitalization is
+**lexically and semantically meaningless** (the old `VAR_NAME`/`TYPE_NAME` split
+is gone). No pass may branch on identifier case; types, constructors, and
+variables are distinguished by their declaration/binding namespace, never by
+spelling.
 
 ## AST — expression-oriented design
 
@@ -53,7 +60,13 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
 Type AST nodes in `agm.agl.syntax.types` include `UnitT`, `AgentT`, and
 `FuncT(params, result)` for the new v2 types. `FuncT` is purely positional;
 named/default argument information lives only in `FuncDef`/`Param`, not in the
-value type.
+value type. Generics (rank-1 / prenex parametric polymorphism) add `AppliedT(name,
+args)` — a type application `Name[args]` for user generic types and parameterized
+aliases — and a `type_params: tuple[str, ...]` field on `FuncDef`/`RecordDef`/
+`EnumDef`/`TypeAlias`. `Call.type_args` carries explicit `callee::[T](args)` type
+arguments; it is static-only and never evaluated (erased at runtime). The former
+expression-level `Constructor` node is gone: constructors are now ordinary
+`VarRef`/`Call`/`FieldAccess` expressions resolved via scope side tables.
 
 ## Side-table annotation convention
 
@@ -90,9 +103,21 @@ Built-in call classification: when the `Call.callee` is a `VarRef` whose name
 is `print`, `exec`, or `ask`, the resolver records the `BuiltinKind` in
 `builtin_calls` and skips the ordinary variable lookup for that name.
 
+**Constructors as value bindings**: record and enum-variant constructors are
+resolved in the ordinary value namespace, not a separate one. A pre-pass collects
+candidates from every `RecordDef`/`EnumDef` (plus seeded built-in/prelude
+constructors) into `ResolvedProgram.constructor_candidates` (name → ordered
+`ConstructorRef` tuple). A single candidate resolves to a `ConstructorRef` in the
+`constructor_refs` side table (keyed by the `VarRef`/`Call` node); two or more
+candidates from distinct owners form an **overload set**, and an unqualified
+reference to an ambiguous name is a scope error — type-qualification
+(`Owner.variant`) disambiguates and is recorded in `qualified_constructor_refs`
+(`FieldAccess` node → `(owner, member)`). `ConstructorRef` carries the owner's
+`type_params` so later passes can instantiate generic constructors.
+
 ## Type system
 
-`agm.agl.typecheck` adds three new semantic types to the v2 system:
+`agm.agl.typecheck` adds these semantic types to the v2 system:
 
 - **`UnitType`** — the type of side-effecting expressions that produce no
   meaningful value (`print`, `:=`, `if` without `else`, `do … until`). Its
@@ -103,6 +128,47 @@ is `print`, `exec`, or `ask`, the resolver records the `BuiltinKind` in
 - **`AgentType`** — opaque; no fields, no equality, no rendering, not
   JSON-shaped.
 - **`BottomType`** — the type of `raise`; assignable to any expected type.
+- **`TypeVarType(name)`** — a rigid type variable bound by an enclosing generic
+  declaration. It is treated as **opaque** by the capability gates
+  (`is_json_shaped`, `comparable_types`, `is_assignable`): a bare type variable is
+  not JSON-shaped, not comparable, and assignable only to an identical type
+  variable. This enforces strict parametricity (D2) — a generic body may not
+  inspect or operate on values of a type-variable type.
+
+`RecordType`/`EnumType` carry a `type_args` tuple and have **nominal identity by
+name + `type_args`** (fields/variants are excluded from equality and hashing). The
+module also exposes the substitution machinery `free_type_vars` / `substitute` /
+`contains_type_var`.
+
+**Generic declarations and instantiation** (`agm.agl.typecheck.env`): generic
+records/enums are stored as `GenericTypeDef` templates (kind + `type_params` +
+a template `RecordType`/`EnumType` whose fields/variants contain `TypeVarType`s).
+`TypeEnvironment.instantiate_nominal(name, args)` performs **eager,
+non-recursive** substitution to produce a concrete type with `type_args` set.
+Parameterized aliases keep their `type_params` and are substituted on resolution.
+`FunctionSignature.type_params` records a generic `def`'s parameters; a
+`ConstructorSignature` (owner/variant, ordered field names + field templates,
+result template, `type_params`) describes each constructor for instantiation.
+`resolve_type_expr(..., type_vars=…)` is type-var-aware: it resolves `AppliedT`
+(checking arity and substituting), turns in-scope `NameT`s into `TypeVarType`s,
+and **rejects a bare generic nominal/alias name** used without arguments.
+
+**Checking generics** (`agm.agl.typecheck.checker`): a generic `def` is checked
+with its type parameters in scope as rigid variables (including inside nested
+lambda/`let` annotations). A small **one-sided matching/inference solver**
+(`_match` / `_match_unsolved`) binds template type variables to concrete argument
+types — `_match` reports inconsistent bindings, `_match_unsolved` fills remaining
+holes from the expected type — driving both the explicit `::[…]` path and pure
+inference. Type-argument matching is **invariant** (D6): a generic nominal matches
+only same-name, same-arity, position-wise. Generic record/enum construction,
+field access, and `case`/`is` patterns (including qualified patterns) instantiate
+the relevant signature. A generic `def` or constructor used as a *value* is
+instantiated from the expected type (D5/D7). Agent/`exec`/`ask`-request targets
+may not contain a type variable (D3).
+
+**Erasure rationale**: type arguments exist **only during type checking**. They
+are never represented at runtime — generic `def`s erase to ordinary closures and
+`Call.type_args` is never evaluated (see *Evaluator*).
 
 Built-in typing rules (in `agm.agl.typecheck.checker`) consult `builtin_calls`:
 
@@ -146,6 +212,15 @@ via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
   `UNIT_VALUE` is reused everywhere.
 - **`AgentValue`** — an opaque handle carrying the declared agent name; resolved
   against the host agent registry at call time.
+- **`ConstructorValue`** — a first-class constructor used as a value, carrying
+  only owner/variant identity (no type args — erased). Calling it builds the
+  record/enum from **positional** arguments in declaration order, sourcing field
+  names/types from the type environment (`GenericTypeDef` template or concrete
+  type) rather than the call-site result type, which may be an erased type
+  variable when the constructor escapes through a higher-order function.
+
+**Type erasure**: generics carry no runtime representation. Generic `def`s are
+ordinary `Closure`s and `Call.type_args` is never evaluated.
 
 All calls go through the unified call dispatch in `Interpreter._eval_call`:
 

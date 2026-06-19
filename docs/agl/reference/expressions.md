@@ -50,19 +50,24 @@ let metadata: dict[text, json] = {
 }
 ```
 
-Keys are literal strings; an unquoted lowercase identifier key is shorthand
-for the same string. Interpolated keys are rejected. Duplicate keys are a
+Keys are literal strings; an unquoted identifier key is shorthand for the same
+string. Interpolated keys are rejected. Duplicate keys are a
 static error.
 
 ## Constructors
 
 ```ebnf
-constructor ::= TYPE_NAME ("." TYPE_NAME)? ("(" named_args? ")")?
-named_args  ::= VAR_NAME ":" expr ("," VAR_NAME ":" expr)* ","?
+constructor ::= NAME ("." NAME)? type_args? ("(" named_args? ")")?
+type_args   ::= "::" "[" type_expr ("," type_expr)* "]"
+named_args  ::= NAME ":" expr ("," NAME ":" expr)* ","?
 ```
 
-Constructor arguments are **named only**. Constructors may only follow a
-type name.
+A record constructor or enum variant, when invoked **directly** by name, takes
+**named** arguments only — never positional. (A constructor escaped through a
+variable becomes a positional callable value; see
+[Constructors as values](#constructors-as-values).) The optional `::[…]`
+pins the type arguments of a generic constructor (see
+[Generic constructors](#generic-constructors)).
 
 ### Record construction
 
@@ -86,6 +91,97 @@ let review: Review = Pass           # resolved by expected type
 
 An unqualified variant name resolves when the expected type is an enum
 containing it, or when exactly one declared enum has a variant of that name.
+A nullary variant is constructed by writing its name alone (no parentheses);
+its payload variants take named arguments.
+
+### Unqualified variant ambiguity
+
+If **two or more** declared enums each have a variant of the same unqualified
+name, a bare reference to that name is a **static ambiguity error** — even
+when the expected type, the payload, or an explicit `::[…]` would in principle
+single out one enum. Disambiguate by qualifying with the owning enum:
+
+```agl
+enum Holder[T]
+  | empty
+  | tagged(by: T)
+
+enum Other
+  | tagged(name: text)
+
+let h: Holder[int] = Holder.tagged(by: 7)   # qualified; unqualified 'tagged' is an error
+```
+
+A nearer binding (a `let`/`var`/parameter of the same name) **shadows** a
+constructor or an overloaded set of constructors entirely; within that scope
+the name refers to the binding, not the constructor.
+
+### Generic constructors
+
+The constructors of a generic record or enum ([Generics](generics.md)) are
+generic too. Their type arguments are normally inferred — from the payload
+arguments, the expected type, or both:
+
+```agl
+record Box[T]
+  value: T
+
+let bi: Box[int] = Box(value: 5)        # T = int, inferred from the payload
+let bt: Box[text] = Box(value: "hi")    # same definition, T = text
+```
+
+Pin the instantiation explicitly with `::[…]` when inference cannot (or
+should not) determine it:
+
+```agl
+let be = Box::[int](value: 99)
+```
+
+Nullary variants of a generic enum carry no payload to infer from, so they
+need an expected type (or an explicit `::[…]`):
+
+```agl
+enum Option[T]
+  | none
+  | some(value: T)
+
+let e: Option[int] = none          # T = int, fixed by the annotation
+let s = some::[int](value: 1)      # T pinned explicitly
+```
+
+### Constructors as values
+
+A record constructor or an enum variant is an **ordinary value binding**: it
+can be stored, passed to a function, and called like any other function value.
+When a constructor is reached **through a variable** rather than written
+directly, it is a positional callable — its arguments are supplied positionally
+in **declaration order**, since a function value has no named parameters
+([Functions](functions.md)):
+
+```agl
+let mk: (int) -> Box[int] = Box     # the constructor as a value
+let made = mk(1)                    # called positionally
+print made.value
+```
+
+This lets constructors be passed to higher-order functions:
+
+```agl
+def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+
+let built = apply(42, mk)           # mk applied inside a generic HOF
+print built.value
+```
+
+A **generic** constructor used as a value needs an expected type to fix its
+instantiation, exactly like a generic `def` used as a value (a bare
+`let f = some` is a static error). The annotation on `mk` above supplies it.
+
+Nullary enum variants are likewise ordinary values:
+
+```agl
+let n: Option[int] = none           # the nullary variant as a value
+```
 
 ### Exception construction
 
@@ -143,10 +239,11 @@ user `def`s, built-in functions (`ask`, `exec`, `print`), and function values
 stored in bindings:
 
 ```ebnf
-call_expr ::= postfix_expr "(" arg_list? ")"
+call_expr ::= postfix_expr type_args? "(" arg_list? ")"
+type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 arg_list  ::= arg ("," arg)* ","?
 arg       ::= expr                  (* positional *)
-            | VAR_NAME ":" expr     (* named *)
+            | NAME ":" expr         (* named *)
 ```
 
 **Single-argument sugar.** When there is exactly one positional argument and

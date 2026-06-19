@@ -11,14 +11,15 @@ introduced by `|`, including the first.
 ```ebnf
 pattern        ::= "_"                                    (* wildcard *)
                  | literal                                (* literal pattern *)
-                 | VAR_NAME                               (* variable binder *)
+                 | NAME                                   (* variable binder *)
                  | constructor_pattern
 
-constructor_pattern ::= TYPE_NAME ("." TYPE_NAME)? ("(" pattern_fields? ")")?
+constructor_pattern ::= NAME ("." NAME)? "(" pattern_fields? ")"
+                 | NAME "." NAME                          (* qualified nullary *)
 
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
-pattern_field  ::= VAR_NAME                               (* shorthand *)
-                 | VAR_NAME ":" pattern                   (* field: subpattern *)
+pattern_field  ::= NAME                                   (* shorthand *)
+                 | NAME ":" pattern                       (* field: subpattern *)
 ```
 
 ### Wildcard `_`
@@ -33,14 +34,24 @@ case result of
 
 ### Variable binder
 
-A lowercase name matches anything and binds the scrutinee to that name as an
-immutable, branch-local value:
+A **bare name** in a pattern is always a variable binder: it matches anything
+and binds the scrutinee to that name as an immutable, branch-local value.
+Capitalization carries no meaning ([Lexical structure](lexical-structure.md)),
+so this is true regardless of how the name is written — `other`, `Other`, and
+`OTHER` are all binders:
 
 ```agl
 case result of
   | Blocked(reason) => raise Abort(message: reason)
   | other => print other
 ```
+
+> **A bare name never matches a constructor.** Because there is only one class
+> of identifier, a bare name cannot be a nullary variant by virtue of its
+> spelling. To match a constructor you must use a form the grammar recognizes
+> as a constructor pattern — call syntax `name()` or a qualified
+> `Enum.variant` (see below). A bare `Pass` in a pattern binds a variable
+> called `Pass`; it does **not** match the variant `Pass`.
 
 ### Literal patterns
 
@@ -66,15 +77,22 @@ Restrictions:
 ### Constructor patterns
 
 A constructor pattern matches one enum variant and optionally destructures
-its payload:
+its payload. A constructor pattern is distinguished from a bare-name binder by
+its **syntax**, not by spelling: it is either a call form `name(…)` (the
+parentheses may be empty) or a qualified `Enum.variant`:
 
 ```agl
-Pass                       # nullary variant
-Review.Pass                # qualified (aliases resolve transparently)
+Pass()                     # nullary variant (empty call form)
+Review.Pass                # nullary variant, qualified (aliases resolve transparently)
 Fail(issues)               # shorthand: binds field 'issues' to name 'issues'
-Blocked(reason: why)       # binds field 'reason' to name 'why'
-Blocked(reason: "stuck")   # nested literal pattern on a field
+Fail(issues: xs)           # binds field 'issues' to name 'xs'
+Fail(issues: ["stuck"])    # nested literal pattern on a field
 ```
+
+> **Migration note.** A *bare* nullary pattern such as `case Pass` no longer
+> matches the variant `Pass` — it now binds a variable. Rewrite each bare
+> nullary pattern as a call form (`Pass()`) or a qualified reference
+> (`Review.Pass`).
 
 Payload patterns are **field-based, not positional**. `Fail(x)` is valid
 only if the variant actually has a field named `x`; to bind field `issues`
@@ -93,6 +111,29 @@ Static rules:
 4. Fields not mentioned in the pattern are simply ignored (patterns need not
    be complete).
 5. A name may be bound only once per pattern.
+
+### Patterns on generic enums
+
+Constructor patterns work on instances of **generic** enums
+([Generics](generics.md)) exactly as on monomorphic ones, in both unqualified
+and qualified form. When the scrutinee is a concrete instance such as
+`Option[int]`, a destructured payload is bound at the **instantiated** type —
+matching `some(value)` against an `Option[int]` binds `value: int`:
+
+```agl
+enum Option[T]
+  | none
+  | some(value: T)
+
+def render(o: Option[int]) -> text =
+  case o of
+    | Option.none => "missing"
+    | Option.some(value) => "found ${value}"   # value: int, so it can be interpolated
+```
+
+The qualifier (`Option.`) names the owning enum; it is otherwise optional and
+serves to disambiguate when two enums share a variant name (see
+[Expressions](expressions.md)).
 
 ## Matching semantics
 
@@ -129,5 +170,14 @@ until review is Pass
 
 case review of
   | Fail(issues) => artifact := ask("Fix ${issues}", agent: impl)
-  | Pass => ()
+  | Pass() => ()
+```
+
+`is` / `is not` also apply to generic enum instances; qualify the variant the
+same way as in a pattern:
+
+```agl
+let probe: Option[int] = some(value: 99)
+if probe is Option.some => print "probe is some"
+if probe is not Option.none => print "probe is not none"
 ```

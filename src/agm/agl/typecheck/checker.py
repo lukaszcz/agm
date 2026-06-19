@@ -224,7 +224,9 @@ class _TypeBuilder:
             elif isinstance(item, TypeAlias):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
-                self._env.register_alias(item.name, item.type_expr)
+                self._env.register_alias(
+                    item.name, item.type_expr, type_params=item.type_params
+                )
 
         # ----------------------------------------------------------------
         # Phase 2: Resolve all field/variant types with recursion detection.
@@ -449,8 +451,14 @@ class _TypeBuilder:
             self._env.register_constructor_signature(sig)
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
-        """Validate that the alias target resolves without cycles."""
-        self._env.resolve_type_expr(stmt.type_expr, span=stmt.span)
+        """Validate that the alias target resolves without cycles.
+
+        A parameterized alias body may reference its own type parameters, so
+        they are in scope as type variables during validation.
+        """
+        self._env.resolve_type_expr(
+            stmt.type_expr, span=stmt.span, type_vars=frozenset(stmt.type_params)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1036,6 +1044,7 @@ class _Checker:
         target_type: Type = explicit if explicit is not None else (
             expected if expected is not None else TextType()
         )
+        self._reject_type_var_target(target_type, node.span)
 
         # D9: reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
@@ -1134,6 +1143,7 @@ class _Checker:
         # Target type: explicit type argument, else text default.
         explicit = self._resolve_explicit_target(node, "ask-request")
         target_type = explicit if explicit is not None else TextType()
+        self._reject_type_var_target(target_type, node.span)
 
         # D9: reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
@@ -1228,6 +1238,7 @@ class _Checker:
         else:
             assert exec_result_type is not None
             target_type = exec_result_type
+        self._reject_type_var_target(target_type, node.span)
 
         # D9: reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
@@ -1309,9 +1320,10 @@ class _Checker:
         ``None`` when there are no explicit type arguments (caller falls back to
         its contextual/default target logic).
 
-        Raises ``AglTypeError`` when:
-        - More than one type argument is provided (arity error).
-        - The resolved type contains a type variable (D3 guard).
+        Raises ``AglTypeError`` when more than one type argument is provided
+        (arity error). The D3 type-variable guard is applied by the caller to
+        the *final* target type (see :meth:`_reject_type_var_target`), so it
+        covers both the explicit and the contextual/inferred target paths.
         """
         if not node.type_args:
             return None
@@ -1321,17 +1333,24 @@ class _Checker:
                 f"got {len(node.type_args)}.",
                 span=node.span,
             )
-        target_type = self._env.resolve_type_expr(
+        return self._env.resolve_type_expr(
             node.type_args[0], span=node.span, type_vars=self._current_type_vars
         )
-        # D3: agent/exec target may not contain a type variable.
+
+    def _reject_type_var_target(self, target_type: Type, span: SourceSpan) -> None:
+        """D3: an ask/exec/ask-request target type may not contain a type variable.
+
+        Applied to the final resolved target — whether it came from an explicit
+        ``::[…]`` argument or was inferred from the contextual expected type
+        (e.g. a generic ``def``'s return type) — so a type variable never reaches
+        codec selection or schema generation (which cannot serialise one).
+        """
         if contains_type_var(target_type):
             tv = next(iter(free_type_vars(target_type)))
             raise AglTypeError(
                 f"agent/exec target type cannot contain a type variable ('{tv}').",
-                span=node.span,
+                span=span,
             )
-        return target_type
 
     # --- shared parse-option handling (ask / exec) ---
 

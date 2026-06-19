@@ -1979,6 +1979,44 @@ class TestTypeDeclarations:
         r = accept_type("type MyInt = int\nlet x: MyInt = 42\nx")
         assert r.resolved.program is not None
 
+    def test_parameterized_alias_param_in_body(self) -> None:
+        # A parameterized alias body may reference its own type parameter, and
+        # applying it substitutes the argument (regression: the type-builder
+        # previously registered aliases with 0 params and dropped body type vars).
+        r = accept_type("type Wrap[A] = list[A]\nlet w: Wrap[int] = [1, 2]\nw")
+        assert r.resolved.program is not None
+
+    def test_parameterized_alias_unused_params(self) -> None:
+        r = accept_type(
+            "type Pair[A, B] = dict[text, json]\n"
+            'let p: Pair[int, text] = {a: 1}\np'
+        )
+        assert r.resolved.program is not None
+
+    def test_parameterized_alias_arity_mismatch_rejected(self) -> None:
+        err = reject_type("type Wrap[A] = list[A]\nlet w: Wrap[int, text] = [1]\nw")
+        assert "type argument" in str(err).lower()
+
+    def test_parameterized_alias_substitution_enforced(self) -> None:
+        # Wrap[int] resolves to list[int]; a text element is rejected.
+        err = reject_type('type Wrap[A] = list[A]\nlet w: Wrap[int] = ["x"]\nw')
+        assert (
+            "int" in str(err).lower()
+            or "text" in str(err).lower()
+            or "mismatch" in str(err).lower()
+        )
+
+    def test_parameterized_alias_mutual_cycle_rejected(self) -> None:
+        # A parameterized-alias cycle is a clean diagnostic, not a raw recursion
+        # crash (the applied-type resolution path needs the same cycle guard as
+        # the bare-name path).
+        err = reject_type("type A[X] = B[X]\ntype B[Y] = A[Y]\nlet z: A[int] = 1\nz")
+        assert "cycle" in str(err).lower()
+
+    def test_parameterized_alias_self_cycle_rejected(self) -> None:
+        err = reject_type("type A[X] = A[X]\nlet z: A[int] = 1\nz")
+        assert "cycle" in str(err).lower()
+
     def test_duplicate_type_name_raises(self) -> None:
         err = reject_type("record A\n  x: int\nrecord A\n  y: int\nA(x: 1)")
         assert "already declared" in str(err).lower() or "duplicate" in str(err).lower()
@@ -4207,6 +4245,31 @@ class TestGenerics:
         # list[T] as target also contains a type var
         err = reject_type('def fetch[T](p: text) -> list[T] = ask::[list[T]](p)')
         assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
+
+    def test_d3_ask_contextual_type_var_target_rejected(self) -> None:
+        # Regression: a bare type-var target inferred from the generic def's
+        # return type (no explicit ::[…]) must give the clean D3 error, not a
+        # codec-selection error.
+        err = reject_type('def fetch[T](p: text) -> T = ask(p)')
+        assert "type variable" in str(err).lower()
+
+    def test_d3_ask_contextual_composite_type_var_target_rejected(self) -> None:
+        # Regression: a composite contextual target (list[T]) previously crashed
+        # in schema generation; it must now be a clean static error.
+        err = reject_type('def fetch[T](p: text) -> list[T] = ask(p)')
+        assert "type variable" in str(err).lower()
+
+    def test_d3_exec_contextual_type_var_target_rejected(self) -> None:
+        err = reject_type('def run[T](cmd: text) -> T = exec(cmd)')
+        assert "type variable" in str(err).lower()
+
+    def test_d3_ask_contextual_concrete_generic_instance_accepted(self) -> None:
+        # A concrete generic instance (no free type var) is a valid ask target.
+        r = accept_type(
+            "enum Option[T]\n  | none\n  | some(value: T)\n"
+            'let x: Option[int] = ask("Q")\nx'
+        )
+        assert r.resolved.program is not None
 
     def test_d3_non_type_var_cases_unaffected(self) -> None:
         # Concrete targets (non-generic context) are unaffected

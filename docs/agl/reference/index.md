@@ -75,6 +75,7 @@ until final is Pass
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Pattern matching](pattern-matching.md) | Patterns, matching semantics, exhaustiveness |
+| [Generics](generics.md) | Type parameters on `def`/`record`/`enum`/`type`, type application, inference and `::[…]` override, generic constructor values, strict parametricity, invariance, erasure |
 | [Control flow](control-flow.md) | `if`, `case`, `do … until` loops |
 | [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `${…}` interpolation, uniform rendering rules |
 | [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |

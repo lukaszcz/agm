@@ -11,9 +11,10 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def   ::= "def" VAR_NAME "(" params? ")" "->" type_expr "=" expr
+func_def   ::= "def" NAME type_params? "(" params? ")" "->" type_expr "=" expr
+type_params ::= "[" NAME ("," NAME)* "]"
 params     ::= param ("," param)* ","?
-param      ::= VAR_NAME ":" type_expr ("=" expr)?
+param      ::= NAME ":" type_expr ("=" expr)?
 ```
 
 A `def` is a top-level declaration. The body is a single expression — which
@@ -71,6 +72,8 @@ nested.
 
 ```ebnf
 lambda_expr ::= "fn" "(" params? ")" ("->" type_expr)? "=>" expr
+params      ::= param ("," param)* ","?
+param       ::= NAME ":" type_expr ("=" expr)?
 ```
 
 `fn` produces a function value. The return type annotation is **optional**:
@@ -105,15 +108,109 @@ the lambda body. Local recursion is expressed via a top-level `def`. The
 restriction is intentional: lambda return-type inference is bottom-up and
 safe precisely because the body never depends on the lambda's own type.
 
+## Generic functions
+
+A `def` may declare **type parameters** in square brackets after its name,
+making it polymorphic over those types. This is prenex (rank-1) parametric
+polymorphism: the type parameters are universally quantified over the whole
+declaration. See [Generics](generics.md) for the full treatment; this section
+covers the function-specific surface.
+
+```agl
+def id[T](x: T) -> T = x
+
+def fst[A, B](a: A, b: B) -> A = a
+```
+
+A type parameter is an ordinary name; it may be used anywhere a type may
+appear within the declaration — parameter types, the return type, and any
+annotation **nested inside the body**:
+
+```agl
+def singleton[T](x: T) -> list[T] =
+  let single: list[T] = [x]
+  single
+
+def via_lambda[A](x: A) -> A =
+  let g: (A) -> A = fn(y: A) -> A => y
+  g(x)
+```
+
+Here `list[T]` is an annotation on an inner `let`, and the lambda's parameter
+and return types refer to the enclosing `A`. A type variable is in scope
+throughout the body of the `def` that introduces it.
+
+### Inference and explicit type arguments
+
+At a call site the type arguments are normally **inferred** — from the
+argument types and from the expected type of the call:
+
+```agl
+print(id(5))          # T = int, inferred from the argument
+print(id("hi"))       # T = text
+print(fst("x", 9))    # A = text, B = int
+```
+
+When inference is insufficient or you want to pin the instantiation, supply
+the type arguments explicitly with the typed-call form `::[…]`:
+
+```agl
+print(id::[int](5))
+```
+
+The type-argument list must match the declared type parameters in number and
+order.
+
+### A generic `def` as a first-class value
+
+A generic `def` can be used as a value, but only where an **expected type**
+fixes its instantiation — typically an annotated binding. The expected
+function type determines the type arguments:
+
+```agl
+def id[T](x: T) -> T = x
+
+let f: (text) -> text = id      # T = text, fixed by the annotation
+print(f("via value"))
+```
+
+A bare `let f = id` with no expected type is a **static error**: there is
+nothing to infer the type arguments from. (Calling `id` directly, where the
+arguments drive inference, needs no annotation.)
+
+### Strict parametricity
+
+Inside a generic `def`, a value whose static type is a bare type variable
+`T` is **opaque**. The body knows nothing about `T` beyond the fact that
+values of it exist, so such a value can only be passed to other functions,
+returned, or stored. It may **not** be:
+
+- compared with `=`, `!=`, or the ordering operators,
+- used in arithmetic,
+- printed or interpolated in a template,
+- field- or index-accessed,
+- tested with `is` / `is not`.
+
+```agl
+def bad[T](x: T, y: T) -> bool = x = y   # static error: '=' on type variable T
+```
+
+Each of these is a static error. This *parametricity* guarantee means a
+generic function treats its type-variable values uniformly regardless of the
+concrete type they are instantiated at. (The restriction applies only to the
+bare type variable itself — a value of a concrete or composite type such as
+`list[T]` supports every operation that type normally allows.)
+
 ## Calling functions
 
 All calls use the same uniform parenthesized syntax:
 
 ```ebnf
-call_expr ::= postfix_expr "(" arg_list? ")"
+call_expr ::= postfix_expr type_args? "(" arg_list? ")"
+type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 arg_list  ::= arg ("," arg)* ","?
 arg       ::= expr                   (* positional *)
-            | VAR_NAME ":" expr      (* named *)
+            | NAME ":" expr          (* named *)
 ```
 
 **Single-argument sugar.** When there is exactly one positional argument

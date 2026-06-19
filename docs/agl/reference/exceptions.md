@@ -37,8 +37,8 @@ body and all catch handler bodies (with `int → decimal` widening). A
 ```ebnf
 try_expr      ::= "try" block catch_clause+
 catch_clause  ::= "catch" catch_pattern "=>" branch_body
-catch_pattern ::= TYPE_NAME ("as" VAR_NAME)?
-                | "_" ("as" VAR_NAME)?
+catch_pattern ::= NAME ("as" NAME)?
+                | "_" ("as" NAME)?
 ```
 
 ```agl

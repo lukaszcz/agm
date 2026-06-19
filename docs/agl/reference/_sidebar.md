@@ -5,6 +5,7 @@
 - [Expressions](expressions.md)
 - [Functions](functions.md)
 - [Pattern matching](pattern-matching.md)
+- [Generics](generics.md)
 - [Control flow](control-flow.md)
 - [Strings and interpolation](strings-and-interpolation.md)
 - [Agent calls](agent-calls.md)

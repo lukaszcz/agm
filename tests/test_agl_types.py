@@ -471,6 +471,16 @@ class TestNewExceptions:
 
 
 class TestCastClassification:
+    def test_bottom_source_is_assignable_to_cast_target(self) -> None:
+        from agm.agl.typecheck.types import (
+            BottomType,
+            CastKind,
+            TextType,
+            cast_classification,
+        )
+
+        assert cast_classification(BottomType(), TextType()) == CastKind.TOTAL_NOOP
+
     def test_text_to_text_noop(self) -> None:
         from agm.agl.typecheck.types import CastKind, TextType, cast_classification
         assert cast_classification(TextType(), TextType()) == CastKind.TOTAL_NOOP

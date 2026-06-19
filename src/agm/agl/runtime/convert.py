@@ -297,7 +297,7 @@ def parse_json_strict(text: str) -> object:
         )
     except StrictJsonParseError:
         raise
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         raise StrictJsonParseError(f"JSON parse error: {exc}") from exc
 
     return obj

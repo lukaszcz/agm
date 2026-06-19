@@ -681,9 +681,11 @@ def cast_classification(source: Type, target: Type) -> CastKind:
 
     Returns the CastKind for the (source, target) pair.
     """
-    # Non-data types never participate
-    _non_data = (UnitType, AgentType, FunctionType, BottomType)
-    if isinstance(source, _non_data) or isinstance(target, _non_data):
+    # Bottom is a valid source because a raise expression never reaches the
+    # conversion. Other non-data sources and all non-data targets are invalid.
+    if isinstance(source, (UnitType, AgentType, FunctionType)) or isinstance(
+        target, (UnitType, AgentType, FunctionType, BottomType)
+    ):
         return CastKind.STATIC_ERROR
     # ExceptionType as target is not in the matrix
     if isinstance(target, ExceptionType):

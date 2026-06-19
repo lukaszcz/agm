@@ -12,6 +12,7 @@ Covers (TDD for M4):
 
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
 
 import pytest
@@ -165,6 +166,15 @@ class TestParseJsonStrict:
     def test_rejects_two_values(self) -> None:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict("1 2")
+
+    def test_rejects_integer_over_python_digit_limit(self) -> None:
+        previous_limit = sys.get_int_max_str_digits()
+        try:
+            sys.set_int_max_str_digits(640)
+            with pytest.raises(StrictJsonParseError):
+                parse_json_strict("1" * 641)
+        finally:
+            sys.set_int_max_str_digits(previous_limit)
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +371,15 @@ class TestConvertValue:
     def test_text_to_int_failure_not_number(self) -> None:
         with pytest.raises(CastConversionError):
             convert_value(TextValue("hello"), TextType(), IntType())
+
+    def test_text_to_int_over_python_digit_limit_is_cast_error(self) -> None:
+        previous_limit = sys.get_int_max_str_digits()
+        try:
+            sys.set_int_max_str_digits(640)
+            with pytest.raises(CastConversionError):
+                convert_value(TextValue("1" * 641), TextType(), IntType())
+        finally:
+            sys.set_int_max_str_digits(previous_limit)
 
     def test_text_to_bool_true(self) -> None:
         result = convert_value(TextValue("true"), TextType(), BoolType())

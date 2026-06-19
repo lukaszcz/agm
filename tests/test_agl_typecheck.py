@@ -3525,6 +3525,11 @@ class TestCast:
         spec = next(iter(r.cast_specs.values()))
         assert spec.kind == CastKind.FALLIBLE
 
+    def test_raise_operand_can_be_cast(self) -> None:
+        """A cast preserves the universal assignability of bottom."""
+        r = accept_type('(raise Abort(message: "x")) as text')
+        assert r
+
 
 class TestParseJsonCall:
     """Tests for parse_json built-in."""

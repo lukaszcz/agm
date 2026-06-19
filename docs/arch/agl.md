@@ -342,6 +342,41 @@ populates it from `span.source.label` for any non-default `SourceId`; for
 compatibility — existing callers that pass `source_name=` to `format_diagnostic`
 continue to see their supplied label.
 
+## Graph-aware scope resolution (`agm.agl.scope.graph`)
+
+`resolve_graph(graph)` runs the scope pass over an entire `ModuleGraph` and
+produces a `ResolvedModuleGraph`.  The pipeline has five steps:
+
+1. **Export sets** — `_compute_exports` collects non-private top-level
+   `FuncDef`/`RecordDef`/`EnumDef`/`TypeAlias` names for each module.
+2. **ImportTarget mapping** — each `ImportDecl` node is mapped to either a
+   `SingleTarget` (concrete module) or `WildcardTarget` (set of matched modules).
+3. **ImportEnv per module** — `build_import_env` uses the targets and export sets
+   to build an `ImportEnv` with `unqualified` (bare name → candidate `QName`
+   set) and `qualified` (handle → name → `QName`) maps.
+4. **Whole-graph pre-pass** — all public `FuncDef` and type declarations across
+   all modules are collected into `decl_info` (node-id/span/binder-kind per
+   `(ModuleId, name)`) and `private_info` (marks private names) BEFORE any body
+   is resolved.  This enables cross-module mutual recursion.
+5. **Per-module resolution** — `_Resolver` is instantiated with `module_id`,
+   `import_env`, `decl_info`, `private_info`, and `is_entry`.  Graph-mode
+   enriches `_resolve_varref`: qualified refs (`handle::name` or `::name`
+   self-refs) are dispatched to dedicated helpers; unqualified refs not found
+   in the lexical scope fall back to `import_env.unqualified` lookup with
+   clash-on-use enforcement.  A clash (>1 candidate `QName`) is an error at the
+   reference site.
+
+`BindingRef` carries a `module_id` field (defaults to `ENTRY_ID`) so
+downstream passes can identify which module owns any binding.
+
+**Enforcement** in graph mode: non-entry modules reject config pragmas,
+`let`/`var` binders, `agent`/`param`/`program` declarations, assignment
+statements, and bare expressions.  Import declarations in non-entry modules must
+appear before all other items (header-only).
+
+Single-module programs continue to use `resolve()` (unchanged); they bypass the
+graph machinery entirely.
+
 ## Module-graph loading (`agm.agl.modules`)
 
 The `modules/` package implements the file-based module system load-and-graph
@@ -413,6 +448,8 @@ by `ModuleId`. The SCC algorithm visits nodes in sorted order.
 | `agm.commands.exec` | CLI command | `tests/test_exec_command.py` |
 | `agm.agl.syntax.spans` | `SourceId` / source-aware spans | `tests/test_agl_source_identity.py` |
 | `agm.agl.modules` | module-graph loading | `tests/test_agl_modules_ids.py`, `tests/test_agl_modules_roots.py`, `tests/test_agl_modules_resolver.py`, `tests/test_agl_modules_loader.py` |
+| `agm.agl.scope.imports` | import environment builder | `tests/test_agl_scope_imports.py` |
+| `agm.agl.scope.graph` | graph-aware scope resolver | `tests/test_agl_scope_graph.py` |
 
 The end-to-end acceptance suite lives in `tests/test_agl_e2e.py` and
 `tests/agl/`. It is **green and part of the standing gate** — `just test` /

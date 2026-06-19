@@ -19,6 +19,7 @@ import enum
 from dataclasses import dataclass, field
 
 from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.syntax.nodes import AgentDecl, FuncDef, PragmaValue, Program
 from agm.agl.syntax.spans import SourceSpan
 
@@ -124,6 +125,12 @@ class BindingRef:
         How the binding was introduced.  Drives the precise ``:=`` rejection
         message so a mutation of a catch binder is not mislabelled as a
         ``let`` (F8).
+    ``module_id``
+        The :class:`~agm.agl.modules.ids.ModuleId` of the module that owns
+        this binding.  For single-program resolution (``resolve()``) and all
+        local bindings, this is always :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        For cross-module resolution via ``resolve_graph()``, cross-module
+        references carry the owning library module's id.
     """
 
     name: str
@@ -131,6 +138,7 @@ class BindingRef:
     decl_span: SourceSpan
     decl_node_id: int
     kind: BinderKind
+    module_id: ModuleId = ENTRY_ID
 
 
 # ---------------------------------------------------------------------------

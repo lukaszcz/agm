@@ -37,8 +37,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     AglScopeError,
@@ -48,6 +50,10 @@ from agm.agl.scope.symbols import (
     ResolvedProgram,
     ScopeNode,
 )
+
+if TYPE_CHECKING:
+    from agm.agl.scope.imports import ImportEnv
+    from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
@@ -210,11 +216,36 @@ class _Resolver:
     this class directly.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        module_id: ModuleId = ENTRY_ID,
+        import_env: ImportEnv | None = None,
+        decl_info: dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]]
+        | None = None,
+        private_info: dict[tuple[ModuleId, str], bool] | None = None,
+        is_entry: bool = True,
+    ) -> None:
+        # Graph-mode parameters (None = single-program mode).
+        self._module_id: ModuleId = module_id
+        self._import_env: ImportEnv | None = import_env
+        # Maps (module_id, name) → (node_id, span, kind) for cross-module refs.
+        self._decl_info: dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]] = (
+            decl_info if decl_info is not None else {}
+        )
+        # Maps (module_id, name) → True for private declarations.
+        self._private_info: dict[tuple[ModuleId, str], bool] = (
+            private_info if private_info is not None else {}
+        )
+        # Whether this module is the entry module (graph mode only).
+        self._is_entry: bool = is_entry
+
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
         # Scope stack — top is the current scope.
         self._scope: ScopeNode | None = None
+        # The module's root ScopeNode (set in run()); used by _lookup_own_root
+        # to bypass lexical shadows introduced by nested scopes (D9 / ::name).
+        self._root_scope: ScopeNode | None = None
         # Whether we are at the program root (for root-only checks).
         self._at_root: bool = False
         # Agents declared at the program root.
@@ -229,6 +260,8 @@ class _Resolver:
         self._config_pragmas: dict[str, PragmaValue] = {}
         # Header-only tracking for config pragmas.
         self._seen_non_pragma: bool = False
+        # Header-only tracking for imports in non-entry modules (graph mode).
+        self._seen_non_import_item: bool = False
         # Source-declared program name.
         self._program_name: str | None = None
 
@@ -264,6 +297,7 @@ class _Resolver:
 
         root = ScopeNode(node_id=program.node_id, parent=parent_scope)
         self._push_scope(root)
+        self._root_scope = root
         self._at_root = True
 
         # Define all collected agents and functions as value bindings in root.
@@ -348,6 +382,7 @@ class _Resolver:
                 decl_span=decl.span,
                 decl_node_id=decl.node_id,
                 kind=BinderKind.agent_binding,
+                module_id=self._module_id,
             )
             self._current_scope().define(name, ref)
 
@@ -381,6 +416,7 @@ class _Resolver:
                 decl_span=synthetic_span,
                 decl_node_id=-1,
                 kind=BinderKind.agent_binding,
+                module_id=self._module_id,
             )
             scope.define(name, ref)
 
@@ -400,6 +436,7 @@ class _Resolver:
                 decl_span=decl.span,
                 decl_node_id=decl.node_id,
                 kind=BinderKind.function_binding,
+                module_id=self._module_id,
             )
             self._current_scope().define(name, ref)
 
@@ -520,32 +557,110 @@ class _Resolver:
         ``AssignStmt``) and declarations (``FuncDef``, ``AgentDecl``, etc.) that
         are not pure expressions are handled first; everything else is treated
         as an expression item.
+
+        In graph mode (``_import_env is not None``), additional enforcement:
+
+        - Non-entry modules: only ``FuncDef``, ``RecordDef``, ``EnumDef``,
+          ``TypeAlias``, and ``ImportDecl`` are allowed at the module root.
+          ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
+          entry-only constructs (``AgentDecl``, ``ParamDecl``, ``ProgramDecl``)
+          are rejected with a scope error.
+        - Non-entry modules: ``ImportDecl`` must precede all declarations
+          (header-only; ``_seen_non_import_item`` tracks this).
         """
+        is_graph_mode = self._import_env is not None
+        is_non_entry_root = is_graph_mode and not self._is_entry and self._at_root
+
         for item in items:
             if isinstance(item, ConfigPragma):
+                if is_non_entry_root:
+                    # config pragmas are not allowed in non-entry modules.
+                    raise AglScopeError(
+                        f"'config' pragmas are only allowed in the entry module, "
+                        f"not inside a library module (found 'config {item.key}' here).",
+                        span=item.span,
+                    )
                 self._resolve_config_pragma(item)
                 # A pragma is not a non-pragma item.
                 continue
+            if isinstance(item, ImportDecl):
+                if is_non_entry_root and self._seen_non_import_item:
+                    raise AglScopeError(
+                        "Import declarations must appear before any other "
+                        "declarations in a library module.",
+                        span=item.span,
+                    )
+                # Module-system pass (M2+) processes imports; resolver skips them.
+                continue
+            # Non-entry enforcement: track that a non-import item has been seen.
+            if is_non_entry_root:
+                self._seen_non_import_item = True
             if isinstance(item, FuncDef):
                 self._resolve_funcdef(item)
             elif isinstance(item, AgentDecl):
+                if is_non_entry_root:
+                    raise AglScopeError(
+                        f"'agent' declarations are only allowed in the entry module, "
+                        f"not in library modules (found 'agent {item.name}' here).",
+                        span=item.span,
+                    )
                 self._resolve_agent_decl(item)
             elif isinstance(item, (RecordDef, EnumDef, TypeAlias)):
                 self._resolve_type_decl(item)
             elif isinstance(item, LetDecl):
+                if is_non_entry_root:
+                    raise AglScopeError(
+                        "Library modules may only contain declarations "
+                        "('def', 'record', 'enum', 'type', 'import'); "
+                        "'let' bindings are not allowed at the top level of a "
+                        "library module.",
+                        span=item.span,
+                    )
                 self._resolve_let(item)
             elif isinstance(item, VarDecl):
+                if is_non_entry_root:
+                    raise AglScopeError(
+                        "Library modules may only contain declarations "
+                        "('def', 'record', 'enum', 'type', 'import'); "
+                        "'var' bindings are not allowed at the top level of a "
+                        "library module.",
+                        span=item.span,
+                    )
                 self._resolve_var(item)
             elif isinstance(item, AssignStmt):
+                if is_non_entry_root:
+                    raise AglScopeError(
+                        "Library modules may only contain declarations; "
+                        "assignment statements are not allowed at the top level.",
+                        span=item.span,
+                    )
                 self._resolve_assign(item)
             elif isinstance(item, ParamDecl):
+                if is_non_entry_root:
+                    raise AglScopeError(
+                        "'param' declarations are only allowed in the entry module, "
+                        f"not in library modules (found 'param {item.name}' here).",
+                        span=item.span,
+                    )
                 self._resolve_param(item)
             elif isinstance(item, ProgramDecl):
+                if is_non_entry_root:
+                    raise AglScopeError(
+                        "'program' declarations are only allowed in the entry module, "
+                        f"not in library modules (found 'program {item.name}' here).",
+                        span=item.span,
+                    )
                 self._resolve_program_decl(item)
-            elif isinstance(item, ImportDecl):
-                pass  # Module-system pass (M2+) will process import declarations
             else:
                 # Pure expression item (Expr union).
+                if is_non_entry_root:
+                    raise AglScopeError(
+                        "Library modules may only contain declarations "
+                        "('def', 'record', 'enum', 'type', 'import'); "
+                        "bare expressions are not allowed at the top level of a "
+                        "library module.",
+                        span=item.span,
+                    )
                 self._resolve_expr(item)
             # Track that we've seen a non-pragma item.
             if self._at_root:
@@ -616,6 +731,7 @@ class _Resolver:
             decl_span=node.span,
             decl_node_id=node.node_id,
             kind=BinderKind.let_binding,
+            module_id=self._module_id,
         )
         self._define(node.name, ref)
 
@@ -628,6 +744,7 @@ class _Resolver:
             decl_span=node.span,
             decl_node_id=node.node_id,
             kind=BinderKind.var_binding,
+            module_id=self._module_id,
         )
         self._define(node.name, ref)
 
@@ -677,6 +794,7 @@ class _Resolver:
             decl_span=node.span,
             decl_node_id=node.node_id,
             kind=BinderKind.param_binding,
+            module_id=self._module_id,
         )
         self._define(node.name, ref)
 
@@ -774,22 +892,157 @@ class _Resolver:
 
         Built-in names (print/exec/ask/ask-request) are only valid in call position; a
         bare VarRef to them is an error (D6: they are not first-class values).
+
+        In graph mode (when ``_import_env`` is set):
+        - ``node.module_qualifier is None`` → lexical scope first, then open imports.
+        - ``node.module_qualifier.segments == ()`` (``::name``) → self-ref to own scope.
+        - ``node.module_qualifier.segments != ()`` → qualified cross-module access.
         """
         if node.name in _RESERVED_NAMES:
             raise AglScopeError(
                 f"'{node.name}' is a built-in and cannot be used as a value.",
                 span=node.span,
             )
+
+        # Graph mode: handle module_qualifier and ImportEnv lookup.
+        if self._import_env is not None and node.module_qualifier is not None:
+            self._resolve_varref_qualified(node)
+            return
+
+        # Standard lexical lookup (single-program mode or bare name in graph mode).
         ref = self._current_scope().lookup(node.name)
         if ref is None:
-            raise AglScopeError(
-                f"'{node.name}' is not defined.",
-                span=node.span,
-            )
+            # In graph mode with import_env, try open imports as fallback.
+            if self._import_env is not None:
+                ref = self._lookup_import_env_unqualified(node)
+            if ref is None:
+                raise AglScopeError(
+                    f"'{node.name}' is not defined.",
+                    span=node.span,
+                )
         # Track agent references for the unused-agent warning.
         if ref.kind == BinderKind.agent_binding and node.name in self._declared_agents:
             self._referenced_agents.add(node.name)
         self._resolution[node.node_id] = ref
+
+    def _lookup_import_env_unqualified(self, node: VarRef) -> BindingRef | None:
+        """Look up a bare name in the open-import environment (graph mode).
+
+        Returns a ``BindingRef`` if exactly one ``QName`` matches, or raises
+        ``AglScopeError`` on ambiguity (clash-on-use).  Returns ``None`` if the
+        name is not found in any open import.
+        """
+        assert self._import_env is not None
+        qnames = self._import_env.unqualified.get(node.name)
+        if qnames is None:
+            return None
+        if len(qnames) > 1:
+            # Clash-on-use: more than one module exposes this name.
+            qualifiers = sorted(
+                ".".join(qn[0].segments) + "::" + qn[1] for qn in qnames
+            )
+            hint = ", ".join(qualifiers)
+            raise AglScopeError(
+                f"'{node.name}' is ambiguous: imported from multiple modules. "
+                f"Use a qualified reference to disambiguate: {hint}",
+                span=node.span,
+            )
+        # Exactly one QName.
+        qname = next(iter(qnames))
+        return self._make_cross_module_ref(qname[0], node.name, qname[1], node.span)
+
+    def _resolve_varref_qualified(self, node: VarRef) -> None:
+        """Resolve a qualified VarRef (``::name`` or ``MODQUAL::name``) in graph mode."""
+        assert self._import_env is not None
+        assert node.module_qualifier is not None
+
+        if node.module_qualifier.segments == ():
+            # Self-reference: ::name — look up in own root scope.
+            ref = self._lookup_own_root(node.name)
+            if ref is None:
+                raise AglScopeError(
+                    f"'{node.name}' is not defined in this module.",
+                    span=node.span,
+                )
+            self._resolution[node.node_id] = ref
+            return
+
+        # Qualified access: MODQUAL::name
+        handle = node.module_qualifier.segments
+        qual_map = self._import_env.qualified.get(handle)
+        if qual_map is None:
+            qualifier_str = ".".join(handle)
+            raise AglScopeError(
+                f"No module imported under qualifier '{qualifier_str}'.",
+                span=node.span,
+            )
+        qname = qual_map.get(node.name)
+        if qname is None:
+            qualifier_str = ".".join(handle)
+            # Determine the owning module for this handle: take any entry from the
+            # qual_map (all entries for this handle belong to at most one source module
+            # per D3; wildcard handles may cover multiple modules but each name maps
+            # to exactly one QName).  A non-None qual_map always has at least one entry
+            # because handles are only registered when names are added to them.
+            owning_module: ModuleId = next(iter(qual_map.values()))[0]
+            # Check if the name is private in the OWNING module (gives better error).
+            if self._private_info.get((owning_module, node.name)):
+                raise AglScopeError(
+                    f"'{node.name}' in module '{owning_module.dotted()}' is declared private "
+                    f"and cannot be accessed from outside the module.",
+                    span=node.span,
+                )
+            raise AglScopeError(
+                f"'{node.name}' is not in the imported set of '{qualifier_str}'.",
+                span=node.span,
+            )
+        ref = self._make_cross_module_ref(qname[0], node.name, qname[1], node.span)
+        self._resolution[node.node_id] = ref
+
+    def _lookup_own_root(self, name: str) -> BindingRef | None:
+        """Look up *name* in the module's own root scope bindings only (D9 / ::name).
+
+        ``::name`` must resolve to the current module's OWN top-level declaration,
+        bypassing any lexical shadows introduced by nested scopes (params, let, etc.).
+        We look ONLY in the root frame's direct ``bindings`` dict — we do NOT call
+        ``lookup()`` (which walks the parent chain and would fall through to a session
+        parent scope or find nested shadows first).
+        """
+        assert self._root_scope is not None, "_lookup_own_root called outside of run()"
+        return self._root_scope.bindings.get(name)
+
+    def _make_cross_module_ref(
+        self,
+        owning_module: ModuleId,
+        exposed_name: str,
+        src_name: str,
+        span: SourceSpan,
+    ) -> BindingRef:
+        """Build a ``BindingRef`` for a cross-module name resolution.
+
+        Parameters
+        ----------
+        owning_module:
+            The ``ModuleId`` of the module that declares the name.
+        exposed_name:
+            The name as written in this module (after any rename).
+        src_name:
+            The original name in the owning module.
+        span:
+            Source span of the reference site (for synthetic decl_span).
+        """
+        key = (owning_module, src_name)
+        decl_node_id, decl_span, kind = self._decl_info.get(
+            key, (-1, span, BinderKind.function_binding)
+        )
+        return BindingRef(
+            name=exposed_name,
+            mutable=False,
+            decl_span=decl_span,
+            decl_node_id=decl_node_id,
+            kind=kind,
+            module_id=owning_module,
+        )
 
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
@@ -873,6 +1126,7 @@ class _Resolver:
                     decl_span=clause.span,
                     decl_node_id=clause.node_id,
                     kind=BinderKind.catch_binder,
+                    module_id=self._module_id,
                 )
                 catch_scope.define(clause.binding, ref)
             self._resolve_expr_or_block(clause.body)
@@ -905,6 +1159,7 @@ class _Resolver:
                     decl_span=param.span,
                     decl_node_id=param.node_id,
                     kind=BinderKind.param_binding,
+                    module_id=self._module_id,
                 )
                 if param.name in param_scope.bindings:
                     raise AglScopeError(
@@ -931,6 +1186,7 @@ class _Resolver:
                 decl_span=pattern.span,
                 decl_node_id=pattern.node_id,
                 kind=BinderKind.pattern_binding,
+                module_id=self._module_id,
             )
             if pattern.name in scope.bindings:
                 raise AglScopeError(

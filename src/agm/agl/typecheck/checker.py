@@ -110,7 +110,9 @@ from agm.agl.typecheck.env import (
     AglTypeError,
     CallSiteRecord,
     CheckedProgram,
+    ConstructorSignature,
     FunctionSignature,
+    GenericTypeDef,
     OutputContractSpec,
     TypeEnvironment,
 )
@@ -281,6 +283,9 @@ class _TypeBuilder:
         self._built.add(name)
 
     def _build_record(self, stmt: RecordDef) -> None:
+        if stmt.type_params:
+            self._build_generic_record(stmt)
+            return
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
@@ -295,6 +300,9 @@ class _TypeBuilder:
         self._env.register_type(stmt.name, RecordType(name=stmt.name, fields=fields))
 
     def _build_enum(self, stmt: EnumDef) -> None:
+        if stmt.type_params:
+            self._build_generic_enum(stmt)
+            return
         variants: dict[str, dict[str, Type]] = {}
         seen_variants: dict[str, SourceSpan] = {}
         for vd in stmt.variants:
@@ -318,16 +326,18 @@ class _TypeBuilder:
             variants[vd.name] = vfields
         self._env.register_type(stmt.name, EnumType(name=stmt.name, variants=variants))
 
-    def _resolve_field_type(self, fd: FieldDef, owner: str) -> Type:
+    def _resolve_field_type(
+        self, fd: FieldDef, owner: str, type_vars: frozenset[str] = frozenset()
+    ) -> Type:
         """Resolve a field's TypeExpr to a semantic Type."""
         self._ensure_referenced_type_built(fd.type_expr)
-        return self._env.resolve_type_expr(fd.type_expr, span=fd.span)
+        return self._env.resolve_type_expr(fd.type_expr, span=fd.span, type_vars=type_vars)
 
     def _ensure_referenced_type_built(
         self, type_expr: object, _alias_seen: frozenset[str] = frozenset()
     ) -> None:
         """Recursively ensure that all user-declared types in *type_expr* are built."""
-        from agm.agl.syntax.types import DictT, ListT, NameT
+        from agm.agl.syntax.types import AppliedT, DictT, ListT, NameT
 
         if isinstance(type_expr, NameT):
             name = type_expr.name
@@ -345,6 +355,98 @@ class _TypeBuilder:
             self._ensure_referenced_type_built(type_expr.elem, _alias_seen)
         elif isinstance(type_expr, DictT):
             self._ensure_referenced_type_built(type_expr.value, _alias_seen)
+        elif isinstance(type_expr, AppliedT):
+            name = type_expr.name
+            if name in self._record_defs:
+                self._ensure_built_record(name)
+            elif name in self._enum_defs:
+                self._ensure_built_enum(name)
+            for arg in type_expr.args:
+                self._ensure_referenced_type_built(arg, _alias_seen)
+
+    def _build_generic_record(self, stmt: RecordDef) -> None:
+        """Build a generic record type: register GenericTypeDef + ConstructorSignature."""
+        type_vars = frozenset(stmt.type_params)
+        fields: dict[str, Type] = {}
+        seen_fields: dict[str, SourceSpan] = {}
+        for fd in stmt.fields:
+            if fd.name in seen_fields:
+                raise AglTypeError(
+                    f"Duplicate field '{fd.name}' in record '{stmt.name}'.", span=fd.span
+                )
+            seen_fields[fd.name] = fd.span
+            self._ensure_referenced_type_built(fd.type_expr)
+            field_type = self._env.resolve_type_expr(
+                fd.type_expr, span=fd.span, type_vars=type_vars
+            )
+            fields[fd.name] = field_type
+        template = RecordType(
+            name=stmt.name,
+            fields=fields,
+            type_args=tuple(TypeVarType(p) for p in stmt.type_params),
+        )
+        gdef = GenericTypeDef(kind="record", type_params=stmt.type_params, template=template)
+        self._env.register_generic_type(stmt.name, gdef)
+        self._env.unregister_name(stmt.name)
+        field_names = tuple(fields.keys())
+        field_templates = tuple(fields.values())
+        sig = ConstructorSignature(
+            owner_name=stmt.name,
+            variant=None,
+            field_names=field_names,
+            field_templates=field_templates,
+            result_template=template,
+            type_params=stmt.type_params,
+        )
+        self._env.register_constructor_signature(sig)
+
+    def _build_generic_enum(self, stmt: EnumDef) -> None:
+        """Build a generic enum type: register GenericTypeDef + ConstructorSignatures."""
+        type_vars = frozenset(stmt.type_params)
+        variants: dict[str, dict[str, Type]] = {}
+        seen_variants: dict[str, SourceSpan] = {}
+        for vd in stmt.variants:
+            if vd.name in seen_variants:
+                raise AglTypeError(
+                    f"Duplicate variant '{vd.name}' in enum '{stmt.name}'.", span=vd.span
+                )
+            seen_variants[vd.name] = vd.span
+            vfields: dict[str, Type] = {}
+            seen_vfields: dict[str, SourceSpan] = {}
+            for fd in vd.fields:
+                if fd.name in seen_vfields:
+                    raise AglTypeError(
+                        f"Duplicate field '{fd.name}' in variant '{stmt.name}.{vd.name}'.",
+                        span=fd.span,
+                    )
+                seen_vfields[fd.name] = fd.span
+                self._ensure_referenced_type_built(fd.type_expr)
+                vfields[fd.name] = self._env.resolve_type_expr(
+                    fd.type_expr, span=fd.span, type_vars=type_vars
+                )
+            variants[vd.name] = vfields
+        template = EnumType(
+            name=stmt.name,
+            variants=variants,
+            type_args=tuple(TypeVarType(p) for p in stmt.type_params),
+        )
+        gdef = GenericTypeDef(kind="enum", type_params=stmt.type_params, template=template)
+        self._env.register_generic_type(stmt.name, gdef)
+        self._env.unregister_name(stmt.name)
+        # Register one ConstructorSignature per variant.
+        for vd in stmt.variants:
+            vfields = variants[vd.name]
+            field_names = tuple(vfields.keys())
+            field_templates = tuple(vfields.values())
+            sig = ConstructorSignature(
+                owner_name=stmt.name,
+                variant=vd.name,
+                field_names=field_names,
+                field_templates=field_templates,
+                result_template=template,
+                type_params=stmt.type_params,
+            )
+            self._env.register_constructor_signature(sig)
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles."""
@@ -667,7 +769,7 @@ class _Checker:
         if isinstance(expr, IsTest):
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
-            return self._check_field_access(expr)
+            return self._check_field_access(expr, expected=expected)
         if _is_index_like(expr):
             return self._check_index_access(expr)
         if isinstance(expr, ListLit):
@@ -679,9 +781,13 @@ class _Checker:
     # --- VarRef ---
 
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
-        # Bare constructor reference → zero-arg construction.
+        # Bare constructor reference → zero-arg construction or generic constructor as value.
         if node.node_id in self._resolved.constructor_refs:
             ctor_ref = self._resolved.constructor_refs[node.node_id]
+            if ctor_ref.type_params:
+                return self._check_generic_constructor_as_value(
+                    ctor_ref=ctor_ref, span=node.span, expected=expected
+                )
             owner = self._resolve_constructor_owner(ctor_ref, node.span)
             return self._check_constructor_call(
                 owner=owner, variant=ctor_ref.variant, args=(), span=node.span
@@ -721,6 +827,135 @@ class _Checker:
             )
         return typ
 
+    def _check_generic_constructor_as_value(
+        self,
+        *,
+        ctor_ref: ConstructorRef,
+        span: SourceSpan,
+        expected: Type | None,
+    ) -> Type:
+        """Handle a generic constructor used as a bare value (not in direct call position).
+
+        For nullary variants (no fields): instantiate from the expected nominal type.
+        For payload constructors: instantiate to a FunctionType from expected FunctionType.
+        """
+        owner_name = ctor_ref.owner_name
+        variant = ctor_ref.variant
+        type_params = ctor_ref.type_params
+        sig = self._env.get_constructor_signature(owner_name, variant)
+        assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
+
+        if not sig.field_names:
+            # Nullary variant: infer type args from expected nominal enum type.
+            subst: dict[str, Type] = {}
+            if (
+                expected is not None
+                and isinstance(expected, EnumType)
+                and expected.name == owner_name
+            ):
+                for p, ta in zip(type_params, expected.type_args):
+                    subst[p] = ta
+            for p in type_params:
+                if p not in subst:
+                    raise AglTypeError(
+                        f"Cannot infer type argument(s) for '{owner_name}': "
+                        "no contextual type available. "
+                        f"Add a type annotation (e.g. 'let x: {owner_name}[…] = …').",
+                        span=span,
+                    )
+            concrete_type = self._env.instantiate_nominal(
+                owner_name, tuple(subst[p] for p in type_params)
+            )
+            return self._check_constructor_call(
+                owner=concrete_type, variant=variant, args=(), span=span
+            )
+        else:
+            # Payload constructor as value: produce a FunctionType.
+            subst = {}
+            if expected is not None and isinstance(expected, FunctionType):
+                # Match field templates against expected function params.
+                for ft, ep in zip(sig.field_templates, expected.params):
+                    self._match_unsolved(ft, ep, subst, span=span)
+                self._match_unsolved(sig.result_template, expected.result, subst, span=span)
+            for p in type_params:
+                if p not in subst:
+                    raise AglTypeError(
+                        f"Cannot infer type argument(s) for constructor '{owner_name}': "
+                        "no contextual type available. "
+                        f"Add a type annotation (e.g. 'let f: ({owner_name}[…]) = …').",
+                        span=span,
+                    )
+            concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
+            concrete_result = substitute(sig.result_template, subst)
+            return FunctionType(params=concrete_params, result=concrete_result)
+
+    def _check_generic_constructor_call(
+        self,
+        *,
+        node_type_args: tuple[object, ...],
+        ctor_ref: ConstructorRef,
+        named_args: tuple[NamedArg, ...],
+        span: SourceSpan,
+        expected: Type | None,
+    ) -> Type:
+        """Check a generic constructor call (with inference or explicit type args)."""
+        owner_name = ctor_ref.owner_name
+        variant = ctor_ref.variant
+        type_params = ctor_ref.type_params
+        sig = self._env.get_constructor_signature(owner_name, variant)
+        assert sig is not None, (
+            f"No constructor signature for {owner_name}.{variant!r}; "
+            "scope resolver should have caught unknown variants."
+        )
+
+        subst: dict[str, Type] = {}
+
+        if node_type_args:
+            # Explicit type arguments path.
+            if len(node_type_args) != len(type_params):
+                raise AglTypeError(
+                    f"'{owner_name}' requires {len(type_params)} type argument(s), "
+                    f"but {len(node_type_args)} were supplied.",
+                    span=span,
+                )
+            for p, ta in zip(type_params, node_type_args):
+                resolved_arg = self._env.resolve_type_expr(
+                    ta, span=span, type_vars=self._current_type_vars
+                )
+                subst[p] = resolved_arg
+        else:
+            # Inference path: match field arg types against field templates.
+            named_by_field = {na.name: na for na in named_args}
+            for field_name, field_template in zip(sig.field_names, sig.field_templates):
+                if field_name in named_by_field:
+                    na = named_by_field[field_name]
+                    partially = substitute(field_template, subst)
+                    if contains_type_var(partially):
+                        arg_type = self._check_expr(na.value, expected=None)
+                    else:
+                        arg_type = self._check_expr(na.value, expected=partially)
+                    self._match(field_template, arg_type, subst, span=na.span)
+            # Fill remaining unsolved from expected result type.
+            if expected is not None:
+                self._match_unsolved(sig.result_template, expected, subst, span=span)
+            # Verify all type params were solved.
+            for p in type_params:
+                if p not in subst:
+                    raise AglTypeError(
+                        f"Cannot infer type argument '{p}' for constructor '{owner_name}'; "
+                        f"supply it explicitly via '{owner_name}::[…]' or add a type annotation.",
+                        span=span,
+                    )
+
+        # Instantiate the nominal type.
+        concrete_type = self._env.instantiate_nominal(
+            owner_name, tuple(subst[p] for p in type_params)
+        )
+        # Validate the constructor call.
+        return self._check_constructor_call(
+            owner=concrete_type, variant=variant, args=named_args, span=span
+        )
+
     # --- Call dispatch ---
 
     def _check_call(self, node: Call, *, expected: Type | None) -> Type:
@@ -742,12 +977,12 @@ class _Checker:
             isinstance(node.callee, VarRef)
             and node.callee.node_id in self._resolved.constructor_refs
         ):
-            return self._check_constructor_callee_call(node)
+            return self._check_constructor_callee_call(node, expected=expected)
         if (
             isinstance(node.callee, FieldAccess)
             and node.callee.node_id in self._resolved.qualified_constructor_refs
         ):
-            return self._check_qualified_constructor_callee_call(node)
+            return self._check_qualified_constructor_callee_call(node, expected=expected)
 
         # Declared function by name?
         # Take the declared-name (named/default) path ONLY when the callee is a
@@ -1289,6 +1524,15 @@ class _Checker:
                 for tp, cp in zip(template.params, concrete.params):
                     self._match(tp, cp, subst, span=span)
                 self._match(template.result, concrete.result, subst, span=span)
+        elif (
+            isinstance(template, (RecordType, EnumType))
+            and isinstance(concrete, (RecordType, EnumType))
+            and type(template) is type(concrete)
+            and template.name == concrete.name
+            and len(template.type_args) == len(concrete.type_args)
+        ):
+            for ta, ca in zip(template.type_args, concrete.type_args):
+                self._match(ta, ca, subst, span=span)
         # Shape mismatch, primitive mismatch, or nominal mismatch: stop (best-effort).
 
     def _match_unsolved(
@@ -1310,6 +1554,15 @@ class _Checker:
                 for tp, cp in zip(template.params, concrete.params):
                     self._match_unsolved(tp, cp, subst, span=span)
                 self._match_unsolved(template.result, concrete.result, subst, span=span)
+        elif (
+            isinstance(template, (RecordType, EnumType))
+            and isinstance(concrete, (RecordType, EnumType))
+            and type(template) is type(concrete)
+            and template.name == concrete.name
+            and len(template.type_args) == len(concrete.type_args)
+        ):
+            for ta, ca in zip(template.type_args, concrete.type_args):
+                self._match_unsolved(ta, ca, subst, span=span)
 
     # --- shared call-argument checker ---
 
@@ -1939,12 +2192,13 @@ class _Checker:
 
     # --- field access ---
 
-    def _check_field_access(self, node: FieldAccess) -> Type:
+    def _check_field_access(self, node: FieldAccess, expected: Type | None = None) -> Type:
         # Bare qualified constructor reference → zero-arg construction.
         if node.node_id in self._resolved.qualified_constructor_refs:
             owner_name, variant = self._resolved.qualified_constructor_refs[node.node_id]
             return self._resolve_qualified_constructor_and_call(
-                owner_name=owner_name, variant=variant, args=(), span=node.span
+                owner_name=owner_name, variant=variant, args=(), span=node.span,
+                expected=expected,
             )
         obj_type = self._check_expr(node.obj, expected=None)
         # D2: reject operations on bare type variables.
@@ -2027,8 +2281,25 @@ class _Checker:
         variant: str,
         args: tuple[NamedArg, ...],
         span: SourceSpan,
+        expected: Type | None = None,
     ) -> Type:
         """Validate and dispatch a qualified constructor (EnumName.variant)."""
+        # Check if this is a generic enum type.
+        gdef = self._env.get_generic_type(owner_name)
+        if gdef is not None:
+            ctor_ref = ConstructorRef(
+                owner_name=owner_name,
+                variant=variant,
+                owner_decl_node_id=0,
+                type_params=gdef.type_params,
+            )
+            return self._check_generic_constructor_call(
+                node_type_args=(),
+                ctor_ref=ctor_ref,
+                named_args=args,
+                span=span,
+                expected=expected,
+            )
         enum_type = self._env.resolve_named_type(owner_name)
         if not isinstance(enum_type, EnumType):
             raise AglTypeError(
@@ -2044,7 +2315,7 @@ class _Checker:
             owner=enum_type, variant=variant, args=args, span=span
         )
 
-    def _check_constructor_callee_call(self, node: Call) -> Type:
+    def _check_constructor_callee_call(self, node: Call, *, expected: Type | None = None) -> Type:
         """Handle a Call whose callee is an unqualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
         ctor_ref = self._resolved.constructor_refs[node.callee.node_id]
@@ -2053,9 +2324,19 @@ class _Checker:
                 "Constructor arguments must be named; positional arguments are not allowed.",
                 span=node.span,
             )
+        if ctor_ref.type_params:
+            # Generic constructor: route to generic call handler.
+            return self._check_generic_constructor_call(
+                node_type_args=node.type_args,
+                ctor_ref=ctor_ref,
+                named_args=node.named_args,
+                span=node.span,
+                expected=expected,
+            )
         if node.type_args:
             raise AglTypeError(
-                "Explicit type arguments on constructors are not supported yet.",
+                f"'{ctor_ref.owner_name}' is not a generic constructor and does not accept "
+                "type arguments.",
                 span=node.span,
             )
         owner = self._resolve_constructor_owner(ctor_ref, node.span)
@@ -2069,7 +2350,9 @@ class _Checker:
             owner=owner, variant=ctor_ref.variant, args=node.named_args, span=node.span
         )
 
-    def _check_qualified_constructor_callee_call(self, node: Call) -> Type:
+    def _check_qualified_constructor_callee_call(
+        self, node: Call, *, expected: Type | None = None
+    ) -> Type:
         """Handle a Call whose callee is a qualified constructor FieldAccess."""
         assert isinstance(node.callee, FieldAccess)
         owner_name, variant = self._resolved.qualified_constructor_refs[node.callee.node_id]
@@ -2084,7 +2367,8 @@ class _Checker:
                 span=node.span,
             )
         return self._resolve_qualified_constructor_and_call(
-            owner_name=owner_name, variant=variant, args=node.named_args, span=node.span
+            owner_name=owner_name, variant=variant, args=node.named_args, span=node.span,
+            expected=expected,
         )
 
     def _check_constructor_call(

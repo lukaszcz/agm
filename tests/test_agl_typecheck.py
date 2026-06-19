@@ -4379,3 +4379,720 @@ class TestGenerics:
             or "assign" in str(err).lower()
         )
 
+# ---------------------------------------------------------------------------
+# M3b: Generic record/enum type declarations
+# ---------------------------------------------------------------------------
+
+
+class TestGenericTypeDecl:
+    """Tests for generic record and enum type declarations."""
+
+    def test_generic_record_accepted(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box[int] = Box(value: 42)\nb"
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_enum_accepted(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = some(value: 1)\nx"
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_record_two_type_params(self) -> None:
+        r = accept_type(
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            'let p: Pair[int, text] = Pair(first: 1, second: "hi")\np'
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_enum_two_type_params(self) -> None:
+        r = accept_type(
+            "enum Either[L, R]\n"
+            "  | left(value: L)\n"
+            "  | right(value: R)\n"
+            "let e: Either[int, text] = left(value: 1)\ne"
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_record_with_concrete_field(self) -> None:
+        r = accept_type(
+            "record Tagged[T]\n"
+            "  label: text\n"
+            "  value: T\n"
+            'let t: Tagged[int] = Tagged(label: "n", value: 5)\nt'
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_type_registers_in_env(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box[int] = Box(value: 1)\nb"
+        )
+        gdef = r.type_env.get_generic_type("Box")
+        assert gdef is not None
+        assert gdef.type_params == ("T",)
+
+    def test_bare_generic_name_without_args_rejected(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box = Box(value: 1)\nb"
+        )
+        assert "type argument" in str(err).lower() or "requires" in str(err).lower()
+
+    def test_generic_record_duplicate_field_rejected(self) -> None:
+        err = reject_type(
+            "record Bad[T]\n"
+            "  x: T\n"
+            "  x: int\n"
+            "Bad(x: 1)"
+        )
+        assert "duplicate" in str(err).lower() or "field" in str(err).lower()
+
+    def test_generic_enum_duplicate_variant_rejected(self) -> None:
+        err = reject_type(
+            "enum Bad[T]\n"
+            "  | Foo\n"
+            "  | Foo\n"
+            "Foo()"
+        )
+        assert "duplicate" in str(err).lower() or "variant" in str(err).lower()
+
+
+class TestGenericConstructorInference:
+    """Tests for type-argument inference on generic constructors."""
+
+    def test_record_constructor_inferred_from_field(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "Box(value: 42)"
+        )
+        assert r.resolved.program is not None
+
+    def test_record_constructor_inferred_from_annotation(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box[int] = Box(value: 42)\nb"
+        )
+        assert r.resolved.program is not None
+
+    def test_enum_payload_variant_inferred_from_field(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "some(value: 1)"
+        )
+        assert r.resolved.program is not None
+
+    def test_enum_payload_variant_inferred_from_annotation(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = some(value: 1)\nx"
+        )
+        assert r.resolved.program is not None
+
+    def test_nullary_variant_inferred_from_annotation(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = none()\nx"
+        )
+        assert r.resolved.program is not None
+
+    def test_record_inferred_from_list_element_context(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let bs: list[Box[int]] = [Box(value: 1), Box(value: 2)]\nbs"
+        )
+        assert r.resolved.program is not None
+
+    def test_qualified_variant_inferred(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = Option.some(value: 1)\nx"
+        )
+        assert r.resolved.program is not None
+
+    def test_two_type_params_inferred_from_fields(self) -> None:
+        r = accept_type(
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            'Pair(first: 1, second: "hi")'
+        )
+        assert r.resolved.program is not None
+
+    def test_inferred_type_matches_result(self) -> None:
+        # Box(value: 1) infers T=int; assert the binding's type_args is (IntType(),)
+        # to lock down "no stale T / no concrete leak".
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b = Box(value: 1)\nb"
+        )
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        binding = r.type_env.get_binding_type(decl.node_id)
+        assert isinstance(binding, RecordType)
+        assert binding.type_args == (IntType(),)
+
+    def test_uninferable_type_var_rejected(self) -> None:
+        # no fields, no annotation -> T cannot be solved
+        err = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "none()"
+        )
+        assert (
+            "infer" in str(err).lower()
+            or "type argument" in str(err).lower()
+            or "annotation" in str(err).lower()
+        )
+
+
+class TestGenericConstructorExplicit:
+    """Tests for explicit type arguments on generic constructors."""
+
+    def test_record_explicit_type_arg(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "Box::[int](value: 42)"
+        )
+        assert r.resolved.program is not None
+
+    def test_enum_variant_explicit_type_arg(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "some::[int](value: 1)"
+        )
+        assert r.resolved.program is not None
+
+    def test_two_type_params_explicit(self) -> None:
+        r = accept_type(
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            'Pair::[int, text](first: 1, second: "hi")'
+        )
+        assert r.resolved.program is not None
+
+    def test_explicit_wrong_arity_rejected(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "Box::[int, text](value: 42)"
+        )
+        assert (
+            "type argument" in str(err).lower()
+            or "requires" in str(err).lower()
+            or "1" in str(err)
+        )
+
+    def test_nullary_variant_explicit_type_arg(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "none::[int]()"
+        )
+        assert r.resolved.program is not None
+
+
+class TestGenericConstructorErrors:
+    """Error cases for generic constructors."""
+
+    def test_field_type_mismatch_rejected(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            'let b: Box[int] = Box(value: "text")\nb'
+        )
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_missing_field_rejected(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "Box()"
+        )
+        assert (
+            "missing" in str(err).lower()
+            or "field" in str(err).lower()
+            or "infer" in str(err).lower()
+        )
+
+    def test_unknown_field_rejected(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "Box(value: 1, extra: 2)"
+        )
+        assert "no field" in str(err).lower() or "field" in str(err).lower()
+
+    def test_inconsistent_type_inference_rejected(self) -> None:
+        # Pair(first: 1, second: T=bool) when annotation says Pair[int, int]
+        err = reject_type(
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            "let p: Pair[int, int] = Pair(first: 1, second: true)\np"
+        )
+        assert (
+            "mismatch" in str(err).lower()
+            or "expected" in str(err).lower()
+            or "bool" in str(err).lower()
+        )
+
+    def test_positional_arg_rejected(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "Box(42)"
+        )
+        assert "named" in str(err).lower() or "positional" in str(err).lower()
+
+
+class TestGenericInvariance:
+    """Tests for invariant type argument checking (D6)."""
+
+    def test_box_int_not_assignable_to_box_text(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            'let b: Box[text] = Box(value: 1)\nb'
+        )
+        assert (
+            "mismatch" in str(err).lower()
+            or "expected" in str(err).lower()
+            or "int" in str(err).lower()
+        )
+
+    def test_option_int_not_assignable_to_option_text(self) -> None:
+        err = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[text] = some(value: 1)\nx"
+        )
+        assert (
+            "mismatch" in str(err).lower()
+            or "expected" in str(err).lower()
+            or "int" in str(err).lower()
+        )
+
+    def test_box_int_assignable_to_box_int(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box[int] = Box(value: 1)\nb"
+        )
+        assert r.resolved.program is not None
+
+
+class TestGenericFieldAccess:
+    """Tests for field access on generic record instances."""
+
+    def test_field_access_on_generic_record(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box[int] = Box(value: 42)\nb.value"
+        )
+        assert r.resolved.program is not None
+
+    def test_field_type_is_instantiated(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box[int] = Box(value: 42)\n"
+            "let v: int = b.value\nv"
+        )
+        assert r.resolved.program is not None
+
+    def test_field_type_mismatch_after_instantiation(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let b: Box[int] = Box(value: 42)\n"
+            "let s: text = b.value\ns"
+        )
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_two_param_field_access(self) -> None:
+        r = accept_type(
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            'let p: Pair[int, text] = Pair(first: 1, second: "hi")\n'
+            "let x: int = p.first\n"
+            "let y: text = p.second\nx"
+        )
+        assert r.resolved.program is not None
+
+
+class TestGenericPatterns:
+    """Tests for pattern matching on generic enum instances."""
+
+    def test_case_on_generic_enum(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = some(value: 1)\n"
+            "case x of | some(value: v) => v | none() => 0"
+        )
+        assert r.resolved.program is not None
+
+    def test_pattern_field_type_is_instantiated(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = some(value: 1)\n"
+            "case x of | some(value: v) => v + 1 | none() => 0"
+        )
+        assert r.resolved.program is not None
+
+
+class TestGenericConstructorAsValue:
+    """Tests for generic constructors used as values (not in direct call position)."""
+
+    def test_payload_constructor_as_value_with_annotation(self) -> None:
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let mk: (int) -> Box[int] = Box\nmk"
+        )
+        assert r.resolved.program is not None
+
+    def test_nullary_variant_as_value_with_annotation(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = none\nx"
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_constructor_as_value_no_context_rejected(self) -> None:
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "Box"
+        )
+        assert (
+            "infer" in str(err).lower()
+            or "type argument" in str(err).lower()
+            or "annotation" in str(err).lower()
+        )
+
+
+class TestNonGenericConstructorsUnchanged:
+    """Verify that non-generic constructors continue to work as before."""
+
+    def test_non_generic_record_still_works(self) -> None:
+        r = accept_type("record Point\n  x: int\n  y: int\nPoint(x: 1, y: 2)")
+        assert r.resolved.program is not None
+
+    def test_non_generic_enum_still_works(self) -> None:
+        r = accept_type("enum Color\n  | Red\n  | Blue\nRed()")
+        assert r.resolved.program is not None
+
+    def test_non_generic_type_arg_rejected(self) -> None:
+        err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x: 1, y: 2)")
+        assert (
+            "type argument" in str(err).lower()
+            or "not a generic" in str(err).lower()
+            or "generic" in str(err).lower()
+        )
+
+    def test_non_generic_enum_variant_type_arg_rejected(self) -> None:
+        err = reject_type("enum Color\n  | Red\nRed::[int]()")
+        assert (
+            "type argument" in str(err).lower()
+            or "not a generic" in str(err).lower()
+            or "generic" in str(err).lower()
+        )
+
+
+# ---------------------------------------------------------------------------
+# M3b: additional coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestGenericCoverageEdgeCases:
+    """Tests for M3b code paths not yet exercised by the main test classes."""
+
+    def test_generic_field_type_references_generic_record(self) -> None:
+        """AppliedT branch (record path) in _ensure_referenced_type_built."""
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "record Wrapper\n"
+            "  box: Box[int]\n"
+            "let w = Wrapper(box: Box(value: 42))\nw"
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_field_type_references_generic_enum(self) -> None:
+        """AppliedT branch (enum path) in _ensure_referenced_type_built (lines 362-363)."""
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "record Wrapper\n"
+            "  opt: Option[int]\n"
+            "let w = Wrapper(opt: some(value: 1))\nw"
+        )
+        assert r.resolved.program is not None
+
+    def test_duplicate_field_in_generic_enum_variant_rejected(self) -> None:
+        """Duplicate field check in generic enum variant (line 418)."""
+        err = reject_type("enum E[T]\n  | A(x: T, x: T)")
+        assert "duplicate" in str(err).lower() or "field" in str(err).lower()
+
+
+    def test_generic_constructor_as_value_no_context_rejected(self) -> None:
+        """Unsolvable type param error in _check_generic_constructor_as_value (line 860)."""
+        err = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "none"
+        )
+        assert (
+            "infer" in str(err).lower()
+            or "annotation" in str(err).lower()
+            or "type argument" in str(err).lower()
+        )
+
+    def test_applied_t_with_unknown_name_in_field(self) -> None:
+        """AppliedT where name is not a record/enum (branch 362->364) triggers resolve error."""
+        # Box[T] is a generic record; Wrapper has a field of type Box[Unknown[int]].
+        # When building Wrapper, _ensure_referenced_type_built is called on the field type.
+        # Box is found in record_defs (line 361), then Unknown is not in record_defs or
+        # enum_defs (branch 362->364), and the error surfaces in resolve_type_expr.
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "record Wrapper\n"
+            "  box: Box[Unknown[int]]\n"
+            "let w = Wrapper(box: Box(value: 1))\nw"
+        )
+        assert err is not None
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: nested-generic inference (regression tests)
+# ---------------------------------------------------------------------------
+
+
+class TestNestedGenericInference:
+    """Regression tests for _match recursing into generic RecordType/EnumType type_args.
+
+    These verify that nested-generic inference works WITHOUT explicit ::[…] or annotations.
+    """
+
+    def test_def_call_unwrap_infers_u_from_box(self) -> None:
+        # def-call path: unwrap(b: Box(value: 1)) must infer U=int without annotation.
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def unwrap[U](b: Box[U]) -> U = b.value\n"
+            "let n: int = unwrap(b: Box(value: 1))\nn"
+        )
+        assert r.resolved.program is not None
+
+    def test_def_call_unwrap_wrong_return_type_rejected(self) -> None:
+        # unwrap returns U=int; annotating as text must be rejected.
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def unwrap[U](b: Box[U]) -> U = b.value\n"
+            "let s: text = unwrap(b: Box(value: 1))\ns"
+        )
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_constructor_holder_infers_u_from_nested_box(self) -> None:
+        # constructor path: Holder(inner: Box(value: 1)) infers U=int.
+        # Assert the binding's type_args is (IntType(),).
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "record Holder[U]\n"
+            "  inner: Box[U]\n"
+            "let h = Holder(inner: Box(value: 1))\nh"
+        )
+        decl = r.resolved.program.body.items[2]
+        assert isinstance(decl, LetDecl)
+        binding = r.type_env.get_binding_type(decl.node_id)
+        assert isinstance(binding, RecordType)
+        assert binding.type_args == (IntType(),)
+
+    def test_constructor_holder_use_as_int_works(self) -> None:
+        # Inferred Holder[int] — accessing inner.value as int must succeed.
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "record Holder[U]\n"
+            "  inner: Box[U]\n"
+            "let h = Holder(inner: Box(value: 1))\n"
+            "let n: int = h.inner.value\nn"
+        )
+        assert r.resolved.program is not None
+
+    def test_inconsistent_nested_inference_rejected(self) -> None:
+        # If the same type var U is bound to both int and text, must be rejected.
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def swap[U](a: Box[U], b: Box[U]) -> U = a.value\n"
+            "swap(a: Box(value: 1), b: Box(value: \"hi\"))"
+        )
+        assert (
+            "inconsistent" in str(err).lower()
+            or "mismatch" in str(err).lower()
+            or "expected" in str(err).lower()
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: generic-recursion rejection tests
+# ---------------------------------------------------------------------------
+
+
+class TestGenericRecursionRejection:
+    """Tests asserting the 'directly or indirectly recursive' error for generic types."""
+
+    def test_generic_record_direct_recursion_rejected(self) -> None:
+        # record Tree[T] with a field of type Tree[T] is directly recursive.
+        err = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "record Tree[T]\n"
+            "  value: T\n"
+            "  child: Tree[T]\n"
+            "Tree(value: 1, child: Tree(value: 2, child: ()))"
+        )
+        assert "recursive" in str(err).lower()
+
+    def test_generic_record_indirect_via_list_rejected(self) -> None:
+        # children: list[Tree[T]] is indirect recursion via list.
+        err = reject_type(
+            "record Tree[T]\n"
+            "  value: T\n"
+            "  children: list[Tree[T]]\n"
+            "Tree(value: 1, children: [])"
+        )
+        assert "recursive" in str(err).lower()
+
+    def test_generic_record_indirect_via_dict_rejected(self) -> None:
+        # dict[text, Tree[T]] is indirect recursion via dict.
+        err = reject_type(
+            "record Tree[T]\n"
+            "  value: T\n"
+            "  children: dict[text, Tree[T]]\n"
+            "Tree(value: 1, children: {})"
+        )
+        assert "recursive" in str(err).lower()
+
+    def test_generic_enum_direct_recursion_rejected(self) -> None:
+        # enum L[T] | nil | cons(tail: L[T]) is directly recursive.
+        err = reject_type(
+            "enum L[T]\n"
+            "  | nil\n"
+            "  | cons(head: T, tail: L[T])\n"
+            "nil()"
+        )
+        assert "recursive" in str(err).lower()
+
+    def test_generic_mutual_recursion_rejected(self) -> None:
+        # record A[T] with field b: B[T] and record B[T] with field a: A[T].
+        err = reject_type(
+            "record A[T]\n"
+            "  b: B[T]\n"
+            "record B[T]\n"
+            "  a: A[T]\n"
+            "A(b: B(a: ()))"
+        )
+        assert "recursive" in str(err).lower()
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: abstract-instance field access and pattern tests in generic defs
+# ---------------------------------------------------------------------------
+
+
+class TestGenericAbstractInstanceAccess:
+    """Tests for field access and pattern matching on abstract generic instances inside defs."""
+
+    def test_field_access_in_generic_def_yields_type_var(self) -> None:
+        # def unbox[U](b: Box[U]) -> U = b.value; field access on Box[U] yields U.
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def unbox[U](b: Box[U]) -> U = b.value\n"
+            "let n: int = unbox(b: Box(value: 42))\nn"
+        )
+        assert r.resolved.program is not None
+
+    def test_field_access_wrong_return_type_rejected(self) -> None:
+        # unbox returns U; annotating as text when U=int must be rejected.
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def unbox[U](b: Box[U]) -> U = b.value\n"
+            "let s: text = unbox(b: Box(value: 42))\ns"
+        )
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_case_on_generic_enum_in_def_binds_type_var(self) -> None:
+        # A generic def that extracts a value from Option[U] via case.
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "def get_or[U](opt: Option[U], default: U) -> U =\n"
+            "  case opt of\n"
+            "    | some(value: v) => v\n"
+            "    | none() => default\n"
+            "let n: int = get_or(opt: some(value: 1), default: 0)\nn"
+        )
+        assert r.resolved.program is not None
+
+    def test_case_on_generic_enum_wrong_return_type_rejected(self) -> None:
+        # The generic def returns U; mismatching annotation must be rejected.
+        err = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "def get_or[U](opt: Option[U], default: U) -> U =\n"
+            "  case opt of\n"
+            "    | some(value: v) => v\n"
+            "    | none() => default\n"
+            "let s: text = get_or(opt: some(value: 1), default: 0)\ns"
+        )
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()

@@ -15,14 +15,12 @@ import agm.commands.dep.list as dep_list_command
 import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
-import agm.commands.exec as exec_command
 import agm.commands.init as init_command
 import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
 import agm.commands.loop.select as loop_select_command
 import agm.commands.loop.step as loop_step_command
 import agm.commands.refine as refine_command
-import agm.commands.repl as repl_command
 import agm.commands.review as review_command
 import agm.commands.revise as revise_command
 import agm.commands.run as run_command
@@ -1091,6 +1089,10 @@ def exec_cmd(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
         )
     _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
+    # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
+    # would otherwise slow every non-AgL ``agm`` invocation's startup.
+    import agm.commands.exec as exec_command
+
     exec_command.run(
         ExecArgs(
             file=file,
@@ -1159,6 +1161,10 @@ def repl_cmd(
     del _help
     del _dry_run
     _check_log_flags_exclusive("repl", no_log=no_log, log=log, log_file=log_file)
+    # Imported lazily: pulls in the AgL DSL (runtime, repl console), which would
+    # otherwise slow every non-AgL ``agm`` invocation's startup.
+    import agm.commands.repl as repl_command
+
     repl_command.run(
         ReplArgs(
             strict_json=strict_json,

@@ -3985,3 +3985,397 @@ class TestTypeVarTypeSchema:
         from agm.agl.runtime.schema import derive_schema
         with pytest.raises(TypeError, match="TypeVarType"):
             derive_schema(TypeVarType("T"))
+
+
+# ---------------------------------------------------------------------------
+# M3a: Generic def checking, type-argument solver, parametricity gates
+# ---------------------------------------------------------------------------
+
+
+class TestGenerics:
+    """Tests for M3a: generic def type-checking, inference, D2 parametricity,
+    D3 target guard, and D5 generic-def-as-value instantiation."""
+
+    # ------------------------------------------------------------------
+    # Generic def: body checking
+    # ------------------------------------------------------------------
+
+    def test_generic_id_def_accepted(self) -> None:
+        accept_type("def id[T](x: T) -> T = x\nid(1)")
+
+    def test_generic_const_def_accepted(self) -> None:
+        accept_type("def const[A, B](a: A, b: B) -> A = a\nconst(1, true)")
+
+    def test_generic_first_container_index_allowed(self) -> None:
+        # list[T] indexing yields T — indexing on a container of T is fine
+        accept_type("def first[T](xs: list[T]) -> T = xs[0]\nfirst([1, 2, 3])")
+
+    def test_generic_wrap_def_accepted(self) -> None:
+        accept_type("def wrap[T](x: T) -> list[T] = [x]\nwrap(1)")
+
+    # ------------------------------------------------------------------
+    # Type argument inference
+    # ------------------------------------------------------------------
+
+    def test_inference_arg_driven(self) -> None:
+        r = accept_type("def id[T](x: T) -> T = x\nlet n = id(1)\nn")
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert r.type_env.get_binding_type(decl.node_id) == IntType()
+
+    def test_inference_result_only_from_expected(self) -> None:
+        # T only appears in the result; context provides the binding
+        r = accept_type("def empty[T]() -> list[T] = []\nlet xs: list[int] = empty()\nxs")
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert r.type_env.get_binding_type(decl.node_id) == ListType(elem=IntType())
+
+    def test_inference_context_doesnt_override_arg(self) -> None:
+        # let x: decimal = id(1) infers T=int, then coerces int → decimal
+        r = accept_type("def id[T](x: T) -> T = x\nlet x: decimal = id(1)\nx")
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert r.type_env.get_binding_type(decl.node_id) == DecimalType()
+
+    def test_explicit_type_args_single(self) -> None:
+        r = accept_type("def id[T](x: T) -> T = x\nid::[int](1)")
+        assert r.resolved.program is not None
+
+    def test_explicit_type_args_multi(self) -> None:
+        r = accept_type("def const[A, B](a: A, b: B) -> A = a\nconst::[int, text](1, \"x\")")
+        assert r.resolved.program is not None
+
+    def test_explicit_type_args_arity_error(self) -> None:
+        err = reject_type("def id[T](x: T) -> T = x\nid::[int, text](1)")
+        assert "type argument" in str(err).lower() or "arity" in str(err).lower() or "1" in str(err)
+
+    def test_inconsistent_binding_error(self) -> None:
+        # pair[T](a: T, b: T) — T=int from first arg, T must be text from second
+        err = reject_type('def pair[T](a: T, b: T) -> T = a\npair(1, "x")')
+        assert "inconsistent" in str(err).lower() or "type argument" in str(err).lower()
+
+    def test_uninferable_variable_error(self) -> None:
+        # Result-only type var with no expected context
+        err = reject_type("def empty[T]() -> list[T] = []\nempty()")
+        assert (
+            "infer" in str(err).lower()
+            or "type argument" in str(err).lower()
+            or "supply" in str(err).lower()
+        )
+
+    # ------------------------------------------------------------------
+    # D2: Strict parametricity — reject operations on bare TypeVarType
+    # ------------------------------------------------------------------
+
+    def test_d2_equality_on_T_rejected(self) -> None:
+        err = reject_type("def eq[T](a: T, b: T) -> bool = a = b")
+        assert (
+            "type variable" in str(err).lower()
+            or "abstract" in str(err).lower()
+            or "not permitted" in str(err).lower()
+        )
+
+    def test_d2_ordering_on_T_rejected(self) -> None:
+        err = reject_type("def lt[T](a: T, b: T) -> bool = a < b")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_add_on_T_rejected(self) -> None:
+        err = reject_type("def add[T](a: T, b: T) -> T = a + b")
+        assert (
+            "type variable" in str(err).lower()
+            or "abstract" in str(err).lower()
+            or "not permitted" in str(err).lower()
+        )
+
+    def test_d2_sub_on_T_rejected(self) -> None:
+        err = reject_type("def sub[T](a: T, b: T) -> T = a - b")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_mul_on_T_rejected(self) -> None:
+        err = reject_type("def mul[T](a: T, b: T) -> T = a * b")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_div_on_T_rejected(self) -> None:
+        err = reject_type("def div[T](a: T, b: T) -> T = a / b")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_unary_neg_on_T_rejected(self) -> None:
+        err = reject_type("def neg[T](x: T) -> T = -x")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_print_on_T_rejected(self) -> None:
+        err = reject_type("def show[T](x: T) -> unit = print(x)")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_interpolation_on_T_rejected(self) -> None:
+        err = reject_type('def show[T](x: T) -> text = "${x}"')
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_field_access_on_T_rejected(self) -> None:
+        err = reject_type("def get[T](x: T) -> int = x.field")
+        assert (
+            "type variable" in str(err).lower()
+            or "abstract" in str(err).lower()
+            or "field" in str(err).lower()
+        )
+
+    def test_d2_index_on_T_rejected(self) -> None:
+        err = reject_type("def get[T](x: T) -> int = x[0]")
+        assert (
+            "type variable" in str(err).lower()
+            or "abstract" in str(err).lower()
+            or "indexable" in str(err).lower()
+        )
+
+    def test_d2_is_test_on_T_rejected(self) -> None:
+        err = reject_type("enum E\n  | A\ndef check[T](x: T) -> bool = x is E.A")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_in_op_bare_T_rejected(self) -> None:
+        # T `in` list[T] — left operand is a bare TypeVarType
+        err = reject_type("def contains[T](x: T, xs: list[T]) -> bool = x in xs")
+        assert (
+            "type variable" in str(err).lower()
+            or "abstract" in str(err).lower()
+            or "not permitted" in str(err).lower()
+        )
+
+    def test_d2_container_of_T_index_allowed(self) -> None:
+        # xs: list[T]; xs[0] yields T — container index is fine
+        accept_type("def first[T](xs: list[T]) -> T = xs[0]\nfirst([1])")
+
+    # ------------------------------------------------------------------
+    # D5: Generic def used as a value
+    # ------------------------------------------------------------------
+
+    def test_d5_generic_def_as_value_with_expected(self) -> None:
+        r = accept_type("def id[T](x: T) -> T = x\nlet f: (int) -> int = id\nf(1)")
+        assert r.resolved.program is not None
+
+    def test_d5_generic_def_as_value_no_expected_errors(self) -> None:
+        err = reject_type("def id[T](x: T) -> T = x\nlet f = id\nf")
+        assert (
+            "infer" in str(err).lower()
+            or "type argument" in str(err).lower()
+            or "annotate" in str(err).lower()
+        )
+
+    def test_d5_generic_def_still_callable(self) -> None:
+        accept_type("def id[T](x: T) -> T = x\nid(42)")
+
+    # ------------------------------------------------------------------
+    # D3: Agent/exec target may not contain a type variable
+    # ------------------------------------------------------------------
+
+    def test_d3_ask_with_type_var_target_rejected(self) -> None:
+        err = reject_type('def fetch[T](p: text) -> T = ask::[T](p)')
+        assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
+
+    def test_d3_ask_explicit_concrete_target_accepted(self) -> None:
+        r = accept_type('let n: int = ask::[int]("Q")\nn')
+        assert r.resolved.program is not None
+
+    def test_d3_ask_explicit_too_many_args_error(self) -> None:
+        err = reject_type('ask::[int, text]("Q")')
+        assert (
+            "type argument" in str(err).lower()
+            or "one" in str(err).lower()
+            or "2" in str(err)
+        )
+
+    def test_d3_exec_with_type_var_rejected(self) -> None:
+        err = reject_type('def run[T](cmd: text) -> T = exec::[T](cmd)')
+        assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
+
+    def test_d3_exec_explicit_concrete_target_accepted(self) -> None:
+        r = accept_type('let x: text = exec::[text]("ls")\nx')
+        assert r.resolved.program is not None
+
+    def test_d3_exec_too_many_type_args_error(self) -> None:
+        err = reject_type('exec::[text, int]("ls")')
+        assert (
+            "type argument" in str(err).lower()
+            or "one" in str(err).lower()
+            or "2" in str(err)
+        )
+
+    def test_d3_ask_request_with_type_var_rejected(self) -> None:
+        err = reject_type('def req[T](p: text) -> AgentRequest = ask-request::[T](p)')
+        assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
+
+    def test_d3_ask_with_list_of_T_rejected(self) -> None:
+        # list[T] as target also contains a type var
+        err = reject_type('def fetch[T](p: text) -> list[T] = ask::[list[T]](p)')
+        assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
+
+    def test_d3_non_type_var_cases_unaffected(self) -> None:
+        # Concrete targets (non-generic context) are unaffected
+        accept_type('let n: int = ask("Q")\nn')
+        accept_type('let x: text = exec("ls")\nx')
+
+    # ------------------------------------------------------------------
+    # D2: right-operand TypeVarType branches (separate from left)
+    # ------------------------------------------------------------------
+
+    def test_d2_right_eq_T_rejected(self) -> None:
+        # left is concrete, right is TypeVarType
+        err = reject_type("def f[T](x: T) -> bool = 1 = x")
+        assert "type variable" in str(err).lower() or "not permitted" in str(err).lower()
+
+    def test_d2_right_ordering_T_rejected(self) -> None:
+        err = reject_type("def f[T](x: T) -> bool = 1 < x")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_right_add_T_rejected(self) -> None:
+        err = reject_type("def f[T](x: T) -> T = 1 + x")
+        assert "type variable" in str(err).lower() or "not permitted" in str(err).lower()
+
+    def test_d2_right_sub_T_rejected(self) -> None:
+        err = reject_type("def f[T](x: T) -> T = 1 - x")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_right_mul_T_rejected(self) -> None:
+        err = reject_type("def f[T](x: T) -> T = 1 * x")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_right_div_T_rejected(self) -> None:
+        err = reject_type("def f[T](x: T) -> T = 1 / x")
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    def test_d2_right_in_T_rejected(self) -> None:
+        # right operand is TypeVarType in an 'in' operation
+        err = reject_type('def f[T](x: T) -> bool = "a" in x')
+        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+
+    # ------------------------------------------------------------------
+    # D5: cannot infer type arg for generic-as-value from context
+    # ------------------------------------------------------------------
+
+    def test_d5_uninferable_from_wrong_arity_context(self) -> None:
+        # id is (T) -> T but context is () -> int (arity mismatch) — T stays unsolved
+        err = reject_type("def id[T](x: T) -> T = x\nlet f: () -> int = id\nf()")
+        assert (
+            "infer" in str(err).lower()
+            or "type argument" in str(err).lower()
+            or "annotate" in str(err).lower()
+        )
+
+    # ------------------------------------------------------------------
+    # _match structural: DictType and FunctionType recursion
+    # ------------------------------------------------------------------
+
+    def test_match_dict_T_inferred(self) -> None:
+        # dict[text, T] param: matching infers T from a dict[text, int] value
+        r = accept_type(
+            'def first_val[T](d: dict[text, T]) -> T = d["k"]\nfirst_val({"k": 1})'
+        )
+        assert r.resolved.program is not None
+
+    def test_match_function_T_inferred(self) -> None:
+        # (T) -> T param: matching against a concrete function infers T
+        r = accept_type(
+            "def apply[T](f: (T) -> T, x: T) -> T = f(x)\n"
+            "def inc(n: int) -> int = n + 1\n"
+            "apply(inc, 1)"
+        )
+        assert r.resolved.program is not None
+
+    # ------------------------------------------------------------------
+    # _match_unsolved: DictType and FunctionType structural recursion
+    # ------------------------------------------------------------------
+
+    def test_match_unsolved_dict_T_from_expected(self) -> None:
+        # empty[T]() -> dict[text, T]: T inferred from expected dict[text, text]
+        r = accept_type(
+            "def empty_dict[T]() -> dict[text, T] = {}\n"
+            "let d: dict[text, text] = empty_dict()\nd"
+        )
+        assert r.resolved.program is not None
+
+    def test_match_unsolved_non_matching_result_type_ignored(self) -> None:
+        # When sig.result is a concrete type, _match_unsolved is a no-op —
+        # the type mismatch is caught by the final assignability check instead.
+        err = reject_type("def f[T](x: T) -> text = \"hi\"\nlet n: int = f(1)\nn")
+        assert (
+            "text" in str(err).lower()
+            or "int" in str(err).lower()
+            or "assign" in str(err).lower()
+        )
+
+    # ------------------------------------------------------------------
+    # Named args in generic calls (inference + substitution paths)
+    # ------------------------------------------------------------------
+
+    def test_generic_named_arg_call_accepted(self) -> None:
+        r = accept_type("def f[T](x: T, y: T) -> T = x\nf(x: 1, y: 2)")
+        assert r.resolved.program is not None
+
+    def test_generic_named_arg_call_error_unknown(self) -> None:
+        # T is inferred from positional arg; then named arg 'z' is unknown
+        err = reject_type("def f[T](x: T, y: T) -> T = x\nf(1, z: 2)")
+        assert "unknown" in str(err).lower() or "parameter" in str(err).lower()
+
+    def test_generic_named_arg_positional_and_named_duplicate(self) -> None:
+        err = reject_type("def f[T](x: T) -> T = x\nf(1, x: 1)")
+        assert (
+            "positional" in str(err).lower()
+            or "parameter" in str(err).lower()
+            or "name" in str(err).lower()
+            or "both" in str(err).lower()
+        )
+
+    # ------------------------------------------------------------------
+    # Missing required arg and too many args in generic calls
+    # ------------------------------------------------------------------
+
+    def test_generic_too_many_positional_args_error(self) -> None:
+        err = reject_type("def f[T](x: T) -> T = x\nf(1, 2)")
+        assert (
+            "too many" in str(err).lower()
+            or "argument" in str(err).lower()
+            or "parameter" in str(err).lower()
+        )
+
+    def test_generic_missing_required_arg_error(self) -> None:
+        err = reject_type("def f[T](x: T, y: T) -> T = x\nf(1)")
+        assert "missing" in str(err).lower() or "required" in str(err).lower()
+
+    # ------------------------------------------------------------------
+    # Non-generic function rejects explicit type args
+    # ------------------------------------------------------------------
+
+    def test_nongeneric_explicit_type_arg_rejected(self) -> None:
+        err = reject_type("def f(x: int) -> int = x\nf::[int](1)")
+        assert (
+            "not a generic" in str(err).lower()
+            or "type argument" in str(err).lower()
+            or "generic" in str(err).lower()
+        )
+
+    # ------------------------------------------------------------------
+    # _match: non-TypeVar/List/Dict/Function template (1300->exit) and
+    # FunctionType arity mismatch (1301->exit)
+    # ------------------------------------------------------------------
+
+    def test_match_concrete_param_in_generic_def(self) -> None:
+        # Concrete param (int) → _match(IntType(), IntType(), ...) falls off
+        # the elif chain (1300->exit); T inferred from second param
+        r = accept_type('def f[T](x: int, y: T) -> T = y\nf(1, "hi")')
+        assert r.resolved.program is not None
+
+    def test_match_function_arity_mismatch_falls_off(self) -> None:
+        # Template (T)->T matched against (int,int)->int: arity mismatch (1301->exit)
+        # _match silently gives up; T is inferred from x: T = 1 = int;
+        # then (int,int)->int is checked against (int)->int → type mismatch
+        err = reject_type(
+            "def apply[T](f: (T) -> T, x: T) -> T = f(x)\n"
+            "def two(a: int, b: int) -> int = a + b\n"
+            "apply(two, 1)"
+        )
+        assert (
+            "infer" in str(err).lower()
+            or "type argument" in str(err).lower()
+            or "mismatch" in str(err).lower()
+            or "assign" in str(err).lower()
+        )
+

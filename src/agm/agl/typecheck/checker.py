@@ -131,9 +131,13 @@ from agm.agl.typecheck.types import (
     RecordType,
     TextType,
     Type,
+    TypeVarType,
     UnitType,
     comparable_types,
+    contains_type_var,
+    free_type_vars,
     is_assignable,
+    substitute,
 )
 
 # ---------------------------------------------------------------------------
@@ -376,6 +380,8 @@ class _Checker:
         self._contract_specs: dict[int, OutputContractSpec] = {}
         self._call_sites: list[CallSiteRecord] = []
         self._warnings: list[Diagnostic] = []
+        # Type variables currently in scope (non-empty inside a generic def body).
+        self._current_type_vars: frozenset[str] = frozenset()
 
     # ------------------------------------------------------------------
     # Pre-registration of function signatures
@@ -393,10 +399,11 @@ class _Checker:
                 f"'{node.name}' is a built-in function name and cannot be redefined.",
                 span=node.span,
             )
+        type_vars: frozenset[str] = frozenset(node.type_params)
         params: list[tuple[str, Type, bool]] = []
         seen_required = True  # True until first defaulted param
         for p in node.params:
-            pt = self._env.resolve_type_expr(p.type_expr, span=p.span)
+            pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
             has_default = p.default is not None
             if seen_required and has_default:
                 # First defaulted param: switch to "defaulted" mode
@@ -409,8 +416,12 @@ class _Checker:
                 )
             params.append((p.name, pt, has_default))
 
-        result_type = self._env.resolve_type_expr(node.return_type, span=node.span)
-        sig = FunctionSignature(params=tuple(params), result=result_type)
+        result_type = self._env.resolve_type_expr(
+            node.return_type, span=node.span, type_vars=type_vars
+        )
+        sig = FunctionSignature(
+            params=tuple(params), result=result_type, type_params=node.type_params
+        )
         self._env.register_function_signature(node.name, sig)
         # Register the binding type as FunctionType (erases names/defaults).
         func_type = FunctionType(
@@ -492,18 +503,25 @@ class _Checker:
         """Check the body of a ``def`` against its registered signature."""
         sig = self._env.get_function_signature(node.name)
         assert sig is not None, f"FuncDef '{node.name}' not pre-registered"
-        # Bind params in the env.
-        for p, (pname, ptype, has_default) in zip(node.params, sig.params):
-            self._env.set_binding_type(p.node_id, ptype)
-        # Check defaults against declared parameter types.
-        for p, (pname, ptype, has_default) in zip(node.params, sig.params):
-            if p.default is not None:
-                def_type = self._check_expr(p.default, expected=ptype)
-                self._assert_assignable(def_type, ptype, p.span)
-        # Check body against declared return type.
-        body_type = self._check_expr(node.body, expected=sig.result)
-        if not isinstance(body_type, BottomType):
-            self._assert_assignable(body_type, sig.result, node.span)
+        # Save and update current type vars for this def's scope.
+        old_type_vars = self._current_type_vars
+        if sig.type_params:
+            self._current_type_vars = frozenset(sig.type_params)
+        try:
+            # Bind params in the env.
+            for p, (pname, ptype, has_default) in zip(node.params, sig.params):
+                self._env.set_binding_type(p.node_id, ptype)
+            # Check defaults against declared parameter types.
+            for p, (pname, ptype, has_default) in zip(node.params, sig.params):
+                if p.default is not None:
+                    def_type = self._check_expr(p.default, expected=ptype)
+                    self._assert_assignable(def_type, ptype, p.span)
+            # Check body against declared return type.
+            body_type = self._check_expr(node.body, expected=sig.result)
+            if not isinstance(body_type, BottomType):
+                self._assert_assignable(body_type, sig.result, node.span)
+        finally:
+            self._current_type_vars = old_type_vars
 
     def _check_param(self, stmt: ParamDecl) -> None:
         ann_type = (
@@ -617,7 +635,7 @@ class _Checker:
         if isinstance(expr, Template):
             return self._check_template(expr)
         if isinstance(expr, VarRef):
-            return self._check_varref(expr)
+            return self._check_varref(expr, expected=expected)
         if isinstance(expr, Call):
             return self._check_call(expr, expected=expected)
         if isinstance(expr, Lambda):
@@ -660,7 +678,7 @@ class _Checker:
 
     # --- VarRef ---
 
-    def _check_varref(self, node: VarRef) -> Type:
+    def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
         # Bare constructor reference → zero-arg construction.
         if node.node_id in self._resolved.constructor_refs:
             ctor_ref = self._resolved.constructor_refs[node.node_id]
@@ -669,7 +687,31 @@ class _Checker:
                 owner=owner, variant=ctor_ref.variant, args=(), span=node.span
             )
         ref = self._resolved.resolution[node.node_id]
-        return self._require_binding_type(ref)
+        typ = self._require_binding_type(ref)
+        # D5: generic def used as a value — must be instantiated from context.
+        if ref.kind is BinderKind.function_binding:
+            sig = self._env.get_function_signature(ref.name)
+            if sig is not None and sig.type_params:
+                if not isinstance(expected, FunctionType):
+                    raise AglTypeError(
+                        f"Cannot infer type arguments for generic function '{ref.name}' "
+                        f"used as a value; annotate the binding "
+                        f"(e.g. 'let f: (int) -> int = {ref.name}') or call it directly.",
+                        span=node.span,
+                    )
+                assert isinstance(typ, FunctionType)
+                subst: dict[str, Type] = {}
+                self._match_unsolved(typ, expected, subst, span=node.span)
+                for p in sig.type_params:
+                    if p not in subst:
+                        raise AglTypeError(
+                            f"Cannot infer type argument '{p}' for generic function "
+                            f"'{ref.name}' from the expected type; "
+                            f"annotate the binding more precisely.",
+                            span=node.span,
+                        )
+                return substitute(typ, subst)
+        return typ
 
     def _require_binding_type(self, ref: BindingRef) -> Type:
         typ = self._env.resolve_binding(ref)
@@ -732,6 +774,13 @@ class _Checker:
                 span=node.span,
             )
         arg_type = self._check_expr(node.args[0], expected=None)
+        # D2: reject operations on bare type variables.
+        if isinstance(arg_type, TypeVarType):
+            raise AglTypeError(
+                f"a value of type variable '{arg_type.name}' has no rendering "
+                f"and cannot be printed.",
+                span=node.args[0].span,
+            )
         if isinstance(arg_type, (FunctionType, AgentType)):
             raise AglTypeError(
                 "a function/agent value has no rendering and cannot be printed.",
@@ -746,8 +795,11 @@ class _Checker:
     )
 
     def _check_ask_call(self, node: Call, *, expected: Type | None) -> Type:
-        # Target type from context.
-        target_type: Type = expected if expected is not None else TextType()
+        # Target type: explicit type argument overrides context.
+        explicit = self._resolve_explicit_target(node, "ask")
+        target_type: Type = explicit if explicit is not None else (
+            expected if expected is not None else TextType()
+        )
 
         # D9: reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
@@ -844,16 +896,8 @@ class _Checker:
         assert agent_request_type is not None, "AgentRequest prelude type missing"
 
         # Target type: explicit type argument, else text default.
-        if node.type_args:
-            if len(node.type_args) > 1:
-                raise AglTypeError(
-                    "ask-request expects a single explicit type argument; "
-                    f"got {len(node.type_args)}.",
-                    span=node.span,
-                )
-            target_type = self._env.resolve_type_expr(node.type_args[0], span=node.span)
-        else:
-            target_type = TextType()
+        explicit = self._resolve_explicit_target(node, "ask-request")
+        target_type = explicit if explicit is not None else TextType()
 
         # D9: reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
@@ -939,7 +983,11 @@ class _Checker:
 
         exec_result_type = self._env.get_type("ExecResult")
         target_type: Type
-        if expected is not None:
+        # Explicit type argument overrides context.
+        explicit = self._resolve_explicit_target(node, "exec")
+        if explicit is not None:
+            target_type = explicit
+        elif expected is not None:
             target_type = expected
         else:
             assert exec_result_type is not None
@@ -1014,6 +1062,39 @@ class _Checker:
                 col=node.span.start_col,
             )
         )
+        return target_type
+
+    # --- shared explicit-target resolver for D3 ---
+
+    def _resolve_explicit_target(self, node: Call, builtin_name: str) -> Type | None:
+        """Resolve the explicit type argument of an ask/ask-request/exec call.
+
+        Returns the resolved ``Type`` when ``node.type_args`` is non-empty, or
+        ``None`` when there are no explicit type arguments (caller falls back to
+        its contextual/default target logic).
+
+        Raises ``AglTypeError`` when:
+        - More than one type argument is provided (arity error).
+        - The resolved type contains a type variable (D3 guard).
+        """
+        if not node.type_args:
+            return None
+        if len(node.type_args) > 1:
+            raise AglTypeError(
+                f"{builtin_name} expects at most one explicit type argument; "
+                f"got {len(node.type_args)}.",
+                span=node.span,
+            )
+        target_type = self._env.resolve_type_expr(
+            node.type_args[0], span=node.span, type_vars=self._current_type_vars
+        )
+        # D3: agent/exec target may not contain a type variable.
+        if contains_type_var(target_type):
+            tv = next(iter(free_type_vars(target_type)))
+            raise AglTypeError(
+                f"agent/exec target type cannot contain a type variable ('{tv}').",
+                span=node.span,
+            )
         return target_type
 
     # --- shared parse-option handling (ask / exec) ---
@@ -1176,6 +1257,200 @@ class _Checker:
             )
         return format_name
 
+    # --- type-variable matching (one-sided unification) ---
+
+    def _match(
+        self, template: Type, concrete: Type, subst: dict[str, Type], *, span: SourceSpan
+    ) -> None:
+        """One-sided unification: bind type vars in *template* to *concrete* types.
+
+        Raises ``AglTypeError`` on inconsistent bindings (same type var, different
+        concrete types).  Silently stops on structural shape mismatches (the
+        assignability check will report the error).
+        """
+        if isinstance(template, TypeVarType):
+            p = template.name
+            if p in subst:
+                if subst[p] != concrete:
+                    raise AglTypeError(
+                        f"Inconsistent type argument: '{p}' was inferred as "
+                        f"'{subst[p]!r}' from one argument but '{concrete!r}' from another.",
+                        span=span,
+                    )
+            else:
+                subst[p] = concrete
+            return
+        if isinstance(template, ListType) and isinstance(concrete, ListType):
+            self._match(template.elem, concrete.elem, subst, span=span)
+        elif isinstance(template, DictType) and isinstance(concrete, DictType):
+            self._match(template.value, concrete.value, subst, span=span)
+        elif isinstance(template, FunctionType) and isinstance(concrete, FunctionType):
+            if len(template.params) == len(concrete.params):
+                for tp, cp in zip(template.params, concrete.params):
+                    self._match(tp, cp, subst, span=span)
+                self._match(template.result, concrete.result, subst, span=span)
+        # Shape mismatch, primitive mismatch, or nominal mismatch: stop (best-effort).
+
+    def _match_unsolved(
+        self, template: Type, concrete: Type, subst: dict[str, Type], *, span: SourceSpan
+    ) -> None:
+        """Like ``_match`` but only binds currently-unbound variables; never challenges
+        existing bindings."""
+        if isinstance(template, TypeVarType):
+            p = template.name
+            if p not in subst:
+                subst[p] = concrete
+            return
+        if isinstance(template, ListType) and isinstance(concrete, ListType):
+            self._match_unsolved(template.elem, concrete.elem, subst, span=span)
+        elif isinstance(template, DictType) and isinstance(concrete, DictType):
+            self._match_unsolved(template.value, concrete.value, subst, span=span)
+        elif isinstance(template, FunctionType) and isinstance(concrete, FunctionType):
+            if len(template.params) == len(concrete.params):
+                for tp, cp in zip(template.params, concrete.params):
+                    self._match_unsolved(tp, cp, subst, span=span)
+                self._match_unsolved(template.result, concrete.result, subst, span=span)
+
+    # --- shared call-argument checker ---
+
+    def _check_call_args(
+        self,
+        params: tuple[tuple[str, Type, bool], ...],
+        node: Call,
+        func_name: str,
+    ) -> None:
+        """Check positional and named arguments against a concrete parameter list.
+
+        Performs: positional arity check, positional arg type-check+assignability,
+        named-arg matching (unknown / both-positional-and-named / duplicate-named),
+        and required-arg presence check.  Raises ``AglTypeError`` on any violation.
+        The caller is responsible for re-checking positional arg expressions during
+        type-variable inference before calling this helper with the substituted params.
+        """
+        # Positional arity check.
+        if len(node.args) > len(params):
+            raise AglTypeError(
+                f"Too many positional arguments: '{func_name}' takes "
+                f"{len(params)} parameter(s), got {len(node.args)}.",
+                span=node.span,
+            )
+
+        # Check positional args.
+        positional_filled: set[str] = set()
+        for i, arg in enumerate(node.args):
+            pname, ptype, _ = params[i]
+            at = self._check_expr(arg, expected=ptype)
+            self._assert_assignable(at, ptype, arg.span)
+            positional_filled.add(pname)
+
+        # Check named args.
+        named_filled: set[str] = set()
+        for na in node.named_args:
+            match_param: tuple[str, Type, bool] | None = None
+            for p in params:
+                if p[0] == na.name:
+                    match_param = p
+                    break
+            if match_param is None:
+                raise AglTypeError(
+                    f"Unknown parameter '{na.name}' in call to '{func_name}'.",
+                    span=na.span,
+                )
+            mp_name, mp_type, _ = match_param
+            if mp_name in positional_filled:
+                raise AglTypeError(
+                    f"Parameter '{mp_name}' supplied both positionally and by name.",
+                    span=na.span,
+                )
+            if mp_name in named_filled:
+                raise AglTypeError(
+                    f"Duplicate named argument '{mp_name}' in call to '{func_name}'.",
+                    span=na.span,
+                )
+            at = self._check_expr(na.value, expected=mp_type)
+            self._assert_assignable(at, mp_type, na.span)
+            named_filled.add(mp_name)
+
+        # Check all required params are supplied.
+        for pname, _, has_def in params:
+            if not has_def and pname not in positional_filled and pname not in named_filled:
+                raise AglTypeError(
+                    f"Missing required argument '{pname}' in call to '{func_name}'.",
+                    span=node.span,
+                )
+
+    # --- generic declared-name call ---
+
+    def _check_generic_declared_call(
+        self,
+        node: Call,
+        func_name: str,
+        sig: FunctionSignature,
+        *,
+        expected: Type | None,
+    ) -> Type:
+        """Check a call to a generic (parametric) declared function."""
+        # --- Explicit type argument path ---
+        if node.type_args:
+            if len(node.type_args) != len(sig.type_params):
+                raise AglTypeError(
+                    f"'{func_name}' requires {len(sig.type_params)} type argument(s), "
+                    f"but {len(node.type_args)} were supplied.",
+                    span=node.span,
+                )
+            subst: dict[str, Type] = {}
+            for p, ta in zip(sig.type_params, node.type_args):
+                resolved_arg = self._env.resolve_type_expr(
+                    ta, span=node.span, type_vars=self._current_type_vars
+                )
+                subst[p] = resolved_arg
+        else:
+            # --- Inference path ---
+            subst = {}
+            # Infer from positional args.
+            for i, arg in enumerate(node.args):
+                if i >= len(sig.params):
+                    break
+                param_template = sig.params[i][1]
+                partially = substitute(param_template, subst)
+                if contains_type_var(partially):
+                    arg_type = self._check_expr(arg, expected=None)
+                else:
+                    arg_type = self._check_expr(arg, expected=partially)
+                self._match(param_template, arg_type, subst, span=arg.span)
+            # Infer from named args.
+            for na in node.named_args:
+                for pname, ptype, _ in sig.params:
+                    if pname == na.name:
+                        param_template = ptype
+                        partially = substitute(param_template, subst)
+                        if contains_type_var(partially):
+                            arg_type = self._check_expr(na.value, expected=None)
+                        else:
+                            arg_type = self._check_expr(na.value, expected=partially)
+                        self._match(param_template, arg_type, subst, span=na.span)
+                        break
+            # Try to fill remaining unsolved vars from expected result type.
+            if expected is not None:
+                self._match_unsolved(sig.result, expected, subst, span=node.span)
+            # Verify all type params were inferred.
+            for p in sig.type_params:
+                if p not in subst:
+                    raise AglTypeError(
+                        f"Cannot infer type argument '{p}' for call to '{func_name}'; "
+                        f"supply it explicitly via '{func_name}::[…]'.",
+                        span=node.span,
+                    )
+
+        # Substitute to get the concrete signature.
+        sub_params = tuple((n, substitute(pt, subst), hd) for n, pt, hd in sig.params)
+        sub_result = substitute(sig.result, subst)
+
+        # Validate arguments against the substituted parameter list.
+        self._check_call_args(sub_params, node, func_name)
+
+        return sub_result
+
     # --- declared-name call ---
 
     def _check_declared_name_call(
@@ -1185,55 +1460,21 @@ class _Checker:
         if sig is None:
             return self._check_value_call(node, expected=expected)
 
-        if len(node.args) > len(sig.params):
+        # Dispatch to the generic path when the function has type parameters.
+        if sig.type_params:
+            return self._check_generic_declared_call(
+                node, func_name, sig, expected=expected
+            )
+
+        # Non-generic path: reject unexpected explicit type args.
+        if node.type_args:
             raise AglTypeError(
-                f"Too many positional arguments: '{func_name}' takes "
-                f"{len(sig.params)} parameter(s), got {len(node.args)}.",
+                f"'{func_name}' is not a generic function and does not accept "
+                f"type arguments.",
                 span=node.span,
             )
 
-        positional_filled: set[str] = set()
-        for i, arg in enumerate(node.args):
-            pname, ptype, _ = sig.params[i]
-            at = self._check_expr(arg, expected=ptype)
-            self._assert_assignable(at, ptype, arg.span)
-            positional_filled.add(pname)
-
-        named_filled: set[str] = set()
-        for na in node.named_args:
-            match: tuple[str, Type, bool] | None = None
-            for p in sig.params:
-                if p[0] == na.name:
-                    match = p
-                    break
-            if match is None:
-                raise AglTypeError(
-                    f"Unknown parameter '{na.name}' in call to '{func_name}'.",
-                    span=na.span,
-                )
-            pname, ptype, has_def = match
-            if pname in positional_filled:
-                raise AglTypeError(
-                    f"Parameter '{pname}' supplied both positionally and by name.",
-                    span=na.span,
-                )
-            if pname in named_filled:
-                raise AglTypeError(
-                    f"Duplicate named argument '{pname}' in call to '{func_name}'.",
-                    span=na.span,
-                )
-            at = self._check_expr(na.value, expected=ptype)
-            self._assert_assignable(at, ptype, na.span)
-            named_filled.add(pname)
-
-        # Check all required params are supplied.
-        for pname, ptype, has_def in sig.params:
-            if not has_def and pname not in positional_filled and pname not in named_filled:
-                raise AglTypeError(
-                    f"Missing required argument '{pname}' in call to '{func_name}'.",
-                    span=node.span,
-                )
-
+        self._check_call_args(sig.params, node, func_name)
         return sig.result
 
     # --- value call (lambda / higher-order) ---
@@ -1382,6 +1623,13 @@ class _Checker:
                     self._node_types[seg.expr.node_id] = seg_type
                 else:
                     seg_type = self._check_expr(seg.expr, expected=None)
+                    # D2: reject operations on bare type variables.
+                    if isinstance(seg_type, TypeVarType):
+                        raise AglTypeError(
+                            f"a value of type variable '{seg_type.name}' has no rendering "
+                            f"and cannot be interpolated.",
+                            span=seg.expr.span,
+                        )
                     if isinstance(seg_type, (FunctionType, AgentType)):
                         raise AglTypeError(
                             "a function/agent value has no rendering and cannot be interpolated.",
@@ -1453,6 +1701,19 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.EQ, BinOp.NEQ):
+            # D2: reject operations on bare type variables.
+            if isinstance(left_type, TypeVarType):
+                raise AglTypeError(
+                    f"operation '=' is not permitted on a value of abstract type "
+                    f"variable '{left_type.name}'.",
+                    span=node.span,
+                )
+            if isinstance(right_type, TypeVarType):
+                raise AglTypeError(
+                    f"operation '=' is not permitted on a value of abstract type "
+                    f"variable '{right_type.name}'.",
+                    span=node.span,
+                )
             if not comparable_types(left_type, right_type):
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
@@ -1462,6 +1723,19 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE):
+            # D2: reject operations on bare type variables.
+            if isinstance(left_type, TypeVarType):
+                raise AglTypeError(
+                    f"ordering operator is not permitted on a value of abstract type "
+                    f"variable '{left_type.name}'.",
+                    span=node.span,
+                )
+            if isinstance(right_type, TypeVarType):
+                raise AglTypeError(
+                    f"ordering operator is not permitted on a value of abstract type "
+                    f"variable '{right_type.name}'.",
+                    span=node.span,
+                )
             numeric_pair = isinstance(left_type, (IntType, DecimalType)) and isinstance(
                 right_type, (IntType, DecimalType)
             )
@@ -1488,6 +1762,19 @@ class _Checker:
             return self._check_numeric_binop(left_type, right_type, node.span, "*")
 
         if op == BinOp.DIV:
+            # D2: reject operations on bare type variables.
+            if isinstance(left_type, TypeVarType):
+                raise AglTypeError(
+                    f"operation '/' is not permitted on a value of abstract type variable "
+                    f"'{left_type.name}'.",
+                    span=node.span,
+                )
+            if isinstance(right_type, TypeVarType):
+                raise AglTypeError(
+                    f"operation '/' is not permitted on a value of abstract type variable "
+                    f"'{right_type.name}'.",
+                    span=node.span,
+                )
             if not (
                 isinstance(left_type, (IntType, DecimalType))
                 and isinstance(right_type, (IntType, DecimalType))
@@ -1505,6 +1792,19 @@ class _Checker:
         )
 
     def _check_add(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
+        # D2: reject operations on bare type variables.
+        if isinstance(left_type, TypeVarType):
+            raise AglTypeError(
+                f"operation '+' is not permitted on a value of abstract type variable "
+                f"'{left_type.name}'.",
+                span=span,
+            )
+        if isinstance(right_type, TypeVarType):
+            raise AglTypeError(
+                f"operation '+' is not permitted on a value of abstract type variable "
+                f"'{right_type.name}'.",
+                span=span,
+            )
         if isinstance(left_type, TextType) and isinstance(right_type, TextType):
             return TextType()
         if isinstance(left_type, (IntType, DecimalType)) and isinstance(
@@ -1522,6 +1822,19 @@ class _Checker:
     def _check_numeric_binop(
         self, left_type: Type, right_type: Type, span: SourceSpan, op_str: str
     ) -> Type:
+        # D2: reject operations on bare type variables.
+        if isinstance(left_type, TypeVarType):
+            raise AglTypeError(
+                f"operation '{op_str}' is not permitted on a value of abstract type variable "
+                f"'{left_type.name}'.",
+                span=span,
+            )
+        if isinstance(right_type, TypeVarType):
+            raise AglTypeError(
+                f"operation '{op_str}' is not permitted on a value of abstract type variable "
+                f"'{right_type.name}'.",
+                span=span,
+            )
         if not (
             isinstance(left_type, (IntType, DecimalType))
             and isinstance(right_type, (IntType, DecimalType))
@@ -1536,6 +1849,19 @@ class _Checker:
         return DecimalType()
 
     def _check_in_op(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
+        # D2: reject operations on bare type variables.
+        if isinstance(left_type, TypeVarType):
+            raise AglTypeError(
+                f"operation 'in' is not permitted on a value of abstract type variable "
+                f"'{left_type.name}'.",
+                span=span,
+            )
+        if isinstance(right_type, TypeVarType):
+            raise AglTypeError(
+                f"operation 'in' is not permitted on a value of abstract type variable "
+                f"'{right_type.name}'.",
+                span=span,
+            )
         if isinstance(left_type, TextType) and isinstance(right_type, TextType):
             return BoolType()
         if isinstance(right_type, ListType):
@@ -1557,6 +1883,12 @@ class _Checker:
 
     def _check_unary_neg(self, node: UnaryNeg) -> Type:
         t = self._check_expr(node.operand, expected=None)
+        # D2: reject operations on bare type variables.
+        if isinstance(t, TypeVarType):
+            raise AglTypeError(
+                f"unary '-' is not permitted on a value of abstract type variable '{t.name}'.",
+                span=node.span,
+            )
         if not isinstance(t, (IntType, DecimalType)):
             raise AglTypeError(
                 f"Unary '-' requires a numeric operand; got '{t!r}'.",
@@ -1568,6 +1900,12 @@ class _Checker:
 
     def _check_is_test(self, node: IsTest) -> BoolType:
         expr_type = self._check_expr(node.expr, expected=None)
+        # D2: reject operations on bare type variables.
+        if isinstance(expr_type, TypeVarType):
+            raise AglTypeError(
+                f"an abstract type variable '{expr_type.name}' cannot be tested with 'is'.",
+                span=node.span,
+            )
         if not isinstance(expr_type, EnumType):
             raise AglTypeError(
                 f"'is' / 'is not' requires an enum-typed left-hand side; "
@@ -1609,6 +1947,12 @@ class _Checker:
                 owner_name=owner_name, variant=variant, args=(), span=node.span
             )
         obj_type = self._check_expr(node.obj, expected=None)
+        # D2: reject operations on bare type variables.
+        if isinstance(obj_type, TypeVarType):
+            raise AglTypeError(
+                f"a value of type variable '{obj_type.name}' has no fields.",
+                span=node.span,
+            )
         if isinstance(obj_type, ExceptionType):
             if node.field not in obj_type.fields:
                 raise AglTypeError(
@@ -1641,6 +1985,12 @@ class _Checker:
         *,
         span: SourceSpan,
     ) -> Type:
+        # D2: reject operations on bare type variables.
+        if isinstance(obj_type, TypeVarType):
+            raise AglTypeError(
+                f"a value of type variable '{obj_type.name}' is not indexable.",
+                span=span,
+            )
         if isinstance(obj_type, ListType):
             index_type = self._check_expr(index, expected=IntType())
             self._assert_assignable(index_type, IntType(), index.span)

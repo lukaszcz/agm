@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "agent_returns_some",
+      "agents": {"picker": ["{\"$case\": \"some\", \"value\": 42}"]},
+      "expect": {
+        "stdout": "found 3\nmissing\nfound 8\nfound 11\nmissing\nprobe is some\nprobe is not none\nagent: 42\n",
+        "calls": {"picker": 1}
+      }
+    },
+    {
+      "name": "agent_returns_none",
+      "agents": {"picker": ["{\"$case\": \"none\"}"]},
+      "expect": {
+        "stdout": "found 3\nmissing\nfound 8\nfound 11\nmissing\nprobe is some\nprobe is not none\nagent: nothing\n",
+        "calls": {"picker": 1}
+      }
+    }
+  ]
+}

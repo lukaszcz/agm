@@ -4934,6 +4934,94 @@ class TestNonGenericConstructorAsValue:
         assert "does not exist in enum" in str(err).lower()
 
 
+class TestGenericEnumQualifiersAndTypeVarScoping:
+    """Regression: qualified patterns/`is`-tests on generic enums, and type
+    variables of an enclosing generic ``def`` visible in nested annotations."""
+
+    _OPTION = "enum Option[T]\n  | none\n  | some(value: T)\n"
+
+    def test_qualified_pattern_on_generic_enum(self) -> None:
+        # Previously: "'Option' is not a known enum type." — the qualifier was
+        # resolved as a concrete type, which rejects bare generic names.
+        r = accept_type(
+            self._OPTION
+            + "let o: Option[int] = some(value: 5)\n"
+            + "case o of\n"
+            + "  | Option.none => 0\n"
+            + "  | Option.some(value) => value\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_qualified_pattern_generic_enum_binds_instantiated_field(self) -> None:
+        # The bound payload is instantiated from the scrutinee's type args.
+        r = accept_type(
+            self._OPTION
+            + "let o: Option[int] = some(value: 5)\n"
+            + "case o of\n"
+            + "  | Option.none => 0\n"
+            + "  | Option.some(value) => value + 1\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_qualified_is_test_on_generic_enum(self) -> None:
+        r = accept_type(
+            self._OPTION
+            + "let o: Option[int] = some(value: 5)\n"
+            + "if o is Option.some => print 1\n"
+            + "if o is not Option.none => print 2\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_generic_record_name_as_variant_qualifier_rejected(self) -> None:
+        # A generic *record* used as a variant qualifier on an enum scrutinee
+        # is not a known enum type (covers the non-enum generic-kind branch).
+        err = reject_type(
+            self._OPTION
+            + "record Box[T]\n  value: T\n"
+            + "let o: Option[int] = some(value: 5)\n"
+            + "if o is Box.some => print 1\n"
+        )
+        assert "not a known enum type" in str(err).lower()
+
+    def test_mismatched_generic_enum_qualifier_rejected(self) -> None:
+        # A qualifier naming a different generic enum than the scrutinee.
+        err = reject_type(
+            self._OPTION
+            + "enum Maybe[T]\n  | nothing\n  | just(value: T)\n"
+            + "let o: Option[int] = some(value: 5)\n"
+            + "if o is Maybe.just => print 1\n"
+        )
+        assert "resolves to enum" in str(err).lower()
+
+    def test_type_var_lambda_annotation_in_generic_def_body(self) -> None:
+        # A lambda inside a generic def may annotate its params/return with the
+        # def's rigid type variables. Previously: "Unknown type 'A'".
+        r = accept_type(
+            "def idf[A](x: A) -> A =\n"
+            "  let g: (A) -> A = fn(y: A) -> A => y\n"
+            "  g(x)\n"
+            "let r = idf(7)\nr"
+        )
+        assert r.resolved.program is not None
+
+    def test_type_var_let_annotation_in_generic_def_body(self) -> None:
+        # A `let` annotation in a generic def body may reference a type variable.
+        r = accept_type(
+            "def mk[A](x: A) -> list[A] =\n"
+            "  let single: list[A] = [x]\n"
+            "  single\n"
+            "let r = mk(3)\nr"
+        )
+        assert r.resolved.program is not None
+
+    def test_type_var_lambda_return_type_in_generic_def(self) -> None:
+        r = accept_type(
+            "def pickfn[A]() -> (A) -> A = fn(y: A) -> A => y\n"
+            '"ok"'
+        )
+        assert r.resolved.program is not None
+
+
 # ---------------------------------------------------------------------------
 # M3b: additional coverage tests
 # ---------------------------------------------------------------------------

@@ -1319,24 +1319,46 @@ class Interpreter:
         """Build a record/enum value from a first-class ``ConstructorValue`` call.
 
         Positional arguments are matched to the constructor's fields in
-        declaration order, using the call's checked result type
-        (``RecordType``/``EnumType``) for the field names/types.  Exceptions
-        never reach here — the checker rejects exception-constructor-as-value.
+        declaration order.  Field names/types come from the constructor's own
+        declaration (via the type environment), NOT the call's result type:
+        when a constructor value escapes through a polymorphic function its
+        result type at the call site is an erased type variable, so the value
+        must carry enough identity to build on its own.  Field types are the
+        declared templates — concrete for monomorphic fields (coercion applies)
+        and ``TypeVarType`` for generic fields (``_coerce`` passes through,
+        consistent with erasure).  Exceptions never reach here — the checker
+        rejects exception-constructor-as-value.
         """
-        typ = self._checked.node_types[call.node_id]
-        if isinstance(typ, EnumType):
-            assert cv.variant is not None, "enum ConstructorValue requires a variant"
-            field_names = list(typ.variants.get(cv.variant, {}).keys())
-        else:
-            assert isinstance(typ, RecordType), (
-                "positional constructor value must build a record or enum"
-            )
-            field_names = list(typ.fields.keys())
+        field_types = self._constructor_field_types(cv.owner_name, cv.variant)
         arg_values: dict[str, Value] = {
-            fname: self._eval_expr(arg, scope)
-            for fname, arg in zip(field_names, call.args, strict=True)
+            fname: _coerce(self._eval_expr(arg, scope), ftype)
+            for (fname, ftype), arg in zip(field_types.items(), call.args, strict=True)
         }
-        return self._construct_runtime_value(typ, cv.variant, arg_values)
+        if cv.variant is None:
+            return RecordValue(type_name=cv.owner_name, fields=arg_values)
+        return EnumValue(type_name=cv.owner_name, variant=cv.variant, fields=arg_values)
+
+    def _constructor_field_types(
+        self, owner_name: str, variant: str | None
+    ) -> dict[str, Type]:
+        """Ordered field name → declared field-type template for a constructor.
+
+        Resolves the owner from the type environment (generic template or
+        concrete type) so first-class constructor values can be built under
+        type erasure without consulting the call site's result type.
+        """
+        gdef = self._type_env.get_generic_type(owner_name)
+        if gdef is not None:
+            owner_type: Type | None = gdef.template
+        else:
+            owner_type = self._type_env.get_type(owner_name)
+        if isinstance(owner_type, EnumType):
+            assert variant is not None, "enum constructor value requires a variant"
+            return dict(owner_type.variants[variant])
+        assert isinstance(owner_type, RecordType), (
+            f"constructor owner {owner_name!r} is not a record or enum"
+        )
+        return dict(owner_type.fields)
 
     def _construct_runtime_value(
         self,

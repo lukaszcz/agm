@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "two_instantiations_and_value_constructor",
+      "expect": {
+        "stdout": "5\nhi\n99\n7\n42\n",
+        "calls": {}
+      }
+    }
+  ]
+}

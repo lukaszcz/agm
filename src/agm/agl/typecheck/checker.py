@@ -605,10 +605,11 @@ class _Checker:
         """Check the body of a ``def`` against its registered signature."""
         sig = self._env.get_function_signature(node.name)
         assert sig is not None, f"FuncDef '{node.name}' not pre-registered"
-        # Save and update current type vars for this def's scope.
+        # Save and update current type vars for this def's scope. A non-generic
+        # def resets the set to empty (defs never nest, but this stays correct
+        # regardless): the body's annotations see exactly this def's type vars.
         old_type_vars = self._current_type_vars
-        if sig.type_params:
-            self._current_type_vars = frozenset(sig.type_params)
+        self._current_type_vars = frozenset(sig.type_params)
         try:
             # Bind params in the env.
             for p, (pname, ptype, has_default) in zip(node.params, sig.params):
@@ -1758,14 +1759,19 @@ class _Checker:
     # --- Lambda ---
 
     def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
+        # Lambda annotations may reference the rigid type variables of an
+        # enclosing generic ``def`` body (the body is checked with them in scope).
+        type_vars = self._current_type_vars
         param_types: list[Type] = []
         for p in node.params:
-            pt = self._env.resolve_type_expr(p.type_expr, span=p.span)
+            pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
             param_types.append(pt)
             self._env.set_binding_type(p.node_id, pt)
 
         if node.return_type is not None:
-            result_type = self._env.resolve_type_expr(node.return_type, span=node.span)
+            result_type = self._env.resolve_type_expr(
+                node.return_type, span=node.span, type_vars=type_vars
+            )
             body_type = self._check_expr(node.body, expected=result_type)
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, result_type, node.span)
@@ -2177,15 +2183,25 @@ class _Checker:
     def _check_variant_qualifier(
         self, qualifier: str, enum_type: EnumType, span: SourceSpan
     ) -> None:
-        resolved = self._env.resolve_named_type(qualifier)
-        if not isinstance(resolved, EnumType):
+        # The qualifier names an enum type. A generic enum's bare name is not
+        # resolvable as a concrete type (bare generic names are rejected), so
+        # resolve it through the generic-template namespace; its declared name
+        # is the qualifier itself. ``enum_type`` is the scrutinee's already
+        # instantiated type, whose ``.name`` is the bare enum name.
+        gdef = self._env.get_generic_type(qualifier)
+        if gdef is not None:
+            resolved_name = qualifier if gdef.kind == "enum" else None
+        else:
+            resolved = self._env.resolve_named_type(qualifier)
+            resolved_name = resolved.name if isinstance(resolved, EnumType) else None
+        if resolved_name is None:
             raise AglTypeError(
                 f"'{qualifier}' is not a known enum type.",
                 span=span,
             )
-        if resolved.name != enum_type.name:
+        if resolved_name != enum_type.name:
             raise AglTypeError(
-                f"Qualifier '{qualifier}' resolves to enum '{resolved.name}', "
+                f"Qualifier '{qualifier}' resolves to enum '{resolved_name}', "
                 f"but the value has enum type '{enum_type.name}'.",
                 span=span,
             )
@@ -2719,7 +2735,9 @@ class _Checker:
     def _resolve_annotation(self, ann: TypeExpr | None, span: SourceSpan) -> Type | None:
         if ann is None:
             return None
-        return self._env.resolve_type_expr(ann, span=span)
+        # Annotations inside a generic ``def`` body (e.g. ``let x: T = …``) may
+        # reference the def's rigid type variables.
+        return self._env.resolve_type_expr(ann, span=span, type_vars=self._current_type_vars)
 
     # ------------------------------------------------------------------
     # Result

@@ -1,0 +1,57 @@
+# Generics: generic higher-order functions. `apply[A, B]` and `twice[A]` accept
+# function values and are instantiated at several argument/result types via
+# inference and via an explicit `apply::[…, …]` override. Concrete lambdas supply
+# the function arguments. Also exercises a lambda inside a generic def whose
+# parameter/return are annotated with the def's own type variable plus a `let`
+# annotation referencing that type variable (`via_lambda`), and a GENERIC enum
+# variant constructor bound as a first-class value, passed THROUGH the generic
+# HOF and called there under type erasure. A param chooses which transform runs.
+def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+
+def twice[A](x: A, f: (A) -> A) -> A = f(f(x))
+
+# A lambda inside a generic def annotating its parameter/return with the def's
+# own type variable `A`, plus a `let` annotation that references `A`.
+def via_lambda[A](x: A) -> A =
+  let g: (A) -> A = fn(y: A) -> A => y
+  g(x)
+
+enum Wrapper[T]
+  | wrap(value: T)
+
+param shout: bool
+
+# Inferred A=int, B=int.
+print(apply(3, fn(n: int) -> int => n * 2))
+
+# Inferred A=int, B=text (result type differs from the argument type).
+print(apply(7, fn(n: int) -> text => "n=${n}"))
+
+# Inferred A=text, B=int.
+print(apply("hello", fn(s: text) -> int => 5))
+
+# Explicit override pinning both type parameters.
+print(apply::[int, int](10, fn(n: int) -> int => n + 1))
+
+# `twice` instantiated at int and at text.
+print(twice(2, fn(n: int) -> int => n * n))
+print(twice("a", fn(s: text) -> text => s + "!"))
+
+# The type-variable lambda, instantiated at int and at text.
+print(via_lambda(99))
+print(via_lambda("kept"))
+
+# A GENERIC enum variant constructor as a first-class value, passed THROUGH the
+# generic HOF and called there — `apply` builds `Wrapper(value: "hi")` at runtime.
+let w: (text) -> Wrapper[text] = wrap
+let boxed = apply("hi", w)
+case boxed of
+  | wrap(value) => print "wrapped ${value}"
+
+# A generic HOF applied to a list element, with a param-selected transform.
+def loud(s: text) -> text = s + "!!!"
+def quiet(s: text) -> text = s
+
+let words = ["raw"]
+let transform: (text) -> text = if shout => loud else => quiet
+print(apply(words[0], transform))

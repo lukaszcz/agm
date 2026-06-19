@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "ints_text_and_records",
+      "expect": {
+        "stdout": "ints top: 10\nmapped: v10\nwords: empty\nitem top: bolt x4\n",
+        "calls": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+# Generics: a polymorphic identity `def` applied at several instantiations
+# (int, text, list, record), an explicit `id::[…]` type-argument override, and
+# the generic `def` bound as a first-class value through an expected function
+# type (D5) and then applied. Also exercises a `let` annotation inside a generic
+# def body that references the def's type variable to build a `list[T]`
+# (`singleton`), instantiated at int and text.
+def id[T](x: T) -> T = x
+
+# A generic def whose body uses a `let` annotation referencing the def's own
+# type variable `T` to build a `list[T]`.
+def singleton[T](x: T) -> list[T] =
+  let single: list[T] = [x]
+  single
+
+record Tag
+  name: text
+  weight: int
+
+# Inferred instantiations from the argument type.
+print(id(5))
+print(id("hi"))
+
+let xs = id([1, 2, 3])
+print(xs[0])
+
+let t = id(Tag(name: "core", weight: 7))
+print(t.name)
+print(t.weight)
+
+# Explicit type-argument override at the call site.
+print(id::[int](9))
+
+# Generic `def` as a first-class value: the expected type instantiates `T`.
+let f: (text) -> text = id
+print(f("via value"))
+
+# The type-variable `let` annotation in action, instantiated at int and text.
+let ys = singleton(11)
+print ys[0]
+let zs = singleton("solo")
+print zs[0]

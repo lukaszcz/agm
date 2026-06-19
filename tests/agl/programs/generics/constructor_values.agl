@@ -1,0 +1,57 @@
+# Generics + case-neutral constructor bindings: first-class payload constructors
+# passed to a generic HOF and called positionally; constructor shadowing (a
+# nearer `def` parameter hides an outer constructor); qualified constructor
+# access to disambiguate a variant name shared by two enums; lowercase AND
+# uppercase constructor names; nullary constructor VALUES (annotated) and nullary
+# constructor PATTERNS (`off()` / `Holder.empty`). A param selects a branch.
+record Pt
+  x: int
+  y: int
+
+# Two enums sharing the unqualified variant name `tagged` — references must be
+# qualified. Lowercase (`Holder`) and uppercase (`Signal`) constructor names.
+enum Holder[T]
+  | empty
+  | tagged(by: T)
+
+enum Signal
+  | Off
+  | On(label: text)
+
+param raise_it: bool
+
+# Generic HOF accepting a function value, applied to a constructor value.
+def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+
+# A non-generic record constructor as a first-class value, passed to the HOF and
+# called positionally there (declaration field order: x, y).
+let p = apply(3, fn(n: int) -> Pt => Pt(x: n, y: n + 1))
+print "${p.x},${p.y}"
+
+# A non-generic payload-variant constructor (uppercase `On`) as a value, called
+# positionally through a variable.
+let mk: (text) -> Signal = On
+let lit = mk("go")
+print lit
+
+# Shadowing: the `def` parameter `tagged` hides the outer `tagged` constructor.
+def shadow(tagged: int) -> int = tagged * 10
+print(shadow(4))
+
+# Qualified disambiguation of the shared `tagged` variant name.
+let h: Holder[int] = Holder.tagged(by: 7)
+case h of
+  | empty() => print "holder empty"
+  | tagged(by: who) => print "held ${who}"
+
+# Nullary constructor VALUE (annotated) and a nullary call-form PATTERN.
+let blank: Holder[text] = Holder.empty
+case blank of
+  | empty() => print "blank"
+  | tagged(by: who) => print "by ${who}"
+
+# Qualified nullary PATTERN (`Signal.Off`) on a non-generic enum.
+let s: Signal = if raise_it => On(label: "fire") else => Off
+case s of
+  | Signal.Off => print "signal off"
+  | On(label) => print "signal on: ${label}"

@@ -1,0 +1,39 @@
+# Generics: a two-parameter `enum Outcome[T, E]` combining a record success
+# payload and a record error payload. A generic function consumes it via `case`,
+# the value variants are inferred from their payloads, and an explicit
+# `ok::[…, …]` override pins both parameters. A param selects the success or
+# failure path.
+record Pt
+  x: int
+  y: int
+
+record Fault
+  code: int
+  detail: text
+
+enum Outcome[T, E]
+  | ok(value: T)
+  | err(error: E)
+
+param fail: bool
+
+def describe[T, E](o: Outcome[T, E]) -> text =
+  case o of
+    | ok(value) => "ok"
+    | err(error) => "err"
+
+let good: Outcome[Pt, Fault] = ok(value: Pt(x: 1, y: 2))
+let bad: Outcome[Pt, Fault] = err(error: Fault(code: 404, detail: "missing"))
+
+print(describe(good))
+print(describe(bad))
+
+# Explicit two-argument override on a generic constructor.
+let pinned = ok::[int, text](value: 5)
+print pinned
+
+# Branch chosen by the host param; field access on the destructured payload.
+let chosen: Outcome[Pt, Fault] = if fail => bad else => good
+case chosen of
+  | ok(value) => print "point ${value.x},${value.y}"
+  | err(error) => print "fault ${error.code}: ${error.detail}"

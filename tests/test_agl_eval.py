@@ -3651,6 +3651,51 @@ def test_generic_qualified_constructor_value_erasure() -> None:
     )
 
 
+def test_generic_record_constructor_value_through_hof() -> None:
+    # A generic record constructor escapes through a polymorphic HOF and is
+    # called there. At that call site the result type is the HOF's erased type
+    # variable, so the value must build from its own identity (not the call's
+    # result type). Regression: previously crashed with an AssertionError.
+    snap = _run_source(
+        "def apply[A, B](x: A, f: (A) -> B) -> B = f(x)\n"
+        "record Box[T]\n"
+        "  value: T\n"
+        "let mk: (int) -> Box[int] = Box\n"
+        "let r = apply(7, mk)\n"
+        "r"
+    )
+    assert snap["r"] == RecordValue(type_name="Box", fields={"value": IntValue(7)})
+
+
+def test_generic_enum_constructor_value_through_hof() -> None:
+    # Same as above for a generic enum payload variant escaping through a HOF.
+    snap = _run_source(
+        "def apply[A, B](x: A, f: (A) -> B) -> B = f(x)\n"
+        "enum Wrapper[T]\n"
+        "  | wrap(value: T)\n"
+        "let w: (text) -> Wrapper[text] = wrap\n"
+        'let r = apply("hi", w)\n'
+        "r"
+    )
+    assert snap["r"] == EnumValue(
+        type_name="Wrapper", variant="wrap", fields={"value": TextValue("hi")}
+    )
+
+
+def test_non_generic_constructor_value_through_hof() -> None:
+    # A non-generic record constructor (concrete field types) escaping through a
+    # HOF still builds correctly, coercing fields against the declared templates.
+    snap = _run_source(
+        "def apply[A, B](x: A, f: (A) -> B) -> B = f(x)\n"
+        "record Tag\n"
+        "  label: text\n"
+        "let mk = Tag\n"
+        'let r = apply("x", mk)\n'
+        "r"
+    )
+    assert snap["r"] == RecordValue(type_name="Tag", fields={"label": TextValue("x")})
+
+
 def test_constructor_value_render_and_serialize() -> None:
     from agm.agl.eval.values import ConstructorValue
     from agm.agl.runtime.render import render_value, render_value_repl

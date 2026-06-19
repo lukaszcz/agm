@@ -42,6 +42,7 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     Call,
     Case,
+    Cast,
     CatchClause,
     ConfigPragma,
     Constructor,
@@ -383,6 +384,10 @@ class Interpreter:
             return self._eval_unary_neg(expr, scope)
         if isinstance(expr, IsTest):
             return self._eval_is_test(expr, scope)
+        if isinstance(expr, Cast):
+            raise NotImplementedError(  # pragma: no cover
+                "Cast evaluation is not yet implemented (milestone M5)"
+            )
         if isinstance(expr, ListLit):
             return self._eval_list_lit(expr, scope)
         if isinstance(expr, DictLit):

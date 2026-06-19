@@ -206,6 +206,21 @@ class UnaryNeg:
 
 
 @dataclass(frozen=True, slots=True)
+class Cast:
+    """A type cast (``expr as T``) or convertibility test (``expr as? T``).
+
+    ``test_only=False`` — the ``as`` operator; yields a value of type T.
+    ``test_only=True``  — the ``as?`` operator; yields ``bool``.
+    """
+
+    expr: Expr
+    target_type: TypeExpr
+    test_only: bool
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class IsTest:
     """Pattern membership test: ``expr is [not] [Qualifier.]Variant``."""
 
@@ -500,6 +515,7 @@ Expr = (
     | BinaryOp
     | UnaryNot
     | UnaryNeg
+    | Cast
     | IsTest
     | Call
     | Lambda

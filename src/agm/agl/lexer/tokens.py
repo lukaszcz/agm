@@ -81,6 +81,7 @@ KW_TRY = "try"
 KW_CATCH = "catch"
 KW_RAISE = "raise"
 KW_AS = "as"
+KW_AS_QUESTION = "as?"
 # KW_PASS removed in v2: `pass` is now a plain identifier (role taken by `()`)
 # KW_PRINT removed in v2: `print` is now an ordinary function name (VAR_NAME)
 KW_AND = "and"
@@ -116,6 +117,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_CATCH,
         KW_RAISE,
         KW_AS,
+        KW_AS_QUESTION,
         KW_AND,
         KW_OR,
         KW_NOT,
@@ -193,5 +195,8 @@ LOOP_BOUND = "LOOP_BOUND"  # [N] immediately after do — value is the integer s
 # parser-facing ``AglLexer.lex()`` method applies this mapping.
 # ---------------------------------------------------------------------------
 GRAMMAR_TOKEN_REMAP: dict[str, str] = {
-    kw: kw.upper() for kw in KEYWORDS
+    kw: kw.upper() for kw in KEYWORDS if kw != KW_AS_QUESTION
 }
+# `as?` contains `?` which is not valid in an uppercase terminal name; map it
+# explicitly to the declared terminal name AS_QUESTION.
+GRAMMAR_TOKEN_REMAP[KW_AS_QUESTION] = "AS_QUESTION"

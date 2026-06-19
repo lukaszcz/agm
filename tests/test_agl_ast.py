@@ -46,6 +46,7 @@ from agm.agl.syntax import (
     Call,
     Case,
     CaseBranch,
+    Cast,
     CatchClause,
     ConfigPragma,
     Constructor,
@@ -1957,3 +1958,72 @@ class TestRemovedNodes:
     def test_stmt_union_not_importable(self) -> None:
         with pytest.raises((ImportError, AttributeError)):
             from agm.agl.syntax import Stmt  # type: ignore[attr-defined]  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# Cast node (M1)
+# ---------------------------------------------------------------------------
+
+
+class TestCastNode:
+    """Tests for the Cast AST node."""
+
+    def _sp(self) -> SourceSpan:
+        return span()
+
+    def test_cast_in_expr_union(self) -> None:
+        import typing
+        assert Cast in typing.get_args(Expr)
+
+    def test_cast_expr_construction(self) -> None:
+        expr = IntLit(value=1, span=self._sp(), node_id=0)
+        target = IntT(span=self._sp(), node_id=1)
+        node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=2)
+        assert node.expr is expr
+        assert node.target_type is target
+        assert node.test_only is False
+
+    def test_cast_test_construction(self) -> None:
+        expr = VarRef(name="x", span=self._sp(), node_id=0)
+        target = TextT(span=self._sp(), node_id=1)
+        node = Cast(expr=expr, target_type=target, test_only=True, span=self._sp(), node_id=2)
+        assert node.test_only is True
+
+    def test_cast_equality_ignores_span_and_node_id(self) -> None:
+        expr = IntLit(value=42, span=self._sp(), node_id=0)
+        target = TextT(span=self._sp(), node_id=1)
+        n1 = Cast(
+            expr=expr, target_type=target, test_only=False,
+            span=SourceSpan(1, 0, 1, 5, 0, 5), node_id=99,
+        )
+        n2 = Cast(
+            expr=expr, target_type=target, test_only=False,
+            span=SourceSpan(2, 0, 2, 5, 0, 5), node_id=100,
+        )
+        assert n1 == n2
+
+    def test_cast_immutable(self) -> None:
+        expr = NullLit(span=self._sp(), node_id=0)
+        target = BoolT(span=self._sp(), node_id=1)
+        node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=2)
+        with pytest.raises((FrozenInstanceError, AttributeError)):
+            node.test_only = True  # type: ignore[misc]
+
+    def test_cast_target_uses_type_expr(self) -> None:
+        """target_type accepts any TypeExpr, including generic forms."""
+        expr = VarRef(name="xs", span=self._sp(), node_id=0)
+        target = ListT(elem=IntT(span=self._sp(), node_id=1), span=self._sp(), node_id=2)
+        node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=3)
+        assert isinstance(node.target_type, ListT)
+
+    def test_cast_walk_visits_cast_and_children(self) -> None:
+        """walk() visits Cast, its expr child, and its target_type child."""
+        from agm.agl.syntax.visitor import walk
+        expr = IntLit(value=1, span=self._sp(), node_id=0)
+        target = TextT(span=self._sp(), node_id=1)
+        node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=2)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert any(isinstance(n, Cast) for n in visited)
+        assert any(isinstance(n, IntLit) for n in visited)
+        assert any(isinstance(n, TextT) for n in visited)

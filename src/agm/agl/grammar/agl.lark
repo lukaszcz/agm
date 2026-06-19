@@ -73,6 +73,7 @@
 // ---------------------------------------------------------------------------
 
 %declare VAR_NAME TYPE_NAME
+%declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
 // string literal "agent") so it can be referenced by name in `field_name`,
 // where `agent` is admitted as a field/key name, and in `type_expr` where
@@ -347,7 +348,7 @@ suite_expr: _INDENT block _DEDENT
 // Operator precedence chain (all transparent — no wrapper nodes)
 //
 // Highest to lowest:
-//   postfix (call/access) > juxt > unary(-) > * / > + - >
+//   postfix (call/access) > juxt > unary(-) > [cast/as/as?] > * / > + - >
 //   comparison (non-assoc) > not > and > or
 // ---------------------------------------------------------------------------
 
@@ -378,9 +379,13 @@ suite_expr: _INDENT block _DEDENT
          | additive MINUS multiplicative  -> bin_sub
          | multiplicative
 
-?multiplicative: multiplicative STAR unary   -> bin_mul
-               | multiplicative SLASH unary  -> bin_div
-               | unary
+?multiplicative: multiplicative STAR cast   -> bin_mul
+               | multiplicative SLASH cast  -> bin_div
+               | cast
+
+?cast: cast "as" type_expr        -> cast_expr
+     | cast AS_QUESTION type_expr -> cast_test
+     | unary
 
 ?unary: MINUS unary   -> unary_neg
       | juxt

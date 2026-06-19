@@ -42,10 +42,12 @@ from agm.agl.syntax.types import (
     DecimalT,
     DictT,
     FuncT,
+    ImportMode,
     IntT,
     JsonT,
     ListT,
     NameT,
+    Qualifier,
     TextT,
     TypeExpr,
     UnitT,
@@ -726,6 +728,7 @@ class AstBuilder(Transformer):
                 args=tuple(named_args),
                 span=span,
                 node_id=new_id,
+                module_qualifier=callee.module_qualifier,
             )
 
         return syntax.Call(
@@ -782,6 +785,7 @@ class AstBuilder(Transformer):
                 args=(),
                 span=_span_from_meta(meta),
                 node_id=self._next_id(),
+                module_qualifier=obj_expr.module_qualifier,
             )
         raise AglSyntaxError(
             f"'.{variant_name}' may only follow a type name "
@@ -1409,6 +1413,258 @@ class AstBuilder(Transformer):
         return syntax.PatternField(
             name=name, pattern=var_pat,
             span=_span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # Import declaration
+    # ------------------------------------------------------------------
+
+    def _import_decl_from_args(
+        self,
+        meta: Meta,
+        args: _Args,
+        *,
+        wildcard: bool,
+    ) -> syntax.ImportDecl:
+        """Shared builder for import_decl_plain and import_decl_wildcard."""
+        module_path: tuple[str, ...] = ()
+        qualified = False
+        alias: str | None = None
+        mode = ImportMode.ALL
+        items: tuple[syntax.ImportItem, ...] = ()
+
+        for a in args:
+            if isinstance(a, Token) and a.type == "QUALIFIED":
+                qualified = True
+            elif isinstance(a, Token) and a.type == "MODPATH":
+                module_path = tuple(str(a).split("."))
+            elif isinstance(a, Token):
+                # Skip IMPORT, DOT, STAR, etc.
+                pass
+            elif type(a) is str:
+                # import_alias result: plain str (not Token, which is also a str subclass)
+                alias = a
+            else:
+                # import_clause result: (ImportMode, items)
+                clause = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...]], a)
+                mode, items = clause
+
+        return syntax.ImportDecl(
+            module_path=module_path,
+            wildcard=wildcard,
+            qualified=qualified,
+            alias=alias,
+            mode=mode,
+            items=items,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def import_decl_plain(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
+        """import_decl_plain: IMPORT MODPATH QUALIFIED? import_alias? import_clause?"""
+        return self._import_decl_from_args(meta, args, wildcard=False)
+
+    def import_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
+        """import_decl_wildcard: IMPORT MODPATH DOT STAR QUALIFIED? import_alias?"""
+        return self._import_decl_from_args(meta, args, wildcard=True)
+
+    def import_alias(self, meta: Meta, args: _Args) -> str:
+        """import_alias: "as" ref_name — return the alias name.
+
+        ref_name is the only non-anonymous child (Lark filters "as");
+        it returns a plain str.  We use next() to skip any Tokens Lark
+        may pass when keep_all_tokens is enabled.
+        """
+        return next(a for a in args if type(a) is str)
+
+    def ref_name(self, meta: Meta, args: _Args) -> str:
+        """ref_name: VAR_NAME | TYPE_NAME"""
+        tok = args[0]
+        assert isinstance(tok, Token)
+        return str(tok)
+
+    def import_clause_using(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
+        """import_clause_using: USING import_item (COMMA import_item)*"""
+        import_items = tuple(a for a in args if isinstance(a, syntax.ImportItem))
+        return (ImportMode.USING, import_items)
+
+    def import_clause_hiding(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
+        """import_clause_hiding: HIDING ref_name (COMMA ref_name)*"""
+        # Filter plain str (from ref_name) — Token is a str subclass, exclude it
+        hiding_names = [a for a in args if type(a) is str]
+        hiding_items = tuple(
+            syntax.ImportItem(
+                name=name,
+                rename=None,
+                span=_span_from_meta(meta),
+                node_id=self._next_id(),
+            )
+            for name in hiding_names
+        )
+        return (ImportMode.HIDING, hiding_items)
+
+    def import_item_rename(self, meta: Meta, args: _Args) -> syntax.ImportItem:
+        """import_item_rename: ref_name "as" ref_name"""
+        # ref_name returns plain str; "as" is filtered by Lark (anonymous terminal)
+        names = [a for a in args if type(a) is str]
+        return syntax.ImportItem(
+            name=names[0],
+            rename=names[1],
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def import_item_plain(self, meta: Meta, args: _Args) -> syntax.ImportItem:
+        """import_item_plain: ref_name"""
+        names = [a for a in args if type(a) is str]
+        return syntax.ImportItem(
+            name=names[0],
+            rename=None,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # Private declarations
+    # ------------------------------------------------------------------
+
+    def private_record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
+        """private_record_def: PRIVATE record_def"""
+        rec = next(a for a in args if isinstance(a, syntax.RecordDef))
+        return syntax.RecordDef(
+            name=rec.name,
+            fields=rec.fields,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    def private_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
+        """private_enum_def: PRIVATE enum_def"""
+        e = next(a for a in args if isinstance(a, syntax.EnumDef))
+        return syntax.EnumDef(
+            name=e.name,
+            variants=e.variants,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    def private_type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
+        """private_type_alias: PRIVATE type_alias"""
+        ta = next(a for a in args if isinstance(a, syntax.TypeAlias))
+        return syntax.TypeAlias(
+            name=ta.name,
+            type_expr=ta.type_expr,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    def private_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """private_func_def: PRIVATE func_def"""
+        f = next(a for a in args if isinstance(a, syntax.FuncDef))
+        return syntax.FuncDef(
+            name=f.name,
+            params=f.params,
+            return_type=f.return_type,
+            body=f.body,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Qualified refs
+    # ------------------------------------------------------------------
+
+    def qual_prefix(self, meta: Meta, args: _Args) -> Qualifier:
+        """qual_prefix: MODQUAL | DCOLON"""
+        tok = args[0]
+        assert isinstance(tok, Token)
+        if tok.type == "MODQUAL":
+            segments = tuple(str(tok).split("."))
+        else:
+            # DCOLON — self-reference, empty segments
+            segments = ()
+        return Qualifier(
+            segments=segments,
+            span=_span_from_token(tok),
+            node_id=self._next_id(),
+        )
+
+    def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
+        """qual_var_ref: qual_prefix VAR_NAME"""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "VAR_NAME")
+        return syntax.VarRef(
+            name=str(name_tok),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+
+    def qual_constructor(self, meta: Meta, args: _Args) -> syntax.Constructor:
+        """qual_constructor: qual_prefix TYPE_NAME"""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
+        return syntax.Constructor(
+            qualifier=None,
+            name=str(name_tok),
+            args=(),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+
+    def qual_named_type(self, meta: Meta, args: _Args) -> NameT:
+        """qual_prefix TYPE_NAME in type position."""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME")
+        return NameT(
+            name=str(name_tok),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+
+    def qual_prim_type(self, meta: Meta, args: _Args) -> NameT:
+        """qual_prefix VAR_NAME in type position."""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "VAR_NAME")
+        return NameT(
+            name=str(name_tok),
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+
+    def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
+        """pat_qual_constructor: qual_prefix TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?
+        """
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        type_toks = [a for a in args if isinstance(a, Token) and a.type == "TYPE_NAME"]
+        qualifier_str: str | None = None
+        if len(type_toks) == 2:
+            qualifier_str = str(type_toks[0])
+            name = str(type_toks[1])
+        else:
+            name = str(type_toks[0])
+        fields: tuple[syntax.PatternField, ...] = ()
+        for a in args:
+            if isinstance(a, tuple) and all(isinstance(x, syntax.PatternField) for x in a):
+                fields = cast(tuple[syntax.PatternField, ...], a)
+        return syntax.ConstructorPattern(
+            qualifier=qualifier_str,
+            name=name,
+            fields=fields,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
         )
 
     # ------------------------------------------------------------------

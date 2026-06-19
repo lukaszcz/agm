@@ -8,6 +8,7 @@ appear in the source.
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass, field
 
 from agm.agl.syntax.spans import SourceSpan
@@ -53,6 +54,29 @@ class DecimalT:
     node_id: int = field(compare=False)
 
 
+class ImportMode(enum.Enum):
+    """Determines which names are imported from the module."""
+
+    ALL = "ALL"
+    USING = "USING"
+    HIDING = "HIDING"
+
+
+@dataclass(frozen=True, slots=True)
+class Qualifier:
+    """A module qualifier prefix, as parsed from ``MODQUAL::`` or leading ``::``.
+
+    ``segments == ()`` means the current module (written as ``::name``).
+    ``segments == ("foo", "bar")`` means the module at path ``foo.bar``.
+    Alias-rooted qualifiers carry the alias + any trailing segments; the AST
+    does not resolve alias vs. module-path — that is scope resolution's job.
+    """
+
+    segments: tuple[str, ...]
+    span: SourceSpan = field(compare=False)
+    node_id: int = field(compare=False)
+
+
 @dataclass(frozen=True, slots=True)
 class NameT:
     """A named type reference (record, enum, or type-alias name)."""
@@ -60,6 +84,7 @@ class NameT:
     name: str
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
+    module_qualifier: Qualifier | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1887,3 +1887,28 @@ class TestCastScope:
         # The call to parse_json should be classified as PARSE_JSON builtin
         from agm.agl.scope.symbols import BuiltinKind
         assert BuiltinKind.PARSE_JSON in r.builtin_calls.values()
+
+
+class TestImportDeclScope:
+    """Import declarations pass through the scope resolver without errors."""
+
+    def test_import_decl_does_not_raise(self) -> None:
+        """A bare import declaration resolves without a scope error."""
+        r = parse_and_resolve("import foo.bar\n1")
+        assert r  # no exception
+
+    def test_import_with_alias_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo as f\n1")
+        assert r
+
+    def test_import_wildcard_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo.*\n1")
+        assert r
+
+    def test_import_using_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo using bar\n1")
+        assert r
+
+    def test_import_hiding_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo hiding secret\n1")
+        assert r

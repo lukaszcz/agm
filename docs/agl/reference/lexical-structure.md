@@ -92,6 +92,46 @@ binders — but they remain legal as field names.
 contextually in type positions. `fn` is reserved (it introduces a lambda).
 `def` is reserved (it introduces a function declaration).
 
+**Module system soft keywords** — `import`, `private`, `qualified`, `using`,
+and `hiding` are **not reserved**. They remain valid identifiers in all
+positions except:
+
+| Keyword | Promoted to | Window |
+|---------|-------------|--------|
+| `import` | `IMPORT` | At item-start (after newline, indent, dedent, `;`, or stream start) |
+| `private` | `PRIVATE` | At item-start |
+| `qualified` | `QUALIFIED` | Within an import line (after `import` keyword, before the next newline or `;`) |
+| `using` | `USING` | Within an import line |
+| `hiding` | `HIDING` | Within an import line |
+
+Examples where they remain plain identifiers:
+
+```agl
+let import = 1          # 'import' not at item-start → VAR_NAME
+let using = "hello"     # 'using' not in import line → VAR_NAME
+def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
+```
+
+## Module qualifiers
+
+`::` separates a **module qualifier** from the name it qualifies. In value
+and type position:
+
+```agl
+foo.bar::thing       # module foo.bar, name thing
+::name               # current module, name name (self-reference)
+A.baz::y             # alias-rooted qualifier, name y
+foo.bar::Color.Red   # module foo.bar, enum Color, variant Red
+```
+
+A qualifier is a dotted module path followed by `::` immediately before the
+name it qualifies. Module path segments are dot-separated lowercase names.
+A leading `::` with no preceding path is the **self-reference** form — it
+refers to the current module.
+
+The typed-call form `callee::[T](args)` (e.g. `ask-request::[Review](…)`) is
+a distinct construct — it is NOT a module qualifier.
+
 ## Identifiers
 
 An identifier starts with a letter (any Unicode letter, not just ASCII) or

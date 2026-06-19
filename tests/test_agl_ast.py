@@ -1781,6 +1781,59 @@ class TestVisitorWalk:
         with pytest.raises(TypeError):
             walk(NotANode(), lambda n: None)
 
+    def test_walk_qual_var_ref_visits_qualifier(self) -> None:
+        """walk() on a qualified VarRef (foo.bar::thing) must visit the Qualifier node."""
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax.visitor import walk
+
+        prog = parse_program("foo.bar::thing")
+        visited: list[object] = []
+        walk(prog, visited.append)
+        assert any(isinstance(n, Qualifier) for n in visited), (
+            "Qualifier node not visited when walking foo.bar::thing"
+        )
+
+    def test_walk_qual_constructor_visits_qualifier(self) -> None:
+        """walk() on a qualified Constructor (foo.bar::Color) must visit the Qualifier node."""
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax.visitor import walk
+
+        prog = parse_program("foo.bar::Color")
+        visited: list[object] = []
+        walk(prog, visited.append)
+        assert any(isinstance(n, Qualifier) for n in visited), (
+            "Qualifier node not visited when walking foo.bar::Color"
+        )
+
+    def test_walk_qual_name_t_visits_qualifier(self) -> None:
+        """walk() on a NameT with a module_qualifier must visit the Qualifier node."""
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax.visitor import walk
+
+        # A qualified type annotation forces a NameT with module_qualifier set.
+        prog = parse_program("let x: foo.bar::MyType = null")
+        visited: list[object] = []
+        walk(prog, visited.append)
+        assert any(isinstance(n, Qualifier) for n in visited), (
+            "Qualifier node not visited when walking a qualified NameT"
+        )
+
+    def test_walk_qual_constructor_pattern_visits_qualifier(self) -> None:
+        """walk() on a ConstructorPattern with module_qualifier must visit the Qualifier."""
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax.visitor import walk
+
+        prog = parse_program("case x of | m::Foo => 1")
+        visited: list[object] = []
+        walk(prog, visited.append)
+        assert any(isinstance(n, Qualifier) for n in visited), (
+            "Qualifier node not visited when walking a qualified ConstructorPattern"
+        )
+
     def test_walk_known_node_without_branch_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A node in _KNOWN_NODE_TYPES but lacking a walk branch must fail loudly.
 
@@ -2027,3 +2080,249 @@ class TestCastNode:
         assert any(isinstance(n, Cast) for n in visited)
         assert any(isinstance(n, IntLit) for n in visited)
         assert any(isinstance(n, TextT) for n in visited)
+
+
+# ---------------------------------------------------------------------------
+# Module system nodes
+# ---------------------------------------------------------------------------
+
+
+class TestModuleSystemNodes:
+    """Tests for ImportMode, Qualifier, ImportItem, ImportDecl AST nodes."""
+
+    def _sp(self) -> SourceSpan:
+        return SourceSpan(1, 0, 1, 1, 0, 1)
+
+    def test_import_mode_enum_values(self) -> None:
+        from agm.agl.syntax import ImportMode
+        assert ImportMode.ALL.value == "ALL"
+        assert ImportMode.USING.value == "USING"
+        assert ImportMode.HIDING.value == "HIDING"
+
+    def test_qualifier_empty_segments_is_self_ref(self) -> None:
+        from agm.agl.syntax import Qualifier
+        q = Qualifier(segments=(), span=self._sp(), node_id=0)
+        assert q.segments == ()
+
+    def test_qualifier_dotted_segments(self) -> None:
+        from agm.agl.syntax import Qualifier
+        q = Qualifier(segments=("foo", "bar"), span=self._sp(), node_id=0)
+        assert q.segments == ("foo", "bar")
+
+    def test_qualifier_equality_ignores_span_and_node_id(self) -> None:
+        from agm.agl.syntax import Qualifier
+        q1 = Qualifier(segments=("mod",), span=SourceSpan(1,0,1,3,0,3), node_id=0)
+        q2 = Qualifier(segments=("mod",), span=SourceSpan(2,0,2,3,0,3), node_id=99)
+        assert q1 == q2
+
+    def test_qualifier_immutable(self) -> None:
+        from agm.agl.syntax import Qualifier
+        q = Qualifier(segments=("a",), span=self._sp(), node_id=0)
+        with pytest.raises((FrozenInstanceError, AttributeError)):
+            q.segments = ("b",)  # type: ignore[misc]
+
+    def test_import_item_with_rename(self) -> None:
+        from agm.agl.syntax import ImportItem
+        item = ImportItem(name="foo", rename="bar", span=self._sp(), node_id=0)
+        assert item.name == "foo"
+        assert item.rename == "bar"
+
+    def test_import_item_no_rename(self) -> None:
+        from agm.agl.syntax import ImportItem
+        item = ImportItem(name="baz", rename=None, span=self._sp(), node_id=0)
+        assert item.rename is None
+
+    def test_import_item_equality_ignores_span(self) -> None:
+        from agm.agl.syntax import ImportItem
+        i1 = ImportItem(name="x", rename=None, span=SourceSpan(1,0,1,1,0,1), node_id=0)
+        i2 = ImportItem(name="x", rename=None, span=SourceSpan(2,0,2,1,0,1), node_id=99)
+        assert i1 == i2
+
+    def test_import_decl_basic(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportMode
+        decl = ImportDecl(
+            module_path=("foo", "bar"),
+            wildcard=False,
+            qualified=False,
+            alias=None,
+            mode=ImportMode.ALL,
+            items=(),
+            span=self._sp(),
+            node_id=0,
+        )
+        assert decl.module_path == ("foo", "bar")
+        assert decl.wildcard is False
+        assert decl.qualified is False
+        assert decl.alias is None
+        assert decl.mode == ImportMode.ALL
+        assert decl.items == ()
+
+    def test_import_decl_wildcard(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportMode
+        decl = ImportDecl(
+            module_path=("utils",),
+            wildcard=True,
+            qualified=False,
+            alias=None,
+            mode=ImportMode.ALL,
+            items=(),
+            span=self._sp(),
+            node_id=0,
+        )
+        assert decl.wildcard is True
+
+    def test_import_decl_qualified_with_alias(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportMode
+        decl = ImportDecl(
+            module_path=("foo",),
+            wildcard=False,
+            qualified=True,
+            alias="f",
+            mode=ImportMode.ALL,
+            items=(),
+            span=self._sp(),
+            node_id=0,
+        )
+        assert decl.qualified is True
+        assert decl.alias == "f"
+
+    def test_import_decl_using_mode(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
+        items = (
+            ImportItem(name="foo", rename=None, span=self._sp(), node_id=1),
+            ImportItem(name="bar", rename="b", span=self._sp(), node_id=2),
+        )
+        decl = ImportDecl(
+            module_path=("m",),
+            wildcard=False,
+            qualified=False,
+            alias=None,
+            mode=ImportMode.USING,
+            items=items,
+            span=self._sp(),
+            node_id=0,
+        )
+        assert decl.mode == ImportMode.USING
+        assert len(decl.items) == 2
+
+    def test_import_decl_hiding_mode(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
+        items = (ImportItem(name="private_fn", rename=None, span=self._sp(), node_id=1),)
+        decl = ImportDecl(
+            module_path=("m",),
+            wildcard=False,
+            qualified=False,
+            alias=None,
+            mode=ImportMode.HIDING,
+            items=items,
+            span=self._sp(),
+            node_id=0,
+        )
+        assert decl.mode == ImportMode.HIDING
+
+    def test_import_decl_is_declaration(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportMode
+        decl = ImportDecl(
+            module_path=("m",),
+            wildcard=False,
+            qualified=False,
+            alias=None,
+            mode=ImportMode.ALL,
+            items=(),
+            span=self._sp(),
+            node_id=0,
+        )
+        assert isinstance(decl, ImportDecl)
+        # Verify it is part of the Declaration union (isinstance check)
+        _ = decl  # Declaration is a type alias, not a class, so just check it's the right type
+        assert type(decl).__name__ == "ImportDecl"
+
+    def test_import_decl_walk_visits_items(self) -> None:
+        from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
+        from agm.agl.syntax.visitor import walk
+        item = ImportItem(name="x", rename=None, span=self._sp(), node_id=1)
+        decl = ImportDecl(
+            module_path=("m",),
+            wildcard=False,
+            qualified=False,
+            alias=None,
+            mode=ImportMode.USING,
+            items=(item,),
+            span=self._sp(),
+            node_id=0,
+        )
+        visited: list[object] = []
+        walk(decl, visited.append)
+        assert any(isinstance(n, ImportDecl) for n in visited)
+        assert any(isinstance(n, ImportItem) for n in visited)
+
+    def test_qualifier_walk_is_leaf(self) -> None:
+        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax.visitor import walk
+        q = Qualifier(segments=("a", "b"), span=self._sp(), node_id=0)
+        visited: list[object] = []
+        walk(q, visited.append)
+        assert visited == [q]
+
+    def test_func_def_is_private_default_false(self) -> None:
+        """FuncDef.is_private defaults to False."""
+        func = FuncDef(
+            name="f",
+            params=(),
+            return_type=TextT(span=self._sp(), node_id=0),
+            body=NullLit(span=self._sp(), node_id=1),
+            span=self._sp(),
+            node_id=2,
+        )
+        assert func.is_private is False
+
+    def test_func_def_is_private_true(self) -> None:
+        func = FuncDef(
+            name="g",
+            params=(),
+            return_type=TextT(span=self._sp(), node_id=0),
+            body=NullLit(span=self._sp(), node_id=1),
+            span=self._sp(),
+            node_id=2,
+            is_private=True,
+        )
+        assert func.is_private is True
+
+    def test_record_def_is_private_default(self) -> None:
+        rec = RecordDef(name="R", fields=(), span=self._sp(), node_id=0)
+        assert rec.is_private is False
+
+    def test_enum_def_is_private_default(self) -> None:
+        e = EnumDef(name="E", variants=(), span=self._sp(), node_id=0)
+        assert e.is_private is False
+
+    def test_type_alias_is_private_default(self) -> None:
+        ta = TypeAlias(
+            name="T",
+            type_expr=TextT(span=self._sp(), node_id=0),
+            span=self._sp(),
+            node_id=1,
+        )
+        assert ta.is_private is False
+
+    def test_var_ref_module_qualifier_default_none(self) -> None:
+        ref = VarRef(name="x", span=self._sp(), node_id=0)
+        assert ref.module_qualifier is None
+
+    def test_var_ref_with_module_qualifier(self) -> None:
+        from agm.agl.syntax import Qualifier
+        q = Qualifier(segments=("foo",), span=self._sp(), node_id=0)
+        ref = VarRef(name="x", span=self._sp(), node_id=1, module_qualifier=q)
+        assert ref.module_qualifier is q
+
+    def test_constructor_module_qualifier_default_none(self) -> None:
+        ctor = Constructor(qualifier=None, name="Foo", args=(), span=self._sp(), node_id=0)
+        assert ctor.module_qualifier is None
+
+    def test_name_t_module_qualifier_default_none(self) -> None:
+        t = NameT(name="MyType", span=self._sp(), node_id=0)
+        assert t.module_qualifier is None
+
+    def test_constructor_pattern_module_qualifier_default_none(self) -> None:
+        pat = ConstructorPattern(qualifier=None, name="Foo", fields=(), span=self._sp(), node_id=0)
+        assert pat.module_qualifier is None

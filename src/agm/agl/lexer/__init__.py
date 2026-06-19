@@ -18,7 +18,7 @@ from lark.lexer import Token
 
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
-from agm.agl.lexer.lexer import AglLexer, tab_warning_collector
+from agm.agl.lexer.lexer import AglLexer, apply_module_passes, tab_warning_collector
 from agm.agl.lexer.scanner import lex_tab_warnings, scan
 
 __all__ = [
@@ -36,4 +36,4 @@ def tokenize(source: str) -> Iterator[Token]:
     This is the public convenience entry point for tests and tooling; the
     Lark parser uses :class:`AglLexer` directly.
     """
-    return layout(scan(source))
+    return iter(apply_module_passes(list(layout(scan(source)))))

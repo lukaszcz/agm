@@ -122,6 +122,27 @@ No float type in AgL. Decimal arithmetic is exact fixed-point.
 | `LOOP_BOUND` | `[N]` after `do` | Merged from `LSQB INT RSQB` by the lexer to eliminate the LALR(1) conflict with list literals. The token's value is the integer string `N`. |
 | `INDEX_LSQB` | adjacent `[` after an expression | Distinguishes indexing (`xs[0]`) from spaced list-literal call sugar (`f [0]`). |
 
+**Module system tokens (contextual / synthetic):**
+
+The following tokens are produced by post-layout lexer passes; they are NOT
+reserved keywords and remain valid identifiers outside their promotion windows.
+
+| Token | Promotion condition | Purpose |
+|-------|---------------------|---------|
+| `IMPORT` | `import` at item-start (after `_NEWLINE`, `_INDENT`, `_DEDENT`, `;`, or stream start) | Leads an `import_decl` |
+| `PRIVATE` | `private` at item-start | Visibility modifier on `def`/`record`/`enum`/`type` |
+| `QUALIFIED` | `qualified` within an import line | Import mode modifier |
+| `USING` | `using` within an import line | Selective import clause |
+| `HIDING` | `hiding` within an import line | Exclusion import clause |
+| `MODQUAL` | `name(DOT name)*::` where the token after `::` is not `[` | Module qualifier prefix; value is the dotted qualifier string (e.g. `"foo.bar"`) |
+| `MODPATH` | `name(DOT name)*` immediately after `IMPORT` | Module path in an import declaration; value is the dotted path string |
+
+`MODQUAL` carries the dotted qualifier string up to but not including `::`.
+`DCOLON` is consumed into the `MODQUAL` token.
+The `next != [` guard preserves the existing typed-call form `callee::[T](args)`.
+A leading `::name` (empty qualifier; self-reference) has no preceding name, so
+no merge fires; the bare `DCOLON` is handled by the grammar directly.
+
 ---
 
 ## Layout Rules
@@ -206,3 +227,11 @@ comparison per expression; a second chained operator is a parse error.
   zero-arg call).
 - Named arguments `VAR_NAME ":" expr` in `arg_list` (reusing the
   constructor shape).
+
+### Module system additions
+
+- `import_decl` as a new top-level declaration: `import MODPATH [.*] [qualified] [as ALIAS] [using…|hiding…]`.
+- `MODQUAL::name` — module-qualified value/type/constructor reference.
+- `::name` — self-reference (current module).
+- `private` modifier on `def`/`record`/`enum`/`type` declarations.
+- Soft keywords: `import`, `private`, `qualified`, `using`, `hiding` — contextually promoted by the lexer; remain valid identifiers outside their promotion windows.

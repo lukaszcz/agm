@@ -74,6 +74,7 @@ from agm.agl.syntax.nodes import (
     FieldDef,
     FuncDef,
     If,
+    ImportDecl,
     IndexAccess,
     IndexTarget,
     InterpSegment,
@@ -479,6 +480,8 @@ class _Checker:
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
+        if isinstance(item, ImportDecl):
+            return UnitType()  # Module-system pass (M2+) will process import declarations
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
             self._check_binding(item)

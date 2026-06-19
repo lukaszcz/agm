@@ -7,6 +7,11 @@
 // leading underscore convention.
 //
 // LALR(1) conflict-freeness verified: 0 shift/reduce, 0 reduce/reduce.
+// Module system (import/private/qualified refs) is conflict-free because:
+//   - import module paths are pre-merged into MODPATH tokens by the lexer,
+//     eliminating the VAR_NAME DOT ambiguity with expression grammar.
+//   - Qualified prefixes are pre-merged into MODQUAL by the lexer, eliminating
+//     the VAR_NAME DCOLON ambiguity with typed_call_atom.
 // See tests/test_agl_parser.py for the mandatory conflict-guard regression.
 //
 // Terminal naming: keyword string literals (e.g. "let") produce uppercase
@@ -73,6 +78,7 @@
 // ---------------------------------------------------------------------------
 
 %declare VAR_NAME TYPE_NAME
+%declare IMPORT QUALIFIED USING HIDING PRIVATE MODQUAL MODPATH
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
 // string literal "agent") so it can be referenced by name in `field_name`,
@@ -123,6 +129,11 @@ _sep: _NEWLINE | SEMICOLON
             | agent_decl
             | config_pragma
             | func_def
+            | import_decl
+            | private_record_def
+            | private_enum_def
+            | private_type_alias
+            | private_func_def
 
 // ---------------------------------------------------------------------------
 // Type declarations
@@ -231,6 +242,8 @@ type_expr: LPAR type_list? RPAR THIN_ARROW type_expr       -> func_type
          | VAR_NAME                                    -> prim_type_or_name
          | TYPE_NAME                                   -> named_type
          | AGENT                                       -> agent_type
+         | qual_prefix TYPE_NAME                       -> qual_named_type
+         | qual_prefix VAR_NAME                        -> qual_prim_type
 
 type_lsqb: LSQB | INDEX_LSQB
 
@@ -417,6 +430,10 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
            | INDEX_LSQB expr RSQB -> juxt_index_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
+// Qualified refs (qual_var_ref/qual_constructor) are NOT included here — they
+// are valid in atom/postfix/juxt-callee position but not as juxt arguments.
+// This keeps DCOLON and MODQUAL out of FIRST(juxt_arg) and avoids an LALR(1)
+// Shift/Reduce conflict between var_ref:VAR_NAME and typed_call_atom:VAR_NAME DCOLON.
 ?juxt_atom: lit_int
           | lit_decimal
           | lit_true
@@ -481,6 +498,8 @@ typed_call_atom: VAR_NAME DCOLON LSQB type_expr RSQB LPAR arg_list? RPAR
      | lit_dict
      | constructor
      | var_ref
+     | qual_var_ref
+     | qual_constructor
      | typed_call_atom
      | paren_expr_or_unit
 
@@ -559,7 +578,8 @@ dict_entry: template COLON expr     -> dict_entry_str
 //   TYPE_NAME (qualified or not) + optional fields → constructor pattern
 //   VAR_NAME (other) → var binder
 //   literal → literal pattern
-pattern: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?  -> pat_constructor
+pattern: TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)?           -> pat_constructor
+       | qual_prefix TYPE_NAME (DOT TYPE_NAME)? (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
        | VAR_NAME                                -> pat_var_or_wild
        | INT                                     -> pat_lit_int
        | DECIMAL                                 -> pat_lit_decimal
@@ -572,3 +592,44 @@ pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
 pattern_field: VAR_NAME COLON pattern   -> pat_field_full
              | VAR_NAME                 -> pat_field_shorthand
+
+// ---------------------------------------------------------------------------
+// Module system: import declarations and private declarations
+//
+// The lexer pre-merges `VAR_NAME (DOT VAR_NAME)*` after IMPORT into a single
+// MODPATH token, eliminating the LALR(1) ambiguity with the expression grammar.
+// Qualified prefixes `NAME(DOT NAME)*::` are pre-merged into MODQUAL by the
+// lexer, eliminating the DCOLON ambiguity with typed_call_atom.
+// ---------------------------------------------------------------------------
+
+// import_decl: IMPORT MODPATH QUALIFIED? (as ref_name)? import_clause?
+// Wildcard tail (.*) follows MODPATH as DOT STAR.
+import_decl : IMPORT MODPATH DOT STAR QUALIFIED? import_alias? -> import_decl_wildcard
+            | IMPORT MODPATH QUALIFIED? import_alias? import_clause? -> import_decl_plain
+
+import_alias : "as" ref_name
+
+import_clause : USING import_item (COMMA import_item)*  -> import_clause_using
+              | HIDING ref_name (COMMA ref_name)*        -> import_clause_hiding
+
+import_item : ref_name "as" ref_name    -> import_item_rename
+            | ref_name                  -> import_item_plain
+
+ref_name : VAR_NAME | TYPE_NAME
+
+// Private declaration wrappers
+private_record_def  : PRIVATE record_def
+private_enum_def    : PRIVATE enum_def
+private_type_alias  : PRIVATE type_alias
+private_func_def    : PRIVATE func_def
+
+// ---------------------------------------------------------------------------
+// Qualified references in expressions, types, and patterns
+// ---------------------------------------------------------------------------
+
+// qual_prefix: MODQUAL (foo.bar::) or bare DCOLON (self-reference ::)
+qual_prefix : MODQUAL | DCOLON
+
+// Qualified variable/constructor in expression position
+qual_var_ref     : qual_prefix VAR_NAME
+qual_constructor : qual_prefix TYPE_NAME

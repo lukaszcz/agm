@@ -28,6 +28,7 @@ import logging.handlers
 
 import pytest
 
+import agm.agl.syntax as syntax
 from agm.agl.parser import (
     AglSyntaxError,
     is_incomplete_source,
@@ -1968,3 +1969,405 @@ class TestCastParsing:
         """Bare `as` with no type raises AglSyntaxError (EOF or newline)."""
         with pytest.raises(AglSyntaxError):
             parse("x as")
+
+
+# ---------------------------------------------------------------------------
+# Import declaration tests
+# ---------------------------------------------------------------------------
+
+
+class TestImportDecl:
+    """Tests for import declaration parsing."""
+
+    def test_simple_import(self) -> None:
+        prog = parse("import foo.bar")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.module_path == ("foo", "bar")
+        assert decl.wildcard is False
+        assert decl.qualified is False
+        assert decl.alias is None
+        assert decl.mode == syntax.ImportMode.ALL
+        assert decl.items == ()
+
+    def test_single_segment_import(self) -> None:
+        prog = parse("import utils")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.module_path == ("utils",)
+
+    def test_import_wildcard(self) -> None:
+        prog = parse("import foo.bar.*")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
+        assert decl.module_path == ("foo", "bar")
+
+    def test_import_qualified(self) -> None:
+        prog = parse("import foo qualified")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.qualified is True
+
+    def test_import_with_alias(self) -> None:
+        prog = parse("import foo.bar as fb")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.alias == "fb"
+
+    def test_import_qualified_with_alias(self) -> None:
+        prog = parse("import foo qualified as f")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.qualified is True
+        assert decl.alias == "f"
+
+    def test_import_using_single_item(self) -> None:
+        prog = parse("import foo using bar")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.mode == syntax.ImportMode.USING
+        assert len(decl.items) == 1
+        assert decl.items[0].name == "bar"
+        assert decl.items[0].rename is None
+
+    def test_import_using_multiple_items(self) -> None:
+        prog = parse("import foo using bar, baz")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.mode == syntax.ImportMode.USING
+        assert len(decl.items) == 2
+        names = {i.name for i in decl.items}
+        assert names == {"bar", "baz"}
+
+    def test_import_using_with_rename(self) -> None:
+        prog = parse("import foo using bar as b")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.items[0].name == "bar"
+        assert decl.items[0].rename == "b"
+
+    def test_import_hiding_single_name(self) -> None:
+        prog = parse("import foo hiding secret")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.mode == syntax.ImportMode.HIDING
+        assert len(decl.items) == 1
+        assert decl.items[0].name == "secret"
+
+    def test_import_hiding_multiple_names(self) -> None:
+        prog = parse("import foo hiding a, b")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.mode == syntax.ImportMode.HIDING
+        names = {i.name for i in decl.items}
+        assert names == {"a", "b"}
+
+    def test_import_using_type_name(self) -> None:
+        # TYPE_NAME in using clause
+        prog = parse("import foo using Bar")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.items[0].name == "Bar"
+
+    def test_import_after_other_decl(self) -> None:
+        """import can appear after other declarations."""
+        prog = parse("let x = 1\nimport foo")
+        it = items(prog)
+        assert isinstance(it[1], syntax.ImportDecl)
+
+    def test_import_is_in_declaration_union(self) -> None:
+        """ImportDecl is part of the Declaration union (item-level)."""
+        prog = parse("import foo")
+        (decl,) = items(prog)
+        # Declaration is a type alias union; check it's ImportDecl
+        assert type(decl).__name__ == "ImportDecl"
+
+    def test_import_qualified_using_two_items(self) -> None:
+        """import foo.bar qualified using x, y — qualified flag + using list."""
+        prog = parse("import foo.bar qualified using x, y")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.module_path == ("foo", "bar")
+        assert decl.qualified is True
+        assert decl.mode == syntax.ImportMode.USING
+        assert {i.name for i in decl.items} == {"x", "y"}
+
+    def test_import_qualified_as_alias_using_two_items(self) -> None:
+        """import foo.bar qualified as A using x, y — all three clauses."""
+        prog = parse("import foo.bar qualified as A using x, y")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.qualified is True
+        assert decl.alias == "A"
+        assert decl.mode == syntax.ImportMode.USING
+        assert {i.name for i in decl.items} == {"x", "y"}
+
+    def test_import_qualified_hiding_two_items(self) -> None:
+        """import foo.bar qualified hiding x, y — qualified flag + hiding list."""
+        prog = parse("import foo.bar qualified hiding x, y")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.qualified is True
+        assert decl.mode == syntax.ImportMode.HIDING
+        assert {i.name for i in decl.items} == {"x", "y"}
+
+    def test_import_wildcard_with_alias(self) -> None:
+        """import foo.bar.* as A — wildcard import with alias."""
+        prog = parse("import foo.bar.* as A")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.module_path == ("foo", "bar")
+        assert decl.wildcard is True
+        assert decl.alias == "A"
+
+    def test_import_alias_uppercase(self) -> None:
+        """import foo.bar as A — uppercase TYPE_NAME alias is accepted."""
+        prog = parse("import foo.bar as A")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.module_path == ("foo", "bar")
+        assert decl.alias == "A"
+
+
+# ---------------------------------------------------------------------------
+# Qualified reference tests
+# ---------------------------------------------------------------------------
+
+
+class TestQualifiedRefs:
+    """Tests for qualified variable and constructor references in expressions."""
+
+    def test_qual_var_ref_simple(self) -> None:
+        prog = parse("foo::bar")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.VarRef)
+        assert expr.name == "bar"
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ("foo",)
+
+    def test_qual_var_ref_dotted(self) -> None:
+        prog = parse("foo.bar::baz")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.VarRef)
+        assert expr.name == "baz"
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ("foo", "bar")
+
+    def test_qual_constructor_simple(self) -> None:
+        prog = parse("foo::Bar")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.Constructor)
+        assert expr.name == "Bar"
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ("foo",)
+
+    def test_qual_constructor_dotted(self) -> None:
+        prog = parse("my.mod::Baz")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.Constructor)
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ("my", "mod")
+
+    def test_self_ref_var(self) -> None:
+        prog = parse("::myvar")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.VarRef)
+        assert expr.name == "myvar"
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ()
+
+    def test_self_ref_constructor(self) -> None:
+        prog = parse("::MyType")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.Constructor)
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ()
+
+    def test_qual_constructor_with_payload(self) -> None:
+        prog = parse("m::Color(r: 1)")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.Constructor)
+        assert expr.name == "Color"
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ("m",)
+        assert len(expr.args) == 1
+        assert expr.args[0].name == "r"
+
+    def test_qual_var_ref_in_call_position(self) -> None:
+        prog = parse("m::myfunc(1)")
+        (call,) = items(prog)
+        assert isinstance(call, syntax.Call)
+        callee = call.callee
+        assert isinstance(callee, syntax.VarRef)
+        assert callee.module_qualifier is not None
+
+    def test_qual_enum_variant_access(self) -> None:
+        # mod::Color.Red — qualified enum variant
+        prog = parse("m::Color.Red")
+        (expr,) = items(prog)
+        assert isinstance(expr, syntax.Constructor)
+        assert expr.qualifier == "Color"
+        assert expr.name == "Red"
+        assert expr.module_qualifier is not None
+
+    def test_typed_call_not_confused_with_qual(self) -> None:
+        # foo::[int](...) is typed call, not a MODQUAL
+        prog = parse("foo::[int](1)")
+        (call,) = items(prog)
+        assert isinstance(call, syntax.Call)
+        # module_qualifier on callee should be None (plain VarRef)
+        callee = call.callee
+        assert isinstance(callee, syntax.VarRef)
+        assert callee.module_qualifier is None
+
+
+# ---------------------------------------------------------------------------
+# Qualified type reference tests
+# ---------------------------------------------------------------------------
+
+
+class TestQualifiedTypeRefs:
+    """Tests for qualified type references in type expressions."""
+
+    def test_qual_named_type_in_annotation(self) -> None:
+        prog = parse("let x: m::MyType = null")
+        (decl,) = items(prog)
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.type_ann, NameT)
+        assert decl.type_ann.name == "MyType"
+        assert decl.type_ann.module_qualifier is not None
+        assert decl.type_ann.module_qualifier.segments == ("m",)
+
+    def test_qual_prim_type_in_annotation(self) -> None:
+        prog = parse("let x: m::text = null")
+        (decl,) = items(prog)
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.type_ann, NameT)
+        assert decl.type_ann.name == "text"
+        assert decl.type_ann.module_qualifier is not None
+
+    def test_self_ref_named_type(self) -> None:
+        prog = parse("let x: ::MyT = null")
+        (decl,) = items(prog)
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.type_ann, NameT)
+        assert decl.type_ann.module_qualifier is not None
+        assert decl.type_ann.module_qualifier.segments == ()
+
+    def test_qual_named_type_in_func_return(self) -> None:
+        prog = parse("def f() -> m::Result = null")
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert isinstance(decl.return_type, NameT)
+        assert decl.return_type.module_qualifier is not None
+
+    def test_qual_pattern_constructor(self) -> None:
+        prog = parse("case x of | m::Foo => 1")
+        (expr,) = items(prog)
+        assert isinstance(expr, Case)
+        pat = expr.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.name == "Foo"
+        assert pat.module_qualifier is not None
+        assert pat.module_qualifier.segments == ("m",)
+
+    def test_self_ref_pattern_constructor(self) -> None:
+        prog = parse("case x of | ::Bar => 2")
+        (expr,) = items(prog)
+        assert isinstance(expr, Case)
+        pat = expr.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.module_qualifier is not None
+        assert pat.module_qualifier.segments == ()
+
+    def test_qual_pattern_enum_variant(self) -> None:
+        # Qualified enum variant: m::Color.Red (two TYPE_NAME tokens after qual_prefix)
+        prog = parse("case x of | m::Color.Red => 1")
+        (expr,) = items(prog)
+        assert isinstance(expr, Case)
+        pat = expr.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier == "Color"
+        assert pat.name == "Red"
+        assert pat.module_qualifier is not None
+        assert pat.module_qualifier.segments == ("m",)
+
+    def test_qual_pattern_constructor_with_fields(self) -> None:
+        # Qualified constructor pattern with payload fields
+        prog = parse("case x of | m::Foo(y: z) => 1")
+        (expr,) = items(prog)
+        assert isinstance(expr, Case)
+        pat = expr.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.name == "Foo"
+        assert len(pat.fields) == 1
+        assert pat.module_qualifier is not None
+
+
+# ---------------------------------------------------------------------------
+# Private declaration tests
+# ---------------------------------------------------------------------------
+
+
+class TestPrivateDecls:
+    """Tests for private record/enum/type alias/func declarations."""
+
+    def test_private_func_def(self) -> None:
+        prog = parse('private def f() -> text = "hi"')
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert decl.is_private is True
+        assert decl.name == "f"
+
+    def test_private_func_preserves_body(self) -> None:
+        prog = parse("private def add(x: int) -> int = x")
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert decl.is_private is True
+        assert len(decl.params) == 1
+
+    def test_private_record_def(self) -> None:
+        prog = parse(
+            "private record Foo\n"
+            "    bar: text"
+        )
+        (decl,) = items(prog)
+        assert isinstance(decl, RecordDef)
+        assert decl.is_private is True
+        assert decl.name == "Foo"
+
+    def test_private_enum_def(self) -> None:
+        prog = parse("private enum Color | Red | Green | Blue")
+        (decl,) = items(prog)
+        assert isinstance(decl, EnumDef)
+        assert decl.is_private is True
+        assert decl.name == "Color"
+
+    def test_private_type_alias(self) -> None:
+        prog = parse("private type Alias = text")
+        (decl,) = items(prog)
+        assert isinstance(decl, TypeAlias)
+        assert decl.is_private is True
+        assert decl.name == "Alias"
+
+    def test_non_private_func_is_not_private(self) -> None:
+        prog = parse('def g() -> text = "g"')
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert decl.is_private is False
+
+    def test_non_private_record_is_not_private(self) -> None:
+        prog = parse("record Bar\n    x: int")
+        (decl,) = items(prog)
+        assert isinstance(decl, RecordDef)
+        assert decl.is_private is False
+
+    def test_private_and_public_decls_together(self) -> None:
+        """Public and private declarations can coexist."""
+        prog = parse('def pub() -> text = "a"\nprivate def priv() -> text = "b"')
+        it = items(prog)
+        assert isinstance(it[0], FuncDef)
+        assert it[0].is_private is False
+        assert isinstance(it[1], FuncDef)
+        assert it[1].is_private is True

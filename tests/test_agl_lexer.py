@@ -2117,3 +2117,109 @@ class TestAsQuestionKeyword:
         # `as` in a cast context
         result = tok("x as text")
         assert ("as", "as") in result
+
+
+# ---------------------------------------------------------------------------
+# Module system lexer tests
+# ---------------------------------------------------------------------------
+
+
+class TestModuleSystemLexer:
+    """Tests for soft-keyword promotion and MODQUAL merging."""
+
+    # --- import soft keyword ---
+
+    def test_import_at_line_start_is_import_token(self) -> None:
+        result = tok("import foo.bar")
+        assert result[0] == ("IMPORT", "import")
+
+    def test_import_mid_expression_stays_var_name(self) -> None:
+        # 'import' after an operator is NOT at item-start → stays VAR_NAME
+        result = tok("x + import")
+        types = [t for t, _ in result]
+        assert "IMPORT" not in types
+        assert ("VAR_NAME", "import") in result
+
+    def test_private_at_line_start_is_private_token(self) -> None:
+        result = tok("private def f() -> text = x")
+        assert result[0] == ("PRIVATE", "private")
+
+    def test_private_not_at_line_start_stays_var_name(self) -> None:
+        result = tok("x + private")
+        assert ("VAR_NAME", "private") in result
+        types = [t for t, _ in result]
+        assert "PRIVATE" not in types
+
+    def test_qualified_in_import_line(self) -> None:
+        result = tok("import foo qualified")
+        types = [t for t, _ in result]
+        assert "QUALIFIED" in types
+
+    def test_qualified_outside_import_line_stays_var_name(self) -> None:
+        result = tok("let qualified = 1")
+        assert ("VAR_NAME", "qualified") in result
+        types = [t for t, _ in result]
+        assert "QUALIFIED" not in types
+
+    def test_using_in_import_line(self) -> None:
+        result = tok("import foo using bar")
+        types = [t for t, _ in result]
+        assert "USING" in types
+
+    def test_hiding_in_import_line(self) -> None:
+        result = tok("import foo hiding bar")
+        types = [t for t, _ in result]
+        assert "HIDING" in types
+
+    def test_using_outside_import_stays_var_name(self) -> None:
+        result = tok("let using = 1")
+        assert ("VAR_NAME", "using") in result
+
+    def test_hiding_outside_import_stays_var_name(self) -> None:
+        result = tok("let hiding = 1")
+        assert ("VAR_NAME", "hiding") in result
+
+    def test_import_window_closes_at_newline(self) -> None:
+        # After newline, a new import line resets; 'using' on a different line
+        # from 'import' is not inside the import window
+        src = "import foo\nusing bar"
+        result = tok(src)
+        # 'using' here is on its own line not preceded by import on same line
+        assert ("VAR_NAME", "using") in result
+
+    # --- MODQUAL merging ---
+
+    def test_simple_var_name_dcolon_var_name_merges_to_modqual(self) -> None:
+        result = lark_tok("foo::bar")
+        assert result[0] == ("MODQUAL", "foo")
+        assert result[1][0] == "VAR_NAME"
+        assert result[1][1] == "bar"
+
+    def test_dotted_path_dcolon_merges_to_modqual(self) -> None:
+        result = lark_tok("foo.bar::baz")
+        assert result[0] == ("MODQUAL", "foo.bar")
+        assert result[1][1] == "baz"
+
+    def test_type_name_dcolon_merges_to_modqual(self) -> None:
+        result = lark_tok("Foo::Bar")
+        assert result[0] == ("MODQUAL", "Foo")
+        assert result[1][0] == "TYPE_NAME"
+
+    def test_typed_call_dcolon_lsqb_not_merged(self) -> None:
+        # VAR_NAME DCOLON LSQB — must NOT be merged to MODQUAL (typed call syntax)
+        result = lark_tok("foo::[int]()")
+        types = [t for t, _ in result]
+        assert "MODQUAL" not in types
+        assert "DCOLON" in types
+
+    def test_bare_dcolon_not_merged(self) -> None:
+        # Leading :: (self-reference) — no preceding name, no merge
+        result = lark_tok("::foo")
+        types = [t for t, _ in result]
+        assert "MODQUAL" not in types
+        assert "DCOLON" in types
+
+    def test_import_in_lark_token_stream(self) -> None:
+        # After remap, 'import' at item-start becomes IMPORT in the parser stream
+        result = lark_tok("import foo")
+        assert result[0] == ("IMPORT", "import")

@@ -3553,3 +3553,28 @@ class TestParseJsonCall:
         """parse_json() with no args is rejected."""
         err = reject_type("parse_json()")
         assert "parse_json" in str(err).lower()
+
+
+class TestImportDeclTypecheck:
+    """Import declarations pass through the type-checker without errors."""
+
+    def test_import_decl_does_not_raise(self) -> None:
+        """A bare import declaration type-checks as unit."""
+        r = accept_type("import foo.bar\n1")
+        assert r  # no exception
+
+    def test_import_with_alias_does_not_raise(self) -> None:
+        r = accept_type("import foo as f\n1")
+        assert r
+
+    def test_import_wildcard_does_not_raise(self) -> None:
+        r = accept_type("import foo.*\n1")
+        assert r
+
+    def test_import_using_does_not_raise(self) -> None:
+        r = accept_type("import foo using bar\n1")
+        assert r
+
+    def test_import_hiding_does_not_raise(self) -> None:
+        r = accept_type("import foo hiding secret\n1")
+        assert r

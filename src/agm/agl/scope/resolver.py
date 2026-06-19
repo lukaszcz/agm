@@ -69,6 +69,7 @@ from agm.agl.syntax.nodes import (
     FieldAccess,
     FuncDef,
     If,
+    ImportDecl,
     IndexAccess,
     IndexTarget,
     InterpSegment,
@@ -541,6 +542,8 @@ class _Resolver:
                 self._resolve_param(item)
             elif isinstance(item, ProgramDecl):
                 self._resolve_program_decl(item)
+            elif isinstance(item, ImportDecl):
+                pass  # Module-system pass (M2+) will process import declarations
             else:
                 # Pure expression item (Expr union).
                 self._resolve_expr(item)

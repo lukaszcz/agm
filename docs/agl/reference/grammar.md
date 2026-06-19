@@ -16,18 +16,56 @@ program    ::= block EOF
 
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
-item       ::= config_pragma                (* header position only *)
-             | record_def | enum_def | type_alias  (* root only *)
-             | param_decl                    (* root only *)
-             | program_decl                  (* root only *)
-             | agent_decl                    (* root only *)
-             | func_def                      (* root only *)
+item       ::= import_decl                  (* header position only *)
+             | config_pragma                (* header position only *)
+             | "private"? record_def        (* root only *)
+             | "private"? enum_def          (* root only *)
+             | "private"? type_alias        (* root only *)
+             | param_decl                   (* root only *)
+             | program_decl                 (* root only *)
+             | agent_decl                   (* root only *)
+             | "private"? func_def          (* root only *)
              | let_decl | var_decl
              | expr
 ```
 
 A block's value is its last item. A `let_decl` or `var_decl` as the final
 item (with no continuation) is a static error.
+
+## Import declarations
+
+```ebnf
+import_decl ::= "import" module_path ("." "*")? "qualified"?
+                ("as" ref_name)?
+                (using_clause | hiding_clause)?
+
+module_path ::= NAME ("." NAME)*      (* all lower-case segments *)
+ref_name    ::= NAME                  (* any case *)
+
+using_clause  ::= "using" import_item ("," import_item)*
+hiding_clause ::= "hiding" ref_name ("," ref_name)*
+import_item   ::= ref_name ("as" ref_name)?
+```
+
+`"import"`, `"qualified"`, `"using"`, and `"hiding"` are contextual soft
+keywords — they remain valid identifiers outside import lines.
+
+`"private"` is a contextual soft keyword at item-start — it remains a valid
+identifier elsewhere.
+
+Examples:
+
+```agl
+import foo.bar
+import foo.bar as A
+import foo.bar qualified
+import foo.bar qualified as A
+import foo.bar using x, y
+import foo.bar hiding x, y
+import foo.bar using x as X, y
+import foo.*
+import foo.bar.* as A
+```
 
 ### Suites (indented blocks)
 
@@ -65,6 +103,8 @@ The runner string of an `agent` declaration must be a literal string with no
 type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
             | TYPE_NAME
+            | qual_prefix TYPE_NAME    (* module-qualified named type *)
+            | qual_prefix VAR_NAME     (* module-qualified primitive type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | func_type
@@ -142,8 +182,10 @@ pattern        ::= "_"
                  | INT | DECIMAL | "true" | "false" | "null" | STRING
                  | VAR_NAME
                  | constructor_pattern
+                 | qual_constructor_pattern
 
-constructor_pattern ::= TYPE_NAME ("." TYPE_NAME)? ("(" pattern_fields? ")")?
+constructor_pattern     ::= TYPE_NAME ("." TYPE_NAME)? ("(" pattern_fields? ")")?
+qual_constructor_pattern ::= qual_prefix TYPE_NAME ("." TYPE_NAME)? ("(" pattern_fields? ")")?
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= VAR_NAME
                  | VAR_NAME ":" pattern
@@ -190,12 +232,17 @@ postfix        ::= postfix "." VAR_NAME            (* field access *)
 
 typed_call     ::= VAR_NAME "::" "[" type_expr "]" "(" arg_list? ")"  (* typed call *)
 
+qual_prefix    ::= NAME ("." NAME)* "::"   (* dotted module path followed by :: *)
+               | "::"                      (* self-reference: current module *)
+
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" ")"                           (* unit literal *)
                | list_literal
                | dict_literal
                | TYPE_NAME                         (* bare constructor *)
                | VAR_NAME                          (* variable reference *)
+               | qual_prefix VAR_NAME              (* module-qualified value ref *)
+               | qual_prefix TYPE_NAME             (* module-qualified constructor *)
                | typed_call                        (* e.g. ask-request::[Review](…) *)
                | template
                | "(" expr ")"                      (* parenthesized expr *)

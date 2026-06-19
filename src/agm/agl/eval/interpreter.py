@@ -31,6 +31,12 @@ from agm.agl.eval.values import (
     UnitValue,
     Value,
 )
+from agm.agl.runtime.convert import (
+    CastConversionError,
+    StrictJsonParseError,
+    convert_value,
+    parse_json_strict,
+)
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -385,9 +391,7 @@ class Interpreter:
         if isinstance(expr, IsTest):
             return self._eval_is_test(expr, scope)
         if isinstance(expr, Cast):
-            raise NotImplementedError(  # pragma: no cover
-                "Cast evaluation is not yet implemented (milestone M5)"
-            )
+            return self._eval_cast(expr, scope)
         if isinstance(expr, ListLit):
             return self._eval_list_lit(expr, scope)
         if isinstance(expr, DictLit):
@@ -573,7 +577,7 @@ class Interpreter:
         if builtin_kind is BuiltinKind.EXEC:
             return self._eval_exec_call(expr, scope)
         if builtin_kind is BuiltinKind.PARSE_JSON:
-            raise NotImplementedError("parse_json eval: M5")  # pragma: no cover
+            return self._eval_parse_json_call(expr, scope)
 
         # User-defined function or closure call.
         callee_val = self._eval_expr(expr.callee, scope)
@@ -1372,6 +1376,78 @@ class Interpreter:
         raise RuntimeError(  # pragma: no cover
             f"is test on non-enum value: {type(value).__name__}"
         )
+
+    def _eval_cast(self, expr: Cast, scope: Scope) -> Value:
+        """Evaluate a ``cast`` or ``as?`` expression (M5).
+
+        For ``as`` (``test_only=False``):
+            Evaluates the source expression once, calls ``convert_value``, and on
+            ``CastConversionError`` raises an ``AglRaise`` wrapping a ``CastError``
+            ``ExceptionValue`` with the fields from D2.
+
+        For ``as?`` (``test_only=True``):
+            Evaluates the source expression once, then runs ``convert_value`` under a
+            trial.  Returns ``BoolValue(True)`` on success and ``BoolValue(False)``
+            only when ``CastConversionError`` is raised — all other exceptions
+            (including ``AglRaise`` from the source and unexpected errors) propagate
+            unchanged.
+        """
+        spec = self._checked.cast_specs[expr.node_id]
+        target = spec.target_type
+        source_type = self._checked.node_types[expr.expr.node_id]
+
+        # Evaluate the source expression exactly once (for both as and as?).
+        value = self._eval_expr(expr.expr, scope)
+
+        if not expr.test_only:
+            # as: convert; on failure raise CastError
+            try:
+                return convert_value(value, source_type, target)
+            except CastConversionError as e:
+                raise AglRaise(
+                    _make_exc_value(
+                        "CastError",
+                        e.message,
+                        trace_id=self._trace.new_event_id(),
+                        source_type=TextValue(e.source_type),
+                        target_type=TextValue(e.target_type),
+                        raw=TextValue(e.raw),
+                    ),
+                    span=expr.span,
+                ) from e
+        else:
+            # as?: trial conversion — only catch CastConversionError
+            try:
+                convert_value(value, source_type, target)
+                return BoolValue(True)
+            except CastConversionError:
+                return BoolValue(False)
+
+    def _eval_parse_json_call(self, expr: Call, scope: Scope) -> Value:
+        """Evaluate a ``parse_json(text)`` call (M5).
+
+        Parses the single positional ``text`` argument with the strict JSON parser.
+        On success returns ``JsonValue(parsed_obj)``.  On ``StrictJsonParseError``
+        raises an ``AglRaise`` wrapping a ``JsonParseError`` ``ExceptionValue``
+        with fields ``message``, ``trace_id``, and ``raw``.
+        """
+        arg_val = self._eval_expr(expr.args[0], scope)
+        assert isinstance(arg_val, TextValue), (
+            f"parse_json: expected TextValue, got {type(arg_val).__name__}"
+        )
+        try:
+            obj = parse_json_strict(arg_val.value)
+        except StrictJsonParseError as e:
+            raise AglRaise(
+                _make_exc_value(
+                    "JsonParseError",
+                    e.message,
+                    trace_id=self._trace.new_event_id(),
+                    raw=TextValue(arg_val.value),
+                ),
+                span=expr.span,
+            ) from e
+        return JsonValue(obj)
 
     def _eval_list_lit(self, expr: ListLit, scope: Scope) -> ListValue:
         elements = tuple(self._eval_expr(e, scope) for e in expr.elements)

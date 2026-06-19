@@ -20,6 +20,7 @@ from agm.agl.eval.values import (
     EnumValue,
     ExceptionValue,
     IntValue,
+    JsonValue,
     ListValue,
     RecordValue,
     TextValue,
@@ -3545,3 +3546,459 @@ def test_text_exec_timeout_raises_exec_error() -> None:
 def test_required_param_without_runtime_value_is_interpreter_invariant() -> None:
     with pytest.raises(AssertionError, match="pre-execution validation"):
         _run_source("param missing\nmissing")
+
+
+# ---------------------------------------------------------------------------
+# Cast evaluation (M5)
+# ---------------------------------------------------------------------------
+
+
+# --- Total casts: as text ---
+
+def test_cast_int_as_text() -> None:
+    snap = _run_source("let x = 42 as text\nx")
+    assert snap["x"] == TextValue("42")
+
+
+def test_cast_decimal_as_text() -> None:
+    snap = _run_source("let x = 3.14 as text\nx")
+    assert snap["x"] == TextValue("3.14")
+
+
+def test_cast_bool_as_text() -> None:
+    snap = _run_source("let x = true as text\nx")
+    assert snap["x"] == TextValue("true")
+
+
+def test_cast_json_as_text() -> None:
+    snap = _run_source('let x: json = 1\nlet y = x as text\ny')
+    assert snap["y"] == TextValue("1")
+
+
+def test_cast_list_as_text() -> None:
+    snap = _run_source("let x: list[int] = [1, 2]\nlet y = x as text\ny")
+    result = snap["y"]
+    assert isinstance(result, TextValue)
+    # The rendered text contains the list elements (format may be pretty-printed)
+    assert "1" in result.value and "2" in result.value
+
+
+def test_cast_dict_as_text() -> None:
+    snap = _run_source('let x: dict[text, int] = {"a": 1}\nlet y = x as text\ny')
+    result = snap["y"]
+    assert isinstance(result, TextValue)
+    assert '"a"' in result.value and "1" in result.value
+
+
+def test_cast_record_as_text() -> None:
+    source = """
+record Point
+  x: int
+  y: int
+let p = Point(x: 1, y: 2)
+let s = p as text
+s
+"""
+    snap = _run_source(source)
+    result = snap["s"]
+    assert isinstance(result, TextValue)
+    # Contains the field names and values (may be pretty-printed)
+    assert '"x"' in result.value and '"y"' in result.value
+    assert "1" in result.value and "2" in result.value
+
+
+def test_cast_enum_as_text() -> None:
+    source = """\
+enum Color | Red | Green | Blue
+let c = Red()
+let s = c as text
+s"""
+    snap = _run_source(source)
+    result = snap["s"]
+    assert isinstance(result, TextValue)
+    assert '"$case"' in result.value and '"Red"' in result.value
+
+
+# --- Total casts: as json ---
+
+def test_cast_int_as_json() -> None:
+    snap = _run_source("let x: json = 1 as json\nx")
+    assert snap["x"] == JsonValue(1)
+
+
+def test_cast_text_as_json() -> None:
+    # text as json wraps as a JSON string (D9)
+    snap = _run_source('let x: json = "hello" as json\nx')
+    assert snap["x"] == JsonValue("hello")
+
+
+def test_cast_bool_as_json() -> None:
+    snap = _run_source("let x: json = true as json\nx")
+    assert snap["x"] == JsonValue(True)
+
+
+def test_cast_list_as_json() -> None:
+    snap = _run_source("let x: list[int] = [1, 2, 3]\nlet y: json = x as json\ny")
+    assert snap["y"] == JsonValue([1, 2, 3])
+
+
+# --- Fallible casts: text -> scalar ---
+
+def test_cast_text_to_int_success() -> None:
+    snap = _run_source('let x = "42" as int\nx')
+    assert snap["x"] == IntValue(42)
+
+
+def test_cast_text_to_bool_success() -> None:
+    snap = _run_source('let x = "true" as bool\nx')
+    assert snap["x"] == BoolValue(True)
+
+
+def test_cast_text_to_decimal_success() -> None:
+    snap = _run_source('let x = "3.14" as decimal\nx')
+    assert snap["x"] == DecimalValue(decimal.Decimal("3.14"))
+
+
+def test_cast_text_to_list_success() -> None:
+    snap = _run_source('let x: list[int] = "[1, 2]" as list[int]\nx')
+    assert snap["x"] == ListValue(elements=(IntValue(1), IntValue(2)))
+
+
+def test_cast_text_to_dict_success() -> None:
+    snap = _run_source('let x: dict[text, int] = \'{"a": 1}\' as dict[text, int]\nx')
+    assert snap["x"] == DictValue(entries={"a": IntValue(1)})
+
+
+def test_cast_text_to_record_success() -> None:
+    json_str = '{"x": 1, "y": 2}'.replace('"', '\\"')
+    source = f"""\
+record Point
+  x: int
+  y: int
+let p: Point = "{json_str}" as Point
+p"""
+    snap = _run_source(source)
+    assert snap["p"] == RecordValue(type_name="Point", fields={"x": IntValue(1), "y": IntValue(2)})
+
+
+def test_cast_text_to_enum_success() -> None:
+    json_str = '{"$case": "Red"}'.replace('"', '\\"')
+    source = f"""\
+enum Color | Red | Green
+let c: Color = "{json_str}" as Color
+c"""
+    snap = _run_source(source)
+    assert snap["c"] == EnumValue(type_name="Color", variant="Red", fields={})
+
+
+# --- Fallible casts: json -> typed ---
+
+def test_cast_json_to_record_success() -> None:
+    source = """\
+record Point
+  x: int
+  y: int
+let j: json = {"x": 1, "y": 2}
+let p: Point = j as Point
+p"""
+    snap = _run_source(source)
+    assert snap["p"] == RecordValue(type_name="Point", fields={"x": IntValue(1), "y": IntValue(2)})
+
+
+def test_cast_json_to_enum_success() -> None:
+    source = """\
+enum Color | Red | Blue
+let j: json = {"$case": "Blue"}
+let c: Color = j as Color
+c"""
+    snap = _run_source(source)
+    assert snap["c"] == EnumValue(type_name="Color", variant="Blue", fields={})
+
+
+def test_cast_json_to_int_success() -> None:
+    snap = _run_source("let j: json = 7\nlet n = j as int\nn")
+    assert snap["n"] == IntValue(7)
+
+
+# --- Numeric casts ---
+
+def test_cast_decimal_as_int_integral_success() -> None:
+    snap = _run_source("let x = 3.0 as int\nx")
+    assert snap["x"] == IntValue(3)
+
+
+def test_cast_int_as_decimal_widening() -> None:
+    snap = _run_source("let x = 5 as decimal\nx")
+    assert snap["x"] == DecimalValue(decimal.Decimal("5"))
+
+
+# --- Redundant / no-op casts ---
+
+def test_cast_text_noop() -> None:
+    snap = _run_source('let x = "hi" as text\nx')
+    assert snap["x"] == TextValue("hi")
+
+
+def test_cast_int_noop() -> None:
+    snap = _run_source("let x = 7 as int\nx")
+    assert snap["x"] == IntValue(7)
+
+
+# --- Chained cast ---
+
+def test_chained_cast_json_then_text() -> None:
+    # x as json as text: int → json → text
+    snap = _run_source("let x = 42 as json as text\nx")
+    assert snap["x"] == TextValue("42")
+
+
+# --- CastError raised paths ---
+
+def test_cast_text_to_int_failure_raises_cast_error() -> None:
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source('let x = "abc" as int\nx')
+    exc = exc_info.value.exc
+    assert exc.type_name == "CastError"
+    assert isinstance(exc.fields["source_type"], TextValue)
+    assert exc.fields["source_type"].value == "text"
+    assert isinstance(exc.fields["target_type"], TextValue)
+    assert exc.fields["target_type"].value == "int"
+    assert isinstance(exc.fields["raw"], TextValue)
+    assert exc.fields["raw"].value == "abc"
+    assert isinstance(exc.fields["message"], TextValue)
+    assert exc.fields["message"].value != ""
+
+
+def test_cast_decimal_to_int_non_integral_raises_cast_error() -> None:
+    # D4: 3.5 as int fails
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source("let x = 3.5 as int\nx")
+    exc = exc_info.value.exc
+    assert exc.type_name == "CastError"
+    assert exc.fields["source_type"] == TextValue("decimal")
+    assert exc.fields["target_type"] == TextValue("int")
+
+
+def test_cast_text_to_bool_failure_raises_cast_error() -> None:
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source('let x = "notabool" as bool\nx')
+    exc = exc_info.value.exc
+    assert exc.type_name == "CastError"
+
+
+def test_cast_text_to_record_malformed_raises_cast_error() -> None:
+    source = """\
+record Point
+  x: int
+  y: int
+let p: Point = "not json" as Point
+p"""
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source(source)
+    assert exc_info.value.exc.type_name == "CastError"
+
+
+# --- try/catch CastError end-to-end ---
+
+def test_try_catch_cast_error() -> None:
+    # Try body and catch must have same type; convert the int result to text for uniformity
+    source = """\
+let result = try
+  ("abc" as int) as text
+catch CastError as e =>
+  e.raw
+result"""
+    snap = _run_source(source)
+    assert snap["result"] == TextValue("abc")
+
+
+def test_try_catch_cast_error_inspects_fields() -> None:
+    source = """\
+let src_type = try
+  ("notanint" as int) as text
+catch CastError as e =>
+  e.source_type
+src_type"""
+    snap = _run_source(source)
+    assert snap["src_type"] == TextValue("text")
+
+
+def test_try_catch_cast_error_target_type_field() -> None:
+    source = """\
+let tgt_type = try
+  ("bad" as bool) as text
+catch CastError as e =>
+  e.target_type
+tgt_type"""
+    snap = _run_source(source)
+    assert snap["tgt_type"] == TextValue("bool")
+
+
+# --- as? convertibility test ---
+
+def test_cast_test_true_for_convertible() -> None:
+    snap = _run_source('let ok = "42" as? int\nok')
+    assert snap["ok"] == BoolValue(True)
+
+
+def test_cast_test_false_for_inconvertible() -> None:
+    snap = _run_source('let ok = "abc" as? int\nok')
+    assert snap["ok"] == BoolValue(False)
+
+
+def test_cast_test_true_for_total_cast() -> None:
+    # statically-total cast: int as? text is always true
+    snap = _run_source("let ok = 1 as? text\nok")
+    assert snap["ok"] == BoolValue(True)
+
+
+def test_cast_test_false_decimal_non_integral() -> None:
+    snap = _run_source("let ok = 3.5 as? int\nok")
+    assert snap["ok"] == BoolValue(False)
+
+
+def test_cast_test_true_decimal_integral() -> None:
+    snap = _run_source("let ok = 3.0 as? int\nok")
+    assert snap["ok"] == BoolValue(True)
+
+
+# --- Single evaluation guarantee ---
+
+def test_cast_as_evaluates_operand_once() -> None:
+    """The operand of 'as' is evaluated exactly once (observable via print side-effect)."""
+    import io
+    from contextlib import redirect_stdout
+
+    source = """\
+def get_num() -> int =
+  print "EVAL"
+  42
+let x = get_num() as text
+x"""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _run_source(source)
+    assert buf.getvalue().count("EVAL") == 1
+
+
+def test_cast_test_evaluates_operand_once_true() -> None:
+    """The operand of 'as?' is evaluated exactly once for a convertible value."""
+    import io
+    from contextlib import redirect_stdout
+
+    source = """\
+def get_num() -> int =
+  print "EVAL"
+  42
+let ok = get_num() as? text
+ok"""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _run_source(source)
+    assert buf.getvalue().count("EVAL") == 1
+
+
+def test_cast_test_evaluates_operand_once_false() -> None:
+    """The operand of 'as?' is evaluated exactly once even when conversion fails."""
+    import io
+    from contextlib import redirect_stdout
+
+    source = """\
+def get_abc() -> text =
+  print "EVAL"
+  "abc"
+let ok = get_abc() as? int
+ok"""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        snap = _run_source(source)
+    assert snap["ok"] == BoolValue(False)
+    assert buf.getvalue().count("EVAL") == 1
+
+
+# --- Source-expression exception propagation ---
+
+def test_cast_test_propagates_source_exception() -> None:
+    """as? must NOT swallow exceptions from the source expression."""
+    source = """
+let lst: list[int] = [1, 2, 3]
+let ok = lst[10] as? text
+ok
+"""
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source(source)
+    assert exc_info.value.exc.type_name == "IndexError"
+
+
+def test_cast_as_propagates_source_exception() -> None:
+    """as must propagate exceptions from the source expression."""
+    source = """
+let lst: list[int] = [1, 2, 3]
+let y = lst[10] as text
+y
+"""
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source(source)
+    assert exc_info.value.exc.type_name == "IndexError"
+
+
+def test_cast_test_propagates_unexpected_conversion_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """as? maps only CastConversionError to false; any other error propagates.
+
+    Guards the failure-boundary discipline: an unexpected (non-CastConversionError)
+    error from convert_value must not be swallowed into a false result.
+    """
+    import agm.agl.eval.interpreter as interp
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("unexpected convert failure")
+
+    monkeypatch.setattr(interp, "convert_value", _boom)
+    with pytest.raises(RuntimeError, match="unexpected convert failure"):
+        _run_source('let ok = "42" as? int\nok')
+
+
+# --- parse_json built-in ---
+
+def test_parse_json_number_success() -> None:
+    snap = _run_source('let x: json = parse_json("42")\nx')
+    assert snap["x"] == JsonValue(42)
+
+
+def test_parse_json_object_success() -> None:
+    snap = _run_source('let x: json = parse_json("{\\"a\\": 1}")\nx')
+    assert snap["x"] == JsonValue({"a": 1})
+
+
+def test_parse_json_string_is_not_same_as_text_as_json() -> None:
+    # parse_json("42") → JsonValue(42) (number), "42" as json → JsonValue("42") (string)
+    snap_parse = _run_source('let x: json = parse_json("42")\nx')
+    snap_cast = _run_source('let x: json = "42" as json\nx')
+    assert snap_parse["x"] == JsonValue(42)
+    assert snap_cast["x"] == JsonValue("42")
+    assert snap_parse["x"] != snap_cast["x"]
+
+
+def test_parse_json_failure_raises_json_parse_error() -> None:
+    with pytest.raises(AglRaise) as exc_info:
+        _run_source('let x: json = parse_json("{bad")\nx')
+    exc = exc_info.value.exc
+    assert exc.type_name == "JsonParseError"
+    assert isinstance(exc.fields["raw"], TextValue)
+    assert exc.fields["raw"].value == "{bad"
+    assert isinstance(exc.fields["message"], TextValue)
+    assert exc.fields["message"].value != ""
+
+
+def test_parse_json_failure_catchable() -> None:
+    # try body returns json, catch branch must also return json
+    source = """\
+let result = try
+  parse_json("{bad")
+catch JsonParseError as e =>
+  e.raw as json
+result"""
+    snap = _run_source(source)
+    assert snap["result"] == JsonValue("{bad")

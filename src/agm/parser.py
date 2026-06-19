@@ -100,6 +100,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm workspace close [-f|--force] [-D] BRANCH
         agm workspace setup
         agm workspace list  [-v|--verbose]
+        agm workspace shell-regen SHELL_DIR
         agm wsp open        [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
         agm wsp close       [-f|--force] [-D] BRANCH
         agm wsp setup
@@ -635,6 +636,19 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm wsp list [-v|--verbose]
 
         Alias form of agm workspace list.
+    """),
+    ("workspace", "shell-regen"): textwrap.dedent("""\
+        agm workspace shell-regen SHELL_DIR
+
+        Regenerate the per-session shell wrapper and rc files in SHELL_DIR.
+
+        Invoked by the workspace shell wrapper to self-heal after its cache
+        directory is deleted. Not normally called directly.
+    """),
+    ("wsp", "shell-regen"): textwrap.dedent("""\
+        agm wsp shell-regen SHELL_DIR
+
+        Alias form of agm workspace shell-regen.
     """),
     ("sync", "fetch"): textwrap.dedent("""\
         agm sync fetch

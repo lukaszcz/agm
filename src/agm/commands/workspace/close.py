@@ -17,6 +17,7 @@ from agm.project.layout import (
     require_current_project_dir,
 )
 from agm.project.workspace_env import load_workspace_env
+from agm.project.workspace_shell import remove_workspace_shell
 from agm.project.worktree import remove_worktree
 from agm.tmux.session import close_tmux_session
 
@@ -77,6 +78,7 @@ def close_workspace(
     _remove_workspace_config(proj_dir=proj_dir, branch=branch, env=env)
     session_name = branch_session_name(proj_dir, branch)
     close_tmux_session(session_name=session_name, cwd=repo_dir, env=env)
+    remove_workspace_shell(session_name)
 
 
 def run(args: CloseArgs) -> None:

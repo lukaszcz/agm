@@ -14,13 +14,14 @@ from agm.cli_support.args import OpenArgs
 from agm.commands.workspace.open import (
     checkout_workspace,
     create_workspace,
-    ensure_workspace_shell,
     open_or_create_workspace,
     open_workspace,
     queue_setup_and_focus_workspace_session,
     validate_pane_count,
 )
 from agm.core import dry_run
+from agm.project import workspace_shell
+from agm.project.workspace_shell import ensure_workspace_shell
 from agm.tmux.session import create_tmux_session
 
 
@@ -77,8 +78,10 @@ class TestValidatePaneCount:
 
 class TestQueueSetupAndFocusSession:
     def test_detached_returns_without_focusing(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        cache = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
         dry_run.set_enabled(True)
 
         queue_setup_and_focus_workspace_session(
@@ -89,8 +92,10 @@ class TestQueueSetupAndFocusSession:
         )
 
         out = capsys.readouterr().out
+        wrapper = str(workspace_shell.workspace_shell_dir("s") / "shell")
         assert "tmux new-session -dP" in out
-        assert ".agent-files/agm-shell/shell" in out
+        assert wrapper in out
+        assert ".agent-files" not in out
         assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session" not in out
@@ -99,6 +104,8 @@ class TestQueueSetupAndFocusSession:
     def test_not_detached_raises_system_exit(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        cache = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
         dry_run.set_enabled(True)
         monkeypatch.delenv("TMUX", raising=False)
 
@@ -111,8 +118,10 @@ class TestQueueSetupAndFocusSession:
             )
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
+        wrapper = str(workspace_shell.workspace_shell_dir("s") / "shell")
         assert "tmux new-session -dP" in out
-        assert ".agent-files/agm-shell/shell" in out
+        assert wrapper in out
+        assert ".agent-files" not in out
         assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session -t s" in out
@@ -133,43 +142,18 @@ class TestQueueSetupAndFocusSession:
 
 
 class TestEnsureWorkspaceShell:
-    def test_writes_wrapper_and_shell_startup_files(
-        self, tmp_path: Path
-    ) -> None:
-        wrapper = ensure_workspace_shell(tmp_path)
-
-        assert wrapper == tmp_path / ".agent-files" / "agm-shell" / "shell"
-        assert wrapper.stat().st_mode & 0o111 != 0
-        assert 'eval "$(agm config env)"' in (
-            tmp_path / ".agent-files" / "agm-shell" / "zsh" / ".zshrc"
-        ).read_text(encoding="utf-8")
-        assert 'exec "$AGM_REAL_SHELL" --rcfile' in wrapper.read_text(encoding="utf-8")
-
-    def test_shell_startup_files_do_not_source_user_dotfiles(self, tmp_path: Path) -> None:
-        ensure_workspace_shell(tmp_path)
-
-        shell_dir = tmp_path / ".agent-files" / "agm-shell"
-        zshrc = (shell_dir / "zsh" / ".zshrc").read_text(encoding="utf-8")
-        bashrc = (shell_dir / "bash" / "bashrc").read_text(encoding="utf-8")
-
-        assert "$HOME/.zshrc" not in zshrc
-        assert "$HOME/.bashrc" not in bashrc
-
-    def test_bash_restart_refreshes_workspace_env(
-        self, tmp_path: Path
-    ) -> None:
-        bash = shutil.which("bash")
-        if bash is None:
-            pytest.skip("bash is required")
-
+    def _setup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, session_name: str = "s"
+    ) -> tuple[Path, Path, Path, Path]:
+        cache = tmp_path / "cache"
         home = tmp_path / "home"
         bin_dir = tmp_path / "bin"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
         home.mkdir()
         bin_dir.mkdir()
-        (home / ".bashrc").write_text(
-            'printf "user bashrc should not run\\n"; exit 99\n',
-            encoding="utf-8",
-        )
+        return cache, home, bin_dir, workspace_shell.workspace_shell_dir(session_name)
+
+    def _fake_agm(self, bin_dir: Path) -> Path:
         agm = bin_dir / "agm"
         agm.write_text(
             "\n".join(
@@ -186,20 +170,125 @@ class TestEnsureWorkspaceShell:
             encoding="utf-8",
         )
         agm.chmod(0o755)
-        wrapper = ensure_workspace_shell(tmp_path)
+        return agm
+
+    def test_writes_wrapper_under_cache_dir_not_agent_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache, _home, _bin_dir, shell_dir = self._setup(tmp_path, monkeypatch)
+        wrapper = ensure_workspace_shell("s")
+
+        assert wrapper == shell_dir / "shell"
+        assert shell_dir.is_relative_to(cache)
+        assert wrapper.stat().st_mode & 0o111 != 0
+        # Nothing is written under any .agent-files directory.
+        assert ".agent-files" not in str(wrapper)
+
+    def test_rc_files_source_user_dotfiles_then_apply_agm_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _cache, _home, _bin_dir, shell_dir = self._setup(tmp_path, monkeypatch)
+        ensure_workspace_shell("s")
+
+        zshrc = (shell_dir / "zsh" / ".zshrc").read_text(encoding="utf-8")
+        bashrc = (shell_dir / "bash" / "bashrc").read_text(encoding="utf-8")
+        shrc = (shell_dir / "sh" / "shrc").read_text(encoding="utf-8")
+
+        assert 'eval "$(agm config env)"' in zshrc
+        assert 'eval "$(agm config env)"' in bashrc
+        assert 'eval "$(agm config env)"' in shrc
+        # zshrc restores ZDOTDIR to $HOME and sources the user's .zshrc from there.
+        assert '. "$ZDOTDIR/.zshrc"' in zshrc
+        assert '"$HOME/.bashrc"' in bashrc
+        assert '"$HOME/.shrc"' in shrc
+
+    def test_wrapper_execs_real_shell(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _cache, _home, _bin_dir, shell_dir = self._setup(tmp_path, monkeypatch)
+        wrapper = ensure_workspace_shell("s", env={"SHELL": "/bin/bash"})
+        text = wrapper.read_text(encoding="utf-8")
+        assert 'exec "$AGM_REAL_SHELL" --rcfile' in text
+        assert 'ZDOTDIR="$AGM_WORKSPACE_SHELL_DIR/zsh"' in text
+        assert 'export ENV="$AGM_WORKSPACE_SHELL_DIR/sh/shrc"' in text
+
+    def test_recreate_cleans_stale_files_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _cache, _home, _bin_dir, shell_dir = self._setup(tmp_path, monkeypatch)
+        shell_dir.mkdir(parents=True)
+        (shell_dir / "stale-marker").write_text("gone\n", encoding="utf-8")
+
+        ensure_workspace_shell("s")
+
+        assert not (shell_dir / "stale-marker").exists()
+        assert (shell_dir / "shell").exists()
+
+    def test_bash_runs_user_bashrc_then_agm_env_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash is required")
+
+        _cache, home, bin_dir, _shell_dir = self._setup(tmp_path, monkeypatch)
+        self._fake_agm(bin_dir)
+        (home / ".bashrc").write_text(
+            'export USERRC_RAN=1\nexport HOLDIR=user\n', encoding="utf-8"
+        )
+        wrapper = ensure_workspace_shell("s", env={"SHELL": bash})
 
         result = subprocess.run(
             [str(wrapper)],
             input="\n".join(
                 [
-                    'printf "first:%s\\n" "$HOLDIR"',
+                    'printf "userrc:%s holdir:%s\n" "$USERRC_RAN" "$HOLDIR"',
+                    "exit",
+                    "",
+                ]
+            ),
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": bash,
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        assert "userrc:1" in result.stdout
+        # agm env (HOLDIR=<cwd>/hold) overrides the user rc (HOLDIR=user).
+        assert f"holdir:{tmp_path}/hold" in result.stdout
+
+    def test_bash_restart_refreshes_workspace_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash is required")
+
+        _cache, home, bin_dir, _shell_dir = self._setup(tmp_path, monkeypatch)
+        self._fake_agm(bin_dir)
+        (home / ".bashrc").write_text('export USERRC_RAN=1\n', encoding="utf-8")
+        wrapper = ensure_workspace_shell("s", env={"SHELL": bash})
+
+        result = subprocess.run(
+            [str(wrapper)],
+            input="\n".join(
+                [
+                    'printf "first:%s\n" "$HOLDIR"',
                     "export HOLDIR=broken",
                     'if [ "${AGM_RESTARTED:-}" != 1 ]; then',
                     "  export AGM_RESTARTED=1",
                     '  exec "$SHELL"',
                     "fi",
-                    'printf "second:%s\\n" "$HOLDIR"',
-                    'printf "shell:%s\\n" "$SHELL"',
+                    'printf "second:%s\n" "$HOLDIR"',
+                    'printf "shell:%s\n" "$SHELL"',
                     "exit",
                     "",
                 ]
@@ -221,6 +310,53 @@ class TestEnsureWorkspaceShell:
         assert f"first:{tmp_path}/hold" in result.stdout
         assert f"second:{tmp_path}/hold" in result.stdout
         assert f"shell:{wrapper}" in result.stdout
+
+    def test_self_heals_after_cache_dir_deletion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash is required")
+
+        _cache, home, bin_dir, shell_dir = self._setup(tmp_path, monkeypatch)
+        self._fake_agm(bin_dir)
+        (home / ".bashrc").write_text('export USERRC_RAN=1\n', encoding="utf-8")
+        wrapper = ensure_workspace_shell("s", env={"SHELL": bash})
+
+        # Simulate partial deletion from inside a running pane: the rc
+        # subdirectories are removed, then `exec $SHELL` re-runs the wrapper.
+        # The wrapper self-heals via `agm workspace shell-regen` before exec'ing.
+        result = subprocess.run(
+            [str(wrapper)],
+            input="\n".join(
+                [
+                    # Delete only the rc subdirs, leaving the wrapper intact.
+                    f"rm -rf {shell_dir / 'zsh'} {shell_dir / 'bash'} {shell_dir / 'sh'}",
+                    'if [ "${AGM_HEALED:-}" != 1 ]; then',
+                    "  export AGM_HEALED=1",
+                    '  exec "$SHELL"',
+                    "fi",
+                    'printf "healed:%s\n" "$HOLDIR"',
+                    "exit",
+                    "",
+                ]
+            ),
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": bash,
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        assert f"healed:{tmp_path}/hold" in result.stdout
+        assert wrapper.exists()
 
 
 # ===========================================================================

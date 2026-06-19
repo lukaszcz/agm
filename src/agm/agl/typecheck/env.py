@@ -25,12 +25,15 @@ from agm.agl.typecheck.types import (
     BoolType,
     DecimalType,
     DictType,
+    EnumType,
     FunctionType,
     IntType,
     JsonType,
     ListType,
+    RecordType,
     TextType,
     Type,
+    TypeVarType,
     UnitType,
 )
 
@@ -46,12 +49,54 @@ class FunctionSignature:
     Carries named/default information needed for declared-name call sites.
     The value type (FunctionType) erases names/defaults (plan R7).
 
-    ``params`` — ordered list of (name, type, has_default).
-    ``result`` — the declared return type.
+    ``params``      — ordered list of (name, type, has_default).
+    ``result``      — the declared return type.
+    ``type_params`` — tuple of type-parameter names for generic functions
+                      (empty for non-generic functions).
     """
 
     params: tuple[tuple[str, Type, bool], ...]  # (name, type, has_default)
     result: Type
+    type_params: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class GenericTypeDef:
+    """Template for a generic record or enum definition.
+
+    ``kind``        — ``"record"`` or ``"enum"``.
+    ``type_params`` — ordered tuple of type-parameter names.
+    ``template``    — a ``RecordType`` or ``EnumType`` whose fields/variants
+                      may contain ``TypeVarType`` nodes.
+    """
+
+    kind: str  # "record" | "enum"
+    type_params: tuple[str, ...]
+    template: RecordType | EnumType
+
+
+@dataclass(frozen=True, slots=True)
+class ConstructorSignature:
+    """Signature for a record constructor or enum variant constructor.
+
+    ``owner_name``      — name of the owning record or enum type.
+    ``variant``         — variant name for enum constructors; ``None`` for
+                          record constructors.
+    ``field_names``     — ordered field names accepted by the constructor.
+    ``field_templates`` — field types (may contain ``TypeVarType`` nodes for
+                          generic types).
+    ``result_template`` — the return type template (may contain TypeVarType).
+    ``type_params``     — type-parameter names for instantiation.
+    """
+
+    owner_name: str
+    variant: str | None
+    field_names: tuple[str, ...]
+    field_templates: tuple[Type, ...]
+    result_template: Type
+    # No default: a constructor always belongs to a concrete generic type whose
+    # type_params are known at registration time; () would silently mask a bug.
+    type_params: tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +250,12 @@ class TypeEnvironment:
         self._binding_types: dict[int, Type] = {}
         # Function signatures — name → FunctionSignature (for declared-name calls).
         self._function_signatures: dict[str, FunctionSignature] = {}
+        # Generic type definitions — name → GenericTypeDef (M2).
+        self._generic_types: dict[str, GenericTypeDef] = {}
+        # Constructor signatures — (owner_name, variant | None) → ConstructorSignature (M2).
+        self._constructor_sigs: dict[tuple[str, str | None], ConstructorSignature] = {}
+        # Alias type-params — name → tuple of type-param names (M2).
+        self._alias_type_params: dict[str, tuple[str, ...]] = {}
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -245,12 +296,76 @@ class TypeEnvironment:
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
 
-    def register_alias(self, name: str, target_expr: object) -> None:
-        """Store the raw TypeExpr for *name*; resolved lazily by resolve_type_expr."""
+    def register_alias(
+        self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()
+    ) -> None:
+        """Store the raw TypeExpr for *name*; resolved lazily by resolve_type_expr.
+
+        ``type_params`` must be provided for parameterized type aliases (e.g.
+        ``type Wrapper[T] = list[T]``); defaults to ``()`` for plain aliases.
+        """
         self._alias_targets[name] = target_expr
+        self._alias_type_params[name] = type_params
 
     def get_alias_target_expr(self, name: str) -> object | None:
         return self._alias_targets.get(name)
+
+    def get_alias_type_params(self, name: str) -> tuple[str, ...]:
+        """Return the type-parameter names for a parameterized alias, or ``()``."""
+        return self._alias_type_params.get(name, ())
+
+    # --- Generic type registry (M2) ---
+
+    def register_generic_type(self, name: str, gdef: GenericTypeDef) -> None:
+        """Register a generic type definition under *name*."""
+        self._generic_types[name] = gdef
+
+    def get_generic_type(self, name: str) -> GenericTypeDef | None:
+        """Return the ``GenericTypeDef`` for *name*, or ``None`` if unknown."""
+        return self._generic_types.get(name)
+
+    def instantiate_nominal(self, name: str, args: tuple[Type, ...]) -> RecordType | EnumType:
+        """Instantiate a generic type named *name* with *args*.
+
+        Substitutes the type parameters in the template with *args* and
+        returns a concrete ``RecordType`` or ``EnumType`` with ``type_args``
+        set to the supplied arguments.
+
+        Raises ``AglTypeError`` for unknown names or arity mismatches.
+        """
+        from agm.agl.typecheck.types import substitute as _subst
+
+        gdef = self._generic_types.get(name)
+        if gdef is None:
+            raise AglTypeError(f"Unknown generic type '{name}'.")
+        if len(args) != len(gdef.type_params):
+            raise AglTypeError(
+                f"Type '{name}' requires {len(gdef.type_params)} type argument(s), "
+                f"got {len(args)}."
+            )
+        subst = dict(zip(gdef.type_params, args))
+        template = gdef.template
+        if isinstance(template, RecordType):
+            new_fields = {k: _subst(v, subst) for k, v in template.fields.items()}
+            return RecordType(name=name, fields=new_fields, type_args=args)
+        # EnumType: substitute into each variant's field types.
+        new_variants = {
+            vname: {k: _subst(v, subst) for k, v in vfields.items()}
+            for vname, vfields in template.variants.items()
+        }
+        return EnumType(name=name, variants=new_variants, type_args=args)
+
+    # --- Constructor signature registry (M2) ---
+
+    def register_constructor_signature(self, sig: ConstructorSignature) -> None:
+        """Register a constructor signature for a record or enum variant."""
+        self._constructor_sigs[(sig.owner_name, sig.variant)] = sig
+
+    def get_constructor_signature(
+        self, owner_name: str, variant: str | None
+    ) -> ConstructorSignature | None:
+        """Return the constructor signature for *owner_name* / *variant*, or ``None``."""
+        return self._constructor_sigs.get((owner_name, variant))
 
     def resolve_named_type(self, name: str) -> Type | None:
         """Resolve a type *name* alias-transparently to a semantic ``Type``.
@@ -300,6 +415,7 @@ class TypeEnvironment:
         *,
         span: SourceSpan | None = None,
         _resolving: frozenset[str] | None = None,
+        type_vars: frozenset[str] = frozenset(),
     ) -> Type:
         """Resolve a ``TypeExpr`` AST node to a semantic ``Type``.
 
@@ -315,9 +431,14 @@ class TypeEnvironment:
         _resolving:
             Internal: set of alias names currently being resolved (cycle
             detection).
+        type_vars:
+            Set of names that are in scope as rigid type variables.  A
+            ``NameT`` whose name is in this set resolves to a ``TypeVarType``
+            instead of being looked up in the type namespace.
         """
         from agm.agl.syntax.types import (
             AgentT,
+            AppliedT,
             BoolT,
             DecimalT,
             DictT,
@@ -349,21 +470,68 @@ class TypeEnvironment:
             return AgentType()
         if isinstance(type_expr, FuncT):
             params = tuple(
-                self.resolve_type_expr(p, _resolving=_resolving) for p in type_expr.params
+                self.resolve_type_expr(p, _resolving=_resolving, type_vars=type_vars)
+                for p in type_expr.params
             )
-            result = self.resolve_type_expr(type_expr.result, _resolving=_resolving)
+            result = self.resolve_type_expr(
+                type_expr.result, _resolving=_resolving, type_vars=type_vars
+            )
             return FunctionType(params=params, result=result)
         if isinstance(type_expr, ListT):
-            elem = self.resolve_type_expr(type_expr.elem, _resolving=_resolving)
+            elem = self.resolve_type_expr(
+                type_expr.elem, _resolving=_resolving, type_vars=type_vars
+            )
             return ListType(elem=elem)
         if isinstance(type_expr, DictT):
-            val = self.resolve_type_expr(type_expr.value, _resolving=_resolving)
+            val = self.resolve_type_expr(
+                type_expr.value, _resolving=_resolving, type_vars=type_vars
+            )
             return DictType(value=val)
         if isinstance(type_expr, NameT):
             return self._resolve_name_type(
                 type_expr.name,
                 span=span if span is not None else type_expr.span,
                 _resolving=_resolving,
+                type_vars=type_vars,
+            )
+        if isinstance(type_expr, AppliedT):
+            from agm.agl.typecheck.types import substitute as _subst
+
+            name = type_expr.name
+            eff_span = span if span is not None else type_expr.span
+            resolved_args = tuple(
+                self.resolve_type_expr(
+                    a, span=None, _resolving=_resolving, type_vars=type_vars
+                )
+                for a in type_expr.args
+            )
+            gdef = self._generic_types.get(name)
+            if gdef is not None:
+                return self.instantiate_nominal(name, resolved_args)
+            alias_expr = self._alias_targets.get(name)
+            if alias_expr is not None:
+                alias_params = self._alias_type_params.get(name, ())
+                if len(resolved_args) != len(alias_params):
+                    raise AglTypeError(
+                        f"Alias '{name}' requires {len(alias_params)} type argument(s), "
+                        f"got {len(resolved_args)}.",
+                        span=eff_span,
+                    )
+                body_type = self.resolve_type_expr(
+                    alias_expr,
+                    span=span,
+                    _resolving=_resolving | {name},
+                    type_vars=type_vars | frozenset(alias_params),
+                )
+                return _subst(body_type, dict(zip(alias_params, resolved_args)))
+            if name in self._types:
+                raise AglTypeError(
+                    f"Type '{name}' does not take type arguments.",
+                    span=eff_span,
+                )
+            raise AglTypeError(
+                f"Unknown type '{name}'.",
+                span=eff_span,
             )
         raise AglTypeError(
             f"Unknown type expression: {type_expr!r}",
@@ -376,8 +544,28 @@ class TypeEnvironment:
         *,
         span: SourceSpan | None,
         _resolving: frozenset[str],
+        type_vars: frozenset[str] = frozenset(),
     ) -> Type:
-        # Check alias table first (aliases are raw TypeExpr, resolved on demand).
+        # Type variables take priority over the type namespace.
+        if name in type_vars:
+            return TypeVarType(name)
+        # Reject a bare reference to a generic type that requires type arguments.
+        gdef = self._generic_types.get(name)
+        if gdef is not None and len(gdef.type_params) > 0:
+            raise AglTypeError(
+                f"Generic type '{name}' requires {len(gdef.type_params)} type argument(s); "
+                f"use '{name}[...]' to apply it.",
+                span=span,
+            )
+        # Reject a bare reference to a parameterized alias.
+        alias_params = self._alias_type_params.get(name, ())
+        if name in self._alias_targets and len(alias_params) > 0:
+            raise AglTypeError(
+                f"Parameterized alias '{name}' requires {len(alias_params)} type argument(s); "
+                f"use '{name}[...]' to apply it.",
+                span=span,
+            )
+        # Check alias table (aliases are raw TypeExpr, resolved on demand).
         if name in self._alias_targets:
             if name in _resolving:
                 raise AglTypeError(
@@ -389,6 +577,7 @@ class TypeEnvironment:
                 target_expr,
                 span=span,
                 _resolving=_resolving | {name},
+                type_vars=type_vars,
             )
         # Direct named type (record, enum, exception).
         typ = self._types.get(name)
@@ -427,3 +616,6 @@ class TypeEnvironment:
         self._alias_targets.update(other._alias_targets)
         self._binding_types.update(other._binding_types)
         self._function_signatures.update(other._function_signatures)
+        self._generic_types.update(other._generic_types)
+        self._constructor_sigs.update(other._constructor_sigs)
+        self._alias_type_params.update(other._alias_type_params)

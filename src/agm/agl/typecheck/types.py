@@ -20,6 +20,8 @@ Type hierarchy
 - ``AgentType`` — the opaque ``agent`` type (AgL v2).
 - ``FunctionType(params, result)`` — a first-class function type (AgL v2),
   positional only; named/optional arguments are erased from the value type.
+- ``TypeVarType(name)`` — a rigid type variable bound by an enclosing generic
+  declaration (AgL generics M2).
 
 ``Type`` is the closed union of all semantic types.
 
@@ -148,17 +150,25 @@ class DictType:
 class RecordType:
     """A ``record`` nominal type.
 
-    ``fields`` maps field name → field type.
+    ``fields`` maps field name → field type.  Fields are excluded from
+    equality and hashing so that two instantiations of the same generic type
+    compare equal iff their ``name`` and ``type_args`` match.
+    ``type_args`` holds the resolved type arguments for a generic instantiation
+    (empty tuple for non-generic records).
     """
 
     name: str
-    fields: Mapping[str, Type]
+    fields: Mapping[str, Type] = field(compare=False)
+    type_args: tuple[Type, ...] = ()
 
     @property
     def kind(self) -> str:
         return "record"
 
     def __repr__(self) -> str:
+        if self.type_args:
+            args_str = ", ".join(repr(a) for a in self.type_args)
+            return f"{self.name}[{args_str}]"
         return self.name
 
 
@@ -167,16 +177,24 @@ class EnumType:
     """An ``enum`` nominal type.
 
     ``variants`` maps variant name → mapping of field names → field types.
+    Variants are excluded from equality and hashing so that two instantiations
+    of the same generic type compare equal iff their ``name`` and ``type_args``
+    match.  ``type_args`` holds the resolved type arguments for a generic
+    instantiation (empty tuple for non-generic enums).
     """
 
     name: str
-    variants: Mapping[str, Mapping[str, Type]]
+    variants: Mapping[str, Mapping[str, Type]] = field(compare=False)
+    type_args: tuple[Type, ...] = ()
 
     @property
     def kind(self) -> str:
         return "enum"
 
     def __repr__(self) -> str:
+        if self.type_args:
+            args_str = ", ".join(repr(a) for a in self.type_args)
+            return f"{self.name}[{args_str}]"
         return self.name
 
 
@@ -280,6 +298,32 @@ class BottomType:
         return "bottom"
 
 
+@dataclass(frozen=True, slots=True)
+class TypeVarType:
+    """A rigid type variable bound by an enclosing generic declaration.
+
+    ``TypeVarType`` is used during type resolution and type checking of
+    generic definitions (M2).  It is never user-visible at the value level
+    — generic instantiation substitutes all type variables before a value
+    is constructed.
+
+    Capability notes:
+    - Not JSON-shaped (``is_json_shaped`` returns ``False``).
+    - Not comparable (``comparable_types`` returns ``False`` for either side).
+    - Assignable only to an identical ``TypeVarType`` (same name); ``json``
+      does NOT absorb it; ``BottomType`` is still assignable to it.
+    """
+
+    name: str
+
+    @property
+    def kind(self) -> str:
+        return "typevar"
+
+    def __repr__(self) -> str:
+        return self.name
+
+
 # Closed union of all semantic types.
 Type = (
     TextType
@@ -296,6 +340,7 @@ Type = (
     | AgentType
     | FunctionType
     | BottomType
+    | TypeVarType
 )
 
 
@@ -341,10 +386,10 @@ def comparable_types(left: Type, right: Type) -> bool:
     NON-comparable — using ``=``/``!=``/``<`` on them is a static error (plan
     D7: agents have no equality in v1; plan D9: function values are opaque).
     """
-    # Guard: agent, function, unit, and bottom values are never comparable.
-    if isinstance(left, (AgentType, FunctionType, UnitType, BottomType)):
+    # Guard: agent, function, unit, bottom, and type-variable values are never comparable.
+    if isinstance(left, (AgentType, FunctionType, UnitType, BottomType, TypeVarType)):
         return False
-    if isinstance(right, (AgentType, FunctionType, UnitType, BottomType)):
+    if isinstance(right, (AgentType, FunctionType, UnitType, BottomType, TypeVarType)):
         return False
     if left == right:
         return True
@@ -386,6 +431,76 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
     if isinstance(target_type, JsonType):
         return is_json_shaped(value_type)
     return False
+
+
+# ---------------------------------------------------------------------------
+# Generic type helpers (M2: free_type_vars, substitute, contains_type_var)
+# ---------------------------------------------------------------------------
+
+
+def free_type_vars(t: Type) -> frozenset[str]:
+    """Recursively collect free type-variable names in *t*."""
+    if isinstance(t, TypeVarType):
+        return frozenset({t.name})
+    if isinstance(t, ListType):
+        return free_type_vars(t.elem)
+    if isinstance(t, DictType):
+        return free_type_vars(t.value)
+    if isinstance(t, FunctionType):
+        result: frozenset[str] = frozenset()
+        for p in t.params:
+            result = result | free_type_vars(p)
+        return result | free_type_vars(t.result)
+    if isinstance(t, RecordType):
+        result = frozenset()
+        for ta in t.type_args:
+            result = result | free_type_vars(ta)
+        for ft in t.fields.values():
+            result = result | free_type_vars(ft)
+        return result
+    if isinstance(t, EnumType):
+        result = frozenset()
+        for ta in t.type_args:
+            result = result | free_type_vars(ta)
+        for vfields in t.variants.values():
+            for ft in vfields.values():
+                result = result | free_type_vars(ft)
+        return result
+    # Primitives, ExceptionType, UnitType, AgentType, BottomType: no type vars.
+    return frozenset()
+
+
+def substitute(t: Type, subst: Mapping[str, Type]) -> Type:
+    """Capture-free substitution: replace ``TypeVarType(n)`` with ``subst[n]``."""
+    if isinstance(t, TypeVarType):
+        return subst.get(t.name, t)
+    if isinstance(t, ListType):
+        return ListType(elem=substitute(t.elem, subst))
+    if isinstance(t, DictType):
+        return DictType(value=substitute(t.value, subst))
+    if isinstance(t, FunctionType):
+        return FunctionType(
+            params=tuple(substitute(p, subst) for p in t.params),
+            result=substitute(t.result, subst),
+        )
+    if isinstance(t, RecordType):
+        new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
+        new_fields = {k: substitute(v, subst) for k, v in t.fields.items()}
+        return RecordType(name=t.name, fields=new_fields, type_args=new_type_args)
+    if isinstance(t, EnumType):
+        new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
+        new_variants = {
+            vname: {k: substitute(v, subst) for k, v in vfields.items()}
+            for vname, vfields in t.variants.items()
+        }
+        return EnumType(name=t.name, variants=new_variants, type_args=new_type_args)
+    # Primitives, ExceptionType, UnitType, AgentType, BottomType: unchanged.
+    return t
+
+
+def contains_type_var(t: Type) -> bool:
+    """Return ``True`` if *t* contains any free type variable."""
+    return bool(free_type_vars(t))
 
 
 # ---------------------------------------------------------------------------

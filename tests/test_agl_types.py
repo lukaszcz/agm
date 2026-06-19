@@ -22,17 +22,25 @@ from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.types import (
     AgentType,
     BoolType,
+    BottomType,
     DecimalType,
+    DictType,
     EnumType,
     ExceptionType,
     FunctionType,
     IntType,
+    JsonType,
+    ListType,
     RecordType,
     TextType,
+    TypeVarType,
     UnitType,
     comparable_types,
+    contains_type_var,
+    free_type_vars,
     is_assignable,
     is_json_shaped,
+    substitute,
 )
 
 # ---------------------------------------------------------------------------
@@ -439,3 +447,230 @@ class TestUnregisterName:
         env.register_type("UserRec", RecordType(name="UserRec", fields={}))
         env.unregister_name("UserRec")
         assert env.has_type("UserRec") is False
+
+
+# ---------------------------------------------------------------------------
+# TypeVarType
+# ---------------------------------------------------------------------------
+
+
+class TestTypeVarType:
+    def test_kind(self) -> None:
+        assert TypeVarType("T").kind == "typevar"
+
+    def test_repr(self) -> None:
+        assert repr(TypeVarType("T")) == "T"
+
+    def test_equality_same_name(self) -> None:
+        assert TypeVarType("T") == TypeVarType("T")
+
+    def test_inequality_different_name(self) -> None:
+        assert TypeVarType("T") != TypeVarType("U")
+
+    def test_frozen(self) -> None:
+        tv = TypeVarType("T")
+        with pytest.raises(Exception):
+            tv.name = "U"  # type: ignore[misc]
+
+    def test_not_json_shaped(self) -> None:
+        assert is_json_shaped(TypeVarType("T")) is False
+
+    def test_not_comparable_left(self) -> None:
+        assert comparable_types(TypeVarType("T"), IntType()) is False
+
+    def test_not_comparable_right(self) -> None:
+        assert comparable_types(IntType(), TypeVarType("T")) is False
+
+    def test_not_comparable_with_itself(self) -> None:
+        assert comparable_types(TypeVarType("T"), TypeVarType("T")) is False
+
+    def test_assignable_to_same_typevar(self) -> None:
+        assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True
+
+    def test_not_assignable_to_different_typevar(self) -> None:
+        assert is_assignable(TypeVarType("T"), TypeVarType("U")) is False
+
+    def test_not_assignable_to_int(self) -> None:
+        assert is_assignable(TypeVarType("T"), IntType()) is False
+
+    def test_int_not_assignable_to_typevar(self) -> None:
+        assert is_assignable(IntType(), TypeVarType("T")) is False
+
+    def test_not_assignable_to_json(self) -> None:
+        assert is_assignable(TypeVarType("T"), JsonType()) is False
+
+    def test_bottom_assignable_to_typevar(self) -> None:
+        assert is_assignable(BottomType(), TypeVarType("T")) is True
+
+
+# ---------------------------------------------------------------------------
+# Generic nominal identity (fields/variants excluded from equality)
+# ---------------------------------------------------------------------------
+
+
+class TestGenericNominalIdentity:
+    def test_record_identity_by_name_and_type_args(self) -> None:
+        r1 = RecordType("Box", {"value": IntType()}, type_args=(IntType(),))
+        r2 = RecordType("Box", {"value": TextType()}, type_args=(IntType(),))
+        assert r1 == r2  # fields excluded from equality
+
+    def test_record_different_type_args_not_equal(self) -> None:
+        r1 = RecordType("Box", {"value": IntType()}, type_args=(IntType(),))
+        r2 = RecordType("Box", {"value": IntType()}, type_args=(TextType(),))
+        assert r1 != r2
+
+    def test_record_no_type_args_identity(self) -> None:
+        r1 = RecordType("R", {"x": IntType()})
+        r2 = RecordType("R", {"y": TextType()})
+        assert r1 == r2  # name-based, no type_args
+
+    def test_record_consistent_hash(self) -> None:
+        r1 = RecordType("Box", {"v": IntType()}, type_args=(IntType(),))
+        r2 = RecordType("Box", {"v": TextType()}, type_args=(IntType(),))
+        assert hash(r1) == hash(r2)
+
+    def test_enum_identity_by_name_and_type_args(self) -> None:
+        e1 = EnumType("Option", {"Some": {"value": IntType()}, "None": {}}, type_args=(IntType(),))
+        e2 = EnumType("Option", {"Some": {"value": TextType()}, "None": {}}, type_args=(IntType(),))
+        assert e1 == e2
+
+    def test_enum_different_type_args_not_equal(self) -> None:
+        e1 = EnumType("Option", {"None": {}}, type_args=(IntType(),))
+        e2 = EnumType("Option", {"None": {}}, type_args=(TextType(),))
+        assert e1 != e2
+
+    def test_repr_with_type_args(self) -> None:
+        r = RecordType("Box", {}, type_args=(IntType(),))
+        assert repr(r) == "Box[int]"
+
+    def test_repr_without_type_args(self) -> None:
+        r = RecordType("R", {})
+        assert repr(r) == "R"
+
+    def test_enum_repr_with_type_args(self) -> None:
+        e = EnumType("Option", {}, type_args=(TextType(),))
+        assert repr(e) == "Option[text]"
+
+
+# ---------------------------------------------------------------------------
+# Helper functions: free_type_vars, substitute, contains_type_var
+# ---------------------------------------------------------------------------
+
+
+class TestHelpers:
+    def test_free_type_vars_primitive(self) -> None:
+        assert free_type_vars(IntType()) == frozenset()
+
+    def test_free_type_vars_typevar(self) -> None:
+        assert free_type_vars(TypeVarType("T")) == frozenset({"T"})
+
+    def test_free_type_vars_list(self) -> None:
+        assert free_type_vars(ListType(TypeVarType("T"))) == frozenset({"T"})
+
+    def test_free_type_vars_dict(self) -> None:
+        assert free_type_vars(DictType(TypeVarType("V"))) == frozenset({"V"})
+
+    def test_free_type_vars_function(self) -> None:
+        ft = FunctionType(params=(TypeVarType("A"),), result=TypeVarType("B"))
+        assert free_type_vars(ft) == frozenset({"A", "B"})
+
+    def test_free_type_vars_record_type_args(self) -> None:
+        r = RecordType("Box", {"value": TypeVarType("T")}, type_args=(TypeVarType("T"),))
+        assert free_type_vars(r) == frozenset({"T"})
+
+    def test_free_type_vars_no_vars(self) -> None:
+        r = RecordType("R", {"x": IntType()})
+        assert free_type_vars(r) == frozenset()
+
+    def test_free_type_vars_enum_variants(self) -> None:
+        e = EnumType(
+            "Either",
+            {"Left": {"v": TypeVarType("A")}, "Right": {"v": TypeVarType("B")}},
+            type_args=(TypeVarType("A"), TypeVarType("B")),
+        )
+        assert free_type_vars(e) == frozenset({"A", "B"})
+
+    def test_free_type_vars_enum_no_vars(self) -> None:
+        e = EnumType("Status", {"Pass": {}, "Fail": {}})
+        assert free_type_vars(e) == frozenset()
+
+    def test_substitute_typevar(self) -> None:
+        t = TypeVarType("T")
+        result = substitute(t, {"T": IntType()})
+        assert result == IntType()
+
+    def test_substitute_typevar_not_in_subst(self) -> None:
+        t = TypeVarType("T")
+        result = substitute(t, {"U": IntType()})
+        assert result == TypeVarType("T")
+
+    def test_substitute_list(self) -> None:
+        t = ListType(TypeVarType("T"))
+        result = substitute(t, {"T": IntType()})
+        assert result == ListType(IntType())
+
+    def test_substitute_dict(self) -> None:
+        t = DictType(TypeVarType("V"))
+        result = substitute(t, {"V": TextType()})
+        assert result == DictType(TextType())
+
+    def test_substitute_function(self) -> None:
+        ft = FunctionType(params=(TypeVarType("A"),), result=TypeVarType("B"))
+        result = substitute(ft, {"A": IntType(), "B": TextType()})
+        assert result == FunctionType(params=(IntType(),), result=TextType())
+
+    def test_substitute_record_type_args_and_fields(self) -> None:
+        r = RecordType("Box", {"value": TypeVarType("T")}, type_args=(TypeVarType("T"),))
+        result = substitute(r, {"T": IntType()})
+        assert isinstance(result, RecordType)
+        assert result.type_args == (IntType(),)
+        assert result.fields["value"] == IntType()
+
+    def test_substitute_enum(self) -> None:
+        e = EnumType(
+            "Option",
+            {"Some": {"value": TypeVarType("T")}, "None": {}},
+            type_args=(TypeVarType("T"),),
+        )
+        result = substitute(e, {"T": TextType()})
+        assert isinstance(result, EnumType)
+        assert result.type_args == (TextType(),)
+        assert result.variants["Some"]["value"] == TextType()
+        assert result.variants["None"] == {}
+
+    def test_substitute_primitive_unchanged(self) -> None:
+        assert substitute(IntType(), {"T": TextType()}) == IntType()
+
+    def test_contains_type_var_true(self) -> None:
+        assert contains_type_var(ListType(TypeVarType("T"))) is True
+
+    def test_contains_type_var_false(self) -> None:
+        assert contains_type_var(ListType(IntType())) is False
+
+
+# ---------------------------------------------------------------------------
+# Capability gates for TypeVarType
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilityGates:
+    def test_typevar_not_json_shaped(self) -> None:
+        assert is_json_shaped(TypeVarType("T")) is False
+
+    def test_typevar_not_comparable_left(self) -> None:
+        assert comparable_types(TypeVarType("T"), IntType()) is False
+
+    def test_typevar_not_comparable_right(self) -> None:
+        assert comparable_types(IntType(), TypeVarType("T")) is False
+
+    def test_typevar_not_comparable_with_itself(self) -> None:
+        assert comparable_types(TypeVarType("T"), TypeVarType("T")) is False
+
+    def test_typevar_assignable_to_same(self) -> None:
+        assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True
+
+    def test_typevar_not_assignable_to_json(self) -> None:
+        assert is_assignable(TypeVarType("T"), JsonType()) is False
+
+    def test_bottom_assignable_to_typevar(self) -> None:
+        assert is_assignable(BottomType(), TypeVarType("T")) is True

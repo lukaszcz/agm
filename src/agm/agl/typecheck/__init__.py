@@ -15,7 +15,9 @@ from agm.agl.typecheck.env import (
     AglTypeError,
     CallSiteRecord,
     CheckedProgram,
+    ConstructorSignature,
     FunctionSignature,
+    GenericTypeDef,
     OutputContractSpec,
     TypeEnvironment,
 )
@@ -34,7 +36,11 @@ from agm.agl.typecheck.types import (
     RecordType,
     TextType,
     Type,
+    TypeVarType,
     UnitType,
+    contains_type_var,
+    free_type_vars,
+    substitute,
 )
 
 __all__ = [
@@ -44,12 +50,14 @@ __all__ = [
     "BottomType",
     "CallSiteRecord",
     "CheckedProgram",
+    "ConstructorSignature",
     "DecimalType",
     "DictType",
     "EnumType",
     "ExceptionType",
     "FunctionSignature",
     "FunctionType",
+    "GenericTypeDef",
     "IntType",
     "JsonType",
     "ListType",
@@ -58,6 +66,10 @@ __all__ = [
     "TextType",
     "Type",
     "TypeEnvironment",
+    "TypeVarType",
     "UnitType",
     "check",
+    "contains_type_var",
+    "free_type_vars",
+    "substitute",
 ]

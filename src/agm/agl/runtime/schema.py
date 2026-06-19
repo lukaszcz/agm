@@ -42,6 +42,7 @@ from agm.agl.typecheck.types import (
     RecordType,
     TextType,
     Type,
+    TypeVarType,
     UnitType,
 )
 
@@ -91,6 +92,10 @@ def derive_schema(typ: Type) -> dict[str, object]:
         )
     if isinstance(typ, BottomType):
         raise TypeError("BottomType has no JSON Schema; bottom type is not wire-serialised.")
+    if isinstance(typ, TypeVarType):
+        raise TypeError(
+            "TypeVarType has no JSON Schema; type variables are not wire-serialised."
+        )
     assert_never(typ)  # pragma: no cover
 
 

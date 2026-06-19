@@ -3650,3 +3650,338 @@ class TestValueCallErrors:
         # exec into a function/agent type is a static error.
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
         assert "function" in str(err).lower() or "agent" in str(err).lower()
+
+
+# ---------------------------------------------------------------------------
+# M2 generics: GenericTypeDef, ConstructorSignature, FunctionSignature.type_params
+# ---------------------------------------------------------------------------
+
+
+from agm.agl.typecheck.env import (  # noqa: E402 — module-level import after test classes
+    ConstructorSignature,
+    GenericTypeDef,
+)
+from agm.agl.typecheck.types import TypeVarType  # noqa: E402
+
+
+class TestGenericTypeDef:
+    def test_register_and_get(self) -> None:
+        env = TypeEnvironment()
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env.register_generic_type("Box", gdef)
+        result = env.get_generic_type("Box")
+        assert result == gdef
+
+    def test_get_unknown_returns_none(self) -> None:
+        env = TypeEnvironment()
+        assert env.get_generic_type("Unknown") is None
+
+    def test_instantiate_nominal_record(self) -> None:
+        env = TypeEnvironment()
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env.register_generic_type("Box", gdef)
+        result = env.instantiate_nominal("Box", (IntType(),))
+        assert isinstance(result, RecordType)
+        assert result.name == "Box"
+        assert result.type_args == (IntType(),)
+        assert result.fields["value"] == IntType()
+
+    def test_instantiate_nominal_enum(self) -> None:
+        env = TypeEnvironment()
+        template = EnumType("Option", {"Some": {"value": TypeVarType("T")}, "None": {}})
+        gdef = GenericTypeDef(kind="enum", type_params=("T",), template=template)
+        env.register_generic_type("Option", gdef)
+        result = env.instantiate_nominal("Option", (TextType(),))
+        assert isinstance(result, EnumType)
+        assert result.type_args == (TextType(),)
+        assert result.variants["Some"]["value"] == TextType()
+        assert result.variants["None"] == {}
+
+    def test_instantiate_arity_mismatch(self) -> None:
+        env = TypeEnvironment()
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env.register_generic_type("Box", gdef)
+        with pytest.raises(AglTypeError, match="1"):
+            env.instantiate_nominal("Box", (IntType(), TextType()))
+
+    def test_instantiate_zero_field_record(self) -> None:
+        env = TypeEnvironment()
+        template = RecordType("Marker", {})
+        gdef = GenericTypeDef(kind="record", type_params=(), template=template)
+        env.register_generic_type("Marker", gdef)
+        result = env.instantiate_nominal("Marker", ())
+        assert isinstance(result, RecordType)
+        assert result.fields == {}
+
+
+class TestConstructorSignature:
+    def test_register_and_get(self) -> None:
+        env = TypeEnvironment()
+        template_result = RecordType("Box", {"value": TypeVarType("T")})
+        sig = ConstructorSignature(
+            owner_name="Box",
+            variant=None,
+            field_names=("value",),
+            field_templates=(TypeVarType("T"),),
+            result_template=template_result,
+            type_params=("T",),
+        )
+        env.register_constructor_signature(sig)
+        got = env.get_constructor_signature("Box", None)
+        assert got == sig
+
+    def test_enum_variant_signature(self) -> None:
+        env = TypeEnvironment()
+        template_result = EnumType("Option", {"Some": {"value": TypeVarType("T")}, "None": {}})
+        sig = ConstructorSignature(
+            owner_name="Option",
+            variant="Some",
+            field_names=("value",),
+            field_templates=(TypeVarType("T"),),
+            result_template=template_result,
+            type_params=("T",),
+        )
+        env.register_constructor_signature(sig)
+        got = env.get_constructor_signature("Option", "Some")
+        assert got is not None
+        assert got.variant == "Some"
+
+    def test_get_nonexistent_returns_none(self) -> None:
+        env = TypeEnvironment()
+        assert env.get_constructor_signature("Foo", None) is None
+
+    def test_nullary_variant_empty_fields(self) -> None:
+        env = TypeEnvironment()
+        template_result = EnumType("Option", {"Some": {}, "None": {}})
+        sig = ConstructorSignature(
+            owner_name="Option",
+            variant="None",
+            field_names=(),
+            field_templates=(),
+            result_template=template_result,
+            type_params=("T",),
+        )
+        env.register_constructor_signature(sig)
+        got = env.get_constructor_signature("Option", "None")
+        assert got is not None
+        assert got.field_names == ()
+
+
+class TestFunctionSignatureTypeParams:
+    def test_default_type_params_empty(self) -> None:
+        sig = FunctionSignature(params=(), result=IntType())
+        assert sig.type_params == ()
+
+    def test_with_type_params(self) -> None:
+        sig = FunctionSignature(params=(), result=TypeVarType("T"), type_params=("T",))
+        assert sig.type_params == ("T",)
+
+
+class TestResolveTypeExprTypeVars:
+    def test_name_in_type_vars_resolves_to_typevar(self) -> None:
+        from agm.agl.syntax.types import NameT
+        env = TypeEnvironment()
+        sp = mk_span()
+        result = env.resolve_type_expr(
+            NameT(name="T", span=sp, node_id=1), type_vars=frozenset({"T"})
+        )
+        assert result == TypeVarType("T")
+
+    def test_registered_type_resolves_with_type_vars_ignored(self) -> None:
+        from agm.agl.syntax.types import NameT
+        env = TypeEnvironment()
+        sp = mk_span()
+        env.register_type("MyRec", RecordType("MyRec", {}))
+        result = env.resolve_type_expr(
+            NameT(name="MyRec", span=sp, node_id=1), type_vars=frozenset({"T"})
+        )
+        assert isinstance(result, RecordType)
+        assert result.name == "MyRec"
+
+    def test_applied_t_resolves_generic_type(self) -> None:
+        from agm.agl.syntax.types import AppliedT
+        env = TypeEnvironment()
+        sp = mk_span()
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env.register_generic_type("Box", gdef)
+        result = env.resolve_type_expr(
+            AppliedT(name="Box", args=(IntT(span=sp, node_id=2),), span=sp, node_id=3),
+            type_vars=frozenset(),
+        )
+        assert isinstance(result, RecordType)
+        assert result.type_args == (IntType(),)
+        assert result.fields["value"] == IntType()
+
+    def test_applied_t_arity_mismatch_raises(self) -> None:
+        from agm.agl.syntax.types import AppliedT
+        env = TypeEnvironment()
+        sp = mk_span()
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env.register_generic_type("Box", gdef)
+        with pytest.raises(AglTypeError):
+            env.resolve_type_expr(
+                AppliedT(
+                    name="Box",
+                    args=(IntT(span=sp, node_id=1), IntT(span=sp, node_id=2)),
+                    span=sp,
+                    node_id=3,
+                ),
+            )
+
+    def test_bare_generic_name_rejected(self) -> None:
+        from agm.agl.syntax.types import NameT
+        env = TypeEnvironment()
+        sp = mk_span()
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env.register_generic_type("Box", gdef)
+        with pytest.raises(AglTypeError, match="1"):
+            env.resolve_type_expr(NameT(name="Box", span=sp, node_id=1))
+
+    def test_applied_t_non_generic_raises(self) -> None:
+        from agm.agl.syntax.types import AppliedT
+        env = TypeEnvironment()
+        sp = mk_span()
+        with pytest.raises(AglTypeError):
+            env.resolve_type_expr(
+                AppliedT(name="Unknown", args=(IntT(span=sp, node_id=1),), span=sp, node_id=2),
+            )
+
+    def test_parameterized_alias_applied(self) -> None:
+        from agm.agl.syntax.types import AppliedT, NameT
+        from agm.agl.syntax.types import ListT as _ListT
+        env = TypeEnvironment()
+        sp = mk_span()
+        env.register_alias(
+            "Wrapper",
+            _ListT(elem=NameT(name="T", span=sp, node_id=10), span=sp, node_id=11),
+            type_params=("T",),
+        )
+        result = env.resolve_type_expr(
+            AppliedT(name="Wrapper", args=(IntT(span=sp, node_id=1),), span=sp, node_id=2),
+        )
+        assert result == ListType(IntType())
+
+    def test_bare_parameterized_alias_rejected(self) -> None:
+        from agm.agl.syntax.types import ListT as _ListT
+        from agm.agl.syntax.types import NameT
+        env = TypeEnvironment()
+        sp = mk_span()
+        env.register_alias(
+            "Wrapper",
+            _ListT(elem=NameT(name="T", span=sp, node_id=10), span=sp, node_id=11),
+            type_params=("T",),
+        )
+        with pytest.raises(AglTypeError, match="1"):
+            env.resolve_type_expr(NameT(name="Wrapper", span=sp, node_id=2))
+
+    def test_seed_from_copies_generic_types(self) -> None:
+        env1 = TypeEnvironment()
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env1.register_generic_type("Box", gdef)
+        env2 = TypeEnvironment()
+        env2.seed_from(env1)
+        assert env2.get_generic_type("Box") == gdef
+
+    def test_seed_from_copies_constructor_sigs(self) -> None:
+        env1 = TypeEnvironment()
+        sig = ConstructorSignature(
+            owner_name="Box",
+            variant=None,
+            field_names=("value",),
+            field_templates=(TypeVarType("T"),),
+            result_template=RecordType("Box", {"value": TypeVarType("T")}),
+            type_params=("T",),
+        )
+        env1.register_constructor_signature(sig)
+        env2 = TypeEnvironment()
+        env2.seed_from(env1)
+        assert env2.get_constructor_signature("Box", None) == sig
+
+    def test_seed_from_copies_alias_type_params(self) -> None:
+        from agm.agl.syntax.types import ListT as _ListT
+        from agm.agl.syntax.types import NameT
+        env1 = TypeEnvironment()
+        sp = mk_span()
+        env1.register_alias(
+            "Wrapper",
+            _ListT(elem=NameT(name="T", span=sp, node_id=1), span=sp, node_id=2),
+            type_params=("T",),
+        )
+        env2 = TypeEnvironment()
+        env2.seed_from(env1)
+        assert env2.get_alias_type_params("Wrapper") == ("T",)
+
+    def test_instantiate_nominal_unknown_raises(self) -> None:
+        env = TypeEnvironment()
+        with pytest.raises(AglTypeError, match="Unknown generic type"):
+            env.instantiate_nominal("NotRegistered", ())
+
+    def test_applied_t_alias_arity_mismatch_raises(self) -> None:
+        from agm.agl.syntax.types import AppliedT, NameT
+        from agm.agl.syntax.types import ListT as _ListT
+        env = TypeEnvironment()
+        sp = mk_span()
+        env.register_alias(
+            "Wrapper",
+            _ListT(elem=NameT(name="T", span=sp, node_id=10), span=sp, node_id=11),
+            type_params=("T",),
+        )
+        with pytest.raises(AglTypeError, match="requires 1"):
+            env.resolve_type_expr(
+                AppliedT(
+                    name="Wrapper",
+                    args=(IntT(span=sp, node_id=1), IntT(span=sp, node_id=2)),
+                    span=sp,
+                    node_id=3,
+                ),
+            )
+
+    def test_applied_t_on_non_generic_registered_type_raises(self) -> None:
+        from agm.agl.syntax.types import AppliedT
+        env = TypeEnvironment()
+        sp = mk_span()
+        env.register_type("Plain", RecordType("Plain", {}))
+        with pytest.raises(AglTypeError, match="does not take type arguments"):
+            env.resolve_type_expr(
+                AppliedT(name="Plain", args=(IntT(span=sp, node_id=1),), span=sp, node_id=2),
+            )
+
+    def test_applied_t_unknown_nested_arg_span_is_arg_span(self) -> None:
+        # Error span for an unknown type inside a type argument must point at
+        # the argument node, not at the outer AppliedT span.
+        from agm.agl.syntax.types import AppliedT, NameT
+        env = TypeEnvironment()
+        outer_sp = mk_span(line=1, col=1)
+        arg_sp = mk_span(line=5, col=10)
+        template = RecordType("Box", {"value": TypeVarType("T")})
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env.register_generic_type("Box", gdef)
+        with pytest.raises(AglTypeError) as exc_info:
+            env.resolve_type_expr(
+                AppliedT(
+                    name="Box",
+                    args=(NameT(name="NoSuchType", span=arg_sp, node_id=1),),
+                    span=outer_sp,
+                    node_id=2,
+                ),
+            )
+        assert exc_info.value.span == arg_sp
+
+
+# ---------------------------------------------------------------------------
+# TypeVarType: derive_schema raises TypeError (coverage for schema.py)
+# ---------------------------------------------------------------------------
+
+
+class TestTypeVarTypeSchema:
+    def test_typevar_type_not_wire_serialisable(self) -> None:
+        from agm.agl.runtime.schema import derive_schema
+        with pytest.raises(TypeError, match="TypeVarType"):
+            derive_schema(TypeVarType("T"))

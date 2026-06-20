@@ -154,13 +154,13 @@ class RecordType:
     ``fields`` maps field name → field type.
     ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
     single-program paths and built-in/prelude types are unaffected).
-    Two ``RecordType`` instances are equal only when ``name``, ``fields``,
-    *and* ``module_id`` all agree — ``foo::Color`` and ``bar::Color`` are
-    distinct nominal types even when structurally identical.
+    Identity is ``(module_id, name)`` only — ``fields`` is excluded from
+    equality and hashing so that a shell (empty fields) and its built form
+    compare equal, and so hashing works regardless of the fields dict content.
     """
 
     name: str
-    fields: Mapping[str, Type]
+    fields: Mapping[str, Type] = field(compare=False)
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property
@@ -185,12 +185,12 @@ class EnumType:
 
     ``variants`` maps variant name → mapping of field names → field types.
     ``module_id`` is the owning module (defaults to ``ENTRY_ID``).
-    Two ``EnumType`` instances are equal only when ``name``, ``variants``,
-    *and* ``module_id`` all agree.
+    Identity is ``(module_id, name)`` only — ``variants`` is excluded from
+    equality and hashing so that a shell and its built form compare equal.
     """
 
     name: str
-    variants: Mapping[str, Mapping[str, Type]]
+    variants: Mapping[str, Mapping[str, Type]] = field(compare=False)
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property

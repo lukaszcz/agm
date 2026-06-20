@@ -219,3 +219,12 @@ let s = arith::square(3)
 import math.arith using square
 let s = square(4)
 ```
+
+## Module search roots
+
+When an AgL program is executed, the runtime resolves module imports by searching
+an unordered set of **search roots** — directories that are scanned for `.agl`
+files matching the module's dot-path. A module whose dot-path resolves to exactly
+one file across all roots is found; zero matching files is a module-not-found
+error; two or more distinct files for the same id is an ambiguity error (no
+silent shadowing, no priority ordering).

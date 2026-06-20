@@ -235,6 +235,13 @@ class TypeEnvironment:
         self._binding_types: dict[int, Type] = {}
         # Function signatures — name → FunctionSignature (for declared-name calls).
         self._function_signatures: dict[str, FunctionSignature] = {}
+        # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
+        # Populated in graph mode by the whole-graph function-signature pre-pass so
+        # that _check_declared_name_call can look up the CORRECT signature for a
+        # cross-module callee by its globally-unique decl_node_id rather than by
+        # bare name (which would pick the wrong signature when two modules define
+        # functions with the same name but different signatures).
+        self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
         # Graph-mode context (M4): None in single-program path.
         self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
         self._import_env: ImportEnv | None = import_env
@@ -324,6 +331,35 @@ class TypeEnvironment:
 
     def all_function_signatures(self) -> dict[str, FunctionSignature]:
         return dict(self._function_signatures)
+
+    def register_function_signature_by_node_id(
+        self, node_id: int, sig: FunctionSignature
+    ) -> None:
+        """Register a function signature keyed by its declaration ``node_id``.
+
+        Used by the graph pre-pass to seed every module's env with ALL
+        function signatures before any body is checked.  Because ``node_id``
+        is globally unique (M2), signatures from different modules never
+        collide here even when two modules define functions with the same name.
+        """
+        self._function_signatures_by_node_id[node_id] = sig
+
+    def get_function_signature_by_node_id(self, node_id: int) -> FunctionSignature | None:
+        """Return the function signature for a callee's declaration ``node_id``.
+
+        Used by ``_check_declared_name_call`` to look up the correct signature
+        for a callee by its globally-unique declaration node id, avoiding the
+        name collision problem when two modules define same-named functions with
+        different signatures.
+
+        Populated in graph mode by the whole-graph function-signature pre-pass
+        (via :meth:`register_function_signature_by_node_id`) AND in single-
+        program mode by ``_preregister_funcdef`` (which always seeds both the
+        name-keyed and node-id-keyed tables).  Returns ``None`` only for
+        syntactically impossible cases (e.g. a callee node_id not registered
+        because the function body check raised before registration).
+        """
+        return self._function_signatures_by_node_id.get(node_id)
 
     # --- Binding type table ---
 
@@ -533,6 +569,16 @@ class TypeEnvironment:
             span=span,
         )
 
+    def non_builtin_type_items(self) -> list[tuple[str, Type]]:
+        """Return ``(name, type)`` pairs for all non-builtin registered types.
+
+        Used by the graph pre-pass to collect type shells into the shared
+        ``graph_type_table`` without accessing the private ``_types`` dict.
+        Builtins (exception types and prelude types) are excluded.
+        """
+        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
+        return [(name, t) for name, t in self._types.items() if name not in builtin]
+
     def all_declared_type_names(self) -> frozenset[str]:
         """Return the set of all registered type names (including built-ins)."""
         return frozenset(self._types) | frozenset(self._alias_targets)
@@ -573,19 +619,6 @@ class TypeEnvironment:
 
     # --- Seeding support ---
 
-    def seed_binding_types_from(self, other: TypeEnvironment) -> None:
-        """Copy binding types (function signatures + node types) from *other*.
-
-        Used in graph mode to seed the current module's env with the binding
-        types of already-checked modules, so cross-module function references
-        (which carry the callee module's ``decl_node_id``) can be resolved.
-
-        Only binding types are copied — types and aliases are NOT merged, since
-        each module maintains its own type namespace.
-        """
-        self._binding_types.update(other._binding_types)
-        self._function_signatures.update(other._function_signatures)
-
     def seed_from(self, other: TypeEnvironment) -> None:
         """Copy *other*'s user-declared types, aliases, and binding types in.
 
@@ -602,3 +635,4 @@ class TypeEnvironment:
         self._alias_targets.update(other._alias_targets)
         self._binding_types.update(other._binding_types)
         self._function_signatures.update(other._function_signatures)
+        self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)

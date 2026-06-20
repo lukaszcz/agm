@@ -341,7 +341,12 @@ class TestOpenImport:
             resolve_graph(graph)
 
     def test_using_with_rename(self, tmp_path: Path) -> None:
-        """'import mylib using foo as baz' exposes 'baz', not 'foo'."""
+        """'import mylib using foo as baz' exposes 'baz', not 'foo'.
+
+        The BindingRef.name records the *original* declared name in the owning
+        module (``"foo"``), not the exposed name (``"baz"``).  This is what
+        the evaluator uses to look up the value in the owning module's frame.
+        """
         graph = _make_graph_from_files(tmp_path, {
             "entry": "import mylib using foo as baz\nlet x = baz()",
             "mylib": "def foo() -> int = 42",
@@ -353,7 +358,8 @@ class TestOpenImport:
         var = _find_varref(entry_program, "baz")
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
-        assert ref.name == "baz"
+        # BindingRef.name is the original declared name in the owning module.
+        assert ref.name == "foo"
 
     def test_qualified_import_prevents_bare_access(self, tmp_path: Path) -> None:
         """'import mylib qualified' — bare 'foo' should error."""

@@ -1036,7 +1036,7 @@ class _Resolver:
             key, (-1, span, BinderKind.function_binding)
         )
         return BindingRef(
-            name=exposed_name,
+            name=src_name,
             mutable=False,
             decl_span=decl_span,
             decl_node_id=decl_node_id,

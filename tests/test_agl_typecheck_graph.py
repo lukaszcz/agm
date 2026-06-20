@@ -2003,3 +2003,257 @@ def test_field_type_with_open_imported_function_name_is_type_error(tmp_path: Pat
     }
     with pytest.raises(_AglTypeError):
         _check_graph(tmp_path, modules)
+
+
+# ---------------------------------------------------------------------------
+# Cross-file mutual recursion (regression for function-signature pre-pass)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
+    """True A↔B cross-file mutual recursion typechecks successfully (qualified calls).
+
+    Module 'even' defines is_even(n) calling odd::is_odd(n-1).
+    Module 'odd'  defines is_odd(n)  calling even::is_even(n-1).
+    Entry imports both and calls even::is_even(10).
+
+    Whichever of 'even'/'odd' is checked first lacks the other's function
+    signatures unless a whole-graph function-signature pre-pass seeds them
+    before any body is checked.  This test MUST FAIL before the pre-pass is
+    added and MUST PASS after.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+
+    modules = {
+        "even": (
+            "import odd\n"
+            "def is_even(n: int) -> bool =\n"
+            "  if n = 0 => true\n"
+            "  | else => odd::is_odd(n - 1)"
+        ),
+        "odd": (
+            "import even\n"
+            "def is_odd(n: int) -> bool =\n"
+            "  if n = 0 => false\n"
+            "  | else => even::is_even(n - 1)"
+        ),
+        "entry": (
+            "import even\n"
+            "let result = even::is_even(10)\n"
+            "result"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+    mid_even = ModuleId.from_dotted("even")
+    mid_odd = ModuleId.from_dotted("odd")
+    assert mid_even in cg.modules
+    assert mid_odd in cg.modules
+    assert ENTRY_ID in cg.modules
+
+
+def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
+    """True A↔B cross-file mutual recursion typechecks via open (unqualified) imports.
+
+    Same mutual recursion as the qualified test, but both modules open-import
+    each other so calls are unqualified.
+
+    This test MUST FAIL before the function-signature pre-pass and MUST PASS after.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+
+    modules = {
+        "even": (
+            "import odd\n"
+            "def is_even(n: int) -> bool =\n"
+            "  if n = 0 => true\n"
+            "  | else => is_odd(n - 1)"
+        ),
+        "odd": (
+            "import even\n"
+            "def is_odd(n: int) -> bool =\n"
+            "  if n = 0 => false\n"
+            "  | else => is_even(n - 1)"
+        ),
+        "entry": (
+            "import even\n"
+            "let result = is_even(10)\n"
+            "result"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+    mid_even = ModuleId.from_dotted("even")
+    mid_odd = ModuleId.from_dotted("odd")
+    assert mid_even in cg.modules
+    assert mid_odd in cg.modules
+    assert ENTRY_ID in cg.modules
+
+
+# ---------------------------------------------------------------------------
+# Coverage: _build_graph_func_sig_table branches
+# ---------------------------------------------------------------------------
+
+
+def test_graph_func_def_with_defaulted_param(tmp_path: Path) -> None:
+    """A library function with a defaulted parameter typechecks successfully.
+
+    Covers the ``seen_required = False`` branch (line 652) in
+    ``_build_graph_func_sig_table``, which is only reached when a FuncDef in a
+    non-entry module has at least one defaulted parameter.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+
+    modules = {
+        "lib": "def add(a: int, b: int = 0) -> int = a + b",
+        "entry": "import lib\nlet r = lib::add(10)\nr",
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+
+
+def test_graph_func_def_required_after_default_error(tmp_path: Path) -> None:
+    """A library function with a required param after a defaulted one → AglTypeError.
+
+    Covers the ``raise AglTypeError`` branch in ``_build_graph_func_sig_table``
+    (required parameter follows a defaulted parameter in a non-entry module's FuncDef).
+    """
+    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
+
+    modules = {
+        "lib": "def bad(a: int = 0, b: int) -> int = a + b",
+        "entry": "import lib\nlet r = lib::bad(1, 2)\nr",
+    }
+    with pytest.raises(_AglTypeError, match="has no default but follows"):
+        _check_graph(tmp_path, modules)
+
+
+def test_graph_func_def_builtin_type_name_error(tmp_path: Path) -> None:
+    """A library function named after a builtin type → AglTypeError from body checker.
+
+    The function-signature pre-pass skips functions whose names clash with
+    built-in type names (e.g. 'bool') to avoid raising prematurely with wrong
+    source spans; the body checker's _preregister_funcdef then raises the proper
+    error.  This test covers the ``continue`` at the builtin-name guard in
+    ``_build_graph_func_sig_table``.
+
+    Note: builtin *function* names ('print', 'ask', etc.) are rejected earlier by
+    the scope resolver (AglScopeError).  Only builtin *type* names pass scope
+    resolution to reach the typecheck gate tested here.
+    """
+    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
+
+    modules = {
+        "lib": "def bool(x: int) -> int = x",
+        "entry": "import lib\n()",
+    }
+    with pytest.raises(_AglTypeError, match="built-in type name"):
+        _check_graph(tmp_path, modules)
+
+
+# ---------------------------------------------------------------------------
+# Finding 1 regression tests: cross-module same-name function signature collision
+# ---------------------------------------------------------------------------
+
+
+def test_cross_module_same_name_qualified_call_false_reject(tmp_path: Path) -> None:
+    """Regression: qualified call to lib::helper(int) must NOT be rejected as type error.
+
+    Entry defines  helper(s: text) -> text.
+    Lib defines    helper(n: int) -> int.
+    Entry calls    lib::helper(5) (qualified, int arg).
+
+    Before the fix: _check_declared_name_call fetched the name-keyed signature
+    and returned entry's helper (text param), causing a spurious type mismatch.
+    After the fix: the node-id-keyed table returns lib's helper (int param),
+    so the call typechecks correctly.
+    """
+    modules = {
+        "lib": "def helper(n: int) -> int = n + 1",
+        "entry": (
+            "import lib qualified\n"
+            "def helper(s: text) -> text = s\n"
+            "let r = lib::helper(5)\n"
+            "r"
+        ),
+    }
+    # Must NOT raise — the qualified call uses lib's signature (int param).
+    cg = _check_graph(tmp_path, modules)
+    assert cg is not None
+
+
+def test_cross_module_same_name_qualified_call_false_accept(tmp_path: Path) -> None:
+    """Regression: qualified call to lib::helper(int) when lib expects text must be rejected.
+
+    Entry defines  helper(n: int) -> int.
+    Lib defines    helper(s: text) -> text.
+    Entry calls    lib::helper(5) (int arg, but lib expects text).
+
+    Before the fix: _check_declared_name_call fetched entry's helper (int param),
+    falsely accepting the call; the evaluator then crashed.
+    After the fix: the node-id-keyed table returns lib's helper (text param),
+    and the type checker correctly rejects the int argument.
+    """
+    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
+
+    modules = {
+        "lib": "def helper(s: text) -> text = s",
+        "entry": (
+            "import lib qualified\n"
+            "def helper(n: int) -> int = n\n"
+            "let r = lib::helper(5)\n"
+            "r"
+        ),
+    }
+    with pytest.raises(_AglTypeError, match="Type mismatch"):
+        _check_graph(tmp_path, modules)
+
+
+def test_two_library_functions_same_name_different_signatures(tmp_path: Path) -> None:
+    """Two modules define same-named functions with DIFFERENT signatures.
+
+    Entry also defines the same name.  Qualified calls to each module must each
+    be validated against the CORRECT module's signature, not the entry's or the
+    other module's.
+
+    Module 'a': helper(n: int) -> int   (entry calls a::helper(5))
+    Module 'b': helper(s: text) -> text (entry calls b::helper("hello"))
+    Entry:      helper(x: bool) -> bool
+
+    Both qualified calls must typecheck; swapping arg types must be rejected.
+    """
+    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
+
+    # Correct types → should typecheck
+    modules_ok = {
+        "a": "def helper(n: int) -> int = n + 1",
+        "b": 'def helper(s: text) -> text = s',
+        "entry": (
+            "import a qualified\n"
+            "import b qualified\n"
+            "def helper(x: bool) -> bool = x\n"
+            "let ra = a::helper(5)\n"
+            'let rb = b::helper("hello")\n'
+            "rb"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules_ok)
+    assert cg is not None
+
+    # Swapped: pass text to a::helper (expects int) → type error
+    tmp_path2 = tmp_path.parent / (tmp_path.name + "_bad")
+    tmp_path2.mkdir()
+    modules_bad = {
+        "a": "def helper(n: int) -> int = n + 1",
+        "b": 'def helper(s: text) -> text = s',
+        "entry": (
+            "import a qualified\n"
+            "import b qualified\n"
+            "def helper(x: bool) -> bool = x\n"
+            'let ra = a::helper("wrong")\n'
+            "let rb = b::helper(5)\n"
+            "rb"
+        ),
+    }
+    with pytest.raises(_AglTypeError, match="Type mismatch"):
+        _check_graph(tmp_path2, modules_bad)

@@ -413,6 +413,13 @@ Execute an AgL (Agent Language) workflow program, either from a source `FILE` or
 program text given with `-c`/`--command`. The AgL language is documented in the
 [AgL language reference](agl/reference/index.md).
 
+**Multi-file programs**: `agm exec` supports programs that import library modules.
+The runtime assembles a set of search roots: the directory of `FILE` (or cwd for `-c`),
+the global library root (`~/.agm/lib`, overridable via `[modules] lib_root` in config),
+and any additional roots declared under `[modules] roots` in any config layer.
+A module name that resolves to exactly one file across all roots succeeds; zero files
+or two or more distinct files are static errors (exit 1 with a diagnostic).
+
 ```text
 agm exec [--strict-json|--no-strict-json]
          [--max-iters N] [--runner COMMAND]

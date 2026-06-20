@@ -29,9 +29,20 @@ Algorithm
       structural type cycle (type that contains itself infinitely) is a static
       error, consistent with the existing single-module behaviour.
 
-2. **Per-module type-check** — for each module, build a module-aware
+2. **Graph function-signature pre-pass** — resolve the parameter and return type
+   annotations for EVERY top-level ``FuncDef`` in EVERY module (using the
+   ``graph_type_table`` and each module's ``ImportEnv`` for cross-module type
+   refs), producing a ``graph_func_sig_table`` mapping each ``FuncDef.node_id``
+   (globally unique per M2) to ``(FunctionSignature, FunctionType)``.  No
+   function body is checked in this phase.  The result is used in Phase 3 to
+   seed EVERY module's env with ALL function binding types before any body is
+   checked, enabling cross-file mutual recursion (D8/§8.2): a call to a not-yet-
+   checked module's function resolves its callee type from the pre-pass table.
+
+3. **Per-module type-check** — for each module, build a module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment` seeded with the module's own
-   types (from the graph table) and the graph table + import env for cross-module
+   types (from the graph table), ALL function binding types (from the
+   function-signature pre-pass), and the graph table + import env for cross-module
    lookups, then run the existing :class:`~agm.agl.typecheck.checker._TypeBuilder`
    and :class:`~agm.agl.typecheck.checker._Checker` logic.
 
@@ -54,7 +65,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
-from agm.agl.syntax.nodes import EnumDef, Program, RecordDef, TypeAlias
+from agm.agl.syntax.nodes import EnumDef, FuncDef, Program, RecordDef, TypeAlias
 from agm.agl.typecheck.checker import _Checker, _TypeBuilder
 from agm.agl.typecheck.env import (
     CallSiteRecord,
@@ -63,11 +74,8 @@ from agm.agl.typecheck.env import (
     TypeEnvironment,
 )
 from agm.agl.typecheck.types import (
-    BUILTIN_EXCEPTIONS,
-    BUILTIN_PRELUDE_TYPES,
     CastSpec,
-    EnumType,
-    RecordType,
+    FunctionType,
     Type,
 )
 
@@ -149,29 +157,13 @@ class CheckedModuleGraph:
 
 
 def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
-    """Run only phase 1 (shell registration) of ``_TypeBuilder.collect``."""
+    """Run only phase 1 (shell registration) of ``_TypeBuilder.collect``.
+
+    Delegates to :meth:`~agm.agl.typecheck.checker._TypeBuilder.collect_shells_only`,
+    the public API added to ``_TypeBuilder`` for this purpose.
+    """
     assert isinstance(program, Program)
-    for item in program.body.items:
-        if isinstance(item, RecordDef):
-            builder._register_name(item.name, item.span)  # noqa: SLF001
-            builder._env.unregister_name(item.name)  # noqa: SLF001
-            builder._env.register_type(  # noqa: SLF001
-                item.name,
-                RecordType(name=item.name, fields={}, module_id=builder._module_id),  # noqa: SLF001
-            )
-            builder._record_defs[item.name] = item  # noqa: SLF001
-        elif isinstance(item, EnumDef):
-            builder._register_name(item.name, item.span)  # noqa: SLF001
-            builder._env.unregister_name(item.name)  # noqa: SLF001
-            builder._env.register_type(  # noqa: SLF001
-                item.name,
-                EnumType(name=item.name, variants={}, module_id=builder._module_id),  # noqa: SLF001
-            )
-            builder._enum_defs[item.name] = item  # noqa: SLF001
-        elif isinstance(item, TypeAlias):
-            builder._register_name(item.name, item.span)  # noqa: SLF001
-            builder._env.unregister_name(item.name)  # noqa: SLF001
-            builder._env.register_alias(item.name, item.type_expr)  # noqa: SLF001
+    builder.collect_shells_only(program)
 
 
 def _resolve_body_for_one(
@@ -195,13 +187,13 @@ def _resolve_body_for_one(
 
     for item in program.body.items:
         if isinstance(item, RecordDef) and item.name == name:
-            builder._ensure_built_record(item.name)  # noqa: SLF001
+            builder.ensure_built_record(item.name)
             t = cross_env.get_type(item.name)
             assert t is not None, f"record '{item.name}' missing after build"
             graph_type_table[(mid, item.name)] = t
             return
         if isinstance(item, EnumDef) and item.name == name:
-            builder._ensure_built_enum(item.name)  # noqa: SLF001
+            builder.ensure_built_enum(item.name)
             t = cross_env.get_type(item.name)
             assert t is not None, f"enum '{item.name}' missing after build"
             graph_type_table[(mid, item.name)] = t
@@ -492,10 +484,8 @@ def _build_graph_type_table(
     # after their target type is resolved.
     graph_type_table: dict[tuple[ModuleId, str], Type] = {}
     for mid, env in per_module_envs.items():
-        for name in env._types:  # noqa: SLF001 – internal table
-            if name in BUILTIN_EXCEPTIONS or name in BUILTIN_PRELUDE_TYPES:
-                continue
-            graph_type_table[(mid, name)] = env._types[name]  # noqa: SLF001
+        for name, t in env.non_builtin_type_items():
+            graph_type_table[(mid, name)] = t
 
     # Build per-module cross-module-aware environments and builders for
     # body resolution.  Each env knows the full graph_type_table and its own
@@ -511,9 +501,8 @@ def _build_graph_type_table(
             module_id=mid,
         )
         # Seed with own type shells so bare-name local refs resolve.
-        for name, t in per_module_envs[mid]._types.items():  # noqa: SLF001
-            if name not in BUILTIN_EXCEPTIONS and name not in BUILTIN_PRELUDE_TYPES:
-                cross_env.register_type(name, t)
+        for name, t in per_module_envs[mid].non_builtin_type_items():
+            cross_env.register_type(name, t)
         cross_envs[mid] = cross_env
         # Build a _TypeBuilder that uses the cross-module env and has the
         # shells and alias targets registered (for _ensure_built_* to work).
@@ -566,6 +555,100 @@ def _build_graph_type_table(
 
 
 # ---------------------------------------------------------------------------
+# Phase 2: whole-graph function-signature pre-pass
+# ---------------------------------------------------------------------------
+
+
+def _build_graph_func_sig_table(
+    resolved_graph: ResolvedModuleGraph,
+    graph_type_table: dict[tuple[ModuleId, str], Type],
+) -> dict[int, tuple[str, FunctionSignature, FunctionType]]:
+    """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
+
+    Returns a table mapping each ``FuncDef.node_id`` (globally unique per M2)
+    to ``(name, FunctionSignature, FunctionType)`` — the declared function name,
+    the full declared signature (names, types, has-default flags), and the erased
+    value type.
+
+    This pre-pass builds per-module ``TypeEnvironment``s seeded with the
+    graph-wide type table and the module's ``ImportEnv`` so that parameter/return
+    type annotations that reference cross-module types (e.g. ``lib::Color``) resolve
+    correctly.  No function body is checked — only the type-expression annotations
+    in each ``FuncDef``'s parameter and return-type declarations are resolved.
+
+    The result is used in :func:`check_graph` (Phase 3) to seed EVERY module's
+    ``TypeEnvironment`` with ALL reachable function binding types BEFORE any body is
+    checked.  Because ``node_id`` is globally unique, seeding the whole table into
+    every module's env is safe and collision-free.  This makes cross-file mutual
+    recursion work: both ``A::f`` (calling ``B::g``) and ``B::g`` (calling ``A::f``)
+    have the other's binding type available regardless of the per-module checking
+    order.
+
+    Reuses :meth:`~agm.agl.typecheck.checker._Checker._preregister_funcdef` logic
+    without duplicating type-expression resolution: a temporary per-module
+    ``TypeEnvironment`` (seeded with own types + graph table + import env) is
+    constructed for each module, then each ``FuncDef`` in that module has its
+    signature resolved through the normal ``TypeEnvironment.resolve_type_expr``
+    path — the exact same path used in the real per-module check.
+    """
+    from agm.agl.typecheck.checker import _BUILTIN_FUNC_NAMES, _BUILTIN_TYPE_NAMES
+    from agm.agl.typecheck.env import AglTypeError
+
+    result: dict[int, tuple[str, FunctionSignature, FunctionType]] = {}
+
+    for mid, rmod in resolved_graph.modules.items():
+        program = rmod.resolved.program
+        assert isinstance(program, Program)
+
+        import_env = rmod.import_env
+        # Build a cross-module-aware env for this module, seeded with its own
+        # types so bare-name local type refs in param annotations resolve.
+        env = TypeEnvironment(
+            graph_type_table=graph_type_table,
+            import_env=import_env,
+            module_id=mid,
+        )
+        for (t_mid, t_name), t in graph_type_table.items():
+            if t_mid == mid:
+                env.register_type(t_name, t)
+
+        for item in program.body.items:
+            if not isinstance(item, FuncDef):
+                continue
+            # Skip shadowing-check names — they are rejected during body check.
+            # Here we only skip the resolution to avoid raising prematurely on
+            # names that the body-checker will report with a better span.
+            if item.name in _BUILTIN_TYPE_NAMES or item.name in _BUILTIN_FUNC_NAMES:
+                continue
+
+            params: list[tuple[str, Type, bool]] = []
+            seen_required = True
+            for p in item.params:
+                pt = env.resolve_type_expr(p.type_expr, span=p.span)
+                has_default = p.default is not None
+                if seen_required and has_default:
+                    seen_required = False
+                elif not seen_required and not has_default:
+                    raise AglTypeError(
+                        f"Parameter '{p.name}' has no default but follows a defaulted "
+                        "parameter. Required parameters must come before parameters with "
+                        "defaults.",
+                        span=p.span,
+                    )
+                params.append((p.name, pt, has_default))
+
+            result_type = env.resolve_type_expr(item.return_type, span=item.span)
+            sig = FunctionSignature(params=tuple(params), result=result_type)
+            func_type = FunctionType(
+                params=tuple(pt for _, pt, _ in params),
+                result=result_type,
+            )
+            result[item.node_id] = (item.name, sig, func_type)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Per-module checking helper
 # ---------------------------------------------------------------------------
 
@@ -576,15 +659,21 @@ def _check_module(
     capabilities: HostCapabilities,
     graph_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
-    checked_so_far: Mapping[ModuleId, CheckedModule],
+    graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType]],
 ) -> CheckedModule:
     """Type-check one module with a module-aware ``TypeEnvironment``.
 
     The env is seeded with:
     - The module's own types (from ``graph_type_table``).
     - The graph table + import env for cross-module lookups.
-    - Binding types (function signatures) from already-checked modules so that
-      cross-module function calls can look up callee types.
+    - Binding types (function signatures) from the whole-graph function-signature
+      pre-pass (``graph_func_sig_table``), seeded BEFORE any body is checked so
+      that cross-module function calls — including those in import cycles (D8,
+      §8.2 cross-file mutual recursion) — can look up callee types regardless of
+      per-module checking order.  The pre-pass computed ``(name, FunctionSignature,
+      FunctionType)`` for ALL top-level ``FuncDef``s across ALL modules;
+      ``node_id``s are globally unique (M2), so seeding the whole table into
+      every module's env is safe and collision-free.
     """
     import_env = import_env_map[mid]
     assert isinstance(import_env, ImportEnv)
@@ -601,23 +690,34 @@ def _check_module(
         if t_mid == mid:
             env.register_type(t_name, t)
 
-    # Seed binding types from already-checked modules (for cross-module calls).
-    # This allows the entry module to look up binding types for imported functions.
+    # Seed binding types from the whole-graph function-signature pre-pass.
+    # This makes EVERY module's function signatures available in EVERY module's
+    # env before any body is checked, enabling cross-file mutual recursion (D8/§8.2).
     #
-    # Ordering dependency: seed_binding_types_from is called BEFORE
-    # builder.collect() runs for the current module.  _function_signatures is
-    # keyed by bare name, so a same-named function in two different modules would
-    # overwrite the seeded value.  This is safe here because real cross-module
-    # call type resolution goes through the node-id-keyed _binding_types table
-    # (which is globally unique), NOT through _function_signatures.  The
-    # _function_signatures seeding is only used so that a callee's signature is
-    # readable by name during the entry module's own declared-name call site
-    # checking.  The subsequent builder.collect() re-registers the current
-    # module's own signatures, which win over any seeded same-named ones.
-    for other_cm in checked_so_far.values():
-        env.seed_binding_types_from(other_cm.type_env)
+    # Three tables are seeded:
+    # - _binding_types (node_id-keyed, globally unique): used by _check_varref to
+    #   look up the callee type when the callee VarRef resolves to a cross-module
+    #   FuncDef's decl_node_id.  Seeding the entire pre-pass table is safe because
+    #   node_ids are globally unique per M2.
+    # - _function_signatures_by_node_id (node_id-keyed, globally unique): used by
+    #   _check_declared_name_call to look up the CORRECT signature for any callee
+    #   by its globally-unique decl_node_id.  Unlike the name-keyed table below,
+    #   this table never suffers from same-name collisions across modules.
+    # - _function_signatures (name-keyed): used as a fallback by
+    #   _check_declared_name_call when no node-id lookup is available (single-
+    #   program path).  Same-named functions from different modules may collide
+    #   here; the current module's own signatures always win because
+    #   builder.collect() → _preregister_funcdef re-registers them AFTER this
+    #   seeding step, overwriting any cross-module collision for bare-name calls.
+    for node_id, (name, sig, func_type) in graph_func_sig_table.items():
+        env.set_binding_type(node_id, func_type)
+        env.register_function_signature_by_node_id(node_id, sig)
+        env.register_function_signature(name, sig)
 
     # Run the full _TypeBuilder + _Checker pipeline on this module's program.
+    # builder.collect() → _preregister_funcdef re-registers this module's own
+    # function signatures (both _binding_types and _function_signatures), so
+    # any same-named collision seeded above is corrected for the current module.
     builder = _TypeBuilder(env, module_id=mid)
     builder.collect(resolved.program)
 
@@ -670,15 +770,24 @@ def check_graph(
     # with their owning module_id.
     graph_type_table = _build_graph_type_table(resolved_graph)
 
+    # Phase 2: build the graph-wide function-signature table.
+    # Resolves parameter/return TypeExprs for every top-level FuncDef in every
+    # module using the graph_type_table (so cross-module type refs in annotations
+    # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
+    # (globally unique per M2).
+    graph_func_sig_table = _build_graph_func_sig_table(resolved_graph, graph_type_table)
+
     # Collect import envs for per-module checking.
     import_env_map: dict[ModuleId, object] = {
         mid: rmod.import_env for mid, rmod in resolved_graph.modules.items()
     }
 
-    # Phase 2: type-check each module's bodies.
-    # Non-entry modules are checked first so their binding types (function
-    # signatures) are available when the entry module is checked.  The entry
-    # module calls imported functions and needs their binding types seeded.
+    # Phase 3: type-check each module's bodies.
+    # Non-entry modules are checked first, then entry (ordering kept for
+    # determinism and for any future ordering-sensitive checks), but function
+    # signature availability no longer depends on this order — the whole-graph
+    # pre-pass in Phase 2 seeds all binding types before any body is checked,
+    # so cross-file mutual recursion (D8/§8.2) is handled correctly.
     checked_modules: dict[ModuleId, CheckedModule] = {}
     all_warnings: list[Diagnostic] = []
 
@@ -695,7 +804,7 @@ def check_graph(
             capabilities,
             graph_type_table,
             import_env_map,
-            checked_modules,
+            graph_func_sig_table,
         )
         checked_modules[mid] = cm
         all_warnings.extend(cm.warnings)

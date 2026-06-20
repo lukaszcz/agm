@@ -39,6 +39,7 @@ Flag notes:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import TypeVar
@@ -47,6 +48,7 @@ from agm.agent.config import default_agent_runner
 from agm.agent.runner import split_command
 from agm.agl import WorkflowRuntime
 from agm.agl.diagnostics import format_diagnostic
+from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.agl.syntax.nodes import PragmaValue
 from agm.cli_support.args import ExecArgs
@@ -62,6 +64,7 @@ from agm.config.general import (
     params_config_from_merged,
     parse_timeout,
 )
+from agm.config.module_roots import load_module_roots
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log_from_layers
@@ -88,9 +91,11 @@ def run(args: ExecArgs) -> None:
     # defensive ``else`` keeps ``run`` safe when called directly.
     if args.command is not None:
         source = args.command
+        entry_path: Path | None = None
         diagnostic_source_name: str | None = None
     elif args.file is not None:
         source = read_text_arg(Path(args.file))
+        entry_path = Path(args.file)
         diagnostic_source_name = args.file
     else:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
@@ -106,11 +111,46 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1) from exc
 
     # ----------------------------------------------------------------
-    # Parse the source ONCE to read config pragmas before resolving
-    # any runtime settings.  Pragma values override config; CLI overrides
-    # pragma (CLI > pragma > config).
+    # Assemble module roots and load + scope the graph ONCE to read config
+    # pragmas before resolving any runtime settings.  Pragma values override
+    # config; CLI overrides pragma (CLI > pragma > config).
     # ----------------------------------------------------------------
-    prepared = WorkflowRuntime.prepare(source)
+    try:
+        mr_config = load_module_roots(
+            home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
+        )
+    except ValueError as exc:
+        print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    # Resolve the lib_root path.
+    if mr_config.lib_root is not None:
+        raw_lib, origin_lib_dir = mr_config.lib_root
+        raw_lib_path = Path(os.path.expanduser(raw_lib))
+        resolved_lib_root: Path | None = (
+            raw_lib_path if raw_lib_path.is_absolute() else origin_lib_dir / raw_lib_path
+        )
+    else:
+        resolved_lib_root = Path("~/.agm/lib")
+
+    # The invocation root is the entry file's directory (for file exec) or
+    # the cwd (for -c inline exec).
+    if entry_path is not None:
+        invocation_root = entry_path.parent
+    else:
+        invocation_root = ctx.cwd
+
+    roots = assemble_roots(
+        invocation_root=invocation_root,
+        lib_root=resolved_lib_root,
+        configured=mr_config.extra,
+        cli=[],
+        cwd=ctx.cwd,
+    )
+
+    prepared = WorkflowRuntime.prepare_program(
+        source, entry_path=entry_path, roots=roots
+    )
     pragmas = prepared.config_pragmas
 
     # Resolve strict_json: CLI > pragma > config.
@@ -190,10 +230,10 @@ def run(args: ExecArgs) -> None:
     #     source `agent` runner hint
     #     resolved default runner (runner_cmd, the floor)
     #
-    # ``prepare`` was already called above to read config pragmas; the same
-    # ``PreparedProgram`` is reused here and handed to ``run_prepared`` below,
-    # so the program is never parsed or scoped twice.  On a source with
-    # parse/scope errors ``declared_agents`` is ``()`` and ``run_prepared``
+    # ``prepare_program`` was already called above to read config pragmas; the
+    # same ``PreparedGraph`` is reused here and handed to ``run_prepared_graph``
+    # below, so the source is never loaded or scoped twice.  On a source with
+    # load/scope errors ``declared_agents`` is ``()`` and ``run_prepared_graph``
     # resurfaces the captured diagnostic (exit 1).
     decls = prepared.declared_agents
     source_hints = {d.name: d.runner for d in decls if d.runner is not None}
@@ -236,7 +276,7 @@ def run(args: ExecArgs) -> None:
     for d in decls:
         runtime.register_agent(d.name, factory)
 
-    discovery = runtime.discover_params(prepared)
+    discovery = runtime.discover_params_graph(prepared)
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
 
@@ -278,13 +318,15 @@ def run(args: ExecArgs) -> None:
         for msg in config_warnings:
             print(msg, file=sys.stderr)
 
-    # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
-    result = runtime.run_prepared(
+    # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.
+    # Pass the already-computed checked_graph from discovery so the graph is
+    # type-checked exactly once (mirroring the single-file run_prepared path).
+    result = runtime.run_prepared_graph(
         prepared,
         param_values=external_params,
         check_only=dry_run.enabled(),
         log_file=log_file,
-        checked=checked,
+        checked_graph=discovery.checked_graph,
     )
 
     # Warnings live on their own channel and never affect the exit code;

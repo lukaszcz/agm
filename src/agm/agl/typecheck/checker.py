@@ -243,6 +243,53 @@ class _TypeBuilder:
             elif isinstance(item, TypeAlias):
                 self._validate_alias(item)
 
+    def collect_shells_only(self, program: Program) -> None:
+        """Register only phase-1 type shells (names + empty records/enums/aliases).
+
+        Public interface for the graph pre-pass (``graph.py``) which needs to
+        register all module's type shells before resolving any body.  Equivalent
+        to running only phase 1 of :meth:`collect`, without phase 2 body
+        resolution.  Called by :func:`~agm.agl.typecheck.graph._build_graph_type_table`
+        for each module before the cross-module topological body resolution.
+        """
+        for item in program.body.items:
+            if isinstance(item, RecordDef):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_type(
+                    item.name,
+                    RecordType(name=item.name, fields={}, module_id=self._module_id),
+                )
+                self._record_defs[item.name] = item
+            elif isinstance(item, EnumDef):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_type(
+                    item.name,
+                    EnumType(name=item.name, variants={}, module_id=self._module_id),
+                )
+                self._enum_defs[item.name] = item
+            elif isinstance(item, TypeAlias):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_alias(item.name, item.type_expr)
+
+    def ensure_built_record(self, name: str) -> None:
+        """Public proxy for :meth:`_ensure_built_record`.
+
+        Used by the graph pre-pass body-resolution step to build a named record
+        type through the type builder without accessing private members.
+        """
+        self._ensure_built_record(name)
+
+    def ensure_built_enum(self, name: str) -> None:
+        """Public proxy for :meth:`_ensure_built_enum`.
+
+        Used by the graph pre-pass body-resolution step to build a named enum
+        type through the type builder without accessing private members.
+        """
+        self._ensure_built_enum(name)
+
     def _register_name(self, name: str, span: SourceSpan) -> None:
         if name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
@@ -429,6 +476,10 @@ class _Checker:
         result_type = self._env.resolve_type_expr(node.return_type, span=node.span)
         sig = FunctionSignature(params=tuple(params), result=result_type)
         self._env.register_function_signature(node.name, sig)
+        # Register by node_id so that cross-module callee signature lookups in
+        # _check_declared_name_call find the correct signature even when another
+        # module defines a function with the same name but a different signature.
+        self._env.register_function_signature_by_node_id(node.node_id, sig)
         # Register the binding type as FunctionType (erases names/defaults).
         func_type = FunctionType(
             params=tuple(pt for _, pt, _ in params),
@@ -737,7 +788,10 @@ class _Checker:
             callee_ref = self._resolved.resolution.get(node.callee.node_id)
             if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
                 return self._check_declared_name_call(
-                    node, node.callee.name, expected=expected
+                    node,
+                    node.callee.name,
+                    expected=expected,
+                    callee_node_id=callee_ref.decl_node_id,
                 )
 
         # Value call (lambda or higher-order).
@@ -1184,9 +1238,20 @@ class _Checker:
     # --- declared-name call ---
 
     def _check_declared_name_call(
-        self, node: Call, func_name: str, *, expected: Type | None
+        self,
+        node: Call,
+        func_name: str,
+        *,
+        expected: Type | None,
+        callee_node_id: int,
     ) -> Type:
-        sig = self._env.get_function_signature(func_name)
+        # Use the node-id-keyed lookup populated by the function-signature pre-pass
+        # (graph mode) and by _preregister_funcdef (single-program mode).  Keying
+        # by the callee's globally-unique decl_node_id avoids the same-name collision
+        # where two modules define functions with identical names but different
+        # signatures, which would cause the name-keyed table to return the wrong
+        # signature for a qualified cross-module call.
+        sig = self._env.get_function_signature_by_node_id(callee_node_id)
         if sig is None:
             return self._check_value_call(node, expected=expected)
 

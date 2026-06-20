@@ -1,6 +1,9 @@
 {
   "network": {
     "allowedDomains": [
+      "api.openai.com",
+      "auth.openai.com",
+      "chatgpt.com",
       "calude.ai",
       "platform.claude.com",
       "api.anthropic.com",
@@ -31,7 +34,8 @@
       ".",
       "/tmp",
       "~/.cache",
-      "~/.opencode"
+      "~/.opencode",
+      "~/.local/share/opencode"
     ],
     "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
   }

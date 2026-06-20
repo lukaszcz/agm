@@ -1019,6 +1019,23 @@ class ReplSession:
         """Return the active program name, if declared."""
         return self._program_name
 
+    def type_names(self) -> frozenset[str]:
+        """Return the names of types declared in prior promoted entries.
+
+        Drives the REPL highlighter's type colouring: a NAME matching one of
+        these (or a builtin type spelling) is rendered as a type.  Types declared
+        in an entry become available here only after that entry is promoted.
+        """
+        return self._ambient_type_names
+
+    def constructor_names(self) -> frozenset[str]:
+        """Return the constructor names declared in prior promoted entries.
+
+        Drives the REPL highlighter's constructor colouring (enum variants and
+        record constructors).  Like :meth:`type_names`, populated on promotion.
+        """
+        return frozenset(self._ambient_constructor_candidates)
+
     def reset(self) -> None:
         """Clear ALL session state (symbols, types, values, params, source, ids)."""
         from agm.agl.eval.scope import Scope

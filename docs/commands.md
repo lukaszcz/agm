@@ -570,9 +570,13 @@ Entry editing:
   (`record`, `enum`, `if`, `case`, `try`, `do`, …) opens a continuation line
   (`...>`); a complete entry submits. Pressing Enter on a blank continuation line
   force-submits even an unfinished buffer so you can always escape.
-- Syntax highlighting and tab-completion are driven from the live session:
-  completion offers AgL keywords, current binding names, available agent names,
-  and meta-command names.
+- Syntax highlighting and tab-completion are driven from the live session.
+  Highlighting colours keywords, string/number literals, operators, the builtin
+  types (`text`, `int`, `decimal`, `bool`, `json`, `list`, `dict`, `unit`), and
+  types or constructors declared earlier in the session. Enum variants (pure
+  constructors) get a distinct constructor colour; a record name, which is both
+  a type and a constructor, colours as a type. Completion offers AgL keywords,
+  current binding names, available agent names, and meta-command names.
 - Command history persists under `~/.agm/repl_history`.
 
 Meta-commands begin with a leading `:` (which never collides with AgL syntax):

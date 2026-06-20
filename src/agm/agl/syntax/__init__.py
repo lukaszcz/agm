@@ -80,6 +80,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
+    BUILTIN_TYPE_NAMES,
     AgentT,
     AppliedT,
     BoolT,
@@ -100,6 +101,7 @@ __all__ = [
     # spans
     "SourceSpan",
     # type exprs
+    "BUILTIN_TYPE_NAMES",
     "TextT",
     "JsonT",
     "BoolT",

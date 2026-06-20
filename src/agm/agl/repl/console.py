@@ -49,6 +49,7 @@ from agm.agl.repl import render as render_mod
 from agm.agl.repl import session as session_mod
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
+from agm.agl.syntax import BUILTIN_TYPE_NAMES
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -118,8 +119,29 @@ _OPERATOR_TOKENS: frozenset[str] = frozenset(
 )
 
 
-def _style_class_for(token_type: str) -> str | None:
-    """Return the style class for an AgL token type, or ``None`` for plain text."""
+def _style_class_for(
+    token_type: str,
+    token_text: str,
+    type_names: frozenset[str],
+    constructor_names: frozenset[str],
+) -> str | None:
+    """Return the style class for an AgL token, or ``None`` for plain text.
+
+    Identifier capitalization carries no meaning in AgL, so a ``NAME`` is
+    classified semantically against the *session-declared* names (passed in via
+    *type_names* / *constructor_names*):
+
+    - a builtin or declared *type* name renders as a type.  A record name is
+      both a type and a constructor, and a position-free highlighter cannot tell
+      which is meant, so type wins for those shared names;
+    - a name that is *only* a constructor — an enum variant such as ``ok`` /
+      ``err`` — renders as a constructor (a callable data value, distinct from a
+      type);
+    - any other ``NAME`` is plain.
+
+    When no session is available both sets are empty, so only the builtin types
+    colour.
+    """
     if token_type in KEYWORDS:
         return "class:agl.keyword"
     if token_type in _STRING_TOKENS:
@@ -129,6 +151,10 @@ def _style_class_for(token_type: str) -> str | None:
     if token_type in _OPERATOR_TOKENS:
         return "class:agl.operator"
     if token_type == "NAME":
+        if token_text in BUILTIN_TYPE_NAMES or token_text in type_names:
+            return "class:agl.type"
+        if token_text in constructor_names:
+            return "class:agl.constructor"
         return "class:agl.name"
     return None
 
@@ -141,6 +167,7 @@ AGL_STYLE: Style = Style.from_dict(
         "agl.number": "#b5cea8",
         "agl.operator": "#d4d4d4",
         "agl.type": "#4ec9b0",
+        "agl.constructor": "#dcdcaa",
         "agl.name": "",
         "agl.banner": "italic #808080",
         "agl.prompt": "bold #569cd6",
@@ -154,12 +181,25 @@ class AglPromptLexer(Lexer):
     Tokenizing a half-typed or invalid line is normal at the prompt, so any
     lexer error is swallowed and the affected document falls back to plain
     styling (no raise ever escapes ``lex_document``).
+
+    *session* supplies the live set of declared type and constructor names so
+    user-defined types/constructors colour like the builtins; it is optional so
+    the lexer can still highlight keywords/strings/numbers/operators and builtin
+    types without one (e.g. in tests).  The name sets are read on every
+    ``lex_document`` so a type declared in an earlier entry colours immediately.
     """
+
+    def __init__(self, session: "ReplSession | None" = None) -> None:
+        self._session = session
 
     def lex_document(
         self, document: Document
     ) -> Callable[[int], StyleAndTextTuples]:
-        styled = self._styled_lines(document.text)
+        type_names = self._session.type_names() if self._session is not None else frozenset()
+        constructor_names = (
+            self._session.constructor_names() if self._session is not None else frozenset()
+        )
+        styled = self._styled_lines(document.text, type_names, constructor_names)
 
         def get_line(lineno: int) -> StyleAndTextTuples:
             # prompt_toolkit only asks for in-range lines; guard defensively so a
@@ -171,7 +211,11 @@ class AglPromptLexer(Lexer):
         return get_line
 
     @staticmethod
-    def _styled_lines(text: str) -> list[StyleAndTextTuples]:
+    def _styled_lines(
+        text: str,
+        type_names: frozenset[str] = frozenset(),
+        constructor_names: frozenset[str] = frozenset(),
+    ) -> list[StyleAndTextTuples]:
         """Tokenize *text* and return per-line styled ``(style, text)`` fragments.
 
         Styled spans are collected as absolute ``(start, end, style)`` offsets
@@ -180,10 +224,13 @@ class AglPromptLexer(Lexer):
         This gives O(spans) total work instead of the O(lines × spans) cost of
         filtering the full span list once per line.
 
+        *type_names* / *constructor_names* are the session-declared identifiers
+        coloured as types (see :func:`_style_class_for`); both default to empty.
+
         On any lexer error the whole document falls back to plain text — a
         partially typed line must never raise out of the prompt.
         """
-        spans = _styled_spans(text)
+        spans = _styled_spans(text, type_names, constructor_names)
         lines = text.split("\n")
         line_starts = _line_start_offsets(text)
 
@@ -200,20 +247,29 @@ class AglPromptLexer(Lexer):
         return [_fragments_for_line(line, per_line[i]) for i, line in enumerate(lines)]
 
 
-def _styled_spans(text: str) -> list[tuple[int, int, str]]:
+def _styled_spans(
+    text: str,
+    type_names: frozenset[str] = frozenset(),
+    constructor_names: frozenset[str] = frozenset(),
+) -> list[tuple[int, int, str]]:
     """Return ``(start, end, style)`` offsets for the styleable tokens in *text*.
 
     Synthetic zero-width tokens (INDENT/DEDENT/NEWLINE) and unstyled token types
-    are skipped.  A lexer error on a half-typed entry yields no spans (plain
-    text), never a raise.
+    are skipped.  A NAME's style depends on its text (builtin/declared type or
+    constructor), so the token's source slice is passed to the classifier.  A
+    lexer error on a half-typed entry yields no spans (plain text), never a raise.
     """
     spans: list[tuple[int, int, str]] = []
     try:
         for token in tokenize(text):
-            style = _style_class_for(token.type)
             start = token.start_pos
             end = token.end_pos
-            if style is None or start is None or end is None or end <= start:
+            if start is None or end is None or end <= start:
+                continue
+            style = _style_class_for(
+                token.type, text[start:end], type_names, constructor_names
+            )
+            if style is None:
                 continue
             spans.append((start, end, style))
     except Exception:
@@ -387,7 +443,7 @@ def build_prompt_session(
     """
     return PromptSession(
         message=[("class:agl.prompt", PROMPT)],
-        lexer=AglPromptLexer(),
+        lexer=AglPromptLexer(session),
         completer=AglCompleter(session),
         history=_make_history(history_path),
         style=AGL_STYLE,

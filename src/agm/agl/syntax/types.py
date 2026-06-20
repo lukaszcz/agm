@@ -12,6 +12,16 @@ from dataclasses import dataclass, field
 
 from agm.agl.syntax.spans import SourceSpan
 
+# The builtin type spellings that lex as a plain ``NAME`` in type position
+# (the parser maps them to primitive/container TypeExpr nodes — see the
+# ``prim_or_name``/``applied_type`` transformers).  ``agent`` is excluded: it is
+# a reserved keyword, not a NAME.  Consumers that classify identifiers without a
+# parse — notably the REPL syntax highlighter — use this set to recognise the
+# builtin types case-faithfully (identifier capitalization carries no meaning).
+BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
+    {"text", "json", "bool", "int", "decimal", "unit", "list", "dict"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TextT:

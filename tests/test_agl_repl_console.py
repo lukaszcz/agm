@@ -341,6 +341,63 @@ class TestLexer:
         assert ("", "   ") in fragments
         assert "".join(text for _style, text in fragments) == "1   "
 
+    @staticmethod
+    def _style_of(fragments: object, word: str) -> str | None:
+        """Return the style of the first fragment whose text equals *word*."""
+        assert isinstance(fragments, list)
+        for style, text in fragments:
+            if text == word:
+                assert isinstance(style, str)
+                return style
+        return None
+
+    @pytest.mark.parametrize("name", ["int", "text", "bool", "list", "dict", "decimal"])
+    def test_builtin_type_name_is_styled_as_type(self, name: str) -> None:
+        # Builtin type spellings lex as plain NAME (capitalization is meaningless)
+        # yet must colour as types — even without a session.
+        fragments = AglPromptLexer().lex_document(Document(f"let x: {name} = y"))(0)
+        assert self._style_of(fragments, name) == "class:agl.type"
+
+    def test_plain_identifier_is_not_styled_as_type(self) -> None:
+        # An ordinary NAME that is neither a builtin nor a declared type/constructor
+        # stays a plain name, not a type.
+        fragments = AglPromptLexer().lex_document(Document("let foo = bar"))(0)
+        assert self._style_of(fragments, "foo") == "class:agl.name"
+        assert self._style_of(fragments, "bar") == "class:agl.name"
+
+    def test_record_name_is_styled_as_type(self) -> None:
+        # A record name doubles as a type and a constructor; a position-free
+        # highlighter can't disambiguate, so it colours as a type in both the
+        # annotation and the construction call.
+        session = ReplSession()
+        result = session.eval_entry("record Pt\n  x: int\n  y: int")
+        assert result.ok
+        lexer = AglPromptLexer(session)
+
+        annotation = lexer.lex_document(Document("let p: Pt = q"))(0)
+        assert self._style_of(annotation, "Pt") == "class:agl.type"
+
+        construction = lexer.lex_document(Document("Pt(x: 1, y: 2)"))(0)
+        assert self._style_of(construction, "Pt") == "class:agl.type"
+
+    def test_enum_variant_is_styled_as_constructor(self) -> None:
+        # An enum variant is a pure constructor (never a type name), so it gets
+        # the distinct constructor style — while the enum type itself is a type.
+        session = ReplSession()
+        result = session.eval_entry("enum Outcome\n  | ok(value: int)\n  | err(code: int)")
+        assert result.ok
+        lexer = AglPromptLexer(session)
+
+        usage = lexer.lex_document(Document("let r: Outcome = ok(value: 1)"))(0)
+        assert self._style_of(usage, "Outcome") == "class:agl.type"
+        assert self._style_of(usage, "ok") == "class:agl.constructor"
+
+    def test_declared_type_not_styled_without_session(self) -> None:
+        # The same name is plain when no session backs the lexer (a user-defined
+        # type is only known via session state).
+        fragments = AglPromptLexer().lex_document(Document("let p: Pt = q"))(0)
+        assert self._style_of(fragments, "Pt") == "class:agl.name"
+
 
 class TestHistory:
     def test_none_path_uses_in_memory_history(self) -> None:

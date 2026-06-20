@@ -321,6 +321,16 @@ to the one file, bracketed by `run_start`/`run_end`; `check_only` writes no trac
 interpreter, not the agent registry). The `agm repl` command builds ONE
 `AgentMode` and passes that same instance to both the wrapper and the console.
 
+The console's `AglPromptLexer` (`agm.agl.repl.console`) highlights by running the
+real lexer; since identifier case is meaningless, it classifies a `NAME` as a
+type/constructor semantically — matching `syntax.BUILTIN_TYPE_NAMES` or the live
+`ReplSession.type_names()` / `constructor_names()` (declared in prior promoted
+entries). A builtin/declared type colours as a type (record names, which are
+both, resolve to type since the lexer-only pass can't disambiguate); a
+constructor-only name (enum variant) gets the distinct constructor style.
+Without a session it still colours keywords, literals, operators, and the
+builtins.
+
 ## Config pragma pipeline
 
 `config KEY = VALUE` header pragmas are grammatically `ConfigPragma` AST nodes.

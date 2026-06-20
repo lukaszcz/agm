@@ -3474,10 +3474,13 @@ class TestCast:
         err = reject_type("agent myAgent\nmyAgent as text")
         assert "cannot cast" in str(err).lower() or "agent" in str(err).lower()
 
-    def test_record_as_json_rejected(self) -> None:
-        """record as json is a static error."""
-        err = reject_type("record R\n  x: int\nlet r = R(x: 1)\nr as json")
-        assert "cannot cast" in str(err).lower()
+    def test_record_as_json_accepted(self) -> None:
+        """record as json is now TOTAL_JSON (D10 — explicit nominal→json cast)."""
+        from agm.agl.typecheck.types import CastKind
+        r = accept_type("record R\n  x: int\nlet r = R(x: 1)\nr as json")
+        assert r
+        spec = next(iter(r.cast_specs.values()))
+        assert spec.kind == CastKind.TOTAL_JSON
 
     def test_cast_to_unit_rejected(self) -> None:
         """casting to unit is a static error."""
@@ -3529,6 +3532,34 @@ class TestCast:
         """A cast preserves the universal assignability of bottom."""
         r = accept_type('(raise Abort(message: "x")) as text')
         assert r
+
+
+class TestCastClassificationTable:
+    """Direct unit tests for cast_classification() covering the new nominal→json pairs."""
+
+    def test_record_to_json_is_total_json(self) -> None:
+        from agm.agl.typecheck.types import CastKind, cast_classification
+
+        source = RecordType(name="R", fields={"x": IntType()})
+        assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
+
+    def test_enum_to_json_is_total_json(self) -> None:
+        from agm.agl.typecheck.types import CastKind, cast_classification
+
+        source = EnumType(name="E", variants={"A": {}, "B": {}})
+        assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
+
+    def test_exception_to_json_is_total_json(self) -> None:
+        from agm.agl.typecheck.types import CastKind, cast_classification
+
+        source = ExceptionType(name="Abort", fields={"message": TextType(), "trace_id": TextType()})
+        assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
+
+    def test_exception_to_text_is_total_render(self) -> None:
+        from agm.agl.typecheck.types import CastKind, cast_classification
+
+        source = ExceptionType(name="Abort", fields={"message": TextType(), "trace_id": TextType()})
+        assert cast_classification(source, TextType()) == CastKind.TOTAL_RENDER
 
 
 class TestParseJsonCall:

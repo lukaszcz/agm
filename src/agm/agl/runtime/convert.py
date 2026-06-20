@@ -388,13 +388,15 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
 
     ``→ text`` (total):
         :func:`~agm.agl.runtime.render.render_value` is used to produce a
-        :class:`~agm.agl.eval.values.TextValue`.
+        :class:`~agm.agl.eval.values.TextValue`.  Nominal sources render in
+        declaration order (the interpreter normalizes their fields).
 
     ``→ json`` (total):
         :func:`~agm.agl.runtime.serialize.value_to_json_obj` is used to
         produce a :class:`~agm.agl.eval.values.JsonValue`.  Per D9, ``text``
         is already JSON-shaped (a JSON string), so ``"42" as json`` yields
-        ``JsonValue("42")``, not ``JsonValue(42)``.
+        ``JsonValue("42")``, not ``JsonValue(42)``.  Nominal values
+        (record/enum/exception) are accepted and serialised structurally.
 
     ``text → T`` (fallible, T not json):
         :func:`parse_json_strict` parses the text strictly, then
@@ -417,17 +419,17 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
         Carries ``source_type``, ``target_type``, ``raw``, and ``message``.
         All other exceptions propagate unchanged.
     """
-    raw = render_value(value)
-
     # ------------------------------------------------------------------
     # → text (total): render any value to text
+    # ``raw`` is the rendered form and also the result here.
     # ------------------------------------------------------------------
     if isinstance(target_type, TextType):
-        return TextValue(raw)
+        return TextValue(render_value(value))
 
     # ------------------------------------------------------------------
     # → json (total): canonicalize any JSON-shaped value
     # Per D9: text as json wraps the text as a JSON string (no parsing).
+    # Nominal values (record/enum/exception) are serialised structurally.
     # ------------------------------------------------------------------
     if isinstance(target_type, JsonType):
         return JsonValue(value_to_json_obj(value))
@@ -446,9 +448,12 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
         assert isinstance(value, IntValue)
         return DecimalValue(Decimal(value.value))
 
-    # Fallible paths below need source/target names for error context.
+    # Fallible paths below need source/target names and raw for error context.
+    # ``render_value`` is called here (lazily) so the total → json / identity /
+    # widening branches above never pay to render the value to text.
     src_name = repr(source_type)
     tgt_name = repr(target_type)
+    raw = render_value(value)
 
     # ------------------------------------------------------------------
     # decimal → int narrowing (D4: must be integral)

@@ -34,7 +34,9 @@ With named arguments, parentheses are required.
 The command template uses the same uniform rendering as all other templates
 ([Strings and interpolation](strings-and-interpolation.md)): `text` values
 interpolate verbatim; `int`, `decimal`, and `bool` as plain scalar text;
-structured values as pretty JSON (2-space indent).
+structured values (`list`, `dict`, record, enum, exception) in AgL form —
+single-line, no injected newlines. To interpolate a structured value as JSON,
+use an explicit cast: `${value as json}`.
 
 Interpolated values are inserted **verbatim** into the command string —
 there is **no automatic shell quoting**. The workflow author is responsible

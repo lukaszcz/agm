@@ -28,7 +28,7 @@
           {
             "agent": "impl",
             "call": 1,
-            "contains": ["Fix valid issues.", "\"$case\"", "off by one", "v1"]
+            "contains": ["Fix valid issues.", "Review.Fail(issues:", "off by one", "v1"]
           }
         ]
       }

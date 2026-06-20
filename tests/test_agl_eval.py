@@ -3602,9 +3602,8 @@ s
     snap = _run_source(source)
     result = snap["s"]
     assert isinstance(result, TextValue)
-    # Contains the field names and values (may be pretty-printed)
-    assert '"x"' in result.value and '"y"' in result.value
-    assert "1" in result.value and "2" in result.value
+    # AgL-native form: Point(x: 1, y: 2)
+    assert result.value == "Point(x: 1, y: 2)"
 
 
 def test_cast_enum_as_text() -> None:
@@ -3616,7 +3615,8 @@ s"""
     snap = _run_source(source)
     result = snap["s"]
     assert isinstance(result, TextValue)
-    assert '"$case"' in result.value and '"Red"' in result.value
+    # AgL-native form: qualified enum name
+    assert result.value == "Color.Red"
 
 
 # --- Total casts: as json ---
@@ -4004,3 +4004,216 @@ result"""
     assert snap["result"] == JsonValue("{bad")
 
 
+# ---------------------------------------------------------------------------
+# 109. M2 — AgL-native rendering at all interpreter output sites
+# ---------------------------------------------------------------------------
+
+
+def test_print_record_agl_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """print(record) outputs AgL form, not JSON."""
+    source = """\
+record Point
+  x: int
+  y: int
+let p = Point(x: 3, y: 4)
+print(p)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Point(x: 3, y: 4)"
+
+
+def test_print_enum_agl_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """print(enum) outputs AgL qualified form."""
+    source = """\
+enum Color | Red | Blue(n: int)
+let c = Blue(n: 7)
+print(c)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Color.Blue(n: 7)"
+
+
+def test_print_enum_nullary_agl_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """print(nullary enum) outputs TypeName.Variant with no parens."""
+    source = """\
+enum Color | Red | Blue
+let c = Red()
+print(c)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Color.Red"
+
+
+def test_print_list_agl_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """print(list) outputs AgL bracket form."""
+    source = """\
+let xs: list[int] = [1, 2, 3]
+print(xs)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "[1, 2, 3]"
+
+
+def test_print_dict_agl_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """print(dict) outputs AgL brace form with quoted keys."""
+    source = """\
+let d: dict[text, int] = {"a": 1, "b": 2}
+print(d)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == '{"a": 1, "b": 2}'
+
+
+def test_template_interpolation_record_agl_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """Template interpolation of a record yields AgL form."""
+    source = """\
+record Point
+  x: int
+  y: int
+let p = Point(x: 3, y: 4)
+print("pos: ${p}")
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "pos: Point(x: 3, y: 4)"
+
+
+def test_template_interpolation_enum_agl_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """Template interpolation of an enum yields qualified AgL form."""
+    source = """\
+enum Color | Red | Blue(n: int)
+let c = Red()
+print("color: ${c}")
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "color: Color.Red"
+
+
+def test_print_record_as_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """print(record as json) outputs JSON form (explicit opt-in)."""
+    source = """\
+record Point
+  x: int
+  y: int
+let p = Point(x: 3, y: 4)
+print(p as json)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    # json at top level → pretty-printed with 2-space indent; print adds trailing newline
+    assert captured.out == '{\n  "x": 3,\n  "y": 4\n}\n'
+
+
+def test_print_enum_as_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """print(enum as json) outputs $case-tagged JSON."""
+    source = """\
+enum Color | Red | Blue(n: int)
+let c = Blue(n: 7)
+print(c as json)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    # "$case" first, then fields; pretty-printed with 2-space indent; print adds trailing newline
+    assert captured.out == '{\n  "$case": "Blue",\n  "n": 7\n}\n'
+
+
+def test_template_record_as_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """${r as json} in template yields compact JSON inline."""
+    source = """\
+record Point
+  x: int
+  y: int
+let p = Point(x: 1, y: 2)
+print("json: ${p as json}")
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    # json in template interpolation uses render_value(top_level=True) → pretty-printed;
+    # print adds a trailing newline
+    assert captured.out == 'json: {\n  "x": 1,\n  "y": 2\n}\n'
+
+
+def test_record_as_text_cast_agl_form() -> None:
+    """r as text produces AgL form (TOTAL_RENDER)."""
+    source = """\
+record Point
+  x: int
+  y: int
+let p = Point(x: 3, y: 4)
+let s: text = p as text
+s"""
+    snap = _run_source(source)
+    assert snap["s"] == TextValue("Point(x: 3, y: 4)")
+
+
+def test_exception_as_text_cast_agl_form() -> None:
+    """exception as text is now TOTAL_RENDER and yields AgL form."""
+    source = """\
+let a = ArithmeticError(message: "oops", operation: "+")
+let s: text = a as text
+s"""
+    snap = _run_source(source)
+    assert isinstance(snap["s"], TextValue)
+    s = snap["s"].value
+    assert s.startswith("ArithmeticError(")
+    assert "trace_id" in s
+    assert "oops" in s
+
+
+def test_print_exception_as_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """exception as json yields all-fields JSON."""
+    import json as _json
+
+    source = """\
+let e = ArithmeticError(message: "oops", operation: "+")
+print(e as json)
+()"""
+    _run_source(source)
+    captured = capsys.readouterr()
+    # Output is pretty-printed JSON (2-space indent) plus trailing newline from print.
+    # trace_id is non-deterministic, so parse back and assert exact deterministic fields.
+    parsed = _json.loads(captured.out)
+    assert parsed["message"] == "oops"
+    assert parsed["operation"] == "+"
+    assert "trace_id" in parsed
+    # Confirm the output is multi-line pretty JSON (not compact)
+    assert "\n" in captured.out.rstrip("\n")
+
+
+def test_as_question_record_to_json_is_true() -> None:
+    """record as? json is always True (TOTAL_JSON)."""
+    source = """\
+record Point
+  x: int
+  y: int
+let p = Point(x: 1, y: 2)
+let ok: bool = p as? json
+ok"""
+    snap = _run_source(source)
+    assert snap["ok"] == BoolValue(True)
+
+
+def test_as_question_exception_to_text_is_true() -> None:
+    """exception as? text is always True (TOTAL_RENDER)."""
+    source = """\
+let e = ArithmeticError(message: "oops", operation: "+")
+let ok: bool = e as? text
+ok"""
+    snap = _run_source(source)
+    assert snap["ok"] == BoolValue(True)
+
+
+def test_as_question_exception_to_json_is_true() -> None:
+    """exception as? json is always True (TOTAL_JSON)."""
+    source = """\
+let e = ArithmeticError(message: "oops", operation: "+")
+let ok: bool = e as? json
+ok"""
+    snap = _run_source(source)
+    assert snap["ok"] == BoolValue(True)

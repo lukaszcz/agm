@@ -737,16 +737,18 @@ def cast_classification(source: Type, target: Type) -> CastKind:
     _text_or_json = (TextType, JsonType)
 
     if isinstance(target, TextType):
-        # renderable types: json, bool, int, decimal, list, dict, record, enum
-        # ExceptionType NOT renderable via casts; non-data types filtered above.
-        if isinstance(source, (JsonType, BoolType, IntType, DecimalType, ListType, DictType,
-                               RecordType, EnumType)):
-            return CastKind.TOTAL_RENDER
-        return CastKind.STATIC_ERROR
+        # Every data value renders to text. Non-data sources (unit/agent/function)
+        # are filtered at the top, and json-shaped/exact-type sources are handled by
+        # the is_assignable block above, so any source reaching here is a renderable
+        # data type (json/bool/int/decimal/list/dict/record/enum/exception).
+        return CastKind.TOTAL_RENDER
 
     if isinstance(target, JsonType):
         # All json-shaped sources are assignable to json (handled above), so
-        # anything reaching here is NOT json-shaped → static error.
+        # anything reaching here is NOT json-shaped.
+        # Nominal types (record/enum/exception) support an explicit structural JSON cast.
+        if isinstance(source, (RecordType, EnumType, ExceptionType)):
+            return CastKind.TOTAL_JSON
         return CastKind.STATIC_ERROR
 
     if isinstance(target, (BoolType, IntType, DecimalType)):

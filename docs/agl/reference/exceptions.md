@@ -24,9 +24,18 @@ static error. It exists for typing: a wildcard catch binds its variable as
 requires catching the concrete type. User-defined exception types do not
 exist in v1.
 
-Exception values support field access (`e.raw`), equality, and rendering:
-in interpolation and `print` an exception renders as the JSON object of its
-fields ([Strings and interpolation](strings-and-interpolation.md)).
+Exception values support field access (`e.raw`), equality, and rendering.
+In interpolation and `print` an exception renders in **AgL record form**,
+including all fields (`message`, `trace_id`, and any type-specific fields)
+in declaration order — for example:
+
+```
+CastError(message: "cannot parse \"x\" as int", trace_id: "evt-7", source_type: "text", target_type: "int", raw: "x")
+```
+
+See [Strings and interpolation](strings-and-interpolation.md) for the uniform
+rendering rules. Use `e as json` to obtain the JSON object of the exception's
+fields; use `e as text` to obtain the same AgL-form string.
 
 ## `try` / `catch`
 
@@ -171,7 +180,7 @@ A `case` with no matching branch and no wildcard
 
 ```text
 scrutinee_type: text   # type name of the unmatched value
-scrutinee: json        # JSON rendering of the unmatched value
+scrutinee: json        # structural JSON encoding of the unmatched value
 ```
 
 ### `ArithmeticError`

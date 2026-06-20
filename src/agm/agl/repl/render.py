@@ -46,7 +46,10 @@ def format_typed_value(name: str, value_type: "Type", value: "Value") -> str:
 
 
 def render_entry_result(
-    result: "EntryResult", *, echo: bool, check_only: bool = False
+    result: "EntryResult",
+    *,
+    echo: bool,
+    check_only: bool = False,
 ) -> str | None:
     """Return the text to print for *result*, or ``None`` when nothing to print.
 

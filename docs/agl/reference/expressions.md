@@ -182,7 +182,7 @@ returns `unit`. The argument may have any type that has a rendering:
 
 ```agl
 print "Review round failed; retrying."
-print review                           # renders review as pretty JSON
+print review                           # renders review in AgL form
 print(classify(-4))                    # compound argument needs parens
 print res.stdout                       # field-access chain as sugar arg
 ```
@@ -315,9 +315,9 @@ if count_json as? int =>
 
 A `text` cast from a fallible source reads the value and formats it as text;
 it is always total regardless of the source type (any data value has a text
-rendering). For structured source types (`bool`, `int`, `list`, records …)
-`as text` produces the same JSON-object or scalar text that `print` would
-render.
+rendering). For structured source types (`list`, records, enums, exceptions …)
+`as text` produces the same AgL-form text that `print` would render.
+For scalar types (`bool`, `int`, `decimal`) it produces the plain scalar text.
 
 ### Variant tests: `is`, `is not`
 

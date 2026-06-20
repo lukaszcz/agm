@@ -674,3 +674,148 @@ class TestCapabilityGates:
 
     def test_bottom_assignable_to_typevar(self) -> None:
         assert is_assignable(BottomType(), TypeVarType("T")) is True
+
+
+# ---------------------------------------------------------------------------
+# New builtin exceptions (M3a)
+# ---------------------------------------------------------------------------
+
+
+class TestNewExceptions:
+    def test_cast_error_in_builtin_exceptions(self) -> None:
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTION_NAMES
+        assert "CastError" in BUILTIN_EXCEPTION_NAMES
+
+    def test_json_parse_error_in_builtin_exceptions(self) -> None:
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTION_NAMES
+        assert "JsonParseError" in BUILTIN_EXCEPTION_NAMES
+
+    def test_cast_error_fields(self) -> None:
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, TextType
+        e = BUILTIN_EXCEPTIONS["CastError"]
+        assert "source_type" in e.fields
+        assert "target_type" in e.fields
+        assert "raw" in e.fields
+        assert e.fields["source_type"] == TextType()
+
+    def test_json_parse_error_fields(self) -> None:
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, TextType
+        e = BUILTIN_EXCEPTIONS["JsonParseError"]
+        assert "raw" in e.fields
+        assert e.fields["raw"] == TextType()
+
+
+class TestCastClassification:
+    def test_bottom_source_is_assignable_to_cast_target(self) -> None:
+        from agm.agl.typecheck.types import (
+            BottomType,
+            CastKind,
+            TextType,
+            cast_classification,
+        )
+
+        assert cast_classification(BottomType(), TextType()) == CastKind.TOTAL_NOOP
+
+    def test_text_to_text_noop(self) -> None:
+        from agm.agl.typecheck.types import CastKind, TextType, cast_classification
+        assert cast_classification(TextType(), TextType()) == CastKind.TOTAL_NOOP
+
+    def test_int_to_text_render(self) -> None:
+        from agm.agl.typecheck.types import CastKind, IntType, TextType, cast_classification
+        assert cast_classification(IntType(), TextType()) == CastKind.TOTAL_RENDER
+
+    def test_bool_to_text_render(self) -> None:
+        from agm.agl.typecheck.types import BoolType, CastKind, TextType, cast_classification
+        assert cast_classification(BoolType(), TextType()) == CastKind.TOTAL_RENDER
+
+    def test_int_to_json_total_json(self) -> None:
+        from agm.agl.typecheck.types import CastKind, IntType, JsonType, cast_classification
+        assert cast_classification(IntType(), JsonType()) == CastKind.TOTAL_JSON
+
+    def test_text_to_json_total_json(self) -> None:
+        from agm.agl.typecheck.types import CastKind, JsonType, TextType, cast_classification
+        assert cast_classification(TextType(), JsonType()) == CastKind.TOTAL_JSON
+
+    def test_json_to_json_noop(self) -> None:
+        from agm.agl.typecheck.types import CastKind, JsonType, cast_classification
+        assert cast_classification(JsonType(), JsonType()) == CastKind.TOTAL_NOOP
+
+    def test_text_to_int_fallible(self) -> None:
+        from agm.agl.typecheck.types import CastKind, IntType, TextType, cast_classification
+        assert cast_classification(TextType(), IntType()) == CastKind.FALLIBLE
+
+    def test_json_to_bool_fallible(self) -> None:
+        from agm.agl.typecheck.types import BoolType, CastKind, JsonType, cast_classification
+        assert cast_classification(JsonType(), BoolType()) == CastKind.FALLIBLE
+
+    def test_decimal_to_int_fallible(self) -> None:
+        from agm.agl.typecheck.types import CastKind, DecimalType, IntType, cast_classification
+        assert cast_classification(DecimalType(), IntType()) == CastKind.FALLIBLE
+
+    def test_int_to_decimal_noop(self) -> None:
+        from agm.agl.typecheck.types import CastKind, DecimalType, IntType, cast_classification
+        assert cast_classification(IntType(), DecimalType()) == CastKind.TOTAL_NOOP
+
+    def test_bool_to_int_static_error(self) -> None:
+        from agm.agl.typecheck.types import BoolType, CastKind, IntType, cast_classification
+        assert cast_classification(BoolType(), IntType()) == CastKind.STATIC_ERROR
+
+    def test_int_to_bool_static_error(self) -> None:
+        from agm.agl.typecheck.types import BoolType, CastKind, IntType, cast_classification
+        assert cast_classification(IntType(), BoolType()) == CastKind.STATIC_ERROR
+
+    def test_unit_source_static_error(self) -> None:
+        from agm.agl.typecheck.types import CastKind, TextType, UnitType, cast_classification
+        assert cast_classification(UnitType(), TextType()) == CastKind.STATIC_ERROR
+
+    def test_agent_target_static_error(self) -> None:
+        from agm.agl.typecheck.types import AgentType, CastKind, TextType, cast_classification
+        assert cast_classification(TextType(), AgentType()) == CastKind.STATIC_ERROR
+
+    def test_record_to_json_static_error(self) -> None:
+        from agm.agl.typecheck.types import CastKind, JsonType, RecordType, cast_classification
+        r = RecordType(name="R", fields={})
+        assert cast_classification(r, JsonType()) == CastKind.STATIC_ERROR
+
+    def test_text_to_record_fallible(self) -> None:
+        from agm.agl.typecheck.types import CastKind, RecordType, TextType, cast_classification
+        r = RecordType(name="R", fields={})
+        assert cast_classification(TextType(), r) == CastKind.FALLIBLE
+
+    def test_json_to_record_fallible(self) -> None:
+        from agm.agl.typecheck.types import CastKind, JsonType, RecordType, cast_classification
+        r = RecordType(name="R", fields={})
+        assert cast_classification(JsonType(), r) == CastKind.FALLIBLE
+
+    def test_exception_as_target_static_error(self) -> None:
+        from agm.agl.typecheck.types import (
+            CastKind,
+            ExceptionType,
+            TextType,
+            cast_classification,
+        )
+        exc = ExceptionType(name="MyError", fields={"message": TextType(), "trace_id": TextType()})
+        assert cast_classification(TextType(), exc) == CastKind.STATIC_ERROR
+
+    def test_exception_source_to_text_static_error(self) -> None:
+        from agm.agl.typecheck.types import (
+            CastKind,
+            ExceptionType,
+            TextType,
+            cast_classification,
+        )
+        exc = ExceptionType(name="MyError", fields={"message": TextType(), "trace_id": TextType()})
+        assert cast_classification(exc, TextType()) == CastKind.STATIC_ERROR
+
+    def test_json_to_text_render(self) -> None:
+        from agm.agl.typecheck.types import CastKind, JsonType, TextType, cast_classification
+        assert cast_classification(JsonType(), TextType()) == CastKind.TOTAL_RENDER
+
+    def test_int_to_list_static_error(self) -> None:
+        from agm.agl.typecheck.types import (
+            CastKind,
+            IntType,
+            ListType,
+            cast_classification,
+        )
+        assert cast_classification(IntType(), ListType(IntType())) == CastKind.STATIC_ERROR

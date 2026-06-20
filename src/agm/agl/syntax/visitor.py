@@ -37,6 +37,7 @@ from agm.agl.syntax.nodes import (
     Call,
     Case,
     CaseBranch,
+    Cast,
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
@@ -195,6 +196,7 @@ class Visitor:
     def visit_BinaryOp(self, node: BinaryOp) -> None: ...
     def visit_UnaryNot(self, node: UnaryNot) -> None: ...
     def visit_UnaryNeg(self, node: UnaryNeg) -> None: ...
+    def visit_Cast(self, node: Cast) -> None: ...
     def visit_IsTest(self, node: IsTest) -> None: ...
     def visit_Call(self, node: Call) -> None: ...
     def visit_Param(self, node: Param) -> None: ...
@@ -282,6 +284,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         BinaryOp,
         UnaryNot,
         UnaryNeg,
+        Cast,
         IsTest,
         Call,
         Param,
@@ -466,6 +469,10 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, UnaryNeg):
         walk(node.operand, callback)
+
+    elif isinstance(node, Cast):
+        walk(node.expr, callback)
+        walk(node.target_type, callback)
 
     elif isinstance(node, IsTest):
         walk(node.expr, callback)

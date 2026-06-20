@@ -2559,3 +2559,27 @@ class TestConstructorBindings:
         )
         r = resolve_program(let_x, fa)
         assert fa.node_id not in r.qualified_constructor_refs
+
+
+# ---------------------------------------------------------------------------
+# Cast scope tests (M2)
+# ---------------------------------------------------------------------------
+
+
+class TestCastScope:
+    def test_cast_subexpr_resolves(self) -> None:
+        """cast sub-expression resolves names normally."""
+        r = parse_and_resolve("let x = 1\nlet y = x as int")
+        assert r  # no exception
+
+    def test_cast_undefined_var_is_scope_error(self) -> None:
+        """undefined var inside a cast is a scope error."""
+        err = reject_scope("undefinedVar as int")
+        assert "undefinedVar" in err.to_diagnostic().message
+
+    def test_parse_json_resolves_as_builtin(self) -> None:
+        """parse_json(x) resolves as a builtin — no 'undefined name parse_json' error."""
+        r = parse_and_resolve('let s = "hello"\nparse_json(s)')
+        # The call to parse_json should be classified as PARSE_JSON builtin
+        from agm.agl.scope.symbols import BuiltinKind
+        assert BuiltinKind.PARSE_JSON in r.builtin_calls.values()

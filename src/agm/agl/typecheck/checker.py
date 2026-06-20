@@ -60,6 +60,7 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     Call,
     Case,
+    Cast,
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
@@ -122,6 +123,8 @@ from agm.agl.typecheck.types import (
     AgentType,
     BoolType,
     BottomType,
+    CastKind,
+    CastSpec,
     DecimalType,
     DictType,
     EnumType,
@@ -135,6 +138,7 @@ from agm.agl.typecheck.types import (
     Type,
     TypeVarType,
     UnitType,
+    cast_classification,
     comparable_types,
     contains_type_var,
     free_type_vars,
@@ -492,6 +496,7 @@ class _Checker:
         self._warnings: list[Diagnostic] = []
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
+        self._cast_specs: dict[int, CastSpec] = {}
 
     # ------------------------------------------------------------------
     # Pre-registration of function signatures
@@ -783,6 +788,8 @@ class _Checker:
             return self._check_index_access(expr)
         if isinstance(expr, ListLit):
             return self._check_list_lit(expr, expected=expected)
+        if isinstance(expr, Cast):
+            return self._check_cast(expr)
         # DictLit is the last Expr union member.
         assert isinstance(expr, DictLit), f"Unexpected expression kind: {type(expr).__name__}"
         return self._check_dict_lit(expr, expected=expected)
@@ -965,6 +972,20 @@ class _Checker:
             owner=concrete_type, variant=variant, args=named_args, span=span
         )
 
+    # --- Cast ---
+
+    def _check_cast(self, node: Cast) -> Type:
+        source_type = self._check_expr(node.expr, expected=None)
+        target_type = self._env.resolve_type_expr(node.target_type, span=node.span)
+        kind = cast_classification(source_type, target_type)
+        if kind == CastKind.STATIC_ERROR:
+            raise AglTypeError(
+                f"cannot cast '{source_type!r}' to '{target_type!r}'.",
+                span=node.span,
+            )
+        self._cast_specs[node.node_id] = CastSpec(target_type=target_type, kind=kind)
+        return BoolType() if node.test_only else target_type
+
     # --- Call dispatch ---
 
     def _check_call(self, node: Call, *, expected: Type | None) -> Type:
@@ -978,6 +999,8 @@ class _Checker:
                 return self._check_ask_call(node, expected=expected)
             if kind == BuiltinKind.ASK_REQUEST:
                 return self._check_ask_request_call(node)
+            if kind == BuiltinKind.PARSE_JSON:
+                return self._check_parse_json_call(node)
             # EXEC
             return self._check_exec_call(node, expected=expected)
 
@@ -1031,6 +1054,18 @@ class _Checker:
                 span=node.args[0].span,
             )
         return UnitType()
+
+    # --- parse_json ---
+
+    def _check_parse_json_call(self, node: Call) -> Type:
+        if len(node.args) != 1 or node.named_args:
+            raise AglTypeError(
+                "parse_json() requires exactly one positional text argument.",
+                span=node.span,
+            )
+        arg_type = self._check_expr(node.args[0], expected=TextType())
+        self._assert_assignable(arg_type, TextType(), node.args[0].span)
+        return JsonType()
 
     # --- ask ---
 
@@ -2771,6 +2806,7 @@ class _Checker:
             warnings=tuple(self._warnings),
             type_env=self._env,
             function_signatures=self._env.all_function_signatures(),
+            cast_specs=self._cast_specs,
         )
 
 

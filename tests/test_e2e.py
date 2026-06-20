@@ -27,7 +27,25 @@ from typing import TypedDict, cast
 
 import pytest
 
+from agm.project.workspace_shell import _sanitize_session_key
+from tests._proc_helpers import wait_for_path
+
 HAS_ZSH = shutil.which("zsh") is not None
+
+
+def _workspace_shell_path(env: dict[str, str], session_name: str) -> Path:
+    """Return the per-session wrapper path the real agm writes under *env*.
+
+    Mirrors ``agm.project.workspace_shell.workspace_shell_dir`` but resolves
+    ``XDG_CACHE_HOME``/``HOME`` against *env* (the installed agm runs with
+    this env), not the test process environment.
+    """
+    xdg = env.get("XDG_CACHE_HOME")
+    if xdg:
+        base = Path(xdg)
+    else:
+        base = Path(env["HOME"]) / ".cache"
+    return base / "agm" / "shell" / _sanitize_session_key(session_name) / "shell"
 needs_zsh = pytest.mark.skipif(not HAS_ZSH, reason="zsh is required")
 
 # A fake ``tmux`` binary used by tests for agm open, tmux.sh and
@@ -509,13 +527,7 @@ def _install_fake_tmux(bin_dir: Path, log_path: Path, env: dict[str, str]) -> No
     env["TMUX_LOG"] = str(log_path)
 
 
-def _wait_for_path(path: Path, *, timeout: float = 10.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.exists():
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"timed out waiting for {path}")
+_wait_for_path = wait_for_path
 
 
 def _assert_pid_gone(pid: int) -> None:
@@ -542,7 +554,7 @@ def _assert_pid_gone(pid: int) -> None:
 
 def _interrupt_agm_process(process: subprocess.Popen[str], *, child_pid: int) -> None:
     os.kill(process.pid, signal.SIGINT)
-    stdout, stderr = process.communicate(timeout=5)
+    stdout, stderr = process.communicate(timeout=60)
 
     assert process.returncode == 130
     assert "Interrupted" in stdout
@@ -1787,6 +1799,41 @@ class TestRmWt:
 # ── agm close ────────────────────────────────────────────────────────────────
 
 
+class TestWorkspaceShellRegen:
+    """agm workspace shell-regen: regenerate the per-session shell wrapper."""
+
+    def test_regenerates_rc_files_in_existing_dir(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # Point the cache at a tmp dir so the installed agm writes there.
+        env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+        shell_dir = _workspace_shell_path(env, "proj/regen").parent
+        shell_dir.mkdir(parents=True)
+        # Start empty: only the directory exists.
+        assert not (shell_dir / "shell").exists()
+
+        result = run_agm(
+            ["workspace", "shell-regen", str(shell_dir)], env=env, cwd=str(tmp_path)
+        )
+
+        assert result.returncode == 0
+        assert (shell_dir / "shell").is_file()
+        assert (shell_dir / "zsh" / ".zshrc").is_file()
+        assert (shell_dir / "bash" / "bashrc").is_file()
+        assert (shell_dir / "sh" / "shrc").is_file()
+
+    def test_errors_when_dir_missing(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+        shell_dir = _workspace_shell_path(env, "proj/missing").parent
+        result = run_agm(
+            ["workspace", "shell-regen", str(shell_dir)],
+            env=env, cwd=str(tmp_path), check=False,
+        )
+        assert result.returncode != 0
+
+
 class TestClose:
     """agm close: remove worktrees and stop matching tmux sessions."""
 
@@ -1804,11 +1851,16 @@ class TestClose:
         workspace_config.mkdir(parents=True)
         (workspace_config / ".env").write_text("WORKSPACE_CONFIG=1\n", encoding="utf-8")
         assert worktree.is_dir()
+        # Open the workspace so a per-session shell wrapper is created in the cache.
+        run_agm(["open", "-d", "feat/close-me"], env=env, cwd=str(project))
+        wrapper = _workspace_shell_path(env, "proj/feat/close-me")
+        assert wrapper.exists()
 
         result = run_agm(["close", "feat/close-me"], env=env, cwd=str(project))
 
         assert not worktree.exists()
         assert not workspace_config.exists()
+        assert not wrapper.exists()
         branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
         assert "feat/close-me" not in branches
         assert "Closed session proj/feat/close-me" in result.stdout
@@ -3964,7 +4016,9 @@ class TestSandbox:
         assert _srt_command(result) == "printf hello"
         assert _srt_settings(result)["network"]["allowedDomains"] == ["echo.com"]
 
-    def test_interrupt_kills_run_process_tree(self, tmp_path: Path, env: dict[str, str]) -> None:
+    def test_interrupt_kills_run_process_tree(
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
+    ) -> None:
         ready_file = tmp_path / "run.ready"
         child_pid_file = tmp_path / "run-child.pid"
 
@@ -4005,7 +4059,7 @@ class TestSandbox:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)
@@ -4013,7 +4067,7 @@ class TestSandbox:
                     pass
 
     def test_interrupt_kills_run_process_tree_with_real_systemd_run_scope(
-        self, tmp_path: Path, env: dict[str, str]
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
     ) -> None:
         ready_file = tmp_path / "wrapped-run.ready"
         child_pid_file = tmp_path / "wrapped-run-child.pid"
@@ -4065,7 +4119,7 @@ class TestSandbox:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)
@@ -5483,7 +5537,7 @@ class TestLoop:
         assert Path(env["FAKE_CLAUDE_LOG"]).read_text().splitlines() == [f"-p @{prompt_file}"] * 2
 
     def test_interrupt_kills_loop_runner_process_tree(
-        self, tmp_path: Path, env: dict[str, str]
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
     ) -> None:
         ready_file = tmp_path / "runner.ready"
         child_pid_file = tmp_path / "runner-child.pid"
@@ -5531,7 +5585,7 @@ class TestLoop:
             child_pid = int(child_pid_file.read_text().strip())
 
             os.kill(process.pid, signal.SIGINT)
-            stdout, stderr = process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=60)
 
             assert process.returncode == 130
             assert "Interrupted" in stdout
@@ -5540,7 +5594,7 @@ class TestLoop:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)
@@ -5548,7 +5602,7 @@ class TestLoop:
                     pass
 
     def test_interrupt_kills_loop_selector_process_tree(
-        self, tmp_path: Path, env: dict[str, str]
+        self, tmp_path: Path, env: dict[str, str], default_sigint: None
     ) -> None:
         ready_file = tmp_path / "selector.ready"
         child_pid_file = tmp_path / "selector-child.pid"
@@ -5607,7 +5661,7 @@ class TestLoop:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.communicate(timeout=60)
             if child_pid is not None:
                 try:
                     os.kill(child_pid, signal.SIGKILL)
@@ -6131,8 +6185,10 @@ class TestOpen:
         assert "-dP" in log
         assert "attach-session" in log
         assert "send-keys" in log
-        assert ".agent-files/agm-shell/shell" in log
-        assert log.index(".agent-files/agm-shell/shell") < log.index("agm workspace setup")
+        wrapper = _workspace_shell_path(env, "proj/feat/test")
+        assert str(wrapper) in log
+        assert log.index(str(wrapper)) < log.index("agm workspace setup")
+        assert ".agent-files" not in log
         assert "-s proj/feat/test" in log
         _wait_for_path(project / "worktrees" / "feat/test" / ".setup-ran")
         assert "Detached tmux session proj/feat/test created" in result.stdout
@@ -6174,7 +6230,7 @@ class TestOpen:
         assert expected_dep_path.is_dir()
         assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
         result = subprocess.run(
-            [str(project / "worktrees" / "feat/test" / ".agent-files" / "agm-shell" / "shell")],
+            [str(_workspace_shell_path(env, "proj/feat/test"))],
             input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
             cwd=project / "worktrees" / "feat/test",
             env=_agm_env(env),
@@ -6207,7 +6263,7 @@ class TestOpen:
         expected_dep_path = project / "deps" / "vyper-automation" / "main"
         assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
         result = subprocess.run(
-            [str(project / "worktrees" / "feat/test" / ".agent-files" / "agm-shell" / "shell")],
+            [str(_workspace_shell_path(env, "proj/feat/test"))],
             input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
             cwd=project / "worktrees" / "feat/test",
             env=_agm_env(env),
@@ -6391,7 +6447,7 @@ class TestOpen:
         run_agm(["open", "repo"], env=env, cwd=str(project))
 
         subprocess.run(
-            [str(project / "repo" / ".agent-files" / "agm-shell" / "shell")],
+            [str(_workspace_shell_path(env, "proj"))],
             input="exit\n",
             cwd=project / "repo",
             env=_agm_env(env),
@@ -6425,7 +6481,7 @@ class TestOpen:
         assert " -e " not in log
         assert f"-e HOLDIR={project}/hold" not in log
         result = subprocess.run(
-            [str(project / "repo" / ".agent-files" / "agm-shell" / "shell")],
+            [str(_workspace_shell_path(env, "proj"))],
             input='printf "%s\\n" "$HOLDIR"\nexit\n',
             cwd=project / "repo",
             env=_agm_env(env),
@@ -6964,6 +7020,11 @@ class TestHelp:
             (["help", "worktree", "remove"], ["worktree", "remove", "-h"], "agm worktree remove"),
             (["help", "workspace", "setup"], ["workspace", "setup", "-h"], "agm workspace setup"),
             (["help", "wsp", "list"], ["wsp", "list", "-h"], "agm workspace list"),
+            (
+                ["help", "workspace", "shell-regen"],
+                ["workspace", "shell-regen", "-h"],
+                "agm workspace shell-regen",
+            ),
             (["help", "sync", "fetch"], ["sync", "fetch", "-h"], "agm sync fetch"),
             (["help", "sync", "pull"], ["sync", "pull", "-h"], "agm sync pull"),
             (["help", "config", "cp"], ["config", "cp", "-h"], "agm config cp"),

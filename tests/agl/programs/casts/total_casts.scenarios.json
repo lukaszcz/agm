@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_values",
+      "params": {"n": 7, "flag": true, "ratio": 2.5},
+      "expect": {
+        "stdout": "7\ntrue\n2.5\n7\ntrue\n2.5\n\"42\"\n42\n7\n"
+      }
+    },
+    {
+      "name": "zero_and_false",
+      "params": {"n": 0, "flag": false, "ratio": 0.1},
+      "expect": {
+        "stdout": "0\nfalse\n0.1\n0\nfalse\n0.1\n\"42\"\n42\n0\n"
+      }
+    },
+    {
+      "name": "negative_int",
+      "params": {"n": -3, "flag": true, "ratio": 1.0},
+      "expect": {
+        "stdout": "-3\ntrue\n1\n-3\ntrue\n1.0\n\"42\"\n42\n-3\n"
+      }
+    }
+  ]
+}

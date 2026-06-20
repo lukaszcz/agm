@@ -23,6 +23,7 @@ from agm.agl.typecheck.types import (
     BUILTIN_PRELUDE_TYPES,
     AgentType,
     BoolType,
+    CastSpec,
     DecimalType,
     DictType,
     EnumType,
@@ -223,6 +224,7 @@ class CheckedProgram:
     warnings: tuple[Diagnostic, ...]
     type_env: TypeEnvironment
     function_signatures: dict[str, FunctionSignature]
+    cast_specs: dict[int, CastSpec]
 
 
 # ---------------------------------------------------------------------------

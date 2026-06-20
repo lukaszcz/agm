@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "valid_ints_and_valid_task_response",
+      "params": {"a": "5", "b": "7"},
+      "agents": {"planner": ["{\"title\": \"Write tests\", \"effort\": 3}"]},
+      "expect": {
+        "stdout": "5\n14\nWrite tests\n3\n",
+        "calls": {"planner": 1}
+      }
+    },
+    {
+      "name": "non_int_params_and_bad_task_response",
+      "params": {"a": "not-a-number", "b": "also-not"},
+      "agents": {"planner": ["{\"title_only\": \"partial\"}"]},
+      "expect": {
+        "stdout": "0\n0\ntask cast failed: text -> Task\n",
+        "calls": {"planner": 1}
+      }
+    },
+    {
+      "name": "zero_params_and_high_effort_task",
+      "params": {"a": "0", "b": "0"},
+      "agents": {"planner": ["{\"title\": \"Refactor\", \"effort\": 8}"]},
+      "expect": {
+        "stdout": "0\n0\nRefactor\n8\n",
+        "calls": {"planner": 1}
+      }
+    }
+  ]
+}

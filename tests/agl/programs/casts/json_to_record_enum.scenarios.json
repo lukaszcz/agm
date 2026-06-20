@@ -1,0 +1,44 @@
+{
+  "scenarios": [
+    {
+      "name": "valid_config_and_low_priority",
+      "params": {
+        "config_json": "{\"name\": \"prod\", \"timeout\": 30, \"retries\": 3}",
+        "priority_json": "{\"$case\": \"Low\"}"
+      },
+      "expect": {
+        "stdout": "prod\n30\n3\npriority: low\n"
+      }
+    },
+    {
+      "name": "missing_field_and_high_priority",
+      "params": {
+        "config_json": "{\"name\": \"dev\"}",
+        "priority_json": "{\"$case\": \"High\", \"reason\": \"urgent\"}"
+      },
+      "expect": {
+        "stdout": "config invalid: json -> Config\npriority: high (urgent)\n"
+      }
+    },
+    {
+      "name": "valid_config_and_bad_priority_json",
+      "params": {
+        "config_json": "{\"name\": \"staging\", \"timeout\": 10, \"retries\": 1}",
+        "priority_json": "{bad json}"
+      },
+      "expect": {
+        "stdout": "staging\n10\n1\npriority json error: {bad json}\n"
+      }
+    },
+    {
+      "name": "valid_config_and_unknown_priority_case",
+      "params": {
+        "config_json": "{\"name\": \"test\", \"timeout\": 5, \"retries\": 0}",
+        "priority_json": "{\"$case\": \"Critical\"}"
+      },
+      "expect": {
+        "stdout": "test\n5\n0\npriority invalid: json -> Priority\n"
+      }
+    }
+  ]
+}

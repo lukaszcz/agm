@@ -25,26 +25,15 @@ from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.eval.values import (
-    BoolValue,
-    DecimalValue,
-    DictValue,
-    EnumValue,
-    IntValue,
-    JsonValue,
-    ListValue,
-    RecordValue,
     TextValue,
     Value,
 )
+from agm.agl.runtime.convert import json_to_value, normalize_integral_decimals
 from agm.agl.runtime.request import ValidationError
 from agm.agl.runtime.schema import derive_schema
 from agm.agl.typecheck.types import (
-    BoolType,
-    DecimalType,
     DictType,
     EnumType,
-    IntType,
-    JsonType,
     ListType,
     RecordType,
     TextType,
@@ -380,131 +369,6 @@ def _extract_json_text(raw: str) -> str | None | object:
 # ---------------------------------------------------------------------------
 # JSON → Value conversion helpers
 # ---------------------------------------------------------------------------
-
-
-def _json_to_value(obj: object, typ: Type) -> Value:
-    """Convert a JSON-shaped Python object to the appropriate typed ``Value``.
-
-    ``obj`` is the result of ``json.loads(parse_float=Decimal)`` — it may be
-    ``dict``, ``list``, ``str``, ``int``, ``Decimal``, ``bool``, or ``None``.
-    ``Decimal`` is never converted to ``float`` (design §5.1).
-
-    Raises ``ValueError`` for type mismatches (the caller handles these).
-    """
-    if isinstance(typ, TextType):
-        if isinstance(obj, str):
-            return TextValue(obj)
-        raise ValueError(f"Expected string, got {type(obj).__name__}")
-
-    if isinstance(typ, IntType):
-        if isinstance(obj, bool):
-            raise ValueError("Expected integer, got bool")
-        if isinstance(obj, int):
-            return IntValue(obj)
-        # Integral Decimals are normalized to ``int`` before validation/conversion
-        # (see ``_normalize_integral_decimals``), so any Decimal reaching here is
-        # non-integral and rejected for an int target.
-        raise ValueError(f"Expected integer, got {type(obj).__name__} {obj!r}")
-
-    if isinstance(typ, DecimalType):
-        if isinstance(obj, bool):
-            raise ValueError("Expected decimal, got bool")
-        if isinstance(obj, Decimal):
-            return DecimalValue(obj)
-        if isinstance(obj, int):
-            return DecimalValue(Decimal(obj))
-        raise ValueError(f"Expected decimal, got {type(obj).__name__} {obj!r}")
-
-    if isinstance(typ, BoolType):
-        if isinstance(obj, bool):
-            return BoolValue(obj)
-        raise ValueError(f"Expected bool, got {type(obj).__name__}")
-
-    if isinstance(typ, JsonType):
-        # Accept any JSON-shaped value.
-        return JsonValue(obj)
-
-    if isinstance(typ, ListType):
-        if not isinstance(obj, list):
-            raise ValueError(f"Expected array, got {type(obj).__name__}")
-        elements = tuple(_json_to_value(e, typ.elem) for e in obj)
-        return ListValue(elements=elements)
-
-    if isinstance(typ, DictType):
-        if not isinstance(obj, dict):
-            raise ValueError(f"Expected object, got {type(obj).__name__}")
-        entries: dict[str, Value] = {}
-        for k, v in obj.items():
-            if not isinstance(k, str):
-                raise ValueError(f"Dict key must be string, got {type(k).__name__}")
-            entries[k] = _json_to_value(v, typ.value)
-        return DictValue(entries=entries)
-
-    if isinstance(typ, RecordType):
-        if not isinstance(obj, dict):
-            raise ValueError(f"Expected object for record, got {type(obj).__name__}")
-        fields: dict[str, Value] = {}
-        for field_name, field_type in typ.fields.items():
-            if field_name not in obj:
-                raise ValueError(f"Missing field {field_name!r}")
-            fields[field_name] = _json_to_value(obj[field_name], field_type)
-        return RecordValue(type_name=typ.name, fields=fields)
-
-    if isinstance(typ, EnumType):
-        if not isinstance(obj, dict):
-            raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
-        case_val = obj.get("$case")
-        if not isinstance(case_val, str):
-            raise ValueError("Enum object must have a string '$case' field")
-        variant_fields = typ.variants.get(case_val)
-        if variant_fields is None:
-            raise ValueError(
-                f"Unknown enum variant {case_val!r} for {typ.name!r}. "
-                f"Valid variants: {list(typ.variants.keys())}"
-            )
-        payload: dict[str, Value] = {}
-        for field_name, field_type in variant_fields.items():
-            if field_name not in obj:
-                raise ValueError(
-                    f"Enum variant {case_val!r} is missing field {field_name!r}"
-                )
-            payload[field_name] = _json_to_value(obj[field_name], field_type)
-        return EnumValue(type_name=typ.name, variant=case_val, fields=payload)
-
-    # ExceptionType is not wire-serialised by the JSON codec.
-    raise ValueError(f"Cannot deserialise type {typ!r} from JSON")
-
-
-# ---------------------------------------------------------------------------
-# Decimal normalization (F2) and validation-error mapping (F1)
-# ---------------------------------------------------------------------------
-
-
-def _normalize_integral_decimals(obj: object) -> object:
-    """Convert integral ``Decimal`` values to ``int`` throughout *obj*.
-
-    Walks the JSON-shaped tree produced by ``json.loads(parse_float=Decimal)``
-    and replaces any ``Decimal`` whose value is integral and lossless
-    (``d == int(d)``) with the equivalent ``int``.  This lets a wire value of
-    ``1.0`` satisfy an ``{"type": "integer"}`` schema; non-integral decimals
-    such as ``1.5`` are preserved and continue to fail integer targets.
-
-    Decimal targets re-widen ``int`` → ``Decimal`` via ``_json_to_value`` and a
-    ``json`` passthrough sees a JSON-equal value, so this is loss-free.
-    """
-    if isinstance(obj, bool):
-        return obj
-    if isinstance(obj, Decimal):
-        if obj == obj.to_integral_value():
-            return int(obj)
-        return obj
-    if isinstance(obj, list):
-        items: list[object] = obj
-        return [_normalize_integral_decimals(e) for e in items]
-    if isinstance(obj, dict):
-        mapping: dict[object, object] = obj
-        return {k: _normalize_integral_decimals(v) for k, v in mapping.items()}
-    return obj
 
 
 def _missing_required_field(error: JsonschemaValidationError) -> str | None:
@@ -863,9 +727,9 @@ class JsonCodec:
         """Validate *parsed_obj* against *schema*, then convert to typed Value."""
         # F2: normalize integral Decimals to int before validation so that e.g.
         # ``1.0`` satisfies ``{"type": "integer"}`` (and decimal targets re-widen
-        # via the int→Decimal path in ``_json_to_value``).  ``1.5`` is left as a
+        # via the int→Decimal path in ``json_to_value``).  ``1.5`` is left as a
         # Decimal and still fails integer targets.
-        normalized_obj = _normalize_integral_decimals(parsed_obj)
+        normalized_obj = normalize_integral_decimals(parsed_obj)
 
         # Schema validation (always strict — design §2.8 rules 3–6).  The
         # recovered/normalized JSON text is threaded through validation-failure
@@ -882,7 +746,7 @@ class JsonCodec:
 
         # Convert to typed Value.
         try:
-            value = _json_to_value(normalized_obj, target_type)
+            value = json_to_value(normalized_obj, target_type)
         except ValueError as exc:
             return ParseResult.failure(
                 f"Value conversion failed: {exc}", normalized_raw=json_text

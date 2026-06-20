@@ -1,0 +1,41 @@
+# json → record and json → enum casts: parse a JSON blob with parse_json, then
+# validate it into a typed structure using `as`.  Covers both successful
+# validation and caught CastError when the JSON does not match the schema.
+record Config
+  name: text
+  timeout: int
+  retries: int
+
+enum Priority
+  | Low
+  | High(reason: text)
+
+param config_json
+param priority_json
+
+# json → record: parse_json + cast
+try
+  let j = parse_json(config_json)
+  let cfg = j as Config
+  print cfg.name
+  print cfg.timeout
+  print cfg.retries
+catch CastError as e =>
+  print "config invalid: ${e.source_type} -> ${e.target_type}"
+catch JsonParseError as e =>
+  print "config json error: ${e.raw}"
+
+# json → enum: parse_json + cast
+try
+  let p_json = parse_json(priority_json)
+  let p = p_json as Priority
+  if p is Low =>
+    print "priority: low"
+  else =>
+    case p of
+      | High(reason) => print "priority: high (${reason})"
+      | Low          => ()
+catch CastError as e =>
+  print "priority invalid: ${e.source_type} -> ${e.target_type}"
+catch JsonParseError as e =>
+  print "priority json error: ${e.raw}"

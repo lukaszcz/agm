@@ -15,14 +15,12 @@ import agm.commands.dep.list as dep_list_command
 import agm.commands.dep.new as dep_new_command
 import agm.commands.dep.remove as dep_remove_command
 import agm.commands.dep.switch as dep_switch_command
-import agm.commands.exec as exec_command
 import agm.commands.init as init_command
 import agm.commands.loop.run as loop_command
 import agm.commands.loop.run as loop_run_command
 import agm.commands.loop.select as loop_select_command
 import agm.commands.loop.step as loop_step_command
 import agm.commands.refine as refine_command
-import agm.commands.repl as repl_command
 import agm.commands.review as review_command
 import agm.commands.revise as revise_command
 import agm.commands.run as run_command
@@ -35,6 +33,7 @@ import agm.commands.workspace.close as workspace_close_command
 import agm.commands.workspace.list as workspace_list_command
 import agm.commands.workspace.open as workspace_open_command
 import agm.commands.workspace.setup as workspace_setup_command
+import agm.commands.workspace.shell_regen as workspace_shell_regen_command
 import agm.commands.worktree.new as worktree_new_command
 import agm.commands.worktree.remove as worktree_remove_command
 from agm import completion
@@ -911,6 +910,23 @@ def workspace_list(
     workspace_list_command.run(verbose=verbose)
 
 
+@workspace_app.command(name="shell-regen")
+def workspace_shell_regen(
+    shell_dir: str | None = typer.Argument(
+        None, metavar="SHELL_DIR", help="Per-session shell directory to regenerate."
+    ),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    workspace_shell_regen_command.run(
+        shell_dir=_require_value(
+            shell_dir, command_path=["workspace", "shell-regen"], name="shell_dir"
+        )
+    )
+
+
 @worktree_app.callback(invoke_without_command=True)
 def worktree_callback(
     ctx: typer.Context,
@@ -1073,6 +1089,10 @@ def exec_cmd(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
         )
     _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
+    # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
+    # would otherwise slow every non-AgL ``agm`` invocation's startup.
+    import agm.commands.exec as exec_command
+
     exec_command.run(
         ExecArgs(
             file=file,
@@ -1141,6 +1161,10 @@ def repl_cmd(
     del _help
     del _dry_run
     _check_log_flags_exclusive("repl", no_log=no_log, log=log, log_file=log_file)
+    # Imported lazily: pulls in the AgL DSL (runtime, repl console), which would
+    # otherwise slow every non-AgL ``agm`` invocation's startup.
+    import agm.commands.repl as repl_command
+
     repl_command.run(
         ReplArgs(
             strict_json=strict_json,

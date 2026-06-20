@@ -963,6 +963,27 @@ class AstBuilder(Transformer):
         return self._binary(meta, args, syntax.BinOp.DIV)
 
     # ------------------------------------------------------------------
+    # Cast operators (as / as?)
+    # ------------------------------------------------------------------
+
+    def _make_cast(self, meta: Meta, args: _Args, *, test_only: bool) -> syntax.Cast:
+        return syntax.Cast(
+            expr=cast(syntax.Expr, args[0]),
+            target_type=_find_type_expr(args[1:]),
+            test_only=test_only,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def cast_expr(self, meta: Meta, args: _Args) -> syntax.Cast:
+        """cast: cast "as" type_expr -> cast_expr"""
+        return self._make_cast(meta, args, test_only=False)
+
+    def cast_test(self, meta: Meta, args: _Args) -> syntax.Cast:
+        """cast: cast AS_QUESTION type_expr -> cast_test"""
+        return self._make_cast(meta, args, test_only=True)
+
+    # ------------------------------------------------------------------
     # Unary operators
     # ------------------------------------------------------------------
 

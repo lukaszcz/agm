@@ -2103,3 +2103,64 @@ class TestCaseNeutralNames:
         result = tok("agent")
         types = [t for t, _ in result]
         assert "NAME" not in types
+
+
+# ---------------------------------------------------------------------------
+# as? keyword tests (M1: cast operator)
+# ---------------------------------------------------------------------------
+
+
+class TestAsQuestionKeyword:
+    """Tests for the `as?` convertibility-test keyword token."""
+
+    def test_as_question_is_keyword(self) -> None:
+        # `as?` is a reserved keyword; raw scanner emits it as type "as?"
+        result = tok("as?")
+        assert result == [("as?", "as?")]
+
+    def test_as_remains_keyword(self) -> None:
+        # `as` alone stays as its existing keyword token type
+        result = tok("as")
+        assert result == [("as", "as")]
+
+    def test_as_question_parser_token(self) -> None:
+        # The parser-facing lex() remaps "as?" to "AS_QUESTION"
+        result = lark_tok("as?")
+        assert result == [("AS_QUESTION", "as?")]
+
+    def test_as_parser_token(self) -> None:
+        # The parser-facing lex() remaps "as" to "AS"
+        result = lark_tok("as")
+        assert result == [("AS", "as")]
+
+    def test_ask_question_stays_name(self) -> None:
+        # `ask?` is NOT a keyword — it stays NAME
+        result = tok("ask?")
+        assert result == [("NAME", "ask?")]
+
+    def test_other_question_suffix_stays_name(self) -> None:
+        # Other ?-suffixed identifiers are not keywords
+        for word in ["done?", "valid?", "empty?"]:
+            result = tok(word)
+            assert result == [("NAME", word)], f"expected NAME for {word!r}"
+
+    def test_as_space_question_is_not_as_question(self) -> None:
+        # `as ?` (spaced) is NOT the test operator: only the contiguous lexeme
+        # `as?` is the keyword. With a space, `as` scans as the keyword and the
+        # lone `?` cannot start an identifier, so the scanner errors.
+        with pytest.raises(LexError):
+            tok("as ?")
+        # And `as` followed by an ordinary word stays the keyword, not `as?`.
+        assert lark_tok("as x") == [("AS", "as"), ("NAME", "x")]
+
+    def test_as_question_in_context(self) -> None:
+        # In a real expression context
+        result = tok("x as? int")
+        assert ("as?", "as?") in result
+        assert ("NAME", "x") in result
+        assert ("NAME", "int") in result
+
+    def test_as_in_context(self) -> None:
+        # `as` in a cast context
+        result = tok("x as text")
+        assert ("as", "as") in result

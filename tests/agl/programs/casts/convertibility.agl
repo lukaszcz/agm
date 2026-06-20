@@ -1,0 +1,24 @@
+# `as?` convertibility test (D7/D8): yields bool without raising.  Used here
+# to drive if/else branching — the same pattern a caller would use before
+# committing to a potentially-failing cast.
+param user_input
+param d: decimal
+
+# Check if the text is a valid int before using it
+if user_input as? int =>
+  let n = user_input as int
+  print "got int: ${n}"
+  print "squared: ${(n * n) as text}"
+else =>
+  print "not an int: ${user_input}"
+
+# Check if a decimal can be narrowed to int
+if d as? int =>
+  let i = d as int
+  print "decimal is integral: ${i}"
+else =>
+  print "decimal has fraction: ${d as text}"
+
+# as? on a total cast is always true (D8)
+let always_true = 42 as? text
+print always_true

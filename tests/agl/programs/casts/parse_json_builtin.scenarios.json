@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "parse_integer_string",
+      "params": {"raw": "42"},
+      "expect": {
+        "stdout": "\"42\"\n42\n"
+      }
+    },
+    {
+      "name": "parse_array",
+      "params": {"raw": "[1, 2, 3]"},
+      "expect": {
+        "stdout_contains": ["\"[1, 2, 3]\"", "1", "2", "3"]
+      }
+    },
+    {
+      "name": "parse_boolean",
+      "params": {"raw": "true"},
+      "expect": {
+        "stdout": "\"true\"\ntrue\n"
+      }
+    },
+    {
+      "name": "malformed_object_raises_json_parse_error",
+      "params": {"raw": "{bad json}"},
+      "expect": {
+        "stdout": "\"{bad json}\"\nparse error\n{bad json}\nhas_message: true\nhas_trace_id: true\n"
+      }
+    },
+    {
+      "name": "non_json_text_raises_json_parse_error",
+      "params": {"raw": "not json at all"},
+      "expect": {
+        "stdout": "\"not json at all\"\nparse error\nnot json at all\nhas_message: true\nhas_trace_id: true\n"
+      }
+    }
+  ]
+}

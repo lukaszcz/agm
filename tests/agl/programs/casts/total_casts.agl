@@ -1,0 +1,35 @@
+# Total casts: `as text` (any renderable value → text) and `as json` (any
+# JSON-shaped value → json) never fail at runtime.  Also demonstrates the
+# important contrast between `"42" as json` (embeds text as a JSON string) and
+# `parse_json("42")` (parses the text and yields the JSON number 42).
+param n: int
+param flag: bool
+param ratio: decimal
+
+# int / bool / decimal → text
+let n_text   = n     as text
+let b_text   = flag  as text
+let d_text   = ratio as text
+print n_text
+print b_text
+print d_text
+
+# int / bool / decimal → json
+let n_json   = n     as json
+let b_json   = flag  as json
+let d_json   = ratio as json
+print n_json
+print b_json
+print d_json
+
+# text → json embeds the text as a JSON string (D9: total, no parse)
+let embedded = "42" as json
+print embedded
+
+# parse_json parses the text and returns the number 42 (not a string)
+let parsed   = parse_json("42")
+print parsed
+
+# Chained: int as json as text renders the JSON representation
+let chained  = n as json as text
+print chained

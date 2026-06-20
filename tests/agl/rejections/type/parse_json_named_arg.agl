@@ -1,0 +1,1 @@
+let j = parse_json("42", foo: "bar")

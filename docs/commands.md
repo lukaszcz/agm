@@ -22,10 +22,12 @@ Global options:
 | `agm workspace close [-f\|--force] [-D] BRANCH` | Remove a branch workspace and close its tmux session |
 | `agm workspace list [-v\|--verbose]` | List all open AGM workspaces |
 | `agm workspace setup` | Run setup scripts for the current workspace |
+| `agm workspace shell-regen SHELL_DIR` | Regenerate the per-session shell wrapper and rc files in `SHELL_DIR` |
 | `agm wsp open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Alias form of `agm workspace open` |
 | `agm wsp close [-f\|--force] [-D] BRANCH` | Alias form of `agm workspace close` |
 | `agm wsp list [-v\|--verbose]` | Alias form of `agm workspace list` |
 | `agm wsp setup` | Alias form of `agm workspace setup` |
+| `agm wsp shell-regen SHELL_DIR` | Alias form of `agm workspace shell-regen` |
 | `agm init [--embedded \| --split] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git]` | Initialize the current directory without cloning a repo |
 | `agm init [--embedded \| --split] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
 | `agm init [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
@@ -80,6 +82,13 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 1. project-level `config/setup.sh`
 2. workspace-local `.config/setup.sh`
 3. workspace-local `.setup.sh`
+
+`agm workspace open` session shell:
+
+- each workspace tmux session runs the user's real interactive shell (`zsh`/`bash`/`sh`) through a small wrapper that first sources `~/.zshrc`/`~/.bashrc`/`~/.shrc` (so keybindings, prompts, completions and aliases are preserved) and then appends `eval "$(agm config env)"` so the workspace environment wins over the user's rc
+- the wrapper and its rc files live under `$XDG_CACHE_HOME/agm/shell/<key>/` (defaulting to `~/.cache/agm/shell/<key>/`), keyed by session name; nothing is written under the project's `.agent-files/`
+- `agm workspace open` recreates the per-session dir fresh (cleaning any stale files); `agm workspace close` removes it
+- `agm workspace shell-regen SHELL_DIR` rewrites the wrapper and rc files into an existing per-session dir (used for manual recovery)
 
 `agm init` options:
 

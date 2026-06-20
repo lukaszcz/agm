@@ -356,6 +356,102 @@ Typing is exact nominal matching with **one** implicit coercion:
    have the *same* type after rule 1.
 5. All branches of a `case` expression must have the same type after rule 1.
 
+For explicit, user-requested conversions between types, see
+[Casts and convertibility](#casts-and-convertibility) below.
+
+## Casts and convertibility
+
+AgL provides two cast operators:
+
+- **`EXPR as T`** — converts the value of `EXPR` to type `T`. If the
+  conversion cannot succeed at runtime it raises `CastError`
+  ([Exceptions](exceptions.md)).
+- **`EXPR as? T`** — tests whether the value of `EXPR` is convertible to `T`
+  without actually performing the conversion. Always yields `bool`; never
+  raises. Equivalent to asking whether `EXPR as T` would succeed.
+
+The target type `T` is a type expression written the same way as any other
+type annotation (`int`, `list[text]`, `MyRecord`, etc.).
+
+Both operators are left-associative and sit at a precedence level between
+unary `-` and `* /`. See [Lexical structure](lexical-structure.md) and
+[Expressions](expressions.md) for the full precedence table and examples.
+
+### Conversion matrix
+
+The table below defines every permitted and rejected source–target pair.
+**Static cast error** means the combination is rejected before the program
+runs; these are never runtime failures. **Total** conversions always succeed
+at runtime; **fallible** ones may raise `CastError`.
+
+| Target type | Permitted source types | Outcome |
+| ----------- | ---------------------- | ------- |
+| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `list[E]`, `dict[text,V]`, record, enum) | total — renders the value to its text representation |
+| `json` | `text`, `json`, `bool`, `int`, `decimal`, `list[E]`, `dict[text,V]` | total — canonicalizes the value to `json` |
+| `bool` | `bool` | total (no-op) |
+| `bool` | `text`, `json` | fallible — value must be a JSON boolean |
+| `int` | `int` | total (no-op) |
+| `int` | `decimal` | fallible — decimal must have no fractional part |
+| `int` | `text`, `json` | fallible — value must be an integral number |
+| `decimal` | `decimal` | total (no-op) |
+| `decimal` | `int` | total (widening, same as the implicit coercion) |
+| `decimal` | `text`, `json` | fallible — value must be a number |
+| `list[E]` | identical `list[E]` | total (no-op) |
+| `list[E]` | `text`, `json` | fallible — strict JSON parse then element validation |
+| `dict[text,V]` | identical `dict[text,V]` | total (no-op) |
+| `dict[text,V]` | `text`, `json` | fallible — strict JSON parse then value validation |
+| record `R` | same record `R` | total (no-op) |
+| record `R` | `text`, `json` | fallible — strict JSON parse then field validation |
+| enum `E` | same enum `E` | total (no-op) |
+| enum `E` | `text`, `json` | fallible — strict JSON parse then variant validation |
+| `record` or `enum` | `json` | **static cast error** — records and enums are not JSON-shaped |
+| any type | `unit`, `agent`, function type | **static cast error** |
+| `unit`, `agent`, function type | any type | **static cast error** |
+
+Any source–target combination not listed above is a static cast error. In
+particular: `bool as int`, `int as bool`, `bool as decimal`, `decimal as bool`
+are all static errors — booleans never convert to or from numbers.
+
+### Total vs fallible casts
+
+A **total** cast is guaranteed to succeed at runtime; it never raises and has
+no runtime cost beyond the conversion itself. Redundant total casts (casting
+a value to its own type, or `int as decimal`) are accepted and are no-ops;
+no warning is emitted.
+
+A **fallible** cast may raise `CastError` if the value does not conform to
+the target type. The `as?` form lets you probe convertibility without
+handling an exception:
+
+```agl
+let ok: bool = some_json as? int   # true if the value is an integral number
+```
+
+### Strict parsing in text and json casts
+
+When the source type is `text` or `json` and the target is a type that
+requires structure (`bool`, `int`, `decimal`, list, dict, record, or enum),
+the cast parses the text (or validates the JSON tree) using **strict JSON
+parsing**: the input must be exactly one well-formed JSON value with no
+surrounding prose, no Markdown fences, and no recovery. This contrasts with
+agent-output parsing, which uses lenient recovery by default.
+
+### `decimal as int` integrality
+
+`decimal as int` succeeds only when the decimal value has no fractional part:
+`3.0 as int` yields `3`, while `3.5 as int` raises `CastError`.
+
+### `text as json` — embedding, not parsing
+
+Because `text` is already JSON-shaped, `"42" as json` produces the JSON
+**string** `"42"` — it wraps the text in JSON representation and does not
+interpret it as a JSON value. This is a total, no-parse cast.
+
+To parse the *contents* of a text as JSON, use the built-in
+**`parse_json`** function ([Expressions](expressions.md)). `parse_json("42")`
+produces the JSON number `42` and raises `JsonParseError`
+([Exceptions](exceptions.md)) on malformed input.
+
 ## Values and equality
 
 Every **data** type has full value equality (`=` / `!=`):

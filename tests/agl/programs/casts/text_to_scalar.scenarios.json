@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "all_valid_inputs",
+      "params": {"int_str": "42", "bool_str": "true", "dec_str": "3.14"},
+      "expect": {
+        "stdout": "int: 42\ndoubled: 84\nbool: true\ndecimal: 3.14\n"
+      }
+    },
+    {
+      "name": "all_invalid_inputs",
+      "params": {"int_str": "42 apples", "bool_str": "yes", "dec_str": "2.5"},
+      "expect": {
+        "stdout": "int cast failed\ntext\nint\n42 apples\nbool cast failed: yes\ndecimal: 2.5\n"
+      }
+    },
+    {
+      "name": "negative_int_and_false",
+      "params": {"int_str": "-7", "bool_str": "false", "dec_str": "0.5"},
+      "expect": {
+        "stdout": "int: -7\ndoubled: -14\nbool: false\ndecimal: 0.5\n"
+      }
+    },
+    {
+      "name": "non_numeric_decimal_fails",
+      "params": {"int_str": "10", "bool_str": "true", "dec_str": "not-a-number"},
+      "expect": {
+        "stdout": "int: 10\ndoubled: 20\nbool: true\ndecimal cast failed: not-a-number\n"
+      }
+    }
+  ]
+}

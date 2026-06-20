@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "int_branch_taken_integral_decimal",
+      "params": {"user_input": "99", "d": 4.0},
+      "expect": {
+        "stdout": "got int: 99\nsquared: 9801\ndecimal is integral: 4\ntrue\n"
+      }
+    },
+    {
+      "name": "else_branch_taken_fractional_decimal",
+      "params": {"user_input": "hello", "d": 2.5},
+      "expect": {
+        "stdout": "not an int: hello\ndecimal has fraction: 2.5\ntrue\n"
+      }
+    },
+    {
+      "name": "zero_int_and_zero_decimal",
+      "params": {"user_input": "0", "d": 0.0},
+      "expect": {
+        "stdout": "got int: 0\nsquared: 0\ndecimal is integral: 0\ntrue\n"
+      }
+    },
+    {
+      "name": "valid_int_but_fractional_decimal",
+      "params": {"user_input": "5", "d": 1.5},
+      "expect": {
+        "stdout": "got int: 5\nsquared: 25\ndecimal has fraction: 1.5\ntrue\n"
+      }
+    }
+  ]
+}

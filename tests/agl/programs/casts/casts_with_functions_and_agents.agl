@@ -1,0 +1,35 @@
+# Casts inside user-defined function bodies and with agent-supplied text.
+# Demonstrates: `as?` inside a def, cast in a recursive helper, and casting
+# an agent's text response to a typed record.
+record Task
+  title: text
+  effort: int
+
+agent planner
+
+# A helper that converts a text to int, returning 0 on failure
+def parse_int_or_zero(s: text) -> int =
+  if s as? int =>
+    s as int
+  else =>
+    0
+
+# A helper that doubles a numeric text value
+def double_text_int(s: text) -> text =
+  let n = parse_int_or_zero(s)
+  (n * 2) as text
+
+param a
+param b
+
+print(parse_int_or_zero(a))
+print(double_text_int(b))
+
+# Agent supplies a JSON text; cast it to a record
+try
+  let raw: text = ask("Return a task.", agent: planner)
+  let task = raw as Task
+  print task.title
+  print task.effort
+catch CastError as e =>
+  print "task cast failed: ${e.source_type} -> ${e.target_type}"

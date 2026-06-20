@@ -18,4 +18,4 @@ The AgL reference documentation is in `docs/agl/reference/`. This reference is w
 
 ## Testing
 
-Whenever you add a new language feature, create end-to-end test program examples under `tests/agl/programs/` exercising this feature thoroughly (in combination with other language features).
+Whenever you add a new language feature, create end-to-end test program examples under `tests/agl/programs/` exercising this feature thoroughly (in combination with other language features). Follow TDD - add end-to-end test program examples as the FIRST step before any other implementation work.

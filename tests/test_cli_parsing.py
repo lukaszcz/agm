@@ -173,6 +173,34 @@ class TestWorkspace:
         assert result.exit_code == 0
         assert calls == [False]
 
+    def test_workspace_shell_regen(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        def record(*, shell_dir: str) -> None:
+            calls.append(shell_dir)
+
+        monkeypatch.setattr(cli.workspace_shell_regen_command, "run", record)
+        result = invoke(runner, ["workspace", "shell-regen", "/tmp/agm-shell-dir"])
+
+        assert result.exit_code == 0
+        assert calls == ["/tmp/agm-shell-dir"]
+
+    def test_wsp_shell_regen(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        def record(*, shell_dir: str) -> None:
+            calls.append(shell_dir)
+
+        monkeypatch.setattr(cli.workspace_shell_regen_command, "run", record)
+        result = invoke(runner, ["wsp", "shell-regen", "/tmp/agm-shell-dir"])
+
+        assert result.exit_code == 0
+        assert calls == ["/tmp/agm-shell-dir"]
+
     def test_wsp_list_verbose(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:

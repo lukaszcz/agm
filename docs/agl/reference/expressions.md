@@ -287,6 +287,48 @@ print res.stdout                       # field-access chain as sugar arg
 `print` cannot be bound as a function value (`let f = print` is a static
 error, because `print`'s type is not yet fully expressible in v1).
 
+## `parse_json`
+
+`parse_json` is a built-in function that parses a `text` value as a strict
+JSON document and returns the resulting `json` value:
+
+```text
+parse_json(input: text) -> json
+```
+
+It uses **strict JSON parsing**: the input must be exactly one well-formed
+JSON value with nothing but surrounding whitespace — no Markdown fences, no
+prose, no repair. On success it returns the parsed JSON tree. On failure it
+raises a catchable `JsonParseError` ([Exceptions](exceptions.md)).
+
+```agl
+let v: json = parse_json('{"key": 42}')   # json dict
+let n: json = parse_json("42")             # json number 42
+let b: json = parse_json("true")           # json boolean true
+
+# parse_json("42") ≠ "42" as json — the former parses; the latter embeds
+let embedded: json = "42" as json     # the JSON string "42" (wraps text)
+let parsed: json   = parse_json("42") # the JSON number 42 (interprets text)
+```
+
+**Contrast with `text as json`.** Because `text` is already JSON-shaped,
+`"42" as json` wraps the text in JSON representation — it yields the JSON
+**string** `"42"`. `parse_json("42")` instead interprets the characters of
+the text and yields the JSON **number** `42`. Use `parse_json` when you have
+a text value that contains serialized JSON and you want to traverse or
+validate its structure.
+
+```agl
+try
+  let data: json = parse_json(raw_output)
+  # use data...
+catch JsonParseError as e =>
+  print "Malformed JSON: ${e.raw}"
+```
+
+`parse_json` cannot be bound as a function value (`let f = parse_json` is a
+static error, because `parse_json`'s type is not yet fully expressible in v1).
+
 ## Operators
 
 ### Equality: `=` and `!=`
@@ -322,6 +364,57 @@ issue in issues          # element membership:  issues: list[T]
 ### Boolean: `and`, `or`, `not`
 
 Operands must be `bool`. `and` and `or` short-circuit.
+
+### Casts: `as` and `as?`
+
+```agl
+EXPR as T     # cast: convert EXPR to type T
+EXPR as? T    # convertibility test: bool, never raises
+```
+
+`as` converts the value to the named type; `as?` tests whether the
+conversion would succeed. The full conversion matrix and semantics are in
+[Types](types.md#casts-and-convertibility).
+
+**Precedence.** Cast operators sit between unary `-` (tighter) and `* /`
+(looser). They are **left-associative**:
+
+| Expression | Parsed as |
+| ---------- | --------- |
+| `-1 as text` | `(-1) as text` — unary minus binds tighter |
+| `2 * 3 as text` | `2 * (3 as text)` — `*` is looser than cast |
+| `1 + 2 as text` | `1 + (2 as text)` — `+` is looser than cast |
+| `f x as int` | `(f x) as int` — application binds tighter |
+| `x as json as text` | `(x as json) as text` — left-associative |
+| `a as? int and b` | `(a as? int) and b` — `and` is looser than cast |
+
+**`as?` is a single token**: the `?` is part of the keyword and must be
+adjacent to `as` (no whitespace). `as` and `as?` are always reserved
+keywords — they cannot be used as variable names.
+
+Examples:
+
+```agl
+let n: int = raw_value as int          # raises CastError if not an int
+let ok: bool = raw_value as? int       # true when cast would succeed
+
+let s: text = some_int as text         # total — always succeeds
+let j: json = my_record.count as json  # total — int is JSON-shaped
+
+# left-associativity chains
+let t: text = some_int as json as text   # (some_int as json) as text
+
+# convertibility test without exception handling
+if count_json as? int =>
+  let n: int = count_json as int
+  print n
+```
+
+A `text` cast from a fallible source reads the value and formats it as text;
+it is always total regardless of the source type (any data value has a text
+rendering). For structured source types (`bool`, `int`, `list`, records …)
+`as text` produces the same JSON-object or scalar text that `print` would
+render.
 
 ### Variant tests: `is`, `is not`
 

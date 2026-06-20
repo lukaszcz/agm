@@ -52,6 +52,7 @@ class BuiltinKind(enum.Enum):
     EXEC = "EXEC"
     ASK = "ASK"
     ASK_REQUEST = "ASK_REQUEST"
+    PARSE_JSON = "PARSE_JSON"
 
 
 # The single source of truth for the built-in call names and their kinds.
@@ -62,6 +63,7 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "exec": BuiltinKind.EXEC,
     "ask": BuiltinKind.ASK,
     "ask-request": BuiltinKind.ASK_REQUEST,
+    "parse_json": BuiltinKind.PARSE_JSON,
 }
 
 

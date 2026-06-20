@@ -1,0 +1,33 @@
+# Fallible casts from text to scalar types.  The same program exercises:
+#   - text → int   (success and caught CastError)
+#   - text → bool  (success and caught CastError)
+#   - text → decimal (success)
+# Casts use STRICT JSON parsing: "42 apples" is not a valid int cast.
+param int_str
+param bool_str
+param dec_str
+
+# text → int: may raise CastError when the text is not an exact JSON integer
+try
+  let n = int_str as int
+  print "int: ${n}"
+  print "doubled: ${n * 2}"
+catch CastError as e =>
+  print "int cast failed"
+  print e.source_type
+  print e.target_type
+  print e.raw
+
+# text → bool: only "true" or "false" (strict JSON)
+try
+  let b = bool_str as bool
+  print "bool: ${b as text}"
+catch CastError as e =>
+  print "bool cast failed: ${e.raw}"
+
+# text → decimal
+try
+  let d = dec_str as decimal
+  print "decimal: ${d as text}"
+catch CastError as e =>
+  print "decimal cast failed: ${e.raw}"

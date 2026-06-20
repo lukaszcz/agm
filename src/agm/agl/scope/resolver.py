@@ -57,6 +57,7 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     Call,
     Case,
+    Cast,
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
@@ -949,6 +950,8 @@ class _Resolver:
         elif isinstance(expr, UnaryNeg):
             self._resolve_expr(expr.operand)
         elif isinstance(expr, IsTest):
+            self._resolve_expr(expr.expr)
+        elif isinstance(expr, Cast):
             self._resolve_expr(expr.expr)
         elif isinstance(expr, ListLit):
             for elem in expr.elements:

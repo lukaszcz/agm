@@ -44,6 +44,7 @@ from agm.agl.syntax import (
     Call,
     Case,
     CaseBranch,
+    Cast,
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
@@ -2105,3 +2106,126 @@ class TestCaseNeutralPatterns:
         assert pat.name == "some"
         assert len(pat.fields) == 1
         assert pat.fields[0].name == "value"
+
+
+# ---------------------------------------------------------------------------
+# Cast expression tests (M1)
+# ---------------------------------------------------------------------------
+
+
+class TestCastParsing:
+    """Tests for `as` (cast) and `as?` (convertibility test) operator parsing.
+
+    Precedence (D5): unary(-) > [cast] > * / > + -
+    So:
+      -1 as text     = (-1) as text       (unary binds tighter)
+      2 * 3 as text  = 2 * (3 as text)    (cast binds tighter than *)
+      1 + 2 as text  = 1 + (2 as text)    (cast binds tighter than +)
+      f x as int     = (f x) as int        (juxt binds tighter than cast)
+    Left-associative chaining:
+      x as json as text = (x as json) as text
+    as? precedence:
+      a as? int and b = (a as? int) and b  (cast > and)
+    """
+
+    def _cast(self, src: str) -> Cast:
+        """Parse a single top-level expression and assert it is a Cast node."""
+        prog = parse(src)
+        expr = first(prog)
+        assert isinstance(expr, Cast), f"expected Cast, got {type(expr).__name__}: {src!r}"
+        return expr
+
+    def test_simple_as_cast(self) -> None:
+        node = self._cast("x as text")
+        assert isinstance(node.expr, VarRef)
+        assert node.expr.name == "x"
+        assert isinstance(node.target_type, TextT)
+        assert node.test_only is False
+
+    def test_simple_as_question_test(self) -> None:
+        node = self._cast("x as? int")
+        assert isinstance(node.expr, VarRef)
+        assert node.expr.name == "x"
+        assert isinstance(node.target_type, IntT)
+        assert node.test_only is True
+
+    def test_unary_neg_binds_tighter_than_cast(self) -> None:
+        # -1 as text  =>  (-1) as text
+        node = self._cast("-1 as text")
+        assert isinstance(node.expr, UnaryNeg)
+        inner = node.expr.operand
+        assert isinstance(inner, IntLit)
+        assert inner.value == 1
+        assert isinstance(node.target_type, TextT)
+        assert node.test_only is False
+
+    def test_cast_binds_tighter_than_multiply(self) -> None:
+        # 2 * 3 as text  =>  2 * (3 as text)
+        prog = parse("2 * 3 as text")
+        expr = first(prog)
+        assert isinstance(expr, BinaryOp)
+        assert expr.op == BinOp.MUL
+        assert isinstance(expr.left, IntLit)
+        assert expr.left.value == 2
+        assert isinstance(expr.right, Cast)
+        assert isinstance(expr.right.expr, IntLit)
+        assert expr.right.expr.value == 3
+
+    def test_cast_binds_tighter_than_additive(self) -> None:
+        # 1 + 2 as text  =>  1 + (2 as text)
+        prog = parse("1 + 2 as text")
+        expr = first(prog)
+        assert isinstance(expr, BinaryOp)
+        assert expr.op == BinOp.ADD
+        assert isinstance(expr.left, IntLit)
+        assert expr.left.value == 1
+        assert isinstance(expr.right, Cast)
+        assert isinstance(expr.right.expr, IntLit)
+        assert expr.right.expr.value == 2
+
+    def test_juxt_binds_tighter_than_cast(self) -> None:
+        # f x as int  =>  (f x) as int  (juxt is tighter)
+        node = self._cast("f x as int")
+        assert isinstance(node.expr, Call)
+        callee = node.expr.callee
+        assert isinstance(callee, VarRef)
+        assert callee.name == "f"
+        assert isinstance(node.target_type, IntT)
+
+    def test_cast_left_associative_chaining(self) -> None:
+        # x as json as text  =>  (x as json) as text
+        outer = self._cast("x as json as text")
+        assert isinstance(outer.target_type, TextT)
+        inner = outer.expr
+        assert isinstance(inner, Cast)
+        assert isinstance(inner.target_type, JsonT)
+        assert isinstance(inner.expr, VarRef)
+
+    def test_as_question_left_associative(self) -> None:
+        # a as? int and b  =>  (a as? int) and b
+        prog = parse("a as? int and b")
+        expr = first(prog)
+        assert isinstance(expr, BinaryOp)
+        assert expr.op == BinOp.AND
+        assert isinstance(expr.left, Cast)
+        assert expr.left.test_only is True
+
+    def test_cast_with_named_type(self) -> None:
+        node = self._cast("x as MyType")
+        assert isinstance(node.target_type, NameT)
+        assert node.target_type.name == "MyType"
+
+    def test_cast_result_type_bool(self) -> None:
+        node = self._cast("val as? bool")
+        assert node.test_only is True
+        assert isinstance(node.target_type, BoolT)
+
+    def test_cast_with_decimal_type(self) -> None:
+        node = self._cast("x as decimal")
+        assert isinstance(node.target_type, DecimalT)
+        assert node.test_only is False
+
+    def test_as_missing_type_raises(self) -> None:
+        """Bare `as` with no type raises AglSyntaxError (EOF or newline)."""
+        with pytest.raises(AglSyntaxError):
+            parse("x as")

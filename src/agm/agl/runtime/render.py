@@ -26,14 +26,12 @@ Per-kind rules:
 - enum   → ``TypeName.Variant(f1: v1, ...)``; nullary variant → ``TypeName.Variant``
 - exception                            → ``TypeName(f1: v1, ...)`` all fields incl. ``trace_id``
 
-A ``TypeLookup`` is required for nominal values (record, enum, exception) to
-emit fields in declaration order.  The caller must supply it; absence is an
-internal invariant error.  ``TypeEnvironment`` satisfies the protocol structurally.
+Nominal values (record, enum, exception) carry their fields in declaration
+order already — the interpreter normalizes them at construction time — so the
+renderer simply walks ``value.fields`` and needs no type information.
 """
 
 from __future__ import annotations
-
-from typing import Protocol
 
 from agm.agl.eval.values import (
     AgentValue,
@@ -52,23 +50,6 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
-from agm.agl.typecheck.types import EnumType, ExceptionType, RecordType, Type
-
-# ---------------------------------------------------------------------------
-# TypeLookup protocol
-# ---------------------------------------------------------------------------
-
-
-class TypeLookup(Protocol):
-    """Read-only protocol for resolving a type name to its semantic ``Type``.
-
-    ``TypeEnvironment`` satisfies this protocol structurally.  The REPL
-    exposes a read-only facade backed by its persistent environment so
-    presentation code cannot mutate session typing state.
-    """
-
-    def get_type(self, name: str) -> Type | None: ...
-
 
 # ---------------------------------------------------------------------------
 # Escape mapping for _quote_text
@@ -141,95 +122,17 @@ def _closure_surface(closure: Closure) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Declaration-order field helper (D7/D11)
-# ---------------------------------------------------------------------------
-
-
-def _ordered_fields(
-    value: RecordValue | EnumValue | ExceptionValue,
-    type_lookup: TypeLookup,
-) -> list[tuple[str, Value]]:
-    """Return (field_name, value) pairs in declared order for a nominal value.
-
-    Resolves ``value.type_name`` via ``type_lookup``, validates the nominal
-    kind and (for enums) the variant, then checks that the declared and runtime
-    field-name sets match exactly.  Returns the runtime values in declared order.
-
-    Raises ``RuntimeError`` for any invariant violation — these cannot be
-    produced by a valid AgL program and must never be hidden by fallback logic.
-    """
-    type_name = value.type_name
-    resolved = type_lookup.get_type(type_name)
-    if resolved is None:
-        raise RuntimeError(
-            f"render: unknown type '{type_name}' — type_lookup returned None"
-        )
-
-    if isinstance(value, RecordValue):
-        if not isinstance(resolved, RecordType):
-            raise RuntimeError(
-                f"render: type '{type_name}' resolved to {type(resolved).__name__}, "
-                f"expected RecordType for RecordValue"
-            )
-        declared_fields = resolved.fields
-        runtime_fields = value.fields
-    elif isinstance(value, EnumValue):
-        if not isinstance(resolved, EnumType):
-            raise RuntimeError(
-                f"render: type '{type_name}' resolved to {type(resolved).__name__}, "
-                f"expected EnumType for EnumValue"
-            )
-        variant = value.variant
-        if variant not in resolved.variants:
-            raise RuntimeError(
-                f"render: unknown variant '{variant}' in enum '{type_name}'"
-            )
-        declared_fields = resolved.variants[variant]
-        runtime_fields = value.fields
-    else:
-        # ExceptionValue
-        if not isinstance(resolved, ExceptionType):
-            raise RuntimeError(
-                f"render: type '{type_name}' resolved to {type(resolved).__name__}, "
-                f"expected ExceptionType for ExceptionValue"
-            )
-        declared_fields = resolved.fields
-        runtime_fields = value.fields
-
-    declared_names = set(declared_fields.keys())
-    runtime_names = set(runtime_fields.keys())
-    if declared_names != runtime_names:
-        missing = declared_names - runtime_names
-        extra = runtime_names - declared_names
-        parts: list[str] = []
-        if missing:
-            parts.append(f"missing runtime fields: {sorted(missing)}")
-        if extra:
-            parts.append(f"extra runtime fields: {sorted(extra)}")
-        raise RuntimeError(
-            f"render: field-set mismatch for '{type_name}': " + "; ".join(parts)
-        )
-
-    return [(name, runtime_fields[name]) for name in declared_fields]
-
-
-# ---------------------------------------------------------------------------
 # Core recursive renderer
 # ---------------------------------------------------------------------------
 
 
-def _render(
-    value: Value,
-    *,
-    top_level: bool,
-    repl: bool,
-    type_lookup: TypeLookup | None,
-) -> str:
+def _render(value: Value, *, top_level: bool, repl: bool) -> str:
     """Recursive AgL-native renderer.
 
     ``top_level=True`` for the outermost call; ``False`` for all children.
     ``repl=True`` enables REPL-echo quoting for a top-level ``text`` value.
-    ``type_lookup`` is mandatory when a nominal value is encountered.
+    Nominal values are rendered straight from ``value.fields``, which the
+    interpreter already keeps in declaration order.
     """
     if isinstance(value, TextValue):
         if top_level and not repl:
@@ -258,36 +161,29 @@ def _render(
     if isinstance(value, ListValue):
         if not value.elements:
             return "[]"
-        items = [_render(e, top_level=False, repl=repl, type_lookup=type_lookup)
-                 for e in value.elements]
+        items = [_render(e, top_level=False, repl=repl) for e in value.elements]
         return "[" + ", ".join(items) + "]"
 
     if isinstance(value, DictValue):
         if not value.entries:
             return "{}"
         items = [
-            f"{_quote_text(k)}: {_render(v, top_level=False, repl=repl, type_lookup=type_lookup)}"
+            f"{_quote_text(k)}: {_render(v, top_level=False, repl=repl)}"
             for k, v in value.entries.items()
         ]
         return "{" + ", ".join(items) + "}"
 
     if isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
-        if type_lookup is None:
-            raise RuntimeError(
-                f"render: type_lookup is required to render nominal value "
-                f"'{value.type_name}' in declaration order"
-            )
         prefix = (
             f"{value.type_name}.{value.variant}"
             if isinstance(value, EnumValue)
             else value.type_name
         )
-        pairs = _ordered_fields(value, type_lookup)
-        if not pairs:
+        if not value.fields:
             return prefix if isinstance(value, EnumValue) else f"{prefix}()"
         field_parts = [
-            f"{name}: {_render(v, top_level=False, repl=repl, type_lookup=type_lookup)}"
-            for name, v in pairs
+            f"{name}: {_render(v, top_level=False, repl=repl)}"
+            for name, v in value.fields.items()
         ]
         return f"{prefix}(" + ", ".join(field_parts) + ")"
 
@@ -300,23 +196,19 @@ def _render(
 # ---------------------------------------------------------------------------
 
 
-def render_value(value: Value, type_lookup: TypeLookup | None = None) -> str:
+def render_value(value: Value) -> str:
     """Render *value* for interpolation, ``print``, or ``as text``.
 
     Top-level ``text`` is verbatim (no quotes).  All other rendering follows
     the AgL-native rules: scalars as plain text, ``list``/``dict`` in AgL
-    bracket/brace form, record/enum/exception as ``TypeName(field: value, ...)``.
-    ``json`` values render as pretty-printed JSON (2-space indent) at top level
-    and compact single-line JSON when nested.
-
-    A ``TypeLookup`` is optional for scalar and structural container values but
-    mandatory when a nominal value (record, enum, exception) is encountered;
-    absence at that point is an internal invariant error.
+    bracket/brace form, record/enum/exception as ``TypeName(field: value, ...)``
+    with fields in declaration order.  ``json`` values render as pretty-printed
+    JSON (2-space indent) at top level and compact single-line JSON when nested.
     """
-    return _render(value, top_level=True, repl=False, type_lookup=type_lookup)
+    return _render(value, top_level=True, repl=False)
 
 
-def render_value_repl(value: Value, type_lookup: TypeLookup | None = None) -> str:
+def render_value_repl(value: Value) -> str:
     """Render *value* for REPL echo (``agl>`` prompt and ``:bindings`` / ``:params``).
 
     Identical to :func:`render_value` except that a top-level ``text`` value is
@@ -325,4 +217,4 @@ def render_value_repl(value: Value, type_lookup: TypeLookup | None = None) -> st
     interpolation (``print`` / ``prompt`` / ``exec``) always uses
     :func:`render_value` verbatim.
     """
-    return _render(value, top_level=True, repl=True, type_lookup=type_lookup)
+    return _render(value, top_level=True, repl=True)

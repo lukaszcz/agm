@@ -1,5 +1,15 @@
 # Plan: AgL-native value rendering (display data structures as they are defined)
 
+> **Revision (post-implementation).** Declaration-order field ordering (D7) is
+> now established at **construction time**: `_eval_constructor` normalizes a
+> nominal value's `fields` to declared order against its type, so the value
+> carries the canonical order itself. The render-time `TypeLookup` protocol,
+> its REPL facade, and the `type_lookup` threading described below were removed
+> — the renderer simply walks `value.fields`. As a consequence `as json` for
+> nominal values now also emits declaration order (it shares the same fields),
+> superseding D8's "JSON field order left intact": native render and `as json`
+> agree, matching what the reference docs already specified.
+
 ## Overview
 
 AgL currently renders every structured value (record, enum, exception, `list`,

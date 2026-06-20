@@ -36,7 +36,6 @@ from agm.agl.runtime.convert import (
     json_obj_to_value,
     parse_json_strict,
 )
-from agm.agl.runtime.render import TypeLookup
 from agm.agl.typecheck.types import (
     BoolType,
     DecimalType,
@@ -48,27 +47,7 @@ from agm.agl.typecheck.types import (
     ListType,
     RecordType,
     TextType,
-    Type,
 )
-
-# ---------------------------------------------------------------------------
-# Minimal TypeLookup for tests that involve nominal values
-# ---------------------------------------------------------------------------
-
-
-class _MapLookup:
-    """Simple TypeLookup backed by a dict — used in convert_value tests."""
-
-    def __init__(self, types: dict[str, Type]) -> None:
-        self._types = types
-
-    def get_type(self, name: str) -> Type | None:
-        return self._types.get(name)
-
-
-# Structural conformance assertion: verifies _MapLookup satisfies TypeLookup at
-# type-check time (mypy validates the Protocol assignment; no runtime purpose).
-_lookup: TypeLookup = _MapLookup({})
 
 # ---------------------------------------------------------------------------
 # parse_json_strict
@@ -644,23 +623,20 @@ class TestConvertValueNominalToText:
 
     def test_record_to_text_agl_form(self) -> None:
         rec_type = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
-        lookup: TypeLookup = _MapLookup({"Point": rec_type})
         rv = RecordValue(type_name="Point", fields={"x": IntValue(3), "y": IntValue(4)})
-        result = convert_value(rv, rec_type, TextType(), lookup)
+        result = convert_value(rv, rec_type, TextType())
         assert result == TextValue("Point(x: 3, y: 4)")
 
     def test_enum_to_text_agl_form(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
-        lookup: TypeLookup = _MapLookup({"Color": enum_type})
         ev = EnumValue(type_name="Color", variant="Red", fields={})
-        result = convert_value(ev, enum_type, TextType(), lookup)
+        result = convert_value(ev, enum_type, TextType())
         assert result == TextValue("Color.Red")
 
     def test_enum_with_fields_to_text_agl_form(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
-        lookup: TypeLookup = _MapLookup({"Color": enum_type})
         ev = EnumValue(type_name="Color", variant="Blue", fields={"n": IntValue(7)})
-        result = convert_value(ev, enum_type, TextType(), lookup)
+        result = convert_value(ev, enum_type, TextType())
         assert result == TextValue("Color.Blue(n: 7)")
 
     def test_exception_to_text_agl_form(self) -> None:
@@ -669,7 +645,6 @@ class TestConvertValueNominalToText:
             fields={"message": TextType(), "trace_id": TextType(),
                     "source_type": TextType(), "target_type": TextType(), "raw": TextType()},
         )
-        lookup: TypeLookup = _MapLookup({"CastError": exc_type})
         exc_val = ExceptionValue(
             type_name="CastError",
             fields={
@@ -680,7 +655,7 @@ class TestConvertValueNominalToText:
                 "raw": TextValue("x"),
             },
         )
-        result = convert_value(exc_val, exc_type, TextType(), lookup)
+        result = convert_value(exc_val, exc_type, TextType())
         assert isinstance(result, TextValue)
         assert result.value.startswith("CastError(")
         assert "trace_id" in result.value

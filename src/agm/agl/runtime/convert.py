@@ -51,7 +51,7 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
-from agm.agl.runtime.render import TypeLookup, render_value
+from agm.agl.runtime.render import render_value
 from agm.agl.runtime.schema import derive_schema
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 from agm.agl.typecheck.types import (
@@ -381,28 +381,22 @@ def _rewrap_conversion_error(
     return CastConversionError(exc.message, source_type=src_name, target_type=tgt_name, raw=raw)
 
 
-def convert_value(
-    value: Value,
-    source_type: Type,
-    target_type: Type,
-    type_lookup: TypeLookup | None = None,
-) -> Value:
+def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
     """Convert *value* of *source_type* to *target_type*, realizing the D1 matrix.
 
     Conversions by target type:
 
     ``→ text`` (total):
         :func:`~agm.agl.runtime.render.render_value` is used to produce a
-        :class:`~agm.agl.eval.values.TextValue`.  A ``type_lookup`` must be
-        supplied when the source is a nominal type (record/enum/exception).
+        :class:`~agm.agl.eval.values.TextValue`.  Nominal sources render in
+        declaration order (the interpreter normalizes their fields).
 
     ``→ json`` (total):
         :func:`~agm.agl.runtime.serialize.value_to_json_obj` is used to
         produce a :class:`~agm.agl.eval.values.JsonValue`.  Per D9, ``text``
         is already JSON-shaped (a JSON string), so ``"42" as json`` yields
         ``JsonValue("42")``, not ``JsonValue(42)``.  Nominal values
-        (record/enum/exception) are now accepted and serialised structurally;
-        no ``type_lookup`` is required for this branch.
+        (record/enum/exception) are accepted and serialised structurally.
 
     ``text → T`` (fallible, T not json):
         :func:`parse_json_strict` parses the text strictly, then
@@ -430,7 +424,7 @@ def convert_value(
     # ``raw`` is the rendered form and also the result here.
     # ------------------------------------------------------------------
     if isinstance(target_type, TextType):
-        return TextValue(render_value(value, type_lookup))
+        return TextValue(render_value(value))
 
     # ------------------------------------------------------------------
     # → json (total): canonicalize any JSON-shaped value
@@ -455,12 +449,11 @@ def convert_value(
         return DecimalValue(Decimal(value.value))
 
     # Fallible paths below need source/target names and raw for error context.
-    # ``render_value`` is called here (lazily) so that scalar/container sources
-    # do not require a type_lookup; nominal sources reaching a fallible path
-    # (text → record, json → record, etc.) are the caller's responsibility.
+    # ``render_value`` is called here (lazily) so the total → json / identity /
+    # widening branches above never pay to render the value to text.
     src_name = repr(source_type)
     tgt_name = repr(target_type)
-    raw = render_value(value, type_lookup)
+    raw = render_value(value)
 
     # ------------------------------------------------------------------
     # decimal → int narrowing (D4: must be integral)

@@ -209,20 +209,19 @@ syntax** for every value kind:
 - `list` / `dict` — AgL container syntax (`[…]` / `{"k": v, …}`); dict keys
   always quoted.
 - Record / enum / exception — AgL constructor syntax
-  (`TypeName(f: v, …)` / `TypeName.Variant(…)` / `TypeName.Variant`); fields
-  emitted in **declaration order** by resolving the type through a read-only
-  `TypeLookup` protocol. An unknown type, wrong nominal kind, unknown enum
-  variant, or field-set mismatch is a `RuntimeError` (internal invariant
-  violation — cannot arise from a valid AgL program).
+  (`TypeName(f: v, …)` / `TypeName.Variant(…)` / `TypeName.Variant`); the
+  renderer walks `value.fields` verbatim.
 
-The `TypeLookup` protocol has one operation: `get_type(name) -> Type | None`.
-`TypeEnvironment` satisfies it structurally; the REPL exposes a read-only facade
-over its persistent environment so presentation code cannot mutate session typing
-state. The renderer depends only on semantic types and the lookup protocol — no
-Lark types, no lexer rules.
+Nominal fields are kept in **declaration order** by the value itself: the
+interpreter normalizes them once, at construction (`_eval_constructor`), against
+the declared type — so the renderer needs no type information and there is a
+single canonical field order for every consumer (native render, `as json`,
+equality). The renderer depends only on the `Value` union — no semantic types,
+no Lark types, no lexer rules.
 
 `as json` on a nominal type (`TOTAL_JSON` cast) uses `value_to_json_obj`
-(existing structural encoding) and is independent of the AgL-native renderer.
+(structural encoding), which walks the same declaration-ordered `value.fields`,
+so native and JSON output agree on field order.
 
 ## Incremental REPL session
 

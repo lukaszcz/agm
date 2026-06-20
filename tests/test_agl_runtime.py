@@ -979,27 +979,14 @@ class TestCapabilitiesBuiltFromRegistrations:
 # ---------------------------------------------------------------------------
 
 
-class _Lookup:
-    """Minimal TypeLookup implementation for render tests."""
-
-    def __init__(self, types: dict[str, Type]) -> None:
-        self._types = types
-
-    def get_type(self, name: str) -> Type | None:
-        return self._types.get(name)
-
-
 class TestRenderValue:
-    """Unit tests for the AgL-native render_value / render_value_repl functions."""
+    """Unit tests for the AgL-native render_value / render_value_repl functions.
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _make_lookup(types: dict[str, Type]) -> _Lookup:
-        """Tiny fake TypeLookup for tests that need nominal rendering."""
-        return _Lookup(types)
+    Nominal values carry their fields in declaration order already (the
+    interpreter normalizes them at construction), so these tests build the
+    values in the order they expect rendered and the renderer walks
+    ``value.fields`` verbatim — no type lookup is involved.
+    """
 
     # ------------------------------------------------------------------
     # text: verbatim (render_value) vs quoted (render_value_repl)
@@ -1198,52 +1185,30 @@ class TestRenderValue:
     # record: AgL form, declaration order
     # ------------------------------------------------------------------
 
-    def test_record_basic_declaration_order(self) -> None:
-        """Record renders in declaration order, not construction order."""
+    def test_record_renders_fields_in_stored_order(self) -> None:
+        """Record renders fields in the order they are stored (declaration order)."""
         from agm.agl.eval.values import IntValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import IntType, RecordType, TextType
 
-        # Declared order: title, severity (text first, then int).
-        lookup = self._make_lookup({
-            "Issue": RecordType(
-                name="Issue",
-                fields={"title": TextType(), "severity": IntType()},
-            )
-        })
-        # Construct value with fields in REVERSE of declared order.
         v = RecordValue(
             type_name="Issue",
-            fields={"severity": IntValue(3), "title": TextValue("Missing tests")},
+            fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
-        out = render_value(v, lookup)
-        # Output must follow declared order: title first, then severity.
-        assert out == 'Issue(title: "Missing tests", severity: 3)'
+        assert render_value(v) == 'Issue(title: "Missing tests", severity: 3)'
 
     def test_record_empty(self) -> None:
         """A record with no fields renders as ``TypeName()``."""
         from agm.agl.eval.values import RecordValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import RecordType
 
-        lookup = self._make_lookup({"Empty": RecordType(name="Empty", fields={})})
         v = RecordValue(type_name="Empty", fields={})
-        assert render_value(v, lookup) == "Empty()"
+        assert render_value(v) == "Empty()"
+
     def test_record_nested_record(self) -> None:
         """Nested records render inline."""
         from agm.agl.eval.values import BoolValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import BoolType, RecordType, TextType
 
-        author_type = RecordType(
-            name="Author",
-            fields={"name": TextType(), "active": BoolType()},
-        )
-        issue_type = RecordType(
-            name="Issue",
-            fields={"title": TextType(), "author": author_type},
-        )
-        lookup = self._make_lookup({"Author": author_type, "Issue": issue_type})
         author = RecordValue(
             type_name="Author",
             fields={"name": TextValue("Ada"), "active": BoolValue(True)},
@@ -1252,24 +1217,14 @@ class TestRenderValue:
             type_name="Issue",
             fields={"title": TextValue("Missing tests"), "author": author},
         )
-        out = render_value(issue, lookup)
+        out = render_value(issue)
         assert out == 'Issue(title: "Missing tests", author: Author(name: "Ada", active: true))'
 
     def test_record_with_list_field(self) -> None:
         """Record with a list field renders correctly (list inline)."""
         from agm.agl.eval.values import IntValue, ListValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import IntType, ListType, RecordType, TextType
 
-        issue_type = RecordType(
-            name="Issue",
-            fields={
-                "title": TextType(),
-                "severity": IntType(),
-                "tags": ListType(elem=TextType()),
-            },
-        )
-        lookup = self._make_lookup({"Issue": issue_type})
         v = RecordValue(
             type_name="Issue",
             fields={
@@ -1278,7 +1233,7 @@ class TestRenderValue:
                 "tags": ListValue(elements=(TextValue("tests"), TextValue("coverage"))),
             },
         )
-        out = render_value(v, lookup)
+        out = render_value(v)
         assert out == 'Issue(title: "Missing tests", severity: 3, tags: ["tests", "coverage"])'
 
     # ------------------------------------------------------------------
@@ -1289,51 +1244,29 @@ class TestRenderValue:
         """Enum with payload renders as ``TypeName.Variant(field: value)``."""
         from agm.agl.eval.values import EnumValue, IntValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import EnumType, IntType
 
-        lookup = self._make_lookup({
-            "Outcome": EnumType(
-                name="Outcome",
-                variants={"Partial": {"left": IntType()}, "Done": {}},
-            )
-        })
         v = EnumValue(type_name="Outcome", variant="Partial", fields={"left": IntValue(2)})
-        assert render_value(v, lookup) == "Outcome.Partial(left: 2)"
+        assert render_value(v) == "Outcome.Partial(left: 2)"
+
     def test_enum_nullary_variant(self) -> None:
         """Nullary enum variant renders as ``TypeName.Variant`` (no parens)."""
         from agm.agl.eval.values import EnumValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import EnumType, IntType
 
-        lookup = self._make_lookup({
-            "Outcome": EnumType(
-                name="Outcome",
-                variants={"Partial": {"left": IntType()}, "Done": {}},
-            )
-        })
         v = EnumValue(type_name="Outcome", variant="Done", fields={})
-        assert render_value(v, lookup) == "Outcome.Done"
-    def test_enum_field_declaration_order(self) -> None:
-        """Enum fields render in declaration order even if constructed out of order."""
+        assert render_value(v) == "Outcome.Done"
+
+    def test_enum_multi_field_payload(self) -> None:
+        """Enum with multiple payload fields renders them in stored order."""
         from agm.agl.eval.values import EnumValue, IntValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import EnumType, IntType
 
-        # Declared order: a, b, c.
-        lookup = self._make_lookup({
-            "E": EnumType(
-                name="E",
-                variants={"V": {"a": IntType(), "b": IntType(), "c": IntType()}},
-            )
-        })
-        # Constructed in reverse order.
         v = EnumValue(
             type_name="E",
             variant="V",
-            fields={"c": IntValue(3), "b": IntValue(2), "a": IntValue(1)},
+            fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
         )
-        out = render_value(v, lookup)
-        assert out == "E.V(a: 1, b: 2, c: 3)"
+        assert render_value(v) == "E.V(a: 1, b: 2, c: 3)"
 
     # ------------------------------------------------------------------
     # exception: record-style with all fields incl. trace_id
@@ -1343,9 +1276,7 @@ class TestRenderValue:
         """Exception renders like a record with all fields in declaration order."""
         from agm.agl.eval.values import ExceptionValue, TextValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS
 
-        lookup = self._make_lookup(dict(BUILTIN_EXCEPTIONS))
         v = ExceptionValue(
             type_name="CastError",
             fields={
@@ -1356,7 +1287,7 @@ class TestRenderValue:
                 "raw": TextValue("x"),
             },
         )
-        out = render_value(v, lookup)
+        out = render_value(v)
         expected = (
             'CastError(message: "cannot parse \\"x\\" as int", trace_id: "evt-7", '
             'source_type: "text", target_type: "int", raw: "x")'
@@ -1367,9 +1298,7 @@ class TestRenderValue:
         """Abort exception includes both message and trace_id."""
         from agm.agl.eval.values import ExceptionValue, TextValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS
 
-        lookup = self._make_lookup(dict(BUILTIN_EXCEPTIONS))
         v = ExceptionValue(
             type_name="Abort",
             fields={
@@ -1377,7 +1306,7 @@ class TestRenderValue:
                 "trace_id": TextValue("abc123"),
             },
         )
-        out = render_value(v, lookup)
+        out = render_value(v)
         assert out == 'Abort(message: "fatal", trace_id: "abc123")'
         assert "<dsl-value" not in out
 
@@ -1427,16 +1356,12 @@ class TestRenderValue:
         """json nested inside a record field renders compact (single-line)."""
         from agm.agl.eval.values import JsonValue, RecordValue
         from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import JsonType, RecordType
 
-        lookup = self._make_lookup({
-            "R": RecordType(name="R", fields={"data": JsonType()})
-        })
         v = RecordValue(
             type_name="R",
             fields={"data": JsonValue({"a": 1, "b": 2})},
         )
-        out = render_value(v, lookup)
+        out = render_value(v)
         # The json field must be compact (no newlines) so the record stays single-line.
         assert "\n" not in out
         assert out == 'R(data: {"a": 1, "b": 2})'
@@ -1474,130 +1399,6 @@ class TestRenderValue:
 
         out = render_value_repl(ListValue(elements=(TextValue("v"),)))
         assert out == '["v"]'
-
-    # ------------------------------------------------------------------
-    # Regression: nominal rendering raises RuntimeError on invariant violations
-    # ------------------------------------------------------------------
-
-    def test_raises_when_type_lookup_missing_for_record(self) -> None:
-        """Rendering a RecordValue without a type_lookup raises RuntimeError."""
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_value
-
-        v = RecordValue(type_name="R", fields={"x": IntValue(1)})
-        with pytest.raises(RuntimeError, match="type_lookup"):
-            render_value(v)
-
-    def test_raises_when_type_lookup_missing_for_enum(self) -> None:
-        """Rendering an EnumValue without a type_lookup raises RuntimeError."""
-        from agm.agl.eval.values import EnumValue, IntValue
-        from agm.agl.runtime.render import render_value
-
-        v = EnumValue(type_name="E", variant="V", fields={"x": IntValue(1)})
-        with pytest.raises(RuntimeError, match="type_lookup"):
-            render_value(v)
-
-    def test_raises_when_type_lookup_missing_for_exception(self) -> None:
-        """Rendering an ExceptionValue without a type_lookup raises RuntimeError."""
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.runtime.render import render_value
-
-        v = ExceptionValue(
-            type_name="Abort",
-            fields={"message": TextValue("x"), "trace_id": TextValue("y")},
-        )
-        with pytest.raises(RuntimeError, match="type_lookup"):
-            render_value(v)
-
-    def test_raises_unknown_type_name(self) -> None:
-        """RuntimeError when type_name is not in the lookup."""
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_value
-
-        lookup = self._make_lookup({})
-        v = RecordValue(type_name="Unknown", fields={"x": IntValue(1)})
-        with pytest.raises(RuntimeError, match="Unknown"):
-            render_value(v, lookup)
-
-    def test_raises_wrong_nominal_kind_record_vs_enum(self) -> None:
-        """RuntimeError when a RecordValue's type resolves to an EnumType."""
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import EnumType, IntType
-
-        lookup = self._make_lookup({
-            "R": EnumType(name="R", variants={"V": {"x": IntType()}})
-        })
-        v = RecordValue(type_name="R", fields={"x": IntValue(1)})
-        with pytest.raises(RuntimeError, match="RecordType"):
-            render_value(v, lookup)
-
-    def test_raises_wrong_nominal_kind_enum_vs_record(self) -> None:
-        """RuntimeError when an EnumValue's type resolves to a RecordType."""
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import IntType, RecordType
-
-        lookup = self._make_lookup({
-            "E": RecordType(name="E", fields={"x": IntType()})
-        })
-        v = EnumValue(type_name="E", variant="V", fields={})
-        with pytest.raises(RuntimeError, match="EnumType"):
-            render_value(v, lookup)
-
-    def test_raises_wrong_nominal_kind_exception_vs_record(self) -> None:
-        """RuntimeError when an ExceptionValue's type resolves to a RecordType."""
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import RecordType, TextType
-
-        lookup = self._make_lookup({
-            "Boom": RecordType(name="Boom", fields={"message": TextType()})
-        })
-        v = ExceptionValue(type_name="Boom", fields={"message": TextValue("x")})
-        with pytest.raises(RuntimeError, match="ExceptionType"):
-            render_value(v, lookup)
-
-    def test_raises_unknown_enum_variant(self) -> None:
-        """RuntimeError when the enum variant is not in the declared variants."""
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import EnumType
-
-        lookup = self._make_lookup({
-            "E": EnumType(name="E", variants={"Known": {}})
-        })
-        v = EnumValue(type_name="E", variant="Unknown", fields={})
-        with pytest.raises(RuntimeError, match="Unknown"):
-            render_value(v, lookup)
-
-    def test_raises_missing_runtime_field(self) -> None:
-        """RuntimeError when a declared field is absent from the runtime value."""
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import IntType, RecordType
-
-        lookup = self._make_lookup({
-            "R": RecordType(name="R", fields={"x": IntType(), "y": IntType()})
-        })
-        # Only 'x' present, 'y' missing.
-        v = RecordValue(type_name="R", fields={"x": IntValue(1)})
-        with pytest.raises(RuntimeError, match="mismatch"):
-            render_value(v, lookup)
-
-    def test_raises_extra_runtime_field(self) -> None:
-        """RuntimeError when the runtime value has a field not in the declaration."""
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_value
-        from agm.agl.typecheck.types import IntType, RecordType
-
-        lookup = self._make_lookup({
-            "R": RecordType(name="R", fields={"x": IntType()})
-        })
-        # 'z' is an extra field not declared.
-        v = RecordValue(type_name="R", fields={"x": IntValue(1), "z": IntValue(9)})
-        with pytest.raises(RuntimeError, match="mismatch"):
-            render_value(v, lookup)
 
     # ------------------------------------------------------------------
     # No <dsl-value> tags ever

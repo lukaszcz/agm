@@ -30,28 +30,19 @@ from agm.agl.diagnostics import format_diagnostic
 if TYPE_CHECKING:
     from agm.agl.eval.values import Value
     from agm.agl.repl.session import EntryResult
-    from agm.agl.runtime.render import TypeLookup
     from agm.agl.typecheck.types import Type
 
 
-def format_typed_value(
-    name: str,
-    value_type: "Type",
-    value: "Value",
-    type_lookup: "TypeLookup | None" = None,
-) -> str:
+def format_typed_value(name: str, value_type: "Type", value: "Value") -> str:
     """Format a single ``name : Type = value`` line.
 
     This is the single source of truth for the binding/value display shared by
     the entry-echo path (:func:`_render_echo`) and the ``:bindings`` / ``:params``
     meta-commands, so the two never drift in how a value is rendered.
-
-    *type_lookup* is forwarded to ``render_value_repl`` so nominal values
-    (record/enum/exception) render in declaration order.
     """
     from agm.agl.runtime.render import render_value_repl
 
-    return f"{name} : {value_type!r} = {render_value_repl(value, type_lookup=type_lookup)}"
+    return f"{name} : {value_type!r} = {render_value_repl(value)}"
 
 
 def render_entry_result(
@@ -59,7 +50,6 @@ def render_entry_result(
     *,
     echo: bool,
     check_only: bool = False,
-    type_lookup: "TypeLookup | None" = None,
 ) -> str | None:
     """Return the text to print for *result*, or ``None`` when nothing to print.
 
@@ -67,8 +57,6 @@ def render_entry_result(
     produce no echo line (errors and warnings are always reported regardless).
     *check_only* selects the dry-run echo: a check-only result has a type but no
     value, so the echo shows the inferred type instead of a value.
-    *type_lookup* is forwarded to ``_render_echo`` so nominal values render in
-    declaration order.
     """
     lines: list[str] = []
 
@@ -82,11 +70,7 @@ def render_entry_result(
         return "\n".join(lines) if lines else None
 
     if echo:
-        echo_line = (
-            _render_check_only(result)
-            if check_only
-            else _render_echo(result, type_lookup)
-        )
+        echo_line = _render_check_only(result) if check_only else _render_echo(result)
         if echo_line is not None:
             lines.append(echo_line)
 
@@ -128,29 +112,22 @@ def _render_check_only(result: "EntryResult") -> str | None:
     return None
 
 
-def _render_echo(
-    result: "EntryResult",
-    type_lookup: "TypeLookup | None" = None,
-) -> str | None:
-    """Render the success echo line for *result*, or ``None`` for statements.
-
-    *type_lookup* is forwarded to ``render_value_repl`` and ``format_typed_value``
-    so nominal values (record/enum/exception) render in declaration order.
-    """
+def _render_echo(result: "EntryResult") -> str | None:
+    """Render the success echo line for *result*, or ``None`` for statements."""
     from agm.agl.runtime.render import render_value_repl
 
     if result.kind == "expression":
         # A bare expression always carries a value and type on success.
         assert result.value is not None
         assert result.value_type is not None
-        return render_value_repl(result.value, type_lookup)
+        return render_value_repl(result.value)
     if result.kind == "binding":
         # A binding echoes ``name : Type = value`` (single-sourced helper so the
         # echo and ``:bindings`` listing never diverge).
         assert result.name is not None
         assert result.value is not None
         assert result.value_type is not None
-        return format_typed_value(result.name, result.value_type, result.value, type_lookup)
+        return format_typed_value(result.name, result.value_type, result.value)
     if result.kind == "declaration":
         assert result.name is not None
         return f"{result.name} declared"

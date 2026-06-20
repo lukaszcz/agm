@@ -693,7 +693,7 @@ class TestNominalRenderingEcho:
         from agm.agl.repl.render import format_typed_value
 
         assert r.value_type is not None
-        line = format_typed_value("p", r.value_type, r.value, s.type_lookup)
+        line = format_typed_value("p", r.value_type, r.value)
         # Declaration order is y, x — so "y: 2" must appear before "x: 1".
         assert line.startswith("p : Point = Point(y: 2, x: 1)")
 
@@ -706,7 +706,7 @@ class TestNominalRenderingEcho:
         s.eval_entry("record Author\n  name: text\n  active: bool")
         r = s.eval_entry('let a = Author(name: "Ada", active: true)')
         assert r.ok
-        rendered = render_entry_result(r, echo=True, type_lookup=s.type_lookup)
+        rendered = render_entry_result(r, echo=True)
         assert rendered == 'a : Author = Author(name: "Ada", active: true)'
 
     def test_enum_echo_qualified_with_fields(self) -> None:
@@ -716,7 +716,7 @@ class TestNominalRenderingEcho:
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
         r = s.eval_entry("let o = Outcome.Partial(left: 7)")
         assert r.ok
-        rendered = render_entry_result(r, echo=True, type_lookup=s.type_lookup)
+        rendered = render_entry_result(r, echo=True)
         assert rendered == "o : Outcome = Outcome.Partial(left: 7)"
 
     def test_enum_nullary_variant_echo(self) -> None:
@@ -726,7 +726,7 @@ class TestNominalRenderingEcho:
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
         r = s.eval_entry("let d = Outcome.Done")
         assert r.ok
-        rendered = render_entry_result(r, echo=True, type_lookup=s.type_lookup)
+        rendered = render_entry_result(r, echo=True)
         assert rendered is not None
         assert "Outcome.Done" in rendered
 
@@ -736,7 +736,7 @@ class TestNominalRenderingEcho:
         s = ReplSession()
         r = s.eval_entry('let msg = "hello world"')
         assert r.ok
-        rendered = render_entry_result(r, echo=True, type_lookup=s.type_lookup)
+        rendered = render_entry_result(r, echo=True)
         assert rendered == 'msg : text = "hello world"'
 
     def test_dollar_in_text_binding_echo_escapes_dollar(self) -> None:
@@ -749,7 +749,7 @@ class TestNominalRenderingEcho:
         s = ReplSession()
         r = s.eval_entry(r'let t = "a\${b}"')
         assert r.ok
-        rendered = render_entry_result(r, echo=True, type_lookup=s.type_lookup)
+        rendered = render_entry_result(r, echo=True)
         assert rendered is not None
         assert r"a\${b}" in rendered
 
@@ -781,27 +781,3 @@ class TestNominalRenderingEcho:
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
         assert "Point(y: 2, x: 1)" in outcome.text
-
-    def test_type_lookup_stays_current_after_reset(self) -> None:
-        # The facade must delegate to the POST-reset _type_env, not the old one.
-        s = ReplSession()
-        s.eval_entry("record Old\n  v: int")
-        lookup_before = s.type_lookup  # same object always
-        s.reset()
-        # After reset, the old type is gone from the env.
-        assert s.type_lookup.get_type("Old") is None
-        # The facade object is the same instance (property returns same facade).
-        assert s.type_lookup is lookup_before
-
-    def test_type_lookup_get_type_returns_none_for_unknown(self) -> None:
-        s = ReplSession()
-        assert s.type_lookup.get_type("NoSuchType") is None
-
-    def test_type_lookup_get_type_returns_declared_type(self) -> None:
-        from agm.agl.typecheck.types import RecordType
-
-        s = ReplSession()
-        s.eval_entry("record Foo\n  n: int")
-        t = s.type_lookup.get_type("Foo")
-        assert isinstance(t, RecordType)
-        assert "n" in t.fields

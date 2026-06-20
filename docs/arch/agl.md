@@ -335,6 +335,18 @@ so a constructor call (`Box(…)` / `Box::[…]`) colours as a constructor while
 bare/annotation use colours as a type. Without a session it still colours
 keywords, literals, operators, builtins, and the buffer's own declarations.
 
+Colour themes live in `agm.agl.repl.themes`: `DARK_THEME` (VS Code Dark+) and
+`LIGHT_THEME` (VS Code Light+). `detect_terminal_theme` reads `$COLORFGBG`
+(set by most terminal emulators; trailing segment `15` → light, anything else
+or absent → dark). `get_style(theme)` resolves `"auto"` via detection and
+returns the appropriate `prompt_toolkit` `Style`. The theme is wired through
+`build_prompt_session(theme=…)` and stored on `MetaContext.theme`; `run_console`
+observes mutations from the `:theme` meta-command and updates `PromptSession.style`
+live, then calls the `on_theme_save` callback (supplied by `commands/repl.py`
+via `config.general.save_repl_theme`) to persist the choice to `~/.agm/config.toml`
+under `[repl] theme`. Loading uses `load_repl_config` (same merge chain as other
+config sections).
+
 ## Config pragma pipeline
 
 `config KEY = VALUE` header pragmas are grammatically `ConfigPragma` AST nodes.

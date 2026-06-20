@@ -24,6 +24,11 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [exec.agents]                 # per-agent runner commands (highest precedence)
 # reviewer = "claude -p"
 
+# [repl] — AgL REPL settings (agm repl).
+#
+# [repl]
+# theme = "auto"    # syntax-highlighting theme: "dark", "light", or "auto" (detect from $COLORFGBG)
+
 # [params.<program>] — default param values for an AgL program (agm exec).
 #
 # The table key is the name from the program's ``program NAME`` declaration, or

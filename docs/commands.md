@@ -580,6 +580,12 @@ Entry editing:
   At a use site, a constructor call (`Box(…)`, `ok::[…](…)`) colours as a
   constructor and a type annotation as a type. Completion offers AgL keywords,
   current binding names, available agent names, and meta-command names.
+- Two colour themes are available: **dark** (VS Code Dark+) and **light**
+  (VS Code Light+). The default is **auto**, which detects the terminal
+  background from the `$COLORFGBG` environment variable (set by most terminal
+  emulators; falls back to dark). Use `:theme dark|light|auto` to switch at
+  runtime; the choice is saved to `~/.agm/config.toml` under `[repl] theme`.
+  You can also set `theme = "light"` directly in the config file.
 - Command history persists under `~/.agm/repl_history`.
 
 Meta-commands begin with a leading `:` (which never collides with AgL syntax):
@@ -597,6 +603,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 | `:agent confirm\|auto` | Switch the agent-call mode (or report it with no argument) |
 | `:load FILE` | Run an `.agl` file's items into the session, one per entry |
 | `:save FILE` | Write the accumulated session source to a file |
+| `:theme [dark\|light\|auto]` | Show or switch the syntax-highlighting theme; saves to `~/.agm/config.toml` |
 
 Press Ctrl-C to cancel the current entry without exiting. During a live agent
 call, Ctrl-C interrupts the call and aborts the current entry (the entry's

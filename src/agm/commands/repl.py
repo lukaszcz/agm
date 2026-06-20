@@ -31,7 +31,12 @@ from agm.agl.repl.agents import ConfirmingAgent
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.cli_support.args import ReplArgs
 from agm.config.context import current_config_context
-from agm.config.general import load_exec_config, load_params_config
+from agm.config.general import (
+    load_exec_config,
+    load_params_config,
+    load_repl_config,
+    save_repl_theme,
+)
 from agm.core import dry_run
 from agm.core.log import prepare_trace_log_from_layers
 
@@ -44,6 +49,7 @@ def run(args: ReplArgs) -> None:
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
     loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
@@ -103,6 +109,8 @@ def run(args: ReplArgs) -> None:
         check_only=dry_run.enabled(),
         agent_mode=agent_mode,
         history_path=history_path,
+        theme=repl_config.theme,
+        on_theme_save=lambda t: save_repl_theme(t, home=ctx.home),
     )
 
 

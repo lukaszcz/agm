@@ -159,6 +159,8 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         check_only: bool = False,
         agent_mode: object = None,
         history_path: Path | None = None,
+        theme: str = "auto",
+        on_theme_save: object = None,
         input: object = None,
         output: object = None,
     ) -> None:
@@ -169,6 +171,8 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
                 "check_only": check_only,
                 "agent_mode": agent_mode,
                 "history_path": history_path,
+                "theme": theme,
+                "on_theme_save": on_theme_save,
             }
         )
 

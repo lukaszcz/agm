@@ -39,7 +39,6 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
-from prompt_toolkit.styles import Style
 
 from agm.agl.lexer import tokenize
 from agm.agl.lexer.tokens import KEYWORDS
@@ -48,6 +47,7 @@ from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl import session as session_mod
 from agm.agl.repl.agentmode import AgentMode
+from agm.agl.repl.themes import get_style
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 from agm.agl.syntax import BUILTIN_TYPE_NAMES
 
@@ -172,20 +172,6 @@ def _style_class_for(
     return None
 
 
-# The Style mapping the style classes above to concrete colours.
-AGL_STYLE: Style = Style.from_dict(
-    {
-        "agl.keyword": "bold #569cd6",
-        "agl.string": "#ce9178",
-        "agl.number": "#b5cea8",
-        "agl.operator": "#d4d4d4",
-        "agl.type": "#4ec9b0",
-        "agl.constructor": "#dcdcaa",
-        "agl.name": "",
-        "agl.banner": "italic #808080",
-        "agl.prompt": "bold #569cd6",
-    }
-)
 
 
 class AglPromptLexer(Lexer):
@@ -529,22 +515,24 @@ def _make_history(history_path: "Path | None") -> History:
 def build_prompt_session(
     session: "ReplSession",
     *,
+    theme: str = "auto",
     history_path: "Path | None" = None,
     input: Input | None = None,
     output: Output | None = None,
 ) -> "PromptSession[str]":
     """Construct the configured ``PromptSession`` for the REPL loop.
 
-    *input* / *output* are forwarded to prompt_toolkit so headless tests can
-    inject a pipe input + ``DummyOutput``; left ``None`` they default to the
-    real terminal.
+    *theme* selects the colour palette (``"dark"``, ``"light"``, or ``"auto"``
+    to detect from ``$COLORFGBG``).  *input* / *output* are forwarded to
+    prompt_toolkit so headless tests can inject a pipe input + ``DummyOutput``;
+    left ``None`` they default to the real terminal.
     """
     return PromptSession(
         message=[("class:agl.prompt", PROMPT)],
         lexer=AglPromptLexer(session),
         completer=AglCompleter(session),
         history=_make_history(history_path),
-        style=AGL_STYLE,
+        style=get_style(theme),
         multiline=True,
         key_bindings=_make_key_bindings(),
         prompt_continuation=_prompt_continuation,
@@ -631,6 +619,8 @@ def run_console(
     check_only: bool = False,
     agent_mode: "AgentMode | None" = None,
     history_path: "Path | None" = None,
+    theme: str = "auto",
+    on_theme_save: "Callable[[str], None] | None" = None,
     input: Input | None = None,
     output: Output | None = None,
 ) -> None:
@@ -648,11 +638,15 @@ def run_console(
     evaluation, no agent/exec calls, and no bindings are persisted — and its
     inferred type is echoed.
 
+    *theme* selects the initial colour palette; *on_theme_save* is called with
+    the new theme name whenever ``:theme`` switches the active theme (use it to
+    persist the choice to config).
+
     The loop is intentionally thin: formatting lives in ``render`` and meta
     handling in ``meta`` so M3 can extend both without touching it.
     """
     prompt_session = build_prompt_session(
-        session, history_path=history_path, input=input, output=output
+        session, theme=theme, history_path=history_path, input=input, output=output
     )
     # A shared, mutable agent-mode holder: ``:agent`` mutates it here, and M4
     # will pass this SAME instance to the confirming agent wrapper so the wrapper
@@ -661,9 +655,11 @@ def run_console(
         session=session,
         echo=echo,
         agent_mode=agent_mode if agent_mode is not None else AgentMode(),
+        theme=theme,
     )
 
     print(format_banner(ctx.agent_mode))
+    current_theme = theme
     while True:
         try:
             entry = prompt_session.prompt()
@@ -678,6 +674,11 @@ def run_console(
             outcome = meta_mod.dispatch_meta(entry, ctx)
             if outcome.text is not None:
                 print(outcome.text)
+            if ctx.theme != current_theme:
+                current_theme = ctx.theme
+                prompt_session.style = get_style(current_theme)
+                if on_theme_save is not None:
+                    on_theme_save(current_theme)
             if outcome.quit:
                 break
             continue

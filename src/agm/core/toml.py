@@ -53,6 +53,12 @@ def set_toml_table_value(doc: TOMLDocument, table_name: str, key: str, value: st
     table[key] = value
 
 
+def empty_toml_doc() -> TOMLDocument:
+    """Create and return an empty ``TOMLDocument``."""
+
+    return tomlkit.document()
+
+
 def dumps_toml(doc: TOMLDocument) -> str:
     """Serialize a ``TOMLDocument`` back to a TOML string."""
 

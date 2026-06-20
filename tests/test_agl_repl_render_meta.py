@@ -671,3 +671,45 @@ class TestSave:
         outcome = meta_mod.dispatch_meta(f":save {bad}", _session_ctx())
         assert outcome.text is not None
         assert "cannot write" in outcome.text.lower()
+
+
+class TestTheme:
+    def test_no_arg_reports_current_theme(self) -> None:
+        ctx = _ctx()
+        ctx.theme = "dark"
+        outcome = meta_mod.dispatch_meta(":theme", ctx)
+        assert outcome.text is not None
+        assert "dark" in outcome.text
+
+    def test_switch_to_light(self) -> None:
+        ctx = _ctx()
+        outcome = meta_mod.dispatch_meta(":theme light", ctx)
+        assert ctx.theme == "light"
+        assert outcome.text is not None
+        assert "light" in outcome.text
+
+    def test_switch_to_dark(self) -> None:
+        ctx = _ctx()
+        ctx.theme = "light"
+        meta_mod.dispatch_meta(":theme dark", ctx)
+        assert ctx.theme == "dark"
+
+    def test_switch_to_auto(self) -> None:
+        ctx = _ctx()
+        meta_mod.dispatch_meta(":theme auto", ctx)
+        assert ctx.theme == "auto"
+
+    def test_unknown_theme_returns_error(self) -> None:
+        ctx = _ctx()
+        outcome = meta_mod.dispatch_meta(":theme neon", ctx)
+        assert outcome.text is not None
+        assert "Unknown theme" in outcome.text
+        assert ctx.theme == "auto"  # unchanged
+
+    def test_theme_in_help(self) -> None:
+        outcome = meta_mod.dispatch_meta(":help", _ctx())
+        assert outcome.text is not None
+        assert ":theme" in outcome.text
+
+    def test_theme_in_meta_command_names(self) -> None:
+        assert ":theme" in meta_mod.meta_command_names()

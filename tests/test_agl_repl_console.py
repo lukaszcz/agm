@@ -867,3 +867,90 @@ class TestStyledLinesBucketing:
         styled = self._get_styled_lines(text)
         assert len(styled) == 3
         assert styled[1] == [("", "")]
+
+
+# ---------------------------------------------------------------------------
+# Theme switching through the loop
+# ---------------------------------------------------------------------------
+
+
+class TestThemeThroughLoop:
+    def _drive_with_save_tracking(
+        self,
+        keystrokes: str,
+        *,
+        initial_theme: str = "dark",
+    ) -> tuple[str, list[str]]:
+        """Run the loop, capture output and recorded on_theme_save calls."""
+        saved: list[str] = []
+        with create_pipe_input() as pipe, _fail_on_hang():
+            pipe.send_text(keystrokes)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                run_console(
+                    ReplSession(),
+                    history_path=None,
+                    theme=initial_theme,
+                    on_theme_save=saved.append,
+                    input=pipe,
+                    output=DummyOutput(),
+                )
+        return out.getvalue(), saved
+
+    def test_theme_command_reports_current_theme(self) -> None:
+        output, _ = self._drive_with_save_tracking(":theme\r\x04", initial_theme="dark")
+        assert "dark" in output
+
+    def test_theme_switch_prints_confirmation(self) -> None:
+        output, _ = self._drive_with_save_tracking(":theme light\r\x04")
+        assert "light" in output
+
+    def test_theme_switch_invokes_save_callback(self) -> None:
+        _, saved = self._drive_with_save_tracking(":theme light\r\x04")
+        assert saved == ["light"]
+
+    def test_theme_switch_to_same_value_does_not_invoke_callback(self) -> None:
+        _, saved = self._drive_with_save_tracking(":theme dark\r\x04", initial_theme="dark")
+        assert saved == []
+
+    def test_multiple_theme_switches_all_saved(self) -> None:
+        _, saved = self._drive_with_save_tracking(
+            ":theme light\r:theme dark\r:theme auto\r\x04"
+        )
+        assert saved == ["light", "dark", "auto"]
+
+    def test_unknown_theme_does_not_trigger_save(self) -> None:
+        _, saved = self._drive_with_save_tracking(":theme neon\r\x04")
+        assert saved == []
+
+    def test_theme_switch_without_save_callback_does_not_raise(self) -> None:
+        # on_theme_save=None (the default) — must not raise when theme changes.
+        with create_pipe_input() as pipe, _fail_on_hang():
+            pipe.send_text(":theme light\r\x04")
+            with contextlib.redirect_stdout(io.StringIO()):
+                run_console(
+                    ReplSession(),
+                    theme="dark",
+                    on_theme_save=None,
+                    history_path=None,
+                    input=pipe,
+                    output=DummyOutput(),
+                )
+
+    def test_build_prompt_session_dark_theme(self) -> None:
+        from agm.agl.repl.themes import DARK_THEME
+
+        with create_pipe_input() as pipe:
+            ps = build_prompt_session(
+                ReplSession(), theme="dark", input=pipe, output=DummyOutput()
+            )
+        assert ps.style is DARK_THEME
+
+    def test_build_prompt_session_light_theme(self) -> None:
+        from agm.agl.repl.themes import LIGHT_THEME
+
+        with create_pipe_input() as pipe:
+            ps = build_prompt_session(
+                ReplSession(), theme="light", input=pipe, output=DummyOutput()
+            )
+        assert ps.style is LIGHT_THEME

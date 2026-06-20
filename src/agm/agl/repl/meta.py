@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agm.agl.repl.agentmode import AgentMode
+from agm.agl.repl.themes import THEME_NAMES
 
 if TYPE_CHECKING:
     from agm.agl.repl.session import ReplSession
@@ -43,12 +44,15 @@ class MetaContext:
                       and mutates it; M4's confirming wrapper will read it). It has
                       no observable effect on evaluation until M4 wires the wrapper.
     ``quit``        — set ``True`` by a handler to ask the loop to exit.
+    ``theme``       — current highlight theme name; mutated by ``:theme`` so the
+                      loop can update the ``PromptSession`` style live.
     """
 
     session: "ReplSession"
     echo: bool = True
     agent_mode: AgentMode = field(default_factory=AgentMode)
     quit: bool = False
+    theme: str = "auto"
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +251,24 @@ def _handle_save(arg: str, ctx: MetaContext) -> MetaOutcome:
     return MetaOutcome(text=f"Saved session source to {arg}")
 
 
+def _handle_theme(arg: str, ctx: MetaContext) -> MetaOutcome:
+    """``:theme [dark|light|auto]`` — show or switch the syntax-highlighting theme.
+
+    With no argument, prints the current theme name.  With an argument, switches
+    to the named theme; the console loop observes the change and updates the
+    ``PromptSession`` style live, then persists the choice via its
+    ``on_theme_save`` callback.
+    """
+    arg = arg.strip()
+    if not arg:
+        return MetaOutcome(text=f"Theme: {ctx.theme}")
+    if arg not in THEME_NAMES:
+        names = ", ".join(THEME_NAMES)
+        return MetaOutcome(text=f"Unknown theme {arg!r}. Available: {names}.")
+    ctx.theme = arg
+    return MetaOutcome(text=f"Theme set to {arg!r}.")
+
+
 # Registry: the authoritative table of built-in meta-commands.  M3 appends to
 # this list (or calls ``register_meta_command``); both the dispatcher and the
 # completer's ``META_COMMANDS`` read from it, so there is a single source of
@@ -317,6 +339,12 @@ _COMMANDS: list[MetaCommand] = [
         usage=":save FILE",
         summary="Write the accumulated session source to a file.",
         handler=_handle_save,
+    ),
+    MetaCommand(
+        names=("theme",),
+        usage=":theme [dark|light|auto]",
+        summary="Show or switch the syntax-highlighting theme (saved to config).",
+        handler=_handle_theme,
     ),
 ]
 

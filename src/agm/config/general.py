@@ -8,7 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agm.core.env import agm_installation_prefix
-from agm.core.toml import TomlDict, load_toml_file, toml_dict
+from agm.core.fs import mkdir, write_text
+from agm.core.toml import (
+    TomlDict,
+    dumps_toml,
+    empty_toml_doc,
+    load_toml_doc,
+    load_toml_file,
+    set_toml_table_value,
+    toml_dict,
+)
 from agm.project.layout import project_config_dir
 
 
@@ -681,3 +690,29 @@ def params_config_from_merged(
     if isinstance(program_table, dict):
         return dict(program_table)
     return {}
+
+
+@dataclass(frozen=True)
+class ReplConfig:
+    """Resolved REPL configuration."""
+
+    theme: str
+
+
+def load_repl_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReplConfig:
+    """Load ``[repl]`` configuration, merging all config layers."""
+    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
+    section = toml_dict(merged.get("repl", {}))
+    theme = section.get("theme", "auto")
+    if not isinstance(theme, str) or theme not in ("dark", "light", "auto"):
+        theme = "auto"
+    return ReplConfig(theme=theme)
+
+
+def save_repl_theme(theme: str, *, home: Path) -> None:
+    """Persist the REPL theme preference to the home-level ``config.toml``."""
+    path = home / ".agm" / "config.toml"
+    doc = load_toml_doc(path) if path.is_file() else empty_toml_doc()
+    set_toml_table_value(doc, "repl", "theme", theme)
+    mkdir(path.parent, parents=True, exist_ok=True)
+    write_text(path, dumps_toml(doc), encoding="utf-8")

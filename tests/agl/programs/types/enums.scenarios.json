@@ -5,14 +5,7 @@
       "params": {"fallback": "n/a"},
       "agents": {"worker": ["{\"$case\": \"Done\"}"]},
       "expect": {
-        "stdout_contains": [
-          "done\nno work left\n",
-          "\"$case\"",
-          "\"Partial\"",
-          "\"left\"",
-          "\"Failed\"",
-          "\"n/a\""
-        ],
+        "stdout": "done\nno work left\nOutcome.Partial(left: 2)\nOutcome.Failed(reason: \"n/a\", fatal: false)\n",
         "calls": {"worker": 1}
       }
     },
@@ -21,7 +14,7 @@
       "params": {"fallback": "n/a"},
       "agents": {"worker": ["{\"$case\": \"Partial\", \"left\": 4}"]},
       "expect": {
-        "stdout_contains": ["not failed\nremaining 4\n", "\"Partial\""],
+        "stdout": "not failed\nremaining 4\nOutcome.Partial(left: 2)\nOutcome.Failed(reason: \"n/a\", fatal: false)\n",
         "calls": {"worker": 1}
       }
     },

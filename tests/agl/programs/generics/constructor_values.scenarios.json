@@ -6,9 +6,7 @@
       "expect": {
         "stdout_contains": [
           "3,4\n",
-          "\"$case\"",
-          "\"On\"",
-          "\"label\": \"go\"",
+          "Signal.On(label: \"go\")",
           "40\nheld 7\nblank\nsignal on: fire\n"
         ],
         "stdout_not_contains": ["signal off"],
@@ -21,10 +19,10 @@
       "expect": {
         "stdout_contains": [
           "3,4\n",
-          "\"label\": \"go\"",
+          "Signal.On(label: \"go\")",
           "40\nheld 7\nblank\nsignal off\n"
         ],
-        "stdout_not_contains": ["signal on"],
+        "stdout_not_contains": ["signal on: "],
         "calls": {}
       }
     }

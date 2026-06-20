@@ -386,8 +386,9 @@ at runtime; **fallible** ones may raise `CastError`.
 
 | Target type | Permitted source types | Outcome |
 | ----------- | ---------------------- | ------- |
-| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `list[E]`, `dict[text,V]`, record, enum) | total — renders the value to its text representation |
+| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `list[E]`, `dict[text,V]`, record, enum, exception) | total — renders the value to its AgL-form text representation |
 | `json` | `text`, `json`, `bool`, `int`, `decimal`, `list[E]`, `dict[text,V]` | total — canonicalizes the value to `json` |
+| `json` | record, enum, exception | total — structural JSON encoding (record → field object; enum → object with `"$case"` tag; exception → all fields including `trace_id`) |
 | `bool` | `bool` | total (no-op) |
 | `bool` | `text`, `json` | fallible — value must be a JSON boolean |
 | `int` | `int` | total (no-op) |
@@ -404,7 +405,6 @@ at runtime; **fallible** ones may raise `CastError`.
 | record `R` | `text`, `json` | fallible — strict JSON parse then field validation |
 | enum `E` | same enum `E` | total (no-op) |
 | enum `E` | `text`, `json` | fallible — strict JSON parse then variant validation |
-| `record` or `enum` | `json` | **static cast error** — records and enums are not JSON-shaped |
 | any type | `unit`, `agent`, function type | **static cast error** |
 | `unit`, `agent`, function type | any type | **static cast error** |
 
@@ -440,6 +440,34 @@ agent-output parsing, which uses lenient recovery by default.
 
 `decimal as int` succeeds only when the decimal value has no fractional part:
 `3.0 as int` yields `3`, while `3.5 as int` raises `CastError`.
+
+### Nominal types `as json` — structural encoding
+
+Records, enums, and exceptions can be explicitly cast to `json` with `as json`.
+This is a structural conversion:
+
+- **record** → a JSON object with one key per field, in declaration order.
+- **enum** → a JSON object with a `"$case"` key holding the variant name, plus
+  one key per variant field.
+- **exception** → a JSON object with all fields including `trace_id`, in
+  declaration order.
+
+This is an **explicit cast only**. Nominal values are not JSON-shaped and are
+not implicitly assignable to `json`; `as json` must be written explicitly:
+
+```agl
+record R
+  x: int
+
+let r: R = R(x: 1)
+print r              # → R(x: 1)       (AgL form — the default)
+
+# A json value printed (or interpolated) directly is top-level, so it renders
+# as pretty, multi-line JSON (2-space indent):
+print(r as json)     # → {
+                     #      "x": 1
+                     #    }
+```
 
 ### `text as json` — embedding, not parsing
 

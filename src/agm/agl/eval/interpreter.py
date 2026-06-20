@@ -1387,19 +1387,25 @@ class Interpreter:
         """
         from agm.agl.typecheck.types import ExceptionType as ExcType
 
+        # Fields are normalized to *declaration order* here, at construction, so
+        # every consumer (native render, ``as json``, equality) sees the same
+        # canonical order regardless of how the constructor call was written.
         if isinstance(typ, RecordType):
             coerced = {
-                fname: _coerce(fval, typ.fields[fname])
-                for fname, fval in arg_values.items()
+                fname: _coerce(arg_values[fname], ftype)
+                for fname, ftype in typ.fields.items()
             }
             return RecordValue(type_name=typ.name, fields=coerced)
 
         if isinstance(typ, ExcType):
-            exc_trace_id = self._trace.new_event_id()
-            fields: dict[str, Value] = {"trace_id": TextValue(exc_trace_id)}
-            for fname, fval in arg_values.items():
-                field_type = typ.fields.get(fname)
-                fields[fname] = _coerce(fval, field_type) if field_type is not None else fval
+            # ``trace_id`` is the only auto-injected field (the type checker
+            # requires every other field, including ``message``); a value the
+            # user passed explicitly still wins.
+            trace_val: Value = TextValue(self._trace.new_event_id())
+            fields = {
+                fname: (_coerce(arg_values[fname], ftype) if fname in arg_values else trace_val)
+                for fname, ftype in typ.fields.items()
+            }
             return ExceptionValue(type_name=typ.name, fields=fields)
 
         # Enum-variant constructor.
@@ -1409,8 +1415,8 @@ class Interpreter:
         assert variant_name is not None, "variant is required for EnumType"
         variant_fields = typ.variants.get(variant_name, {})
         coerced2 = {
-            fname: _coerce(fval, variant_fields[fname])
-            for fname, fval in arg_values.items()
+            fname: _coerce(arg_values[fname], ftype)
+            for fname, ftype in variant_fields.items()
         }
         return EnumValue(type_name=typ.name, variant=variant_name, fields=coerced2)
 

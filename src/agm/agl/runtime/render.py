@@ -1,21 +1,34 @@
-"""Uniform value rendering for AgL string interpolation.
+"""AgL-native value rendering for string interpolation, print, and REPL echo.
 
-Every ``${expr}`` in any template — whether it appears in a ``prompt`` agent
-call, a ``print`` statement, or an ``exec`` shell call — renders its value with
-the same rules:
+Values render in the AgL syntax used to define them by default.  JSON output
+is an explicit opt-in via ``as json``.  Two boolean axes drive the leaf cases:
 
-- ``text``               → verbatim string (no boundary markers, no quoting)
-- ``int`` / ``decimal`` / ``bool`` → plain scalar text (see ``_scalar_text``)
-- ``list`` / ``dict`` / record / enum / ``json`` / exception
-                         → pretty-printed JSON, 2-space indent (see ``_pretty_json``)
+- **top-level vs nested** — the caller passes the value at top level
+  (``top_level=True``); every recursive child call uses ``top_level=False``.
+- **interpolation vs REPL echo** — controls only the top-level ``text`` case:
+  interpolation (``render_value``) leaves ``text`` verbatim; REPL echo
+  (``render_value_repl``) quotes it as an AgL string literal.
 
-No ``<dsl-value>`` boundary tags are ever added.  No shell quoting is applied
-to ``exec`` interpolations — the rendered text is inserted verbatim.  The
-``as <name>`` renderer-override syntax no longer exists; ``${expr}`` always
-uses the rules above.
+Per-kind rules:
 
-``render_value`` is the single entry point used by the interpreter for all
-three evaluation contexts.
+- ``text`` (top-level, interpolation)  → verbatim, no quotes
+- ``text`` (top-level, REPL echo)      → quoted AgL string literal via ``_quote_text``
+- ``text`` (nested, any mode)          → quoted AgL string literal via ``_quote_text``
+- ``int`` / ``decimal`` / ``bool``     → ``_scalar_text`` at any depth
+- ``unit``                             → ``()``
+- ``agent``                            → ``<agent NAME>``
+- ``function`` (``Closure``)           → ``<function/N -> T>``
+- ``json`` (top-level)                 → pretty JSON, 2-space indent
+- ``json`` (nested)                    → compact JSON, single-line
+- ``list``                             → ``[e1, e2, ...]``, children nested
+- ``dict``                             → ``{"k1": v1, ...}``, keys always quoted
+- record                               → ``TypeName(f1: v1, ...)`` declaration order
+- enum   → ``TypeName.Variant(f1: v1, ...)``; nullary variant → ``TypeName.Variant``
+- exception                            → ``TypeName(f1: v1, ...)`` all fields incl. ``trace_id``
+
+Nominal values (record, enum, exception) carry their fields in declaration
+order already — the interpreter normalizes them at construction time — so the
+renderer simply walks ``value.fields`` and needs no type information.
 """
 
 from __future__ import annotations
@@ -26,15 +39,25 @@ from agm.agl.eval.values import (
     Closure,
     ConstructorValue,
     DecimalValue,
+    DictValue,
+    EnumValue,
+    ExceptionValue,
     IntValue,
+    JsonValue,
+    ListValue,
+    RecordValue,
     TextValue,
     UnitValue,
     Value,
 )
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 
-# Escape mapping mirroring AgL's JSON-style string-literal escape set, used by
-# :func:`_quote_text` to produce a REPL-echo surface form for ``text`` values.
+# ---------------------------------------------------------------------------
+# Escape mapping for _quote_text
+# ---------------------------------------------------------------------------
+
+# JSON escape set extended with ``$`` so ``${`` cannot be read as interpolation
+# inside a quoted string literal rendered into output.
 _TEXT_ESCAPES: dict[str, str] = {
     '"': '\\"',
     "\\": "\\\\",
@@ -43,16 +66,17 @@ _TEXT_ESCAPES: dict[str, str] = {
     "\t": "\\t",
     "\b": "\\b",
     "\f": "\\f",
+    "$": "\\$",
 }
 
 
 def _quote_text(s: str) -> str:
     """Return *s* as a double-quoted AgL string literal surface form.
 
-    Mirrors the escape set AgL string literals accept (``\\"``, ``\\\\``,
-    ``\\n`` …, ``\\uXXXX``) so a ``text`` value round-trips visually in the
-    REPL echo.  This is a display concern only — it never affects template
-    interpolation, where ``text`` is always inserted verbatim.
+    Applies the JSON escape set plus ``\\$`` (so ``${`` cannot read as
+    interpolation) and ``\\uXXXX`` for remaining control characters.  Used
+    for both nested ``text`` values and the top-level REPL-echo case so the
+    two never diverge.
     """
     out: list[str] = ['"']
     for ch in s:
@@ -65,15 +89,6 @@ def _quote_text(s: str) -> str:
             out.append(ch)
     out.append('"')
     return "".join(out)
-
-
-def _pretty_json(value: Value) -> str:
-    """Render *value* as pretty-printed JSON (2-space indent).
-
-    Uses the shared exact serializer so ``Decimal`` values are emitted as exact
-    unquoted numeric text (never routed through binary ``float``; design §5.1).
-    """
-    return dumps_exact(value_to_json_obj(value), indent=2)
 
 
 def _scalar_text(value: IntValue | DecimalValue | BoolValue) -> str:
@@ -107,56 +122,105 @@ def _closure_surface(closure: Closure) -> str:
     return f"<function/{arity} -> {closure.return_type!r}>"
 
 
-def render_value(value: Value) -> str:
-    """Render *value* for use inside any template interpolation (uniform rendering).
+# ---------------------------------------------------------------------------
+# Core recursive renderer
+# ---------------------------------------------------------------------------
 
-    Rules (applied identically in ``prompt``, ``print``, and ``exec`` contexts):
-    - ``text``                        → verbatim string.
-    - ``int`` / ``decimal`` / ``bool`` → plain scalar text via ``_scalar_text``.
-    - ``unit`` (``()``)               → the literal text ``"()"``.
-    - ``agent``                       → ``"<agent NAME>"``.
-    - ``ConstructorValue``            → ``"<constructor Owner>"`` (record) or
-                                        ``"<constructor Owner.variant>"`` (enum).
-    - ``function`` (``Closure``)      → ``"<function/N -> T>"``.
-    - Everything else (``list``, ``dict``, record, enum, ``json``, exception)
-                                      → pretty-printed JSON, 2-space indent.
 
-    No ``<dsl-value>`` boundary tags, no shell quoting.
+def _render(value: Value, *, top_level: bool, repl: bool) -> str:
+    """Recursive AgL-native renderer.
 
-    ``Closure`` and ``AgentValue`` are only reachable here from REPL echo /
-    ``:bindings`` (the type checker statically prevents them from appearing in
-    ``print``, template interpolation, or ``exec`` — design D9).
+    ``top_level=True`` for the outermost call; ``False`` for all children.
+    ``repl=True`` enables REPL-echo quoting for a top-level ``text`` value.
+    Nominal values are rendered straight from ``value.fields``, which the
+    interpreter already keeps in declaration order.
     """
     if isinstance(value, TextValue):
-        return value.value
+        if top_level and not repl:
+            # Interpolation context: verbatim.
+            return value.value
+        # REPL echo (top-level) or nested (any mode): quoted.
+        return _quote_text(value.value)
+
     if isinstance(value, UnitValue):
         return "()"
+
     if isinstance(value, (IntValue, DecimalValue, BoolValue)):
         return _scalar_text(value)
+
     if isinstance(value, AgentValue):
         return f"<agent {value.name}>"
+
     if isinstance(value, ConstructorValue):
         if value.variant is not None:
             return f"<constructor {value.owner_name}.{value.variant}>"
         return f"<constructor {value.owner_name}>"
+
     if isinstance(value, Closure):
         return _closure_surface(value)
-    # Structured / json / exception: pretty JSON.
-    return _pretty_json(value)
+
+    if isinstance(value, JsonValue):
+        if top_level:
+            return dumps_exact(value_to_json_obj(value), indent=2)
+        return dumps_exact(value_to_json_obj(value), indent=None)
+
+    if isinstance(value, ListValue):
+        if not value.elements:
+            return "[]"
+        items = [_render(e, top_level=False, repl=repl) for e in value.elements]
+        return "[" + ", ".join(items) + "]"
+
+    if isinstance(value, DictValue):
+        if not value.entries:
+            return "{}"
+        items = [
+            f"{_quote_text(k)}: {_render(v, top_level=False, repl=repl)}"
+            for k, v in value.entries.items()
+        ]
+        return "{" + ", ".join(items) + "}"
+
+    if isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
+        prefix = (
+            f"{value.type_name}.{value.variant}"
+            if isinstance(value, EnumValue)
+            else value.type_name
+        )
+        if not value.fields:
+            return prefix if isinstance(value, EnumValue) else f"{prefix}()"
+        field_parts = [
+            f"{name}: {_render(v, top_level=False, repl=repl)}"
+            for name, v in value.fields.items()
+        ]
+        return f"{prefix}(" + ", ".join(field_parts) + ")"
+
+    # Exhaustiveness: the Value union is closed; all cases covered above.
+    raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def render_value(value: Value) -> str:
+    """Render *value* for interpolation, ``print``, or ``as text``.
+
+    Top-level ``text`` is verbatim (no quotes).  All other rendering follows
+    the AgL-native rules: scalars as plain text, ``list``/``dict`` in AgL
+    bracket/brace form, record/enum/exception as ``TypeName(field: value, ...)``
+    with fields in declaration order.  ``json`` values render as pretty-printed
+    JSON (2-space indent) at top level and compact single-line JSON when nested.
+    """
+    return _render(value, top_level=True, repl=False)
 
 
 def render_value_repl(value: Value) -> str:
-    """Render *value* for REPL echo (``agl>`` and ``:bindings`` / ``:params``).
+    """Render *value* for REPL echo (``agl>`` prompt and ``:bindings`` / ``:params``).
 
     Identical to :func:`render_value` except that a top-level ``text`` value is
-    shown quoted (as an AgL string literal surface form) so the REPL echo of
-    ``agl> \"aaa\"`` reads ``\"aaa\"``.  Text nested inside structured values
-    is already quoted by the JSON renderer, so only the bare ``text`` case
-    differs.  Template interpolation (``print`` / ``prompt`` / ``exec``) is
-    unaffected — it always uses :func:`render_value` verbatim.
+    shown as a quoted AgL string literal so the REPL echo of ``"aaa"`` reads
+    ``"aaa"``.  Text nested inside structured values is also quoted.  Template
+    interpolation (``print`` / ``prompt`` / ``exec``) always uses
+    :func:`render_value` verbatim.
     """
-    if isinstance(value, TextValue):
-        return _quote_text(value.value)
-    return render_value(value)
-
-
+    return _render(value, top_level=True, repl=True)

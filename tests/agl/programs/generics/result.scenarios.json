@@ -6,9 +6,7 @@
       "expect": {
         "stdout_contains": [
           "ok\nerr\n",
-          "\"$case\"",
-          "\"ok\"",
-          "\"value\": 5",
+          "Outcome.ok(value: 5)",
           "point 1,2\n"
         ],
         "stdout_not_contains": ["fault"],
@@ -21,10 +19,10 @@
       "expect": {
         "stdout_contains": [
           "ok\nerr\n",
-          "\"value\": 5",
+          "Outcome.ok(value: 5)",
           "fault 404: missing\n"
         ],
-        "stdout_not_contains": ["point"],
+        "stdout_not_contains": ["point 1"],
         "calls": {}
       }
     }

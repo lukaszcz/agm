@@ -24,6 +24,7 @@ from agm.agl import AglError, SourceSpan, WorkflowRuntime
 from agm.agl.diagnostics import format_diagnostic, format_diagnostic_location
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.runtime import Diagnostic, RunResult
+from agm.agl.typecheck.types import Type
 
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
@@ -924,7 +925,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         from agm.agl.eval.values import TextValue as TV
         from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
-        from agm.agl.typecheck.types import TextType, Type
+        from agm.agl.typecheck.types import TextType
 
         class FooCodec:
             @property
@@ -973,21 +974,62 @@ class TestCapabilitiesBuiltFromRegistrations:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: render.py — render_value / _scalar_text / _pretty_json
+# Coverage: render.py — render_value / render_value_repl / _scalar_text
 # ---------------------------------------------------------------------------
 
 
 class TestRenderValue:
-    """Unit tests for the uniform render_value function."""
+    """Unit tests for the AgL-native render_value / render_value_repl functions.
 
-    def test_text_value_is_verbatim(self) -> None:
+    Nominal values carry their fields in declaration order already (the
+    interpreter normalizes them at construction), so these tests build the
+    values in the order they expect rendered and the renderer walks
+    ``value.fields`` verbatim — no type lookup is involved.
+    """
+
+    # ------------------------------------------------------------------
+    # text: verbatim (render_value) vs quoted (render_value_repl)
+    # ------------------------------------------------------------------
+
+    def test_text_verbatim_render_value(self) -> None:
+        """render_value: top-level text is verbatim, no quotes."""
         from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_value
+
         assert render_value(TextValue("hello world")) == "hello world"
+
+    def test_text_quoted_render_value_repl(self) -> None:
+        """render_value_repl: top-level text is wrapped in double quotes."""
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_value_repl
+
+        assert render_value_repl(TextValue("hello")) == '"hello"'
+
+    def test_text_repl_escapes_special_chars(self) -> None:
+        """render_value_repl: JSON escape set applies to top-level text."""
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_value_repl
+
+        assert render_value_repl(TextValue('a"b')) == '"a\\"b"'
+        assert render_value_repl(TextValue("a\\b")) == '"a\\\\b"'
+        assert render_value_repl(TextValue("a\nb")) == '"a\\nb"'
+        assert render_value_repl(TextValue("a\tb")) == '"a\\tb"'
+
+    def test_text_repl_escapes_control_chars_as_unicode(self) -> None:
+        """render_value_repl: control chars below 0x20 render as \\uXXXX."""
+        from agm.agl.eval.values import TextValue
+        from agm.agl.runtime.render import render_value_repl
+
+        assert render_value_repl(TextValue("a\x00b")) == '"a\\u0000b"'
+
+    # ------------------------------------------------------------------
+    # Scalars: int / decimal / bool (unchanged at any depth)
+    # ------------------------------------------------------------------
 
     def test_int_value_is_plain_text(self) -> None:
         from agm.agl.eval.values import IntValue
         from agm.agl.runtime.render import render_value
+
         assert render_value(IntValue(42)) == "42"
 
     def test_decimal_value_is_plain_text(self) -> None:
@@ -1001,91 +1043,13 @@ class TestRenderValue:
     def test_bool_value_is_plain_text(self) -> None:
         from agm.agl.eval.values import BoolValue
         from agm.agl.runtime.render import render_value
-        assert render_value(BoolValue(True)) == "true"
-        assert render_value(BoolValue(False)) == "false"
-
-    def test_list_value_is_pretty_json(self) -> None:
-        from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_value
-        v = ListValue([IntValue(1), IntValue(2)])
-        out = render_value(v)
-        assert out == "[\n  1,\n  2\n]"
-
-    def test_dict_value_is_pretty_json(self) -> None:
-        from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import render_value
-        v = DictValue({"k": TextValue("v")})
-        out = render_value(v)
-        assert '"k"' in out and '"v"' in out
-
-    def test_no_dsl_value_tags_in_prompt_interpolation(self) -> None:
-        """Interpolation in a prompt never wraps values in <dsl-value> tags."""
-        from agm.agl.eval.values import IntValue, TextValue
-        from agm.agl.runtime.render import render_value
-        assert "<dsl-value" not in render_value(TextValue("x"))
-        assert "<dsl-value" not in render_value(IntValue(1))
-
-    def test_render_value_text(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_value
-
-        assert render_value(TextValue("hello")) == "hello"
-
-    def test_render_value_int_via_render_value(self) -> None:
-        from agm.agl.eval.values import IntValue
-        from agm.agl.runtime.render import render_value
-
-        assert render_value(IntValue(7)) == "7"
-
-    def test_render_value_decimal_via_render_value(self) -> None:
-        from decimal import Decimal
-
-        from agm.agl.eval.values import DecimalValue
-        from agm.agl.runtime.render import render_value
-
-        assert render_value(DecimalValue(Decimal("1.5"))) == "1.5"
-
-    def test_render_value_bool_via_render_value(self) -> None:
-        from agm.agl.eval.values import BoolValue
-        from agm.agl.runtime.render import render_value
 
         assert render_value(BoolValue(True)) == "true"
         assert render_value(BoolValue(False)) == "false"
 
-    def test_render_value_json_via_render_value(self) -> None:
-        from agm.agl.eval.values import JsonValue
-        from agm.agl.runtime.render import render_value
-
-        out = render_value(JsonValue({"k": 1}))
-        assert "k" in out
-
-    def test_render_value_list_via_render_value(self) -> None:
-        from agm.agl.eval.values import IntValue, ListValue
-        from agm.agl.runtime.render import render_value
-
-        out = render_value(ListValue(elements=(IntValue(1),)))
-        assert "1" in out
-
-    def test_render_value_record_via_render_value(self) -> None:
-        from agm.agl.eval.values import IntValue, RecordValue
-        from agm.agl.runtime.render import render_value
-
-        out = render_value(RecordValue(type_name="R", fields={"x": IntValue(3)}))
-        assert "x" in out
-
-    def test_render_value_enum_via_render_value(self) -> None:
-        from agm.agl.eval.values import EnumValue
-        from agm.agl.runtime.render import render_value
-
-        out = render_value(EnumValue(type_name="E", variant="A", fields={}))
-        assert "A" in out
-
-    def test_render_value_dict_via_render_value(self) -> None:
-        from agm.agl.eval.values import DictValue, TextValue
-        from agm.agl.runtime.render import render_value
-
-        out = render_value(DictValue(entries={"k": TextValue("v")}))
-        assert "k" in out
+    # ------------------------------------------------------------------
+    # _scalar_text unit tests (unchanged helper — keep working)
+    # ------------------------------------------------------------------
 
     def test_scalar_text_int(self) -> None:
         """_scalar_text(IntValue) renders as plain decimal digits."""
@@ -1112,61 +1076,35 @@ class TestRenderValue:
         assert _scalar_text(BoolValue(True)) == "true"
         assert _scalar_text(BoolValue(False)) == "false"
 
-    def test_exception_value_renders_as_pretty_json(self) -> None:
-        """Exception value renders as pretty JSON (no boundary tags)."""
-        from agm.agl.eval.values import ExceptionValue, TextValue
-        from agm.agl.runtime.render import render_value
-
-        exc_val = ExceptionValue(
-            type_name="Abort",
-            fields={
-                "message": TextValue("fatal"),
-                "trace_id": TextValue("abc123"),
-            },
-        )
-        out = render_value(exc_val)
-        assert "fatal" in out, f"Expected message value in output: {out!r}"
-        assert "abc123" in out, f"Expected trace_id value in output: {out!r}"
-        assert "<dsl-value" not in out, f"Expected no boundary tags: {out!r}"
+    # ------------------------------------------------------------------
+    # unit / agent / closure (non-data, unchanged)
+    # ------------------------------------------------------------------
 
     def test_unit_value_renders_as_unit_literal(self) -> None:
-        """Unit value (``()``) renders as the literal text ``'()'``.
-
-        In v2, unit is a first-class value returned by expressions like
-        ``print(x)`` and unit-yielding if/do/try branches.  The renderer must
-        produce a stable, human-readable representation rather than crashing.
-        """
+        """Unit value renders as ``()``."""
         from agm.agl.eval.values import UnitValue
         from agm.agl.runtime.render import render_value
 
         assert render_value(UnitValue()) == "()"
 
     def test_agent_value_renders_as_angle_bracket_form(self) -> None:
-        """AgentValue renders as ``<agent NAME>`` — no crash, no JSON attempt."""
+        """AgentValue renders as ``<agent NAME>``."""
         from agm.agl.eval.values import AgentValue
         from agm.agl.runtime.render import render_value
 
-        rendered = render_value(AgentValue(name="reviewer"))
-        assert rendered == "<agent reviewer>"
+        assert render_value(AgentValue(name="reviewer")) == "<agent reviewer>"
 
     def test_closure_renders_as_function_surface_form(self) -> None:
-        """Closure renders as ``<function/N -> T>`` — no crash, no JSON attempt.
-
-        The surface form uses the arity (from ``params``) and the declared
-        return type (from ``return_type``), both of which every Closure carries.
-        """
+        """Closure renders as ``<function/N -> T>``."""
         from agm.agl.eval.values import Closure
         from agm.agl.runtime.render import render_value
 
-        # Obtain a real Closure via an AgL program (fn expression bound to let).
         rt = WorkflowRuntime()
         result = rt.run("let f = fn(x: int, y: int) -> int => x + y\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, Closure)
-        rendered = render_value(closure)
-        # Arity 2, return type int.
-        assert rendered == "<function/2 -> int>"
+        assert render_value(closure) == "<function/2 -> int>"
 
     def test_closure_zero_arity_renders_correctly(self) -> None:
         """A zero-parameter closure renders as ``<function/0 -> T>``."""
@@ -1180,37 +1118,259 @@ class TestRenderValue:
         assert isinstance(closure, Closure)
         assert render_value(closure) == "<function/0 -> int>"
 
+    # ------------------------------------------------------------------
+    # list: single-line AgL form
+    # ------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Coverage: render.py — render_value_repl (REPL echo quotes text)
-# ---------------------------------------------------------------------------
+    def test_list_single_line(self) -> None:
+        """Lists render as single-line ``[e1, e2, ...]``."""
+        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.runtime.render import render_value
 
+        v = ListValue(elements=(IntValue(1), IntValue(2)))
+        assert render_value(v) == "[1, 2]"
 
-class TestRenderValueRepl:
-    """Unit tests for the REPL echo renderer (:func:`render_value_repl`)."""
+    def test_list_empty(self) -> None:
+        """Empty list renders as ``[]``."""
+        from agm.agl.eval.values import ListValue
+        from agm.agl.runtime.render import render_value
 
-    def test_text_value_is_quoted(self) -> None:
+        assert render_value(ListValue(elements=())) == "[]"
+
+    def test_list_nested_text_is_quoted(self) -> None:
+        """Text inside a list is quoted."""
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = ListValue(elements=(TextValue("tests"), TextValue("coverage")))
+        assert render_value(v) == '["tests", "coverage"]'
+
+    # ------------------------------------------------------------------
+    # dict: always-quoted keys, single-line AgL form
+    # ------------------------------------------------------------------
+
+    def test_dict_single_line_quoted_keys(self) -> None:
+        """Dict renders single-line with always-quoted keys."""
+        from agm.agl.eval.values import DictValue, IntValue
+        from agm.agl.runtime.render import render_value
+
+        v = DictValue({"origin": IntValue(1)})
+        assert render_value(v) == '{"origin": 1}'
+
+    def test_dict_key_with_space_is_quoted(self) -> None:
+        """Dict keys with spaces (or any content) are always quoted."""
+        from agm.agl.eval.values import DictValue, IntValue
+        from agm.agl.runtime.render import render_value
+
+        v = DictValue({"two words": IntValue(1)})
+        assert render_value(v) == '{"two words": 1}'
+
+    def test_dict_empty(self) -> None:
+        """Empty dict renders as ``{}``."""
+        from agm.agl.eval.values import DictValue
+        from agm.agl.runtime.render import render_value
+
+        assert render_value(DictValue({})) == "{}"
+
+    def test_dict_multiple_entries(self) -> None:
+        """Multiple dict entries, in insertion order, keys quoted."""
+        from agm.agl.eval.values import DictValue, IntValue
+        from agm.agl.runtime.render import render_value
+
+        v = DictValue({"origin": IntValue(1), "two words": IntValue(2)})
+        assert render_value(v) == '{"origin": 1, "two words": 2}'
+
+    # ------------------------------------------------------------------
+    # record: AgL form, declaration order
+    # ------------------------------------------------------------------
+
+    def test_record_renders_fields_in_stored_order(self) -> None:
+        """Record renders fields in the order they are stored (declaration order)."""
+        from agm.agl.eval.values import IntValue, RecordValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = RecordValue(
+            type_name="Issue",
+            fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
+        )
+        assert render_value(v) == 'Issue(title: "Missing tests", severity: 3)'
+
+    def test_record_empty(self) -> None:
+        """A record with no fields renders as ``TypeName()``."""
+        from agm.agl.eval.values import RecordValue
+        from agm.agl.runtime.render import render_value
+
+        v = RecordValue(type_name="Empty", fields={})
+        assert render_value(v) == "Empty()"
+
+    def test_record_nested_record(self) -> None:
+        """Nested records render inline."""
+        from agm.agl.eval.values import BoolValue, RecordValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        author = RecordValue(
+            type_name="Author",
+            fields={"name": TextValue("Ada"), "active": BoolValue(True)},
+        )
+        issue = RecordValue(
+            type_name="Issue",
+            fields={"title": TextValue("Missing tests"), "author": author},
+        )
+        out = render_value(issue)
+        assert out == 'Issue(title: "Missing tests", author: Author(name: "Ada", active: true))'
+
+    def test_record_with_list_field(self) -> None:
+        """Record with a list field renders correctly (list inline)."""
+        from agm.agl.eval.values import IntValue, ListValue, RecordValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = RecordValue(
+            type_name="Issue",
+            fields={
+                "title": TextValue("Missing tests"),
+                "severity": IntValue(3),
+                "tags": ListValue(elements=(TextValue("tests"), TextValue("coverage"))),
+            },
+        )
+        out = render_value(v)
+        assert out == 'Issue(title: "Missing tests", severity: 3, tags: ["tests", "coverage"])'
+
+    # ------------------------------------------------------------------
+    # enum: qualified form, nullary variant
+    # ------------------------------------------------------------------
+
+    def test_enum_with_payload(self) -> None:
+        """Enum with payload renders as ``TypeName.Variant(field: value)``."""
+        from agm.agl.eval.values import EnumValue, IntValue
+        from agm.agl.runtime.render import render_value
+
+        v = EnumValue(type_name="Outcome", variant="Partial", fields={"left": IntValue(2)})
+        assert render_value(v) == "Outcome.Partial(left: 2)"
+
+    def test_enum_nullary_variant(self) -> None:
+        """Nullary enum variant renders as ``TypeName.Variant`` (no parens)."""
+        from agm.agl.eval.values import EnumValue
+        from agm.agl.runtime.render import render_value
+
+        v = EnumValue(type_name="Outcome", variant="Done", fields={})
+        assert render_value(v) == "Outcome.Done"
+
+    def test_enum_multi_field_payload(self) -> None:
+        """Enum with multiple payload fields renders them in stored order."""
+        from agm.agl.eval.values import EnumValue, IntValue
+        from agm.agl.runtime.render import render_value
+
+        v = EnumValue(
+            type_name="E",
+            variant="V",
+            fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
+        )
+        assert render_value(v) == "E.V(a: 1, b: 2, c: 3)"
+
+    # ------------------------------------------------------------------
+    # exception: record-style with all fields incl. trace_id
+    # ------------------------------------------------------------------
+
+    def test_exception_renders_record_style_with_trace_id(self) -> None:
+        """Exception renders like a record with all fields in declaration order."""
+        from agm.agl.eval.values import ExceptionValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = ExceptionValue(
+            type_name="CastError",
+            fields={
+                "message": TextValue('cannot parse "x" as int'),
+                "trace_id": TextValue("evt-7"),
+                "source_type": TextValue("text"),
+                "target_type": TextValue("int"),
+                "raw": TextValue("x"),
+            },
+        )
+        out = render_value(v)
+        expected = (
+            'CastError(message: "cannot parse \\"x\\" as int", trace_id: "evt-7", '
+            'source_type: "text", target_type: "int", raw: "x")'
+        )
+        assert out == expected
+
+    def test_exception_abort_renders_with_trace_id(self) -> None:
+        """Abort exception includes both message and trace_id."""
+        from agm.agl.eval.values import ExceptionValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = ExceptionValue(
+            type_name="Abort",
+            fields={
+                "message": TextValue("fatal"),
+                "trace_id": TextValue("abc123"),
+            },
+        )
+        out = render_value(v)
+        assert out == 'Abort(message: "fatal", trace_id: "abc123")'
+        assert "<dsl-value" not in out
+
+    # ------------------------------------------------------------------
+    # Nested text escaping including $ → \$
+    # ------------------------------------------------------------------
+
+    def test_nested_text_escapes_dollar(self) -> None:
+        """Nested text containing ``${`` escapes ``$`` as ``\\$``."""
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = ListValue(elements=(TextValue("a${b}"),))
+        out = render_value(v)
+        assert out == r'["a\${b}"]'
+
+    def test_nested_text_escapes_quotes_and_newlines(self) -> None:
+        """Nested text: quotes and newlines are escaped."""
+        from agm.agl.eval.values import ListValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = ListValue(elements=(TextValue('say "hi"\nbye'),))
+        out = render_value(v)
+        assert out == r'["say \"hi\"\nbye"]'
+
+    def test_repl_top_level_text_escapes_dollar(self) -> None:
+        """render_value_repl: top-level text with ``$`` escapes it as ``\\$``."""
         from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_value_repl
 
-        assert render_value_repl(TextValue("aaa")) == '"aaa"'
+        out = render_value_repl(TextValue("a${b}"))
+        assert out == r'"a\${b}"'
 
-    def test_text_value_escapes_special_chars(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_value_repl
+    # ------------------------------------------------------------------
+    # json: top-level pretty vs nested compact
+    # ------------------------------------------------------------------
 
-        assert render_value_repl(TextValue('a"b')) == '"a\\"b"'
-        assert render_value_repl(TextValue("a\\b")) == '"a\\\\b"'
-        assert render_value_repl(TextValue("a\nb")) == '"a\\nb"'
-        assert render_value_repl(TextValue("a\tb")) == '"a\\tb"'
+    def test_json_top_level_is_pretty(self) -> None:
+        """Top-level json value renders as pretty-printed JSON (indent=2)."""
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.runtime.render import render_value
 
-    def test_text_value_escapes_control_chars_as_unicode(self) -> None:
-        from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_value_repl
+        out = render_value(JsonValue({"k": 1}))
+        assert out == '{\n  "k": 1\n}'
 
-        assert render_value_repl(TextValue("a\x00b")) == '"a\\u0000b"'
+    def test_json_nested_is_compact(self) -> None:
+        """json nested inside a record field renders compact (single-line)."""
+        from agm.agl.eval.values import JsonValue, RecordValue
+        from agm.agl.runtime.render import render_value
 
-    def test_non_text_values_match_render_value(self) -> None:
+        v = RecordValue(
+            type_name="R",
+            fields={"data": JsonValue({"a": 1, "b": 2})},
+        )
+        out = render_value(v)
+        # The json field must be compact (no newlines) so the record stays single-line.
+        assert "\n" not in out
+        assert out == 'R(data: {"a": 1, "b": 2})'
+
+    # ------------------------------------------------------------------
+    # render_value_repl: non-text values match render_value
+    # ------------------------------------------------------------------
+
+    def test_repl_non_text_matches_render_value(self) -> None:
+        """render_value_repl matches render_value for non-text values."""
         from decimal import Decimal
 
         from agm.agl.eval.values import (
@@ -1227,16 +1387,29 @@ class TestRenderValueRepl:
             DecimalValue(Decimal("1.5")),
             BoolValue(True),
             UnitValue(),
-            ListValue([IntValue(1)]),
+            ListValue(elements=(IntValue(1),)),
         ):
             assert render_value_repl(v) == render_value(v)
 
-    def test_nested_text_in_list_is_json_quoted(self) -> None:
+    def test_repl_nested_text_in_list_is_quoted(self) -> None:
+        """Text inside a list is quoted regardless of repl mode."""
         from agm.agl.eval.values import ListValue, TextValue
         from agm.agl.runtime.render import render_value_repl
 
-        out = render_value_repl(ListValue([TextValue("v")]))
-        assert '"v"' in out
+        out = render_value_repl(ListValue(elements=(TextValue("v"),)))
+        assert out == '["v"]'
+
+    # ------------------------------------------------------------------
+    # No <dsl-value> tags ever
+    # ------------------------------------------------------------------
+
+    def test_no_dsl_value_tags_in_interpolation(self) -> None:
+        """Interpolation never wraps values in <dsl-value> tags."""
+        from agm.agl.eval.values import IntValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        assert "<dsl-value" not in render_value(TextValue("x"))
+        assert "<dsl-value" not in render_value(IntValue(1))
 
 
 # ---------------------------------------------------------------------------
@@ -2302,7 +2475,7 @@ class TestRegisterCodecErrors:
         from agm.agl.eval.values import TextValue
         from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
-        from agm.agl.typecheck.types import TextType, Type
+        from agm.agl.typecheck.types import TextType
 
         class _Codec(OutputCodec):
             @property

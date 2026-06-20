@@ -191,9 +191,12 @@ Built-in typing rules (in `agm.agl.typecheck.checker`) consult `builtin_calls`:
 
 **Cast type checking.** `Cast` nodes are checked against a `cast_specs` side
 table in `agm.agl.typecheck.casts` that encodes the permitted source–target
-pairs and their total/fallible classification. Invalid pairs (e.g. `record as
-json`, `bool as int`, casts to/from `unit`/`agent`/function types) are static
-errors. `as?` nodes are always typed as `bool` regardless of source/target.
+pairs and their total/fallible classification. Invalid pairs (e.g. `bool as int`,
+casts to/from `unit`/`agent`/function types) are static errors. Nominal types
+(record, enum, exception) `as json` are permitted as a `TOTAL_JSON` explicit cast
+(structural encoding); `exception as text` is permitted as a `TOTAL_RENDER` cast.
+Implicit assignability to `json` is unchanged — nominal values are still not
+JSON-shaped. `as?` nodes are always typed as `bool` regardless of source/target.
 
 The prelude types `ExecResult` (a record with `stdout`, `stderr`, `exit_code`,
 `timed_out`) and `ParsePolicy` (enum `Abort | Retry(n: int)`) are registered as
@@ -265,6 +268,35 @@ existing configurable strict/lenient codec pipeline and is not affected.
 Agent-value dispatch: `_eval_ask_call` extracts the `AgentValue` from the
 `agent:` named argument (or uses the default agent when absent) and issues the
 call via the host runtime, exactly as the former `AgentCall` node did.
+
+## Value rendering
+
+All value display (template/`${…}` interpolation, `print`, `as text`, and REPL
+echo) goes through a single recursive renderer in `agm.agl.runtime.render`
+(`render_value` / `render_value_repl`). The renderer produces **AgL-native
+syntax** for every value kind:
+
+- Scalars (`int`, `decimal`, `bool`) — plain text.
+- `text` — verbatim at top level (interpolation), quoted AgL string literal
+  when nested or in REPL echo; dollar signs are escaped as `\$`.
+- `json` — pretty-printed (2-space indent) at top level, compact single-line
+  when nested inside another structured value.
+- `list` / `dict` — AgL container syntax (`[…]` / `{"k": v, …}`); dict keys
+  always quoted.
+- Record / enum / exception — AgL constructor syntax
+  (`TypeName(f: v, …)` / `TypeName.Variant(…)` / `TypeName.Variant`); the
+  renderer walks `value.fields` verbatim.
+
+Nominal fields are kept in **declaration order** by the value itself: the
+interpreter normalizes them once, at construction (`_eval_constructor`), against
+the declared type — so the renderer needs no type information and there is a
+single canonical field order for every consumer (native render, `as json`,
+equality). The renderer depends only on the `Value` union — no semantic types,
+no Lark types, no lexer rules.
+
+`as json` on a nominal type (`TOTAL_JSON` cast) uses `value_to_json_obj`
+(structural encoding), which walks the same declaration-ordered `value.fields`,
+so native and JSON output agree on field order.
 
 ## Incremental REPL session
 

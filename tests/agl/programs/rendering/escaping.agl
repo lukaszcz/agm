@@ -1,0 +1,37 @@
+# Nested text escaping: $, ", and \n inside records and lists, combined with
+# functions and control flow.  Verifies that nested text in structured values
+# is quoted with all required escapes so the output is a round-trippable AgL
+# string literal.
+record Template
+  body: text
+  tag: text
+
+enum Snippet
+  | Raw(src: text)
+  | Wrapped(prefix: text, src: text)
+
+# A record whose text fields contain characters that require escaping.
+let t1 = Template(body: "use \${x} here", tag: "has \"quotes\"")
+print t1
+
+# Nested text with a newline.
+let t2 = Template(body: "line1\nline2", tag: "ok")
+print t2
+
+# A list of records containing special characters.
+let snips = [Raw(src: "\${var}"), Wrapped(prefix: ">>", src: "a\"b")]
+print snips
+
+# Interpolating a record into a template (top-level text -> verbatim;
+# nested record text fields -> quoted in the AgL-native form).
+def label(t: Template) -> text =
+  "tag=${t.tag}"
+
+print(label(t1))
+
+# Control flow: pick the snippet based on a condition.
+param use_raw: bool
+
+let chosen: Snippet = if use_raw => Raw(src: "plain \${x}") else => Wrapped(prefix: "**", src: "bold \${x}")
+
+print chosen

@@ -181,6 +181,10 @@ optionally `= "runner"`). All calls — including `ask`, `print`, and `exec` —
 `[exec.agents]` (per-agent), the source runner hint, `--runner`, `[exec] runner`,
 `[loop] runner`, or `claude -p` (built-in default).
 
+Programs can span multiple `.agl` files via the module system (`import utils.math`). `agm exec`
+searches the entry file's directory, `~/.agm/lib`, and any configured `[modules] roots` for
+imported modules.
+
 ```bash
 agm exec workflow.agl
 agm exec --name Alice --max-iters 10 workflow.agl   # --<param> per declared param

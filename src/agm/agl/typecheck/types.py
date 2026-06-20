@@ -44,6 +44,8 @@ import enum as _enum
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
+
 # ---------------------------------------------------------------------------
 # Primitive types (singletons-by-construction; frozen dataclasses)
 # ---------------------------------------------------------------------------
@@ -153,24 +155,31 @@ class RecordType:
 
     ``fields`` maps field name → field type.  Fields are excluded from
     equality and hashing so that two instantiations of the same generic type
-    compare equal iff their ``name`` and ``type_args`` match.
+    compare equal iff their ``name``, ``type_args``, and ``module_id`` match.
     ``type_args`` holds the resolved type arguments for a generic instantiation
     (empty tuple for non-generic records).
+    ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
+    single-program paths and built-in/prelude types are unaffected).
+    Identity is ``(module_id, name, type_args)`` — ``fields`` is excluded from
+    equality and hashing so that a shell (empty fields) and its built form
+    compare equal.
     """
 
     name: str
     fields: Mapping[str, Type] = field(compare=False)
     type_args: tuple[Type, ...] = ()
+    module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property
     def kind(self) -> str:
         return "record"
 
     def __repr__(self) -> str:
+        prefix = "" if self.module_id.is_entry else f"{self.module_id.dotted()}::"
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
-            return f"{self.name}[{args_str}]"
-        return self.name
+            return f"{prefix}{self.name}[{args_str}]"
+        return f"{prefix}{self.name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,24 +188,29 @@ class EnumType:
 
     ``variants`` maps variant name → mapping of field names → field types.
     Variants are excluded from equality and hashing so that two instantiations
-    of the same generic type compare equal iff their ``name`` and ``type_args``
-    match.  ``type_args`` holds the resolved type arguments for a generic
-    instantiation (empty tuple for non-generic enums).
+    of the same generic type compare equal iff their ``name``, ``type_args``,
+    and ``module_id`` match.  ``type_args`` holds the resolved type arguments
+    for a generic instantiation (empty tuple for non-generic enums).
+    ``module_id`` is the owning module (defaults to ``ENTRY_ID``).
+    Identity is ``(module_id, name, type_args)`` — ``variants`` is excluded
+    from equality and hashing so that a shell and its built form compare equal.
     """
 
     name: str
     variants: Mapping[str, Mapping[str, Type]] = field(compare=False)
     type_args: tuple[Type, ...] = ()
+    module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property
     def kind(self) -> str:
         return "enum"
 
     def __repr__(self) -> str:
+        prefix = "" if self.module_id.is_entry else f"{self.module_id.dotted()}::"
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
-            return f"{self.name}[{args_str}]"
-        return self.name
+            return f"{prefix}{self.name}[{args_str}]"
+        return f"{prefix}{self.name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -487,14 +501,18 @@ def substitute(t: Type, subst: Mapping[str, Type]) -> Type:
     if isinstance(t, RecordType):
         new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
         new_fields = {k: substitute(v, subst) for k, v in t.fields.items()}
-        return RecordType(name=t.name, fields=new_fields, type_args=new_type_args)
+        return RecordType(
+            name=t.name, fields=new_fields, type_args=new_type_args, module_id=t.module_id
+        )
     if isinstance(t, EnumType):
         new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
         new_variants = {
             vname: {k: substitute(v, subst) for k, v in vfields.items()}
             for vname, vfields in t.variants.items()
         }
-        return EnumType(name=t.name, variants=new_variants, type_args=new_type_args)
+        return EnumType(
+            name=t.name, variants=new_variants, type_args=new_type_args, module_id=t.module_id
+        )
     # Primitives, ExceptionType, UnitType, AgentType, BottomType: unchanged.
     return t
 

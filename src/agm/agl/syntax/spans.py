@@ -8,6 +8,25 @@ continues to work for callers (including the lexer).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field as dc_field
+
+
+@dataclass(frozen=True, slots=True)
+class SourceId:
+    """Identity of a source text (file, REPL entry, inline string, etc.).
+
+    ``label`` is the display string used in diagnostics:
+    - canonical file path for file-based modules (``"/path/to/foo.agl"``)
+    - ``"<command>"`` for ``exec -c`` inline source
+    - ``"<repl>"`` for REPL entries
+    - ``"<agl>"`` (the default / unknown source)
+    """
+
+    label: str
+
+
+#: Sentinel used when no source identity is known (the default).
+UNKNOWN_SOURCE: SourceId = SourceId("<agl>")
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +44,13 @@ class SourceSpan:
 
     All four offset/line/column fields are required; there are no sentinel
     defaults.  Synthetic nodes must still supply real positions.
+
+    ``source`` identifies which source file/text this span belongs to.  It is
+    excluded from equality and hashing (``compare=False``) so that structurally
+    identical spans from different source files still compare equal — consistent
+    with how ``span`` and ``node_id`` are handled in AST nodes.  Defaults to
+    ``UNKNOWN_SOURCE`` so that the hundreds of existing synthetic-span sites
+    require no changes.
     """
 
     start_line: int
@@ -33,3 +59,4 @@ class SourceSpan:
     end_col: int
     start_offset: int
     end_offset: int
+    source: SourceId = dc_field(default=UNKNOWN_SOURCE, compare=False)

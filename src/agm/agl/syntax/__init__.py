@@ -41,6 +41,8 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     If,
     IfBranch,
+    ImportDecl,
+    ImportItem,
     IndexAccess,
     IndexTarget,
     InterpSegment,
@@ -88,10 +90,12 @@ from agm.agl.syntax.types import (
     DecimalT,
     DictT,
     FuncT,
+    ImportMode,
     IntT,
     JsonT,
     ListT,
     NameT,
+    Qualifier,
     TextT,
     TypeExpr,
     UnitT,
@@ -115,6 +119,11 @@ __all__ = [
     "AgentT",
     "FuncT",
     "TypeExpr",
+    # module system
+    "ImportMode",
+    "Qualifier",
+    "ImportItem",
+    "ImportDecl",
     # program
     "Program",
     # declarations

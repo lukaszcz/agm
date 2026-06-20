@@ -43,6 +43,7 @@ from typing import TypeGuard
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -74,6 +75,7 @@ from agm.agl.syntax.nodes import (
     FieldDef,
     FuncDef,
     If,
+    ImportDecl,
     IndexAccess,
     IndexTarget,
     InterpSegment,
@@ -197,8 +199,9 @@ class _TypeBuilder:
              indirect recursion and report a clear diagnostic.
     """
 
-    def __init__(self, env: TypeEnvironment) -> None:
+    def __init__(self, env: TypeEnvironment, module_id: ModuleId = ENTRY_ID) -> None:
         self._env = env
+        self._module_id = module_id
         # Track user-declared names → declaration span (excludes built-ins).
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum definitions for on-demand phase-2 building.
@@ -218,12 +221,17 @@ class _TypeBuilder:
             if isinstance(item, RecordDef):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
-                self._env.register_type(item.name, RecordType(name=item.name, fields={}))
+                self._env.register_type(
+                    item.name, RecordType(name=item.name, fields={}, module_id=self._module_id)
+                )
                 self._record_defs[item.name] = item
             elif isinstance(item, EnumDef):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
-                self._env.register_type(item.name, EnumType(name=item.name, variants={}))
+                self._env.register_type(
+                    item.name,
+                    EnumType(name=item.name, variants={}, module_id=self._module_id),
+                )
                 self._enum_defs[item.name] = item
             elif isinstance(item, TypeAlias):
                 self._register_name(item.name, item.span)
@@ -242,6 +250,53 @@ class _TypeBuilder:
                 self._ensure_built_enum(item.name)
             elif isinstance(item, TypeAlias):
                 self._validate_alias(item)
+
+    def collect_shells_only(self, program: Program) -> None:
+        """Register only phase-1 type shells (names + empty records/enums/aliases).
+
+        Public interface for the graph pre-pass (``graph.py``) which needs to
+        register all module's type shells before resolving any body.  Equivalent
+        to running only phase 1 of :meth:`collect`, without phase 2 body
+        resolution.  Called by :func:`~agm.agl.typecheck.graph._build_graph_type_table`
+        for each module before the cross-module topological body resolution.
+        """
+        for item in program.body.items:
+            if isinstance(item, RecordDef):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_type(
+                    item.name,
+                    RecordType(name=item.name, fields={}, module_id=self._module_id),
+                )
+                self._record_defs[item.name] = item
+            elif isinstance(item, EnumDef):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_type(
+                    item.name,
+                    EnumType(name=item.name, variants={}, module_id=self._module_id),
+                )
+                self._enum_defs[item.name] = item
+            elif isinstance(item, TypeAlias):
+                self._register_name(item.name, item.span)
+                self._env.unregister_name(item.name)
+                self._env.register_alias(item.name, item.type_expr)
+
+    def ensure_built_record(self, name: str) -> None:
+        """Public proxy for :meth:`_ensure_built_record`.
+
+        Used by the graph pre-pass body-resolution step to build a named record
+        type through the type builder without accessing private members.
+        """
+        self._ensure_built_record(name)
+
+    def ensure_built_enum(self, name: str) -> None:
+        """Public proxy for :meth:`_ensure_built_enum`.
+
+        Used by the graph pre-pass body-resolution step to build a named enum
+        type through the type builder without accessing private members.
+        """
+        self._ensure_built_enum(name)
 
     def _register_name(self, name: str, span: SourceSpan) -> None:
         if name in _BUILTIN_TYPE_NAMES:
@@ -303,7 +358,9 @@ class _TypeBuilder:
             seen_fields[fd.name] = fd.span
             field_type = self._resolve_field_type(fd, stmt.name)
             fields[fd.name] = field_type
-        self._env.register_type(stmt.name, RecordType(name=stmt.name, fields=fields))
+        self._env.register_type(
+            stmt.name, RecordType(name=stmt.name, fields=fields, module_id=self._module_id)
+        )
 
     def _build_enum(self, stmt: EnumDef) -> None:
         if stmt.type_params:
@@ -330,7 +387,9 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd, f"{stmt.name}.{vd.name}")
             variants[vd.name] = vfields
-        self._env.register_type(stmt.name, EnumType(name=stmt.name, variants=variants))
+        self._env.register_type(
+            stmt.name, EnumType(name=stmt.name, variants=variants, module_id=self._module_id)
+        )
 
     def _resolve_field_type(
         self, fd: FieldDef, owner: str, type_vars: frozenset[str] = frozenset()
@@ -538,6 +597,10 @@ class _Checker:
             params=tuple(params), result=result_type, type_params=node.type_params
         )
         self._env.register_function_signature(node.name, sig)
+        # Register by node_id so that cross-module callee signature lookups in
+        # _check_declared_name_call find the correct signature even when another
+        # module defines a function with the same name but a different signature.
+        self._env.register_function_signature_by_node_id(node.node_id, sig)
         # Register the binding type as FunctionType (erases names/defaults).
         func_type = FunctionType(
             params=tuple(pt for _, pt, _ in params),
@@ -600,6 +663,8 @@ class _Checker:
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
+        if isinstance(item, ImportDecl):
+            return UnitType()  # Module-system pass (M2+) will process import declarations
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
             self._check_binding(item)
@@ -809,6 +874,15 @@ class _Checker:
                 owner=owner, variant=ctor_ref.variant, span=node.span
             )
         ref = self._resolved.resolution[node.node_id]
+        # A constructor_binding resolves to a type declaration, not a value.
+        # Catch bare type name references (e.g. ``mylib::Color``) and raise a
+        # user-facing error instead of an internal assertion failure.
+        if ref.kind is BinderKind.constructor_binding:
+            raise AglTypeError(
+                f"'{node.name}' is a type name, not a value; "
+                "use it with a constructor call (e.g. 'EnumName.Variant' or 'RecordName(...)').",
+                span=node.span,
+            )
         typ = self._require_binding_type(ref)
         # D5: generic def used as a value — must be instantiated from context.
         if ref.kind is BinderKind.function_binding:
@@ -913,12 +987,20 @@ class _Checker:
         named_args: tuple[NamedArg, ...],
         span: SourceSpan,
         expected: Type | None,
+        sig: ConstructorSignature | None = None,
+        gdef: GenericTypeDef | None = None,
     ) -> Type:
-        """Check a generic constructor call (with inference or explicit type args)."""
+        """Check a generic constructor call (with inference or explicit type args).
+
+        ``sig`` and ``gdef`` may be supplied by cross-module callers that already
+        looked up these from the graph tables; when ``None``, they are looked up
+        from the own-module env (the default path for same-module generic calls).
+        """
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
-        sig = self._env.get_constructor_signature(owner_name, variant)
+        if sig is None:
+            sig = self._env.get_constructor_signature(owner_name, variant)
         assert sig is not None, (
             f"No constructor signature for {owner_name}.{variant!r}; "
             "scope resolver should have caught unknown variants."
@@ -964,9 +1046,11 @@ class _Checker:
                     )
 
         # Instantiate the nominal type.
-        concrete_type = self._env.instantiate_nominal(
-            owner_name, tuple(subst[p] for p in type_params)
-        )
+        concrete_args = tuple(subst[p] for p in type_params)
+        if gdef is not None:
+            concrete_type = self._env.instantiate_from_gdef(owner_name, gdef, concrete_args)
+        else:
+            concrete_type = self._env.instantiate_nominal(owner_name, concrete_args)
         # Validate the constructor call.
         return self._check_constructor_call(
             owner=concrete_type, variant=variant, args=named_args, span=span
@@ -1016,17 +1100,30 @@ class _Checker:
         ):
             return self._check_qualified_constructor_callee_call(node, expected=expected)
 
-        # Declared function by name?
+        # Declared function or cross-module constructor by name?
         # Take the declared-name (named/default) path ONLY when the callee is a
         # bare VarRef that resolves to a top-level function_binding (a ``def``).
         # A let/var-bound function value, a param, or a field access must all
         # take the value-call path — they are not declared names and do not
         # support named/defaulted arguments.
+        # Exception: a cross-module constructor_binding (module_qualifier present)
+        # is handled as a constructor call.
         if isinstance(node.callee, VarRef):
             callee_ref = self._resolved.resolution.get(node.callee.node_id)
             if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
                 return self._check_declared_name_call(
-                    node, node.callee.name, expected=expected
+                    node,
+                    node.callee.name,
+                    expected=expected,
+                    callee_node_id=callee_ref.decl_node_id,
+                )
+            if (
+                callee_ref is not None
+                and callee_ref.kind is BinderKind.constructor_binding
+                and not callee_ref.module_id.is_entry
+            ):
+                return self._check_cross_module_constructor_call(
+                    node, callee_ref, expected=expected
                 )
 
         # Value call (lambda or higher-order).
@@ -1762,9 +1859,20 @@ class _Checker:
     # --- declared-name call ---
 
     def _check_declared_name_call(
-        self, node: Call, func_name: str, *, expected: Type | None
+        self,
+        node: Call,
+        func_name: str,
+        *,
+        expected: Type | None,
+        callee_node_id: int,
     ) -> Type:
-        sig = self._env.get_function_signature(func_name)
+        # Use the node-id-keyed lookup populated by the function-signature pre-pass
+        # (graph mode) and by _preregister_funcdef (single-program mode).  Keying
+        # by the callee's globally-unique decl_node_id avoids the same-name collision
+        # where two modules define functions with identical names but different
+        # signatures, which would cause the name-keyed table to return the wrong
+        # signature for a qualified cross-module call.
+        sig = self._env.get_function_signature_by_node_id(callee_node_id)
         if sig is None:
             return self._check_value_call(node, expected=expected)
 
@@ -2243,19 +2351,62 @@ class _Checker:
         # is the qualifier itself. ``enum_type`` is the scrutinee's already
         # instantiated type, whose ``.name`` is the bare enum name.
         gdef = self._env.get_generic_type(qualifier)
+        type_mismatch: bool
         if gdef is not None:
             resolved_name = qualifier if gdef.kind == "enum" else None
+            type_mismatch = resolved_name != enum_type.name
         else:
             resolved = self._env.resolve_named_type(qualifier)
             resolved_name = resolved.name if isinstance(resolved, EnumType) else None
+            # Compare by full identity (name + module_id) so foo::Color ≠ bar::Color.
+            type_mismatch = resolved != enum_type
         if resolved_name is None:
             raise AglTypeError(
                 f"'{qualifier}' is not a known enum type.",
                 span=span,
             )
-        if resolved_name != enum_type.name:
+        if type_mismatch:
             raise AglTypeError(
                 f"Qualifier '{qualifier}' resolves to enum '{resolved_name}', "
+                f"but the value has enum type '{enum_type.name}'.",
+                span=span,
+            )
+
+    def _check_module_qualified_variant(
+        self,
+        module_qualifier: object,  # Qualifier
+        enum_name: str,
+        enum_type: EnumType,
+        span: SourceSpan,
+    ) -> None:
+        """Validate a module-qualified enum-type qualifier, e.g. ``mylib::Color``."""
+        from agm.agl.syntax.types import NameT, Qualifier
+
+        assert isinstance(module_qualifier, Qualifier)
+        fake_name_t = NameT(
+            name=enum_name,
+            span=span,
+            node_id=-1,
+            module_qualifier=module_qualifier,
+        )
+        try:
+            resolved = self._env.resolve_type_expr(fake_name_t, span=span)
+        except AglTypeError as exc:
+            raise AglTypeError(
+                f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
+                "is not a known enum type.",
+                span=span,
+            ) from exc
+        if not isinstance(resolved, EnumType):
+            raise AglTypeError(
+                f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
+                "is not a known enum type.",
+                span=span,
+            )
+        if resolved != enum_type:
+            raise AglTypeError(
+                f"Qualifier '{'.'.join(module_qualifier.segments)}::{enum_name}' "
+                f"resolves to enum '{resolved.name}', "
                 f"but the value has enum type '{enum_type.name}'.",
                 span=span,
             )
@@ -2265,10 +2416,12 @@ class _Checker:
     def _check_field_access(self, node: FieldAccess, expected: Type | None = None) -> Type:
         # Bare qualified constructor reference → value-position construction.
         if node.node_id in self._resolved.qualified_constructor_refs:
-            owner_name, variant = self._resolved.qualified_constructor_refs[node.node_id]
+            owner_name, variant, owner_module_id = (
+                self._resolved.qualified_constructor_refs[node.node_id]
+            )
             return self._check_qualified_constructor_as_value(
-                owner_name=owner_name, variant=variant, span=node.span,
-                expected=expected,
+                owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
+                span=node.span, expected=expected,
             )
         obj_type = self._check_expr(node.obj, expected=None)
         # D2: reject operations on bare type variables.
@@ -2335,8 +2488,14 @@ class _Checker:
     def _resolve_constructor_owner(
         self, ref: ConstructorRef, span: SourceSpan
     ) -> RecordType | EnumType | ExceptionType:
-        """Resolve the owner type for a constructor ref."""
-        owner = self._env.get_type(ref.owner_name)
+        """Resolve the owner type for a constructor ref.
+
+        Falls back to the unqualified import map for cross-module types that
+        are open-imported but not registered in the local environment.
+        """
+        owner: Type | None = self._env.get_type(ref.owner_name)
+        if owner is None:
+            owner = self._env.resolve_named_type(ref.owner_name)
         if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
             raise AglTypeError(
                 f"'{ref.owner_name}' is not a known constructible type.",
@@ -2349,6 +2508,7 @@ class _Checker:
         *,
         owner_name: str,
         variant: str,
+        owner_module_id: ModuleId | None,
         span: SourceSpan,
         expected: Type | None,
     ) -> Type:
@@ -2366,20 +2526,32 @@ class _Checker:
             return self._check_generic_constructor_as_value(
                 ctor_ref=ctor_ref, span=span, expected=expected
             )
-        enum_type = self._resolve_qualified_enum_owner(owner_name, variant, span)
+        enum_type = self._resolve_qualified_enum_owner(
+            owner_name, variant, span, owner_module_id=owner_module_id
+        )
         return self._check_constructor_as_value(
             owner=enum_type, variant=variant, span=span
         )
 
     def _resolve_qualified_enum_owner(
-        self, owner_name: str, variant: str, span: SourceSpan
+        self,
+        owner_name: str,
+        variant: str,
+        span: SourceSpan,
+        *,
+        owner_module_id: ModuleId | None = None,
     ) -> EnumType:
         """Resolve a non-generic qualified constructor's owner to a validated enum.
 
         Scope records ``Owner.member`` for any declared type name without
         checking enum-ness or variant existence, so both are validated here.
+        When ``owner_module_id`` is given (cross-module constructor ref), look up
+        directly in the graph type table instead of the unqualified import map.
         """
-        enum_type = self._env.resolve_named_type(owner_name)
+        if owner_module_id is not None:
+            enum_type = self._env.resolve_type_by_module_id(owner_module_id, owner_name)
+        else:
+            enum_type = self._env.resolve_named_type(owner_name)
         if not isinstance(enum_type, EnumType):
             raise AglTypeError(
                 f"'{owner_name}' is not a known enum type.",
@@ -2431,6 +2603,7 @@ class _Checker:
         *,
         owner_name: str,
         variant: str,
+        owner_module_id: ModuleId | None = None,
         args: tuple[NamedArg, ...],
         span: SourceSpan,
         expected: Type | None = None,
@@ -2452,9 +2625,72 @@ class _Checker:
                 span=span,
                 expected=expected,
             )
-        enum_type = self._resolve_qualified_enum_owner(owner_name, variant, span)
+        enum_type = self._resolve_qualified_enum_owner(
+            owner_name, variant, span, owner_module_id=owner_module_id
+        )
         return self._check_constructor_call(
             owner=enum_type, variant=variant, args=args, span=span
+        )
+
+    def _check_cross_module_constructor_call(
+        self,
+        node: Call,
+        callee_ref: BindingRef,
+        *,
+        expected: Type | None = None,
+    ) -> Type:
+        """Handle a Call whose callee is a cross-module constructor VarRef.
+
+        Used when the callee is a qualified VarRef like ``modA::Foo`` that
+        resolved to a ``constructor_binding`` in a non-entry module.
+        """
+        assert isinstance(node.callee, VarRef)
+        if node.args:
+            raise AglTypeError(
+                "Constructor arguments must be named; positional arguments are not allowed.",
+                span=node.span,
+            )
+        # Cross-module generic constructor — both explicit (lib::Box[int](v:1)) and
+        # inferred (lib::Box(value:1)) routes go here.
+        gdef = self._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
+        if gdef is not None:
+            ctor_sig = self._env.get_ctor_sig_from_module(
+                callee_ref.module_id, callee_ref.name, None
+            )
+            assert ctor_sig is not None, (
+                f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.dotted()}' "
+                "has no constructor signature in the graph table"
+            )
+            ctor_ref = ConstructorRef(
+                owner_name=callee_ref.name,
+                variant=None,
+                owner_decl_node_id=callee_ref.decl_node_id,
+                type_params=gdef.type_params,
+            )
+            return self._check_generic_constructor_call(
+                node_type_args=node.type_args,
+                ctor_ref=ctor_ref,
+                named_args=node.named_args,
+                span=node.span,
+                expected=expected,
+                sig=ctor_sig,
+                gdef=gdef,
+            )
+        if node.type_args:
+            raise AglTypeError(
+                f"'{callee_ref.name}' is not a generic type and does not accept "
+                "type arguments.",
+                span=node.span,
+            )
+        owner_type = self._env.resolve_type_by_module_id(callee_ref.module_id, callee_ref.name)
+        # Invariant: scope resolver only sets constructor_binding for RecordDef/EnumDef,
+        # which are always RecordType/EnumType in the graph type table.
+        assert isinstance(owner_type, (RecordType, EnumType)), (
+            f"constructor_binding for '{callee_ref.name}' in "
+            f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
+        )
+        return self._check_constructor_call(
+            owner=owner_type, variant=None, args=node.named_args, span=node.span
         )
 
     def _check_constructor_callee_call(self, node: Call, *, expected: Type | None = None) -> Type:
@@ -2497,7 +2733,9 @@ class _Checker:
     ) -> Type:
         """Handle a Call whose callee is a qualified constructor FieldAccess."""
         assert isinstance(node.callee, FieldAccess)
-        owner_name, variant = self._resolved.qualified_constructor_refs[node.callee.node_id]
+        owner_name, variant, owner_module_id = (
+            self._resolved.qualified_constructor_refs[node.callee.node_id]
+        )
         if node.args:
             raise AglTypeError(
                 "Constructor arguments must be named; positional arguments are not allowed.",
@@ -2509,8 +2747,8 @@ class _Checker:
                 span=node.span,
             )
         return self._resolve_qualified_constructor_and_call(
-            owner_name=owner_name, variant=variant, args=node.named_args, span=node.span,
-            expected=expected,
+            owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
+            args=node.named_args, span=node.span, expected=expected,
         )
 
     def _check_constructor_call(
@@ -2675,7 +2913,13 @@ class _Checker:
                     span=pattern.span,
                 )
             if pattern.qualifier is not None:
-                self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
+                if pattern.module_qualifier is not None:
+                    # Module-qualified variant qualifier, e.g. ``mylib::Color.Red``.
+                    self._check_module_qualified_variant(
+                        pattern.module_qualifier, pattern.qualifier, subj_type, pattern.span
+                    )
+                else:
+                    self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
             variant_name = pattern.name
             if variant_name not in subj_type.variants:
                 raise AglTypeError(

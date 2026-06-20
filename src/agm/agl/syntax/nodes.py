@@ -35,7 +35,7 @@ from dataclasses import field as dc_field
 from decimal import Decimal
 
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TypeExpr
+from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -75,6 +75,35 @@ class BinOp(enum.Enum):
     SUB = "-"
     MUL = "*"
     DIV = "/"
+
+
+# ---------------------------------------------------------------------------
+# Module system nodes
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ImportItem:
+    """A single item in a ``using`` import clause: ``name [as rename]``."""
+
+    name: str
+    rename: str | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ImportDecl:
+    """``import MODPATH[.*] [qualified] [as ALIAS] [using…|hiding…]`` declaration."""
+
+    module_path: tuple[str, ...]
+    wildcard: bool
+    qualified: bool
+    alias: str | None
+    mode: ImportMode
+    items: tuple[ImportItem, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +149,7 @@ class VarRef:
     name: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    module_qualifier: Qualifier | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +294,7 @@ class FuncDef:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
+    is_private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,6 +602,7 @@ class ConstructorPattern:
     fields: tuple[PatternField, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    module_qualifier: Qualifier | None = None
 
 
 # Closed union of all pattern nodes.
@@ -673,6 +705,7 @@ class RecordDef:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
+    is_private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -694,6 +727,7 @@ class EnumDef:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
+    is_private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,6 +739,7 @@ class TypeAlias:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
+    is_private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -787,6 +822,7 @@ Declaration = (
     | ProgramDecl
     | AgentDecl
     | ConfigPragma
+    | ImportDecl
 )
 
 

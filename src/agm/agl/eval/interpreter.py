@@ -32,6 +32,7 @@ from agm.agl.eval.values import (
     UnitValue,
     Value,
 )
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.convert import (
     CastConversionError,
     StrictJsonParseError,
@@ -61,6 +62,7 @@ from agm.agl.syntax.nodes import (
     FieldAccess,
     FuncDef,
     If,
+    ImportDecl,
     IndexAccess,
     IndexTarget,
     InterpSegment,
@@ -112,8 +114,9 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import ValidationError
     from agm.agl.runtime.trace import TraceStore
-    from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.syntax.spans import SourceId, SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, FunctionSignature, TypeEnvironment
+    from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph
     from agm.core.process import ProcessCaptureResult
 
 
@@ -180,6 +183,7 @@ class Interpreter:
         loop_limit: int,
         strict_json: bool,
         source: str = "",
+        sources: "Mapping[SourceId, str] | None" = None,
         shell_exec_timeout: float | None = None,
         trace: "TraceStore | None" = None,
         max_call_depth: int = 256,
@@ -191,7 +195,13 @@ class Interpreter:
         self._registry = registry
         self._contracts = contracts
         self._type_env = type_env
-        self._source = normalize_newlines(source)
+        self._sources: dict[SourceId, str] = {
+            source_id: normalize_newlines(source_text)
+            for source_id, source_text in (sources or {}).items()
+            if source_text
+        }
+        if source:
+            self._sources[checked.resolved.program.span.source] = normalize_newlines(source)
         self._loop_limit = loop_limit
         self._strict_json = strict_json
         self._shell_exec_timeout = shell_exec_timeout
@@ -201,6 +211,8 @@ class Interpreter:
         self._param_values: "Mapping[str, Value]" = (
             param_values if param_values is not None else {}
         )
+        self._module_frames: dict[ModuleId, Scope] = {}
+        self._module_sigs: dict[ModuleId, dict[str, FunctionSignature]] = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -214,6 +226,8 @@ class Interpreter:
 
         May raise ``AglRaise`` for uncaught AgL exceptions.
         """
+        self._module_frames = {ENTRY_ID: root_scope}
+        self._module_sigs = {ENTRY_ID: self._checked.function_signatures}
         with decimal.localcontext(_AGL_DECIMAL_CONTEXT):
             # Pre-pass: install FuncDef closures and AgentValue bindings in the
             # root scope so mutual recursion and forward references work.
@@ -297,7 +311,7 @@ class Interpreter:
         if isinstance(item, (FuncDef, AgentDecl, ParamDecl)):
             # Closures and AgentValues installed in pre-pass.
             return UNIT_VALUE
-        if isinstance(item, (RecordDef, EnumDef, TypeAlias, ProgramDecl, ConfigPragma)):
+        if isinstance(item, (RecordDef, EnumDef, TypeAlias, ProgramDecl, ConfigPragma, ImportDecl)):
             return UNIT_VALUE
         # --- Must be an Expr ---
         return self._eval_expr(cast("Expr", item), scope)
@@ -407,6 +421,28 @@ class Interpreter:
             if isinstance(self._checked.node_types.get(expr.node_id), FunctionType):
                 return ConstructorValue(owner_name=cref.owner_name, variant=cref.variant)
             return self._build_constructor_value(expr.node_id, expr.name, (), scope)
+
+        from agm.agl.scope.symbols import BinderKind
+
+        ref = self._checked.resolved.resolution.get(expr.node_id)
+        # A module_qualifier (``::name`` or ``MOD::name``) always denotes a module
+        # top-level binding; fetch from the owning module frame, walking up the
+        # parent chain (e.g. to reach promoted REPL session bindings).  This
+        # bypasses the current lexical scope (fn_scope) so ::x is never shadowed
+        # by a same-named function parameter.
+        if ref is not None and expr.module_qualifier is not None:
+            frame = self._module_frames.get(ref.module_id)
+            if frame is not None:  # pragma: no branch
+                binding = frame.lookup(ref.name)
+                if binding is not None:  # pragma: no branch
+                    return binding.value
+        if ref is not None and ref.kind in (BinderKind.function_binding, BinderKind.agent_binding):
+            frame = self._module_frames.get(ref.module_id)
+            if frame is not None:  # pragma: no branch
+                binding = frame.bindings.get(ref.name)
+                if binding is not None:
+                    return binding.value
+        # Fall back to lexical lookup for local/param/let/var/pattern/catch bindings
         binding = scope.lookup(expr.name)
         if binding is None:  # pragma: no cover
             raise RuntimeError(f"Undefined variable at runtime: {expr.name!r}")
@@ -418,9 +454,9 @@ class Interpreter:
             # Qualified constructor with fields used as a value → ConstructorValue;
             # a nullary/zero-field constructor builds the bare value directly.
             if isinstance(self._checked.node_types.get(expr.node_id), FunctionType):
-                owner_name, variant = self._checked.resolved.qualified_constructor_refs[
-                    expr.node_id
-                ]
+                owner_name, variant, _mid = (
+                    self._checked.resolved.qualified_constructor_refs[expr.node_id]
+                )
                 return ConstructorValue(owner_name=owner_name, variant=variant)
             return self._build_constructor_value(expr.node_id, expr.field, (), scope)
         obj = self._eval_expr(expr.obj, scope)
@@ -598,10 +634,21 @@ class Interpreter:
             return self._eval_parse_json_call(expr, scope)
 
         # Check for constructor call (callee is VarRef or FieldAccess resolving to a constructor).
+        from agm.agl.scope.symbols import BinderKind
+
         callee = expr.callee
         if isinstance(callee, VarRef):
             cref = self._checked.resolved.constructor_refs.get(callee.node_id)
             if cref is not None:
+                return self._build_constructor_value(
+                    expr.node_id, callee.name, expr.named_args, scope
+                )
+            # Cross-module constructor call (e.g. lib::Point(x:1) or lib::Color.Red()).
+            callee_ref = self._checked.resolved.resolution.get(callee.node_id)
+            if (
+                callee_ref is not None
+                and callee_ref.kind is BinderKind.constructor_binding
+            ):
                 return self._build_constructor_value(
                     expr.node_id, callee.name, expr.named_args, scope
                 )
@@ -637,20 +684,16 @@ class Interpreter:
         # Determine if this is a declared-name call so we can use named/default args.
         from agm.agl.scope.symbols import BinderKind
 
-        func_name: str | None = None
+        callee_sig: FunctionSignature | None = None
         if isinstance(call.callee, VarRef):
             ref = self._checked.resolved.resolution.get(call.callee.node_id)
             if ref is not None and ref.kind == BinderKind.function_binding:
-                func_name = call.callee.name
+                callee_sig = self._get_function_signature(ref.module_id, ref.name)
 
         # Build the function scope (closes over the closure's captured env).
         fn_scope = Scope(parent=closure.env)
 
-        sig = (
-            self._checked.function_signatures.get(func_name)
-            if func_name is not None
-            else None
-        )
+        sig = callee_sig
         if sig is not None:
             self._bind_declared_args(fn_scope, closure, sig, call, call_scope)
         else:
@@ -1598,9 +1641,41 @@ class Interpreter:
 
     def _source_slice(self, span: "SourceSpan") -> str:
         """Return the normalized-source text covered by *span*."""
-        if not self._source:
+        source = self._sources.get(span.source, "")
+        if not source:
             return ""
-        return self._source[span.start_offset : span.end_offset]
+        return source[span.start_offset : span.end_offset]
+
+    def _get_function_signature(self, module_id: ModuleId, name: str) -> FunctionSignature | None:
+        """Look up a function signature in the given module's signatures table."""
+        sigs = self._module_sigs.get(module_id)
+        if sigs is None:  # pragma: no cover
+            return None
+        return sigs.get(name)
+
+    def execute_with_frames(
+        self,
+        entry_frame: Scope,
+        module_frames: dict[ModuleId, Scope],
+        module_sigs: dict[ModuleId, dict[str, FunctionSignature]],
+    ) -> None:
+        """Execute the entry module's block using pre-built per-module frames.
+
+        Called by :func:`execute_graph` after all module frames have been
+        assembled and closures installed.  Handles entry-module ``param``
+        declarations and then runs the entry body.
+        """
+        with decimal.localcontext(_AGL_DECIMAL_CONTEXT):
+            self._module_frames = module_frames
+            self._module_sigs = module_sigs
+            # Pre-pass: install entry-module params (agents and functions are
+            # already installed in entry_frame by execute_graph).
+            for item in self._checked.resolved.program.body.items:
+                if isinstance(item, ParamDecl):
+                    self._eval_param_decl(item, entry_frame)
+            # Main pass.
+            for item in self._checked.resolved.program.body.items:
+                self._eval_item(item, entry_frame)
 
 
 # ---------------------------------------------------------------------------
@@ -1890,3 +1965,199 @@ def _describe_value(value: Value) -> str:
     # Closure is the only remaining Value member.
     assert isinstance(value, Closure), f"unexpected value kind: {type(value).__name__}"
     return "function"
+
+
+# ---------------------------------------------------------------------------
+# Module-graph execution
+# ---------------------------------------------------------------------------
+
+
+def _merge_graph_into_checked_program(
+    entry_cm: CheckedModule,
+    checked_graph: CheckedModuleGraph,
+) -> CheckedProgram:
+    """Build a merged :class:`CheckedProgram` from the entry module plus all library modules.
+
+    The interpreter uses a single ``CheckedProgram`` for dispatch tables
+    (``resolved.builtin_calls``, ``node_types``, ``contract_specs``,
+    ``cast_specs``).  Because library module bodies (closures) are also
+    evaluated by the same interpreter, their per-module side tables must be
+    merged into a single combined program.  Node ids are disjoint across
+    modules (M2 seeds each module with a distinct id range), so the merge is
+    unambiguous.
+    """
+    from agm.agl.scope.symbols import BindingRef, BuiltinKind
+    from agm.agl.scope.symbols import ResolvedProgram as _RP
+    from agm.agl.typecheck.env import CheckedProgram as _CP
+    from agm.agl.typecheck.env import OutputContractSpec
+    from agm.agl.typecheck.types import CastSpec
+
+    # Merge resolution, builtin_calls, constructor_refs, and
+    # qualified_constructor_refs from all modules into combined views rooted at
+    # the entry program.
+    merged_resolution: dict[int, BindingRef] = dict(entry_cm.resolved.resolution)
+    merged_builtin_calls: dict[int, BuiltinKind] = dict(entry_cm.resolved.builtin_calls)
+    merged_constructor_refs = dict(entry_cm.resolved.constructor_refs)
+    merged_qcr = dict(entry_cm.resolved.qualified_constructor_refs)
+    for mid, cm in checked_graph.modules.items():
+        if mid == checked_graph.entry_id:
+            continue
+        merged_resolution.update(cm.resolved.resolution)
+        merged_builtin_calls.update(cm.resolved.builtin_calls)
+        merged_constructor_refs.update(cm.resolved.constructor_refs)
+        merged_qcr.update(cm.resolved.qualified_constructor_refs)
+
+    # Build a merged ResolvedProgram using the entry's program and root_scope
+    # but with combined dispatch tables.
+    merged_resolved = _RP(
+        program=entry_cm.resolved.program,
+        resolution=merged_resolution,
+        builtin_calls=merged_builtin_calls,
+        root_scope=entry_cm.resolved.root_scope,
+        declared_agents=entry_cm.resolved.declared_agents,
+        declared_functions=entry_cm.resolved.declared_functions,
+        config_pragmas=entry_cm.resolved.config_pragmas,
+        program_name=entry_cm.resolved.program_name,
+        warnings=entry_cm.resolved.warnings,
+        constructor_refs=merged_constructor_refs,
+        qualified_constructor_refs=merged_qcr,
+    )
+
+    # Merge node_types, contract_specs, cast_specs from all modules.
+    merged_node_types: dict[int, Type] = dict(entry_cm.node_types)
+    merged_contract_specs: dict[int, OutputContractSpec] = dict(entry_cm.contract_specs)
+    merged_cast_specs: dict[int, CastSpec] = dict(entry_cm.cast_specs)
+    for mid, cm in checked_graph.modules.items():
+        if mid == checked_graph.entry_id:
+            continue
+        merged_node_types.update(cm.node_types)
+        merged_contract_specs.update(cm.contract_specs)
+        merged_cast_specs.update(cm.cast_specs)
+
+    from agm.agl.typecheck.env import TypeEnvironment
+
+    merged_type_env = TypeEnvironment()
+    merged_type_env.seed_from(entry_cm.type_env)
+    for cm in checked_graph.modules.values():
+        merged_type_env.copy_binding_types_from(cm.type_env)
+
+    return _CP(
+        resolved=merged_resolved,
+        node_types=merged_node_types,
+        contract_specs=merged_contract_specs,
+        call_sites=entry_cm.call_sites,
+        warnings=entry_cm.warnings,
+        type_env=merged_type_env,
+        function_signatures=entry_cm.function_signatures,
+        cast_specs=merged_cast_specs,
+    )
+
+
+def execute_graph(
+    checked_graph: CheckedModuleGraph,
+    registry: AgentRegistry,
+    contracts: dict[int, OutputContract],
+    *,
+    loop_limit: int,
+    strict_json: bool,
+    source: str = "",
+    shell_exec_timeout: float | None = None,
+    trace: TraceStore | None = None,
+    max_call_depth: int = 256,
+    param_values: Mapping[str, Value] | None = None,
+) -> dict[str, Value]:
+    """Execute an AgL module graph starting from the entry module.
+
+    Builds one :class:`~agm.agl.eval.scope.Scope` frame per module, installs
+    closures for all ``def`` declarations across all modules, then executes
+    the entry module's body.
+
+    Parameters
+    ----------
+    checked_graph:
+        Output of :func:`~agm.agl.typecheck.graph.check_graph`.
+    registry:
+        Agent registry for ``ask`` dispatch.
+    contracts:
+        Materialized :class:`~agm.agl.runtime.contract.OutputContract` per
+        agent/exec call node id.
+    loop_limit:
+        Default iteration bound for ``do`` loops.
+    strict_json:
+        Default strict-JSON flag for codec operations.
+    source:
+        Entry module source text (for error context slicing).
+    shell_exec_timeout:
+        Idle timeout for ``exec`` calls, or ``None`` for no limit.
+    trace:
+        Trace store, or ``None`` for the no-op store.
+    max_call_depth:
+        Recursion depth limit.
+    param_values:
+        Optional mapping of param name → value for entry module params.
+
+    Returns
+    -------
+    dict[str, Value]
+        Snapshot of the entry module's root scope after execution.
+    """
+    # Build one Scope frame per module (all at once so forward refs are safe).
+    module_frames: dict[ModuleId, Scope] = {
+        mid: Scope(parent=None) for mid in checked_graph.modules
+    }
+
+    # Install closures for every module's def declarations into ITS frame.
+    # All frames are created before any closure is installed so mutual
+    # recursion across modules works (closure.env captures the frame ref).
+    for mid, cm in checked_graph.modules.items():
+        frame = module_frames[mid]
+        for item in cm.resolved.program.body.items:
+            if isinstance(item, FuncDef):
+                sig = cm.function_signatures.get(item.name)
+                ret_type: Type = sig.result if sig is not None else UnitType()
+                params: tuple[tuple[str, Expr | None], ...] = tuple(
+                    (p.name, p.default) for p in item.params
+                )
+                closure = Closure(
+                    env=frame, params=params, body=item.body, return_type=ret_type
+                )
+                frame.define(item.name, closure, mutable=False, decl_span=item.span)
+
+    # Install entry-module agent declarations into the entry frame.
+    entry_cm = checked_graph.modules[checked_graph.entry_id]
+    entry_frame = module_frames[checked_graph.entry_id]
+    for item in entry_cm.resolved.program.body.items:
+        if isinstance(item, AgentDecl):
+            entry_frame.define(
+                item.name, AgentValue(name=item.name), mutable=False, decl_span=item.span
+            )
+
+    # Build module_sigs for cross-module function signature lookup.
+    module_sigs: dict[ModuleId, dict[str, FunctionSignature]] = {
+        mid: cm.function_signatures for mid, cm in checked_graph.modules.items()
+    }
+
+    # Create a merged CheckedProgram that combines all modules' dispatch tables.
+    # Node ids are disjoint across modules (M2 seeds each with a distinct range)
+    # so the merge is unambiguous.  Library closures are evaluated by the same
+    # interpreter and need their builtin_calls/node_types/etc. tables present.
+    entry_checked = _merge_graph_into_checked_program(entry_cm, checked_graph)
+    interp = Interpreter(
+        checked=entry_checked,
+        registry=registry,
+        contracts=contracts,
+        type_env=entry_checked.type_env,
+        loop_limit=loop_limit,
+        strict_json=strict_json,
+        source=source,
+        sources={
+            cm.resolved.program.span.source: cm.source_text
+            for cm in checked_graph.modules.values()
+        },
+        shell_exec_timeout=shell_exec_timeout,
+        trace=trace,
+        max_call_depth=max_call_depth,
+        param_values=param_values,
+    )
+    interp.execute_with_frames(entry_frame, module_frames, module_sigs)
+    return entry_frame.snapshot()

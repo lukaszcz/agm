@@ -22,12 +22,15 @@ if TYPE_CHECKING:
 
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.eval.values import ExceptionValue, Value
+    from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
+    from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.syntax.nodes import PragmaValue, Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
+    from agm.agl.typecheck.graph import CheckedModuleGraph
     from agm.agl.typecheck.types import Type as AglType
 
 # Reserved agent names: cannot be registered by callers.
@@ -121,6 +124,7 @@ class ParamDiscovery:
     checked: "CheckedProgramType | None"
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
+    checked_graph: "CheckedModuleGraph | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +191,79 @@ class PreparedProgram:
         if self.resolved is None:
             return None
         return self.resolved.program_name
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedGraph:
+    """Result of the load + scope phase of an AgL multi-module program.
+
+    Produced by :meth:`WorkflowRuntime.prepare_program` and consumed by
+    :meth:`WorkflowRuntime.run_prepared_graph`.  Properties mirror
+    :class:`PreparedProgram` but read from the entry module of the graph.
+
+    ``resolved_graph``
+        The fully loaded and scope-resolved module graph, or ``None`` when
+        loading or scope resolution failed (in which case ``diagnostics``
+        holds the error and ``run_prepared_graph`` short-circuits).
+    ``diagnostics``
+        Error-severity load/scope diagnostics; empty on success.
+    ``warnings``
+        Non-fatal lex (TAB) and scope warnings; present even on failure.
+    """
+
+    source: str
+    entry_path: "Path | None"
+    roots: "RootSet"
+    resolved_graph: "ResolvedModuleGraph | None"
+    diagnostics: tuple[Diagnostic, ...]
+    warnings: tuple[Diagnostic, ...]
+
+    @property
+    def declared_agents(self) -> tuple[AgentDeclInfo, ...]:
+        """Agent declarations from the entry module, sorted by line/col.
+
+        Empty when load or scope failed (``resolved_graph is None``).
+        """
+        if self.resolved_graph is None:
+            return ()
+        infos = [
+            AgentDeclInfo(
+                name=decl.name,
+                runner=decl.runner,
+                line=decl.span.start_line,
+                col=decl.span.start_col,
+            )
+            for decl in self.resolved_graph.entry_agents.values()
+        ]
+        infos.sort(key=lambda info: (info.line, info.col))
+        return tuple(infos)
+
+    @property
+    def config_pragmas(self) -> "dict[str, PragmaValue]":
+        """The validated ``config`` pragmas declared in the entry module.
+
+        Empty when load or scope failed (``resolved_graph is None``).
+        """
+        from agm.agl.modules.ids import ENTRY_ID
+
+        if self.resolved_graph is None:
+            return {}
+        entry_mod = self.resolved_graph.modules.get(ENTRY_ID)
+        if entry_mod is None:
+            return {}
+        return dict(entry_mod.resolved.config_pragmas)
+
+    @property
+    def program_name(self) -> str | None:
+        """The declared program name from the entry module, or ``None``."""
+        from agm.agl.modules.ids import ENTRY_ID
+
+        if self.resolved_graph is None:
+            return None
+        entry_mod = self.resolved_graph.modules.get(ENTRY_ID)
+        if entry_mod is None:
+            return None
+        return entry_mod.resolved.program_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -820,6 +897,424 @@ class WorkflowRuntime:
             trace_path=log_file,
         )
 
+    @staticmethod
+    def prepare_program(
+        entry_source: str,
+        *,
+        entry_path: "Path | None",
+        roots: "RootSet",
+    ) -> PreparedGraph:
+        """Load + scope the full module graph for *entry_source* ONCE.
+
+        This is the graph-mode analogue of :meth:`prepare`.  Drives the load
+        pipeline (``parse → BFS-load-imports → resolve_graph``) for a
+        multi-file AgL program rooted at *entry_source*.
+
+        Non-raising: any load (``ModuleNotFound``, ``AmbiguousModule``,
+        ``ModulePrefixNotFound``, ``ImportEntryError``), parse
+        (``AglSyntaxError``), or scope (``AglScopeError``) failure is
+        captured into :attr:`PreparedGraph.diagnostics` rather than raised,
+        with ``resolved_graph`` left ``None``.  TAB advisories are captured
+        as warnings via the lex-pass context manager.
+        """
+        from agm.agl.lexer import tab_warning_collector
+        from agm.agl.modules.errors import (
+            AmbiguousModule,
+            ImportEntryError,
+            ModuleNotFound,
+            ModulePrefixNotFound,
+        )
+        from agm.agl.modules.loader import load_graph
+        from agm.agl.parser import AglSyntaxError
+        from agm.agl.scope import AglScopeError
+        from agm.agl.scope.graph import resolve_graph
+
+        with tab_warning_collector() as tab_sink:
+            try:
+                graph = load_graph(entry_source, entry_path=entry_path, roots=roots)
+            except AglSyntaxError as exc:
+                return PreparedGraph(
+                    entry_source,
+                    entry_path,
+                    roots,
+                    None,
+                    (exc.to_diagnostic(),),
+                    tuple(tab_sink),
+                )
+            except (
+                ModuleNotFound,
+                AmbiguousModule,
+                ModulePrefixNotFound,
+                ImportEntryError,
+            ) as exc:
+                return PreparedGraph(
+                    entry_source,
+                    entry_path,
+                    roots,
+                    None,
+                    (exc.to_diagnostic(),),
+                    tuple(tab_sink),
+                )
+            except Exception as exc:
+                return PreparedGraph(
+                    entry_source,
+                    entry_path,
+                    roots,
+                    None,
+                    (Diagnostic(message=str(exc), line=1),),
+                    tuple(tab_sink),
+                )
+        warnings: tuple[Diagnostic, ...] = tuple(tab_sink)
+
+        try:
+            resolved_graph = resolve_graph(graph)
+        except AglScopeError as exc:
+            return PreparedGraph(
+                entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
+            )
+        except Exception as exc:
+            return PreparedGraph(
+                entry_source,
+                entry_path,
+                roots,
+                None,
+                (Diagnostic(message=f"Scope error: {exc}", line=1),),
+                warnings,
+            )
+
+        # Collect scope warnings from the resolved graph.
+        all_warnings = (*warnings, *resolved_graph.warnings)
+        return PreparedGraph(
+            entry_source, entry_path, roots, resolved_graph, (), all_warnings
+        )
+
+    def discover_params_graph(self, prepared: PreparedGraph) -> ParamDiscovery:
+        """Typecheck-only discovery for typed ``param`` declarations in a graph.
+
+        Graph-mode analogue of :meth:`discover_params`.  Reads typed param
+        declarations from the entry module of *prepared.resolved_graph*.
+        """
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.syntax.nodes import ParamDecl
+
+        if prepared.resolved_graph is None:
+            return ParamDiscovery(
+                params=(),
+                program_name=prepared.program_name,
+                checked=None,
+                diagnostics=prepared.diagnostics,
+                warnings=prepared.warnings,
+                checked_graph=None,
+            )
+
+        capabilities = self.host_environment().capabilities
+        checked_graph, tc_diagnostics = _run_typecheck_graph(
+            prepared.resolved_graph, capabilities
+        )
+        all_warnings_list: list[Diagnostic] = list(prepared.warnings)
+        if checked_graph is not None:
+            all_warnings_list.extend(checked_graph.warnings)
+        all_warnings = tuple(all_warnings_list)
+
+        if checked_graph is None:
+            return ParamDiscovery(
+                params=(),
+                program_name=prepared.program_name,
+                checked=None,
+                diagnostics=tc_diagnostics,
+                warnings=all_warnings,
+                checked_graph=None,
+            )
+
+        entry_cm = checked_graph.modules.get(ENTRY_ID)
+        if entry_cm is None:
+            return ParamDiscovery(
+                params=(),
+                program_name=prepared.program_name,
+                checked=None,
+                diagnostics=(Diagnostic(message="Entry module not found in graph", line=1),),
+                warnings=all_warnings,
+            )
+
+        # Build a stub CheckedProgram for compatibility with existing param wiring.
+        from agm.agl.typecheck.env import CheckedProgram as _CP
+
+        stub_checked = _CP(
+            resolved=entry_cm.resolved,
+            node_types=entry_cm.node_types,
+            contract_specs=entry_cm.contract_specs,
+            call_sites=entry_cm.call_sites,
+            warnings=entry_cm.warnings,
+            type_env=entry_cm.type_env,
+            function_signatures=entry_cm.function_signatures,
+            cast_specs=entry_cm.cast_specs,
+        )
+
+        infos: list[ParamDeclInfo] = []
+        for item in entry_cm.resolved.program.body.items:
+            if isinstance(item, ParamDecl):
+                param_type = entry_cm.type_env.get_binding_type(item.node_id)
+                assert param_type is not None, (
+                    f"Param {item.name!r} has no recorded binding type; "
+                    "checker invariant violated."
+                )
+                infos.append(
+                    ParamDeclInfo(
+                        name=item.name,
+                        type=param_type,
+                        has_default=item.default is not None,
+                        line=item.span.start_line,
+                        col=item.span.start_col,
+                    )
+                )
+        infos.sort(key=lambda info: (info.line, info.col))
+        return ParamDiscovery(
+            params=tuple(infos),
+            program_name=prepared.program_name,
+            checked=stub_checked,
+            diagnostics=(),
+            warnings=all_warnings,
+            checked_graph=checked_graph,
+        )
+
+    def run_prepared_graph(
+        self,
+        prepared: PreparedGraph,
+        *,
+        param_values: Mapping[str, object] | None = None,
+        check_only: bool = False,
+        log_file: "Path | None" = None,
+        checked_graph: "CheckedModuleGraph | None" = None,
+    ) -> RunResult:
+        """Execute an already loaded + scoped module graph (no re-loading).
+
+        Graph-mode analogue of :meth:`run_prepared`.  Resumes the pipeline at
+        type checking: ``check_graph`` → validate params → materialize contracts
+        → ``execute_graph``.  Agents are entry-program-owned.
+
+        When *prepared* carries a load/scope failure (``resolved_graph is
+        None``), its diagnostics are surfaced unchanged and nothing executes.
+
+        ``checked_graph``
+            When the caller has already type-checked the graph (e.g. via
+            :meth:`discover_params_graph`), pass the result here to skip the
+            second redundant ``check_graph`` call.  ``None`` (the default)
+            runs type checking here as before.
+        """
+        from agm.agl.modules.ids import ENTRY_ID
+
+        if param_values is None:
+            param_values = {}
+
+        warnings: list[Diagnostic] = list(prepared.warnings)
+
+        if prepared.resolved_graph is None:
+            return RunResult(
+                ok=False,
+                diagnostics=list(prepared.diagnostics),
+                error=None,
+                warnings=warnings,
+            )
+        resolved_graph = prepared.resolved_graph
+
+        host_env = self.host_environment()
+        registry = host_env.registry
+        capabilities = host_env.capabilities
+
+        # Agent reconciliation against entry module's declared agents.
+        reconciliation_errors = _reconcile_agents(registry, resolved_graph.entry_agents)
+        if reconciliation_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=reconciliation_errors,
+                error=None,
+                warnings=list(warnings),
+            )
+
+        # Type checking — skip if the caller already has a checked graph
+        # (e.g. from discover_params_graph) to avoid running check_graph twice.
+        if checked_graph is None:
+            checked_graph, tc_diagnostics = _run_typecheck_graph(resolved_graph, capabilities)
+        else:
+            tc_diagnostics = ()
+        if checked_graph is None:
+            return RunResult(
+                ok=False,
+                diagnostics=list(tc_diagnostics),
+                error=None,
+                warnings=warnings,
+            )
+
+        warnings.extend(checked_graph.warnings)
+
+        entry_cm = checked_graph.modules[ENTRY_ID]
+
+        # Validate required params from the entry module.
+        from agm.agl.syntax.nodes import ParamDecl
+
+        declared_params: dict[str, "AglType"] = {}
+        param_errors: list[Diagnostic] = []
+        for item in entry_cm.resolved.program.body.items:
+            if isinstance(item, ParamDecl):
+                param_type = entry_cm.type_env.get_binding_type(item.node_id)
+                if param_type is None:
+                    raise AssertionError(
+                        f"Param {item.name!r} has no recorded binding type; "
+                        "checker invariant violated."
+                    )
+                declared_params[item.name] = param_type
+                if item.default is None and item.name not in param_values:
+                    param_errors.append(
+                        diagnostic_from_span(
+                            f"Missing required param: {item.name!r}",
+                            item.span,
+                        )
+                    )
+
+        if param_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=param_errors,
+                error=None,
+                warnings=list(warnings),
+            )
+
+        # Materialize output contracts — merge contract_specs from all modules.
+        from agm.agl.runtime.contract import materialize_contract
+
+        codecs = host_env.codecs
+        contracts: dict[int, object] = {}
+        contract_errors: list[Diagnostic] = []
+
+        # Merge contract_specs from all modules (entry + library).
+        from agm.agl.typecheck.env import OutputContractSpec
+
+        merged_contract_specs: dict[int, OutputContractSpec] = {}
+        for cm in checked_graph.modules.values():
+            merged_contract_specs.update(cm.contract_specs)
+
+        for node_id, spec in merged_contract_specs.items():
+            try:
+                contracts[node_id] = materialize_contract(spec, codecs)
+            except ValueError as exc:
+                contract_errors.append(
+                    Diagnostic(message=f"Contract error: {exc}", line=1)
+                )
+
+        if contract_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=contract_errors,
+                error=None,
+                warnings=list(warnings),
+            )
+
+        # Convert supplied param values.
+        converted_params: dict[str, "Value"] = {}
+        param_bind_errors: list[Diagnostic] = []
+
+        for item in entry_cm.resolved.program.body.items:
+            if isinstance(item, ParamDecl) and item.name in param_values:
+                raw_val = param_values[item.name]
+                param_type_obj = declared_params[item.name]
+                try:
+                    typed_val = convert_param_value(item.name, raw_val, param_type_obj)
+                except ValueError as exc:
+                    param_bind_errors.append(
+                        diagnostic_from_span(str(exc), item.span)
+                    )
+                    continue
+                converted_params[item.name] = typed_val
+
+        if param_bind_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=param_bind_errors,
+                error=None,
+                warnings=list(warnings),
+            )
+
+        # Dry-run stop: build call-site inventory from entry module only.
+        if check_only:
+            from agm.agl.runtime.contract import OutputContract
+
+            entry_contracts = {
+                nid: c
+                for nid, c in contracts.items()
+                if nid in {rec.node_id for rec in entry_cm.call_sites}
+            }
+            inventory = _build_call_inventory_from_call_sites(
+                entry_cm.call_sites, entry_contracts
+            )
+            return RunResult(
+                ok=True,
+                diagnostics=[],
+                error=None,
+                warnings=list(warnings),
+                bindings={},
+                call_sites=tuple(inventory),
+                trace_path=None,
+            )
+
+        # Execute the graph.
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.interpreter import execute_graph
+        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.runtime.trace import TraceStore
+
+        trace = TraceStore(path=log_file)
+        if log_file is not None:
+            from agm.core.fs import mkdir
+
+            mkdir(log_file.parent, parents=True, exist_ok=True)
+        trace.run_start()
+
+        typed_contracts: dict[int, OutputContract] = {
+            nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
+        }
+
+        try:
+            root_bindings = execute_graph(
+                checked_graph,
+                registry,
+                typed_contracts,
+                loop_limit=self._default_loop_limit,
+                strict_json=self._default_strict_json,
+                source=prepared.source,
+                shell_exec_timeout=self._shell_exec_timeout,
+                trace=trace,
+                max_call_depth=self._default_call_depth_limit,
+                param_values=converted_params,
+            )
+        except AglRaise as exc:
+            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            trace_id = str(error.fields.get("trace_id", ""))
+            trace.exception(
+                type_name=error.type_name,
+                message=str(error.fields.get("message", "")),
+                trace_id=trace_id,
+                span=exc.span,
+            )
+            trace.run_end(ok=False)
+            return RunResult(
+                ok=False,
+                diagnostics=[],
+                error=error,
+                warnings=list(warnings),
+                bindings={},
+                trace_path=log_file,
+            )
+
+        trace.run_end(ok=True)
+        return RunResult(
+            ok=True,
+            diagnostics=[],
+            error=None,
+            warnings=list(warnings),
+            bindings=root_bindings,
+            trace_path=log_file,
+        )
+
     @property
     def default_loop_limit(self) -> int:
         """Default iteration bound for ``do[N]`` loops."""
@@ -844,6 +1339,22 @@ class WorkflowRuntime:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _run_typecheck_graph(
+    resolved_graph: "ResolvedModuleGraph",
+    capabilities: "HostCapabilities",
+) -> "tuple[CheckedModuleGraph | None, tuple[Diagnostic, ...]]":
+    """Run the graph typecheck pass without raising."""
+    from agm.agl.typecheck.env import AglTypeError
+    from agm.agl.typecheck.graph import check_graph
+
+    try:
+        return check_graph(resolved_graph, capabilities), ()
+    except AglTypeError as exc:
+        return None, (exc.to_diagnostic(),)
+    except Exception as exc:
+        return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
 
 
 def _run_typecheck(
@@ -1132,6 +1643,43 @@ def exception_value_to_run_error(
         line = span.start_line
         col = span.start_col
     return RunError(type_name=exc.type_name, fields=fields, line=line, col=col)
+
+
+def _build_call_inventory_from_call_sites(
+    call_sites: "tuple[object, ...]",
+    contracts: dict[int, object],
+) -> list[CallSiteInfo]:
+    """Build call-site inventory from a tuple of ``CallSiteRecord`` objects.
+
+    Used by :meth:`WorkflowRuntime.run_prepared_graph` for ``check_only`` mode
+    to build the inventory from the entry module's call_sites directly, without
+    a full ``CheckedProgram``.
+    """
+    from agm.agl.runtime.contract import OutputContract
+    from agm.agl.typecheck.env import CallSiteRecord
+
+    inventory: list[CallSiteInfo] = []
+
+    for record in call_sites:
+        if not isinstance(record, CallSiteRecord):
+            continue
+        contract = contracts.get(record.node_id)
+        has_schema = (
+            isinstance(contract, OutputContract) and contract.json_schema is not None
+        )
+        inventory.append(
+            CallSiteInfo(
+                callee=record.callee,
+                target_type=repr(record.target_type),
+                codec_name=record.codec_name,
+                has_schema=has_schema,
+                parse_policy=record.parse_policy,
+                line=record.line,
+                col=record.col,
+            )
+        )
+
+    return inventory
 
 
 def _build_call_inventory(

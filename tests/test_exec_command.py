@@ -610,7 +610,7 @@ class TestExecExitCodeMapping:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared_graph", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -661,7 +661,7 @@ class TestExecCommandWarnings:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared_graph", fake_run)
 
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -682,9 +682,10 @@ class TestExecCommandWarnings:
         assert "undefined_name" in captured.err
         assert f"{agl_file}:1:9-22: error:" in captured.err
 
-    def test_inline_error_diagnostic_has_no_filename(
+    def test_inline_error_diagnostic_has_command_label(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """Inline -c errors carry the ``<command>:`` source label (from SourceId)."""
         args = ExecArgs(
             file=None,
             command="let x = undefined_name\n",
@@ -702,8 +703,9 @@ class TestExecCommandWarnings:
         captured = capsys.readouterr()
         assert "undefined_name" in captured.err
         assert "1:9-22: error:" in captured.err
-        assert "<command>" not in captured.err
-        assert "<agl>" not in captured.err
+        # The graph loader stamps inline source with SourceId(label="<command>"),
+        # so <command>: appears as the source label in the diagnostic output.
+        assert "<command>:1:9-22: error:" in captured.err
 
     def test_warning_and_error_together_exits_1_and_prints_both(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -745,7 +747,7 @@ class TestExecCommandWarnings:
 
         import agm.agl.runtime.runtime as rt_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared", fake_run)
+        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared_graph", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -757,20 +759,21 @@ class TestExecCommandWarnings:
 
 
 class TestExecParsesSourceOnce:
-    """``agm exec`` parses + scopes the source exactly ONCE (no double parse).
+    """``agm exec`` loads and scopes the graph exactly ONCE (no double parse).
 
     Regression guard: ``agm exec`` learns the declared-agent inventory (to wire
     registrations) AND executes the program.  Both must come from a single
-    ``prepare`` so the source is never parsed or scoped twice.
+    ``prepare_program`` call so the source is never loaded or scoped twice.
     """
 
     def test_exec_parses_and_scopes_source_exactly_once(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import agm.agl.parser as parser_mod
-        import agm.agl.scope as scope_mod
-        from agm.agl.scope.symbols import ResolvedProgram
-        from agm.agl.syntax.nodes import Program
+        import agm.agl.modules.loader as loader_mod
+        import agm.agl.scope.graph as scope_graph_mod
+        from agm.agl.modules.loader import ModuleGraph
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.scope.graph import ResolvedModuleGraph
         from agm.core import dry_run
 
         agl_file = tmp_path / "prog.agl"
@@ -778,31 +781,39 @@ class TestExecParsesSourceOnce:
         # static pipeline, the exact scenario that previously parsed twice.
         agl_file.write_text('agent impl\nask("do it", agent: impl)\n')
 
-        real_parse = parser_mod.parse_program
-        real_resolve = scope_mod.resolve
-        parse_calls = 0
-        resolve_calls = 0
+        real_load = loader_mod.load_graph
+        real_resolve_graph = scope_graph_mod.resolve_graph
+        load_calls = 0
+        resolve_graph_calls = 0
 
-        def counting_parse(source: str) -> Program:
-            nonlocal parse_calls
-            parse_calls += 1
-            return real_parse(source)
+        def counting_load(
+            entry_source: str,
+            *,
+            entry_path: object,
+            roots: RootSet,
+        ) -> ModuleGraph:
+            nonlocal load_calls
+            load_calls += 1
+            return real_load(entry_source, entry_path=entry_path, roots=roots)  # type: ignore[arg-type]
 
-        # ``prepare`` calls ``resolve(program)`` with no keyword args.
-        def counting_resolve(program: Program) -> ResolvedProgram:
-            nonlocal resolve_calls
-            resolve_calls += 1
-            return real_resolve(program)
+        def counting_resolve_graph(
+            graph: ModuleGraph,
+            *,
+            ambient_agents: frozenset[str] = frozenset(),
+        ) -> ResolvedModuleGraph:
+            nonlocal resolve_graph_calls
+            resolve_graph_calls += 1
+            return real_resolve_graph(graph, ambient_agents=ambient_agents)
 
-        monkeypatch.setattr(parser_mod, "parse_program", counting_parse)
-        monkeypatch.setattr(scope_mod, "resolve", counting_resolve)
+        monkeypatch.setattr(loader_mod, "load_graph", counting_load)
+        monkeypatch.setattr(scope_graph_mod, "resolve_graph", counting_resolve_graph)
         # Dry-run drives the full static pipeline (parse → scope → typecheck →
         # reconcile) without executing any agent.
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         assert exec_command.run(_exec_args(agl_file)) is None
-        assert parse_calls == 1
-        assert resolve_calls == 1
+        assert load_calls == 1
+        assert resolve_graph_calls == 1
 
 
 class TestExecCLIPaths:
@@ -1603,13 +1614,16 @@ class TestUncaughtExceptionOutputFormat:
             ),
         )
         with patch("agm.commands.exec.WorkflowRuntime") as mock_rt:
-            # prepare() must return a fake PreparedProgram with empty pragmas so
+            # prepare_program() must return a fake PreparedGraph with empty pragmas so
             # the pragma-resolution logic does not choke on MagicMock values.
             fake_prepared = MagicMock()
             fake_prepared.config_pragmas = {}
             fake_prepared.declared_agents = ()
-            mock_rt.prepare.return_value = fake_prepared
-            mock_rt.return_value.run_prepared.return_value = fake_result
+            mock_rt.prepare_program.return_value = fake_prepared
+            mock_rt.return_value.discover_params_graph.return_value = MagicMock(
+                diagnostics=(), warnings=(), params=(), checked=None, program_name=None
+            )
+            mock_rt.return_value.run_prepared_graph.return_value = fake_result
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
         assert exc_info.value.code == 2
@@ -2435,31 +2449,39 @@ class TestExecPragmaPrecedence:
 
         The pragma validator accepts any non-empty string; parse_timeout rejects
         values like "forever" that are not valid duration strings.  We inject the
-        invalid value via a patched prepare() to bypass the scope pass.
+        invalid value via a patched prepare_program() to bypass the scope pass.
         """
         from unittest.mock import MagicMock
 
+        from agm.agl.modules.roots import RootSet
         from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
 
-        real_prepare = RealRuntime.prepare
+        real_prepare_program = RealRuntime.prepare_program
 
-        def fake_prepare(source: str) -> object:
-            real_pp = real_prepare(source)
-            # Wrap the real PreparedProgram with an invalid timeout in config_pragmas.
-            fake_pp = MagicMock()
-            fake_pp.config_pragmas = {"timeout": "forever"}
-            fake_pp.declared_agents = real_pp.declared_agents
-            # Preserve other attributes for run_prepared.
-            fake_pp.program = real_pp.program
-            fake_pp.resolved = real_pp.resolved
-            fake_pp.diagnostics = real_pp.diagnostics
-            fake_pp.warnings = real_pp.warnings
-            return fake_pp
+        def fake_prepare_program(
+            source: str,
+            *,
+            entry_path: object,
+            roots: RootSet,
+        ) -> object:
+            real_pg = real_prepare_program(source, entry_path=entry_path, roots=roots)  # type: ignore[arg-type]
+            # Wrap the real PreparedGraph with an invalid timeout in config_pragmas.
+            fake_pg = MagicMock()
+            fake_pg.config_pragmas = {"timeout": "forever"}
+            fake_pg.declared_agents = real_pg.declared_agents
+            fake_pg.resolved_graph = real_pg.resolved_graph
+            fake_pg.diagnostics = real_pg.diagnostics
+            fake_pg.warnings = real_pg.warnings
+            return fake_pg
 
-        monkeypatch.setattr(exec_command.WorkflowRuntime, "prepare", staticmethod(fake_prepare))
+        monkeypatch.setattr(
+            exec_command.WorkflowRuntime,
+            "prepare_program",
+            staticmethod(fake_prepare_program),
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))
@@ -2648,3 +2670,412 @@ class TestExecPragmaPrecedence:
 
         exec_command.run(_exec_args_no_log(agl_file, runner="cli-runner"))
         assert captured_runner == ["cli-runner"]
+
+
+def _exec_args_inline_no_log(
+    command: str,
+    *,
+    strict_json: bool | None = None,
+    max_iters: int | None = None,
+    runner: str | None = None,
+) -> ExecArgs:
+    """Build a minimal ExecArgs for -c inline exec tests."""
+    return ExecArgs(
+        file=None,
+        command=command,
+        param_tokens=[],
+        strict_json=strict_json,
+        max_iters=max_iters,
+        runner=runner,
+        no_log=True,
+        log_file=None,
+        log=False,
+    )
+
+
+class TestExecModuleRoots:
+    """M5b: ``agm exec`` uses graph pipeline and module roots.
+
+    Tests verify that:
+    - ``agm exec <file>`` uses the file's directory as invocation root.
+    - ``agm exec -c`` uses cwd as invocation root.
+    - An error in an imported module carries that module's file path in the
+      diagnostic (via source_label).
+    - A multi-file program executes successfully when the library is reachable.
+    """
+
+    def test_exec_file_uses_file_directory_as_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``agm exec file.agl`` can import a sibling module in the same directory."""
+        lib_dir = tmp_path
+        (lib_dir / "mylib.agl").write_text(
+            "def answer() -> int = 42\n"
+        )
+        entry = lib_dir / "entry.agl"
+        entry.write_text("import mylib\nlet r = answer()\nprint r\n")
+
+        # A successful run returns normally (no SystemExit).
+        exec_command.run(_exec_args_no_log(entry))
+        captured = capsys.readouterr()
+        assert "42" in captured.out
+
+    def test_exec_file_import_error_reports_source_label(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Error in imported module shows that module's file path in diagnostic."""
+        lib_dir = tmp_path
+        (lib_dir / "broken.agl").write_text("def f() -> int = undeclared_name\n")
+        entry = lib_dir / "entry.agl"
+        entry.write_text("import broken\nlet r = f()\nr\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(entry))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        # The diagnostic should mention the broken.agl file path
+        assert "broken.agl" in captured.err
+
+    def test_exec_inline_uses_cwd_as_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``agm exec -c`` uses cwd (from config context) as invocation root."""
+        # Write a lib module to a tmp dir
+        lib_dir = tmp_path / "libdir"
+        lib_dir.mkdir()
+        (lib_dir / "util.agl").write_text("def greet() -> text = \"Hi!\"\n")
+        entry_source = "import util\nlet r = greet()\nprint r\n"
+
+        # Patch current_config_context as imported in exec_command
+        from agm.config import context as ctx_mod
+
+        original_ctx = ctx_mod.current_config_context()
+
+        class FakeCtx:
+            home = original_ctx.home
+            proj_dir = original_ctx.proj_dir
+            cwd = lib_dir
+
+        monkeypatch.setattr(exec_command, "current_config_context", lambda: FakeCtx())
+
+        # A successful run returns normally (no SystemExit).
+        exec_command.run(_exec_args_inline_no_log(entry_source))
+        captured = capsys.readouterr()
+        assert "Hi!" in captured.out
+
+    def test_exec_file_missing_import_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A missing import causes exit 1 with a diagnostic on stderr."""
+        entry = tmp_path / "prog.agl"
+        entry.write_text("import no_such_module\nlet x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(entry))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "no_such_module" in captured.err
+
+    def test_exec_multifile_successful_run(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A two-module AgL program executes successfully end-to-end."""
+        lib_dir = tmp_path
+        (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
+        entry = lib_dir / "prog.agl"
+        entry.write_text("import calc\nlet r = square(4)\nprint r\n")
+
+        # A successful run returns normally (no SystemExit).
+        exec_command.run(_exec_args_no_log(entry))
+        captured = capsys.readouterr()
+        assert "16" in captured.out
+
+    def test_invalid_module_roots_config_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ValueError from load_module_roots causes exit 1 with a config error."""
+        from unittest.mock import patch
+
+        entry = tmp_path / "prog.agl"
+        entry.write_text("let x = 1\nx\n")
+
+        with (
+            patch(
+                "agm.commands.exec.load_module_roots",
+                side_effect=ValueError("bad config"),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            exec_command.run(_exec_args_no_log(entry))
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert "module roots" in captured.err.lower()
+
+    def test_configured_lib_root_is_resolved(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configured lib_root in module roots config is resolved and used."""
+        from agm.config.module_roots import ModuleRootsConfig
+
+        lib_dir = tmp_path / "mylib"
+        lib_dir.mkdir()
+        (lib_dir / "shared.agl").write_text("def pi() -> int = 314\n")
+
+        entry_dir = tmp_path / "work"
+        entry_dir.mkdir()
+        entry = entry_dir / "prog.agl"
+        entry.write_text("import shared\nlet r = pi()\nprint r\n")
+
+        # Patch load_module_roots to return a ModuleRootsConfig with lib_root set.
+        with monkeypatch.context() as mp:
+            mp.setattr(
+                exec_command,
+                "load_module_roots",
+                lambda *, home, proj_dir, cwd: ModuleRootsConfig(
+                    lib_root=(str(lib_dir), tmp_path),  # absolute path
+                    extra=(),
+                ),
+            )
+            exec_command.run(_exec_args_no_log(entry))
+        captured = capsys.readouterr()
+        assert "314" in captured.out
+
+    def test_exec_wildcard_import_multifile(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``import pkg.*`` wildcard imports two sibling modules and both are callable.
+
+        Verifies that the wildcard import path works end-to-end through the
+        exec_command pipeline (discover_params_graph + run_prepared_graph).
+        """
+        pkg_dir = tmp_path / "pkg"
+        pkg_dir.mkdir()
+        (pkg_dir / "add.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        (pkg_dir / "mul.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
+        entry = tmp_path / "prog.agl"
+        entry.write_text(
+            "import pkg.*\n"
+            "let s = add(3, 4)\n"
+            "let p = mul(3, 4)\n"
+            "print s\n"
+            "print p\n"
+        )
+
+        exec_command.run(_exec_args_no_log(entry))
+        captured = capsys.readouterr()
+        assert "7" in captured.out
+        assert "12" in captured.out
+
+    def test_exec_qualified_import_multifile(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``import x qualified`` + ``x::name`` qualified call works end-to-end.
+
+        Verifies that the qualified-import path works through the command pipeline.
+        """
+        (tmp_path / "mathlib.agl").write_text("def square(n: int) -> int = n * n\n")
+        entry = tmp_path / "prog.agl"
+        entry.write_text(
+            "import mathlib qualified\n"
+            "let r = mathlib::square(7)\n"
+            "print r\n"
+        )
+
+        exec_command.run(_exec_args_no_log(entry))
+        captured = capsys.readouterr()
+        assert "49" in captured.out
+
+    def test_exec_imported_function_ask_multi_scenario(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multi-scenario: imported function calls ask() with an agent passed from entry.
+
+        Scenario A: agent returns "Alice" → result printed is "Alice"
+        Scenario B: agent returns "World" → result printed is "World"
+
+        Each scenario drives exec_command.run end-to-end with a distinct mock
+        response injected via runner_backed_agent_factory, asserting each output.
+        """
+        import agm.commands.exec as exec_mod
+        from agm.agl.runtime.request import AgentRequest, AgentResponse
+
+        (tmp_path / "greeter.agl").write_text(
+            "def greet(prompt: text, bot: agent) -> text =\n"
+            "  ask(prompt, agent: bot)\n"
+        )
+        entry = tmp_path / "entry.agl"
+        entry.write_text(
+            "import greeter\n"
+            "agent mybot\n"
+            'let result = greeter::greet("What is your name?", mybot)\n'
+            "print result\n"
+        )
+
+        def _run_with_response(response: str) -> str:
+            """Inject *response* as the mock agent answer and return stdout."""
+
+            def mock_agent(req: AgentRequest) -> AgentResponse:
+                return AgentResponse(content=response)
+
+            # Patch runner_backed_agent_factory so both the default agent and
+            # the registered 'mybot' agent use our mock (matching the pattern
+            # in test_ask_program_dispatches_to_runner_backed_agent above).
+            monkeypatch.setattr(
+                exec_mod, "runner_backed_agent_factory", lambda **_: mock_agent
+            )
+            exec_command.run(_exec_args_no_log(entry))
+            out, _ = capsys.readouterr()
+            return out
+
+        # Scenario A: agent returns "Alice"
+        out_a = _run_with_response("Alice")
+        assert "Alice" in out_a
+
+        # Scenario B: agent returns "World" — different input/output combination
+        out_b = _run_with_response("World")
+        assert "World" in out_b
+        assert out_a != out_b
+
+
+class TestExecCliModulePaths:
+    """M6: ``-I/--module-path`` roots are threaded into ``assemble_roots``.
+
+    Tests verify that a module placed only in a ``-I DIR`` root is resolvable
+    by ``agm exec`` when that root is passed via ``ExecArgs.module_paths``.
+    """
+
+    def test_module_in_cli_root_is_resolvable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A module placed only in a -I root is importable by the entry program."""
+        lib_root = tmp_path / "mylibs"
+        lib_root.mkdir()
+        (lib_root / "helper.agl").write_text("def answer() -> int = 99\n")
+
+        # entry.agl lives in a separate directory with no sibling modules
+        entry_dir = tmp_path / "prog"
+        entry_dir.mkdir()
+        entry = entry_dir / "main.agl"
+        entry.write_text("import helper\nlet r = answer()\nprint r\n")
+
+        args = ExecArgs(
+            file=str(entry),
+            command=None,
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[str(lib_root)],
+        )
+        exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "99" in captured.out
+
+    def test_multiple_cli_roots_each_resolvable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Two -I roots each contribute a distinct module, both resolvable."""
+        root_a = tmp_path / "rootA"
+        root_a.mkdir()
+        (root_a / "mod_a.agl").write_text("def va() -> int = 10\n")
+
+        root_b = tmp_path / "rootB"
+        root_b.mkdir()
+        (root_b / "mod_b.agl").write_text("def vb() -> int = 20\n")
+
+        entry_dir = tmp_path / "entry"
+        entry_dir.mkdir()
+        entry = entry_dir / "prog.agl"
+        entry.write_text(
+            "import mod_a\nimport mod_b\nlet r = va() + vb()\nprint r\n"
+        )
+
+        args = ExecArgs(
+            file=str(entry),
+            command=None,
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[str(root_a), str(root_b)],
+        )
+        exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "30" in captured.out
+
+    def test_module_not_found_without_cli_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Without -I, a module in an external root is not found (exit 1)."""
+        lib_root = tmp_path / "mylibs"
+        lib_root.mkdir()
+        (lib_root / "helper.agl").write_text("def answer() -> int = 99\n")
+
+        entry_dir = tmp_path / "prog"
+        entry_dir.mkdir()
+        entry = entry_dir / "main.agl"
+        entry.write_text("import helper\nlet r = answer()\nprint r\n")
+
+        args = ExecArgs(
+            file=str(entry),
+            command=None,
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[],  # no CLI roots
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "helper" in captured.err
+
+    def test_inline_exec_with_cli_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``-c`` inline exec resolves imports from a -I root."""
+        lib_root = tmp_path / "inlinelibs"
+        lib_root.mkdir()
+        (lib_root / "util.agl").write_text("def greet() -> text = \"Hello!\"\n")
+
+        # cwd is irrelevant — helper is not reachable from cwd; only via -I
+        entry_dir = tmp_path / "work"
+        entry_dir.mkdir()
+
+        from agm.config import context as ctx_mod
+
+        original_ctx = ctx_mod.current_config_context()
+
+        class FakeCtx:
+            home = original_ctx.home
+            proj_dir = original_ctx.proj_dir
+            cwd = entry_dir
+
+        monkeypatch.setattr(exec_command, "current_config_context", lambda: FakeCtx())
+
+        args = ExecArgs(
+            file=None,
+            command="import util\nlet r = greet()\nprint r\n",
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[str(lib_root)],
+        )
+        exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "Hello!" in captured.out

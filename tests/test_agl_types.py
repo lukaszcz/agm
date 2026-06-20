@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl.modules.ids import ModuleId
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.types import (
     AgentType,
@@ -833,3 +834,132 @@ class TestCastClassification:
             cast_classification,
         )
         assert cast_classification(IntType(), ListType(IntType())) == CastKind.STATIC_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Nominal equality for RecordType / EnumType
+# ---------------------------------------------------------------------------
+
+
+class TestNominalEquality:
+    """RecordType and EnumType must compare by (module_id, name) only."""
+
+    def _mod(self, name: str) -> "ModuleId":
+        from agm.agl.modules.ids import ModuleId
+
+        return ModuleId(segments=(name,))
+
+    def test_record_same_name_module_different_fields_equal(self) -> None:
+        from agm.agl.typecheck.types import IntType, RecordType, TextType
+
+        r1 = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
+        r2 = RecordType(name="Point", fields={"z": TextType()})
+        assert r1 == r2
+
+    def test_enum_same_name_module_different_variants_equal(self) -> None:
+        from agm.agl.typecheck.types import EnumType, IntType
+
+        e1 = EnumType(name="Color", variants={"Red": {}, "Green": {}})
+        e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
+        assert e1 == e2
+
+    def test_record_different_module_not_equal(self) -> None:
+        from agm.agl.typecheck.types import IntType, RecordType
+
+        mod_foo = self._mod("foo")
+        mod_bar = self._mod("bar")
+        r1 = RecordType(name="Color", fields={"x": IntType()}, module_id=mod_foo)
+        r2 = RecordType(name="Color", fields={"x": IntType()}, module_id=mod_bar)
+        assert r1 != r2
+
+    def test_enum_different_module_not_equal(self) -> None:
+        from agm.agl.typecheck.types import EnumType
+
+        mod_foo = self._mod("foo")
+        mod_bar = self._mod("bar")
+        e1 = EnumType(name="Color", variants={"Red": {}}, module_id=mod_foo)
+        e2 = EnumType(name="Color", variants={"Red": {}}, module_id=mod_bar)
+        assert e1 != e2
+
+    def test_record_different_name_not_equal(self) -> None:
+        from agm.agl.typecheck.types import IntType, RecordType
+
+        r1 = RecordType(name="Point", fields={"x": IntType()})
+        r2 = RecordType(name="Color", fields={"x": IntType()})
+        assert r1 != r2
+
+    def test_enum_different_name_not_equal(self) -> None:
+        from agm.agl.typecheck.types import EnumType
+
+        e1 = EnumType(name="Color", variants={"Red": {}})
+        e2 = EnumType(name="Shape", variants={"Red": {}})
+        assert e1 != e2
+
+    def test_record_hashable(self) -> None:
+        from agm.agl.typecheck.types import IntType, RecordType
+
+        r = RecordType(name="Point", fields={"x": IntType()})
+        h = hash(r)
+        assert isinstance(h, int)
+
+    def test_enum_hashable(self) -> None:
+        from agm.agl.typecheck.types import EnumType
+
+        e = EnumType(name="Color", variants={"Red": {}})
+        h = hash(e)
+        assert isinstance(h, int)
+
+    def test_equal_records_hash_equal(self) -> None:
+        from agm.agl.typecheck.types import IntType, RecordType, TextType
+
+        r1 = RecordType(name="Point", fields={"x": IntType()})
+        r2 = RecordType(name="Point", fields={"z": TextType()})
+        assert r1 == r2
+        assert hash(r1) == hash(r2)
+
+    def test_equal_enums_hash_equal(self) -> None:
+        from agm.agl.typecheck.types import EnumType, IntType
+
+        e1 = EnumType(name="Color", variants={"Red": {}})
+        e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
+        assert e1 == e2
+        assert hash(e1) == hash(e2)
+
+    def test_record_usable_as_dict_key(self) -> None:
+        from agm.agl.typecheck.types import IntType, RecordType, TextType
+
+        r1 = RecordType(name="Point", fields={"x": IntType()})
+        r2 = RecordType(name="Point", fields={"z": TextType()})
+        d: dict[RecordType, str] = {r1: "found"}
+        assert d[r2] == "found"
+
+    def test_enum_usable_in_set(self) -> None:
+        from agm.agl.typecheck.types import EnumType, IntType
+
+        e1 = EnumType(name="Color", variants={"Red": {}})
+        e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
+        s = {e1, e2}
+        assert len(s) == 1
+
+    def test_shell_record_equals_built(self) -> None:
+        from agm.agl.typecheck.types import IntType, RecordType
+
+        shell = RecordType(name="Point", fields={})
+        built = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
+        assert shell == built
+
+    def test_shell_enum_equals_built(self) -> None:
+        shell = EnumType(name="Color", variants={})
+        built = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
+        assert shell == built
+
+    def test_list_type_stays_structural(self) -> None:
+        assert ListType(IntType()) != ListType(TextType())
+
+    def test_dict_type_stays_structural(self) -> None:
+        assert DictType(IntType()) != DictType(TextType())
+
+    def test_function_type_stays_structural(self) -> None:
+        f1 = FunctionType(params=(IntType(),), result=TextType())
+        f2 = FunctionType(params=(TextType(),), result=TextType())
+        assert f1 != f2

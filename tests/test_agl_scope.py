@@ -2224,7 +2224,7 @@ class TestConstructorBindings:
         fa = let_decl.value
         assert isinstance(fa, FieldAccess)
         assert fa.node_id in r.qualified_constructor_refs
-        owner, member = r.qualified_constructor_refs[fa.node_id]
+        owner, member, _mid = r.qualified_constructor_refs[fa.node_id]
         assert owner == "Option"
         assert member == "some"
 
@@ -2249,7 +2249,7 @@ class TestConstructorBindings:
         last = r.program.body.items[1]
         assert isinstance(last, FieldAccess)
         assert last.node_id in r.qualified_constructor_refs
-        assert r.qualified_constructor_refs[last.node_id] == ("Option", "none")
+        assert r.qualified_constructor_refs[last.node_id][:2] == ("Option", "none")
 
     def test_qualified_access_with_record_type(self) -> None:
         """Box.value is NOT a constructor qualified access (Box is a record, value is a field)."""
@@ -2546,7 +2546,7 @@ class TestConstructorBindings:
         )
         r = resolve_program(enum, fa)
         assert fa.node_id in r.qualified_constructor_refs
-        assert r.qualified_constructor_refs[fa.node_id] == ("Color", "red")
+        assert r.qualified_constructor_refs[fa.node_id][:2] == ("Color", "red")
 
     def test_ordinary_field_access_not_qualified_ref(self) -> None:
         """FieldAccess on a regular value is NOT recorded in qualified_constructor_refs."""
@@ -2583,3 +2583,28 @@ class TestCastScope:
         # The call to parse_json should be classified as PARSE_JSON builtin
         from agm.agl.scope.symbols import BuiltinKind
         assert BuiltinKind.PARSE_JSON in r.builtin_calls.values()
+
+
+class TestImportDeclScope:
+    """Import declarations pass through the scope resolver without errors."""
+
+    def test_import_decl_does_not_raise(self) -> None:
+        """A bare import declaration resolves without a scope error."""
+        r = parse_and_resolve("import foo.bar\n1")
+        assert r  # no exception
+
+    def test_import_with_alias_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo as f\n1")
+        assert r
+
+    def test_import_wildcard_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo.*\n1")
+        assert r
+
+    def test_import_using_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo using bar\n1")
+        assert r
+
+    def test_import_hiding_does_not_raise(self) -> None:
+        r = parse_and_resolve("import foo hiding secret\n1")
+        assert r

@@ -219,6 +219,7 @@ class ExecArgs:
     param_tokens: list[str] = field(default_factory=list)
     log: bool = False
     command: str | None = None
+    module_paths: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

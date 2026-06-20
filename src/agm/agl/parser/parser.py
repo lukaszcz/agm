@@ -13,6 +13,8 @@ source string to ``_PARSER``, then passes the resulting Lark tree to
 from __future__ import annotations
 
 import importlib.resources
+from dataclasses import replace as dc_replace
+from typing import NoReturn
 
 from lark import Lark
 from lark.exceptions import (
@@ -28,6 +30,22 @@ from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.lexer import AglLexer
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
 from agm.agl.parser.transform import AstBuilder
+from agm.agl.syntax.spans import SourceId
+
+
+def _reraise_stamped(err: AglSyntaxError, source: SourceId | None) -> NoReturn:
+    """Re-raise *err*, stamping its span with *source* when both are present.
+
+    When *source* is not ``None`` and *err* carries a span, a new
+    ``AglSyntaxError`` is raised with the span's ``source`` field replaced by
+    *source*.  Otherwise *err* is re-raised unchanged.
+
+    This helper consolidates the repeated stamp-then-re-raise pattern that
+    appears in every ``except`` arm of :func:`_parse_to_program`.
+    """
+    if source is not None and err.span is not None:
+        raise AglSyntaxError(str(err), span=dc_replace(err.span, source=source)) from err
+    raise err
 
 
 def _load_grammar() -> str:
@@ -50,7 +68,7 @@ _PARSER: Lark = Lark(
 
 
 def _parse_to_program(
-    text: str, *, filename: str, start_id: int
+    text: str, *, filename: str, start_id: int, source: SourceId | None = None
 ) -> tuple[syntax.Program, int]:
     """Parse *text* into a ``Program`` and report the next unused node id.
 
@@ -58,27 +76,38 @@ def _parse_to_program(
     Node ids are assigned starting at *start_id*; the returned ``int`` is the
     first id NOT consumed (the seed for a subsequent incremental parse), read
     from the builder's counter rather than assuming the root holds the maximum.
+
+    When *source* is supplied, every ``SourceSpan`` the builder constructs is
+    stamped with that ``SourceId``; the same id is also stamped on any
+    ``AglSyntaxError`` raised during parsing.
     """
     try:
         tree = _PARSER.parse(text)
     except LexError as exc:
-        raise syntax_error_from_lark(exc, filename=filename, source_text=text) from exc
+        _reraise_stamped(
+            syntax_error_from_lark(exc, filename=filename, source_text=text), source
+        )
     except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
-        raise syntax_error_from_lark(exc, filename=filename, source_text=text) from exc
+        _reraise_stamped(
+            syntax_error_from_lark(exc, filename=filename, source_text=text), source
+        )
     except LarkError as exc:  # pragma: no cover
         # Any other lark-level error (ParseError, GrammarError, etc.) is a
         # genuine syntax/parse problem.  Narrowing to LarkError lets internal
         # bugs (AssertionError and the like) surface instead of being masked.
-        raise syntax_error_from_lark(exc, filename=filename, source_text=text) from exc
+        _reraise_stamped(
+            syntax_error_from_lark(exc, filename=filename, source_text=text), source
+        )
 
-    builder = AstBuilder(start_id=start_id)
+    builder = AstBuilder(start_id=start_id, source=source)
     try:
         result = builder.transform(tree)
     except VisitError as exc:
         # Lark wraps transformer exceptions in VisitError.  If the original
-        # exception is already an AglSyntaxError, unwrap and re-raise it.
+        # exception is already an AglSyntaxError, unwrap and re-raise it,
+        # stamping the source so transformer-raised errors carry the module path.
         if isinstance(exc.orig_exc, AglSyntaxError):
-            raise exc.orig_exc from exc
+            _reraise_stamped(exc.orig_exc, source)
         raise syntax_error_from_lark(exc, filename=filename) from exc  # pragma: no cover
     assert isinstance(result, syntax.Program)
     return result, builder.next_node_id
@@ -157,7 +186,11 @@ def is_incomplete_source(text: str) -> bool:
 
 
 def parse_program(
-    text: str, *, filename: str = "<agl>", start_id: int = 0
+    text: str,
+    *,
+    filename: str = "<agl>",
+    start_id: int = 0,
+    source: SourceId | None = None,
 ) -> syntax.Program:
     """Parse *text* as an AgL program and return a ``syntax.Program`` AST.
 
@@ -172,6 +205,11 @@ def parse_program(
         Used by incremental sessions to keep node ids globally unique across
         entries; prefer :func:`parse_program_seeded` there to also recover the
         next seed.
+    source:
+        Optional :class:`~agm.agl.syntax.spans.SourceId` to stamp on every
+        ``SourceSpan`` in the resulting AST.  When ``None`` (the default),
+        spans carry ``UNKNOWN_SOURCE`` (label ``"<agl>"``).  Pass this from
+        the module loader so that multi-file diagnostics identify the origin file.
 
     Returns
     -------
@@ -182,14 +220,21 @@ def parse_program(
     ------
     AglSyntaxError
         On any lex or parse error, with a :class:`~agm.agl.syntax.spans.SourceSpan`
-        carrying 1-based line/column information.
+        carrying 1-based line/column information.  If *source* was supplied,
+        the error span is stamped with that ``SourceId``.
     """
-    program, _next_id = _parse_to_program(text, filename=filename, start_id=start_id)
+    program, _next_id = _parse_to_program(
+        text, filename=filename, start_id=start_id, source=source
+    )
     return program
 
 
 def parse_program_seeded(
-    text: str, *, start_id: int, filename: str = "<agl>"
+    text: str,
+    *,
+    start_id: int,
+    filename: str = "<agl>",
+    source: SourceId | None = None,
 ) -> tuple[syntax.Program, int]:
     """Parse *text* with node ids starting at *start_id* for incremental use.
 
@@ -206,6 +251,9 @@ def parse_program_seeded(
         The first ``node_id`` to assign.
     filename:
         The logical filename for error messages (default ``"<agl>"``).
+    source:
+        Optional :class:`~agm.agl.syntax.spans.SourceId` stamped on every span.
+        See :func:`parse_program` for details.
 
     Returns
     -------
@@ -217,4 +265,4 @@ def parse_program_seeded(
     AglSyntaxError
         On any lex or parse error.
     """
-    return _parse_to_program(text, filename=filename, start_id=start_id)
+    return _parse_to_program(text, filename=filename, start_id=start_id, source=source)

@@ -7,10 +7,12 @@ public ``tokenize`` helper.  No scanner/layout internals are tested.
 from __future__ import annotations
 
 import pytest
+from lark import Token
 from lark.lexer import LexerState
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer import AglLexer, LexError, lex_tab_warnings, tokenize
+from agm.agl.lexer.lexer import _is_qual_typed_call_bracket
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -360,6 +362,38 @@ class TestIndexBracketRemap:
             ("UNTIL", "until"),
             ("NAME", "done"),
         ]
+
+    def test_qual_typed_call_lsqb_not_converted_to_index_lsqb(self) -> None:
+        # lib::Box[int](value: 1) — the [ must stay LSQB, not become INDEX_LSQB.
+        tokens = lark_tok("lib::Box[int](value: 1)")
+        types = [t for t, _ in tokens]
+        idx = types.index("NAME")  # find "Box"
+        assert types[idx + 1] == "LSQB"
+
+    def test_qual_typed_call_nested_brackets_lsqb_preserved(self) -> None:
+        # lib::Box[list[int]](value: xs) — outer [ stays LSQB; inner [ becomes INDEX_LSQB.
+        # This exercises the depth>1 path in _is_qual_typed_call_bracket.
+        tokens = lark_tok("lib::Box[list[int]](value: xs)")
+        types = [t for t, _ in tokens]
+        box_idx = next(i for i, (t, v) in enumerate(tokens) if t == "NAME" and v == "Box")
+        assert types[box_idx + 1] == "LSQB"  # outer [ preserved
+        list_idx = next(i for i, (t, v) in enumerate(tokens) if t == "NAME" and v == "list")
+        assert types[list_idx + 1] == "INDEX_LSQB"  # inner [ converted
+
+    def test_is_qual_typed_call_bracket_unclosed_returns_false(self) -> None:
+        # Coverage: lexer.py line 368 — for loop exhausted without finding RSQB.
+        # Constructs a token list with no matching ] to reach the return False at end.
+        def tok(type_: str, value: str) -> Token:
+            t: Token = Token(type_, value)
+            return t
+
+        tokens = [
+            tok("MODQUAL", "lib::"),
+            tok("NAME", "Box"),
+            tok("LSQB", "["),    # pos 2 — the bracket being checked
+            tok("NAME", "int"),  # no RSQB follows — loop exhausts
+        ]
+        assert _is_qual_typed_call_bracket(tokens, 2) is False
 
 
 # ---------------------------------------------------------------------------
@@ -2164,3 +2198,109 @@ class TestAsQuestionKeyword:
         # `as` in a cast context
         result = tok("x as text")
         assert ("as", "as") in result
+
+
+# ---------------------------------------------------------------------------
+# Module system lexer tests
+# ---------------------------------------------------------------------------
+
+
+class TestModuleSystemLexer:
+    """Tests for soft-keyword promotion and MODQUAL merging."""
+
+    # --- import soft keyword ---
+
+    def test_import_at_line_start_is_import_token(self) -> None:
+        result = tok("import foo.bar")
+        assert result[0] == ("IMPORT", "import")
+
+    def test_import_mid_expression_stays_name(self) -> None:
+        # 'import' after an operator is NOT at item-start → stays NAME
+        result = tok("x + import")
+        types = [t for t, _ in result]
+        assert "IMPORT" not in types
+        assert ("NAME", "import") in result
+
+    def test_private_at_line_start_is_private_token(self) -> None:
+        result = tok("private def f() -> text = x")
+        assert result[0] == ("PRIVATE", "private")
+
+    def test_private_not_at_line_start_stays_name(self) -> None:
+        result = tok("x + private")
+        assert ("NAME", "private") in result
+        types = [t for t, _ in result]
+        assert "PRIVATE" not in types
+
+    def test_qualified_in_import_line(self) -> None:
+        result = tok("import foo qualified")
+        types = [t for t, _ in result]
+        assert "QUALIFIED" in types
+
+    def test_qualified_outside_import_line_stays_name(self) -> None:
+        result = tok("let qualified = 1")
+        assert ("NAME", "qualified") in result
+        types = [t for t, _ in result]
+        assert "QUALIFIED" not in types
+
+    def test_using_in_import_line(self) -> None:
+        result = tok("import foo using bar")
+        types = [t for t, _ in result]
+        assert "USING" in types
+
+    def test_hiding_in_import_line(self) -> None:
+        result = tok("import foo hiding bar")
+        types = [t for t, _ in result]
+        assert "HIDING" in types
+
+    def test_using_outside_import_stays_name(self) -> None:
+        result = tok("let using = 1")
+        assert ("NAME", "using") in result
+
+    def test_hiding_outside_import_stays_name(self) -> None:
+        result = tok("let hiding = 1")
+        assert ("NAME", "hiding") in result
+
+    def test_import_window_closes_at_newline(self) -> None:
+        # After newline, a new import line resets; 'using' on a different line
+        # from 'import' is not inside the import window
+        src = "import foo\nusing bar"
+        result = tok(src)
+        # 'using' here is on its own line not preceded by import on same line
+        assert ("NAME", "using") in result
+
+    # --- MODQUAL merging ---
+
+    def test_simple_name_dcolon_name_merges_to_modqual(self) -> None:
+        result = lark_tok("foo::bar")
+        assert result[0] == ("MODQUAL", "foo")
+        assert result[1][0] == "NAME"
+        assert result[1][1] == "bar"
+
+    def test_dotted_path_dcolon_merges_to_modqual(self) -> None:
+        result = lark_tok("foo.bar::baz")
+        assert result[0] == ("MODQUAL", "foo.bar")
+        assert result[1][1] == "baz"
+
+    def test_upper_name_dcolon_merges_to_modqual(self) -> None:
+        result = lark_tok("Foo::Bar")
+        assert result[0] == ("MODQUAL", "Foo")
+        assert result[1][0] == "NAME"
+
+    def test_typed_call_dcolon_lsqb_not_merged(self) -> None:
+        # NAME DCOLON LSQB — must NOT be merged to MODQUAL (typed call syntax)
+        result = lark_tok("foo::[int]()")
+        types = [t for t, _ in result]
+        assert "MODQUAL" not in types
+        assert "DCOLON" in types
+
+    def test_bare_dcolon_not_merged(self) -> None:
+        # Leading :: (self-reference) — no preceding name, no merge
+        result = lark_tok("::foo")
+        types = [t for t, _ in result]
+        assert "MODQUAL" not in types
+        assert "DCOLON" in types
+
+    def test_import_in_lark_token_stream(self) -> None:
+        # After remap, 'import' at item-start becomes IMPORT in the parser stream
+        result = lark_tok("import foo")
+        assert result[0] == ("IMPORT", "import")

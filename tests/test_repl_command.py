@@ -408,6 +408,28 @@ class TestReplParamsConfigLoader:
         assert r.ok
         assert loader_calls == ["myapp"]
 
+    def test_configured_lib_root_wired_into_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        """When [modules] lib_root is set in config, it is resolved and passed to the session."""
+        home = _isolated_home(monkeypatch, tmp_path)
+        # Create an AGM home config with a lib_root pointing to a local dir.
+        lib_dir = tmp_path / "mylib"
+        lib_dir.mkdir()
+        agm_home = home / ".agm"
+        agm_home.mkdir(parents=True, exist_ok=True)
+        (agm_home / "config.toml").write_text(
+            f"[modules]\nlib_root = {str(lib_dir)!r}\n"
+        )
+        repl_command.run(_args())
+        session = fake_console[0]["session"]
+        assert isinstance(session, ReplSession)
+        # The session's _lib_root should be the resolved absolute lib dir.
+        assert session._lib_root == lib_dir
+
 
 class TestReplTrace:
     def test_log_file_threaded_into_session(

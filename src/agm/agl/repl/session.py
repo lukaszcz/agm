@@ -28,19 +28,23 @@ from typing import TYPE_CHECKING, Literal
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
     from agm.agl.eval.scope import Scope
     from agm.agl.eval.values import Value
+    from agm.agl.modules.ids import ModuleId
+    from agm.agl.modules.loader import LoadedModule
+    from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.runtime import HostEnvironment, RunError
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
-    from agm.agl.syntax.nodes import Program
+    from agm.agl.syntax.nodes import ImportDecl, Program
     from agm.agl.syntax.spans import SourceSpan
-    from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
+    from agm.agl.typecheck.env import CheckedProgram, FunctionSignature, TypeEnvironment
+    from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph
     from agm.agl.typecheck.types import Type
 
 
@@ -203,6 +207,10 @@ class ReplSession:
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
+        cwd: "Path | None" = None,
+        lib_root: "Path | None" = None,
+        configured_roots: "Iterable[tuple[str, Path]]" = (),
+        extra_cli_roots: "Iterable[str]" = (),
     ) -> None:
         from agm.agl.eval.scope import Scope
         from agm.agl.runtime.runtime import WorkflowRuntime
@@ -260,6 +268,23 @@ class ReplSession:
         # access (``Owner.variant``) across REPL entries.
         self._ambient_type_names: frozenset[str] = frozenset()
 
+        # Module roots configuration (M6 REPL import support).
+        # These are stored so _ensure_roots() can assemble the RootSet lazily.
+        self._cwd: Path | None = cwd
+        self._lib_root: Path | None = lib_root
+        self._configured_roots: tuple[tuple[str, Path], ...] = tuple(configured_roots)
+        self._extra_cli_roots: tuple[str, ...] = tuple(extra_cli_roots)
+        # Lazily assembled RootSet (set directly in tests via s._roots = ...).
+        self._roots: RootSet | None = None
+        # Cached lib modules from prior REPL graph-mode entries.
+        self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
+        self._lib_module_frames: dict[ModuleId, Scope] = {}
+        self._lib_module_sigs: dict[ModuleId, dict[str, FunctionSignature]] = {}
+        # Accumulated import declarations from prior promoted graph-mode entries.
+        # These are prepended to each new entry's program in graph mode so that
+        # open imports (e.g. ``import util``) persist across entries.
+        self._accumulated_imports: list["ImportDecl"] = []
+
     @staticmethod
     def _make_agent_type() -> "Type":
         """Return an ``AgentType`` instance (deferred import, used at init and reset)."""
@@ -278,6 +303,28 @@ class ReplSession:
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``WorkflowRuntime`` validation)."""
         self._runtime.register_codec(codec)
+
+    # ------------------------------------------------------------------
+    # Module roots (M6)
+    # ------------------------------------------------------------------
+
+    def _ensure_roots(self) -> "RootSet":
+        """Build the ``RootSet`` lazily on first import use."""
+        if self._roots is not None:
+            return self._roots
+        from pathlib import Path
+
+        from agm.agl.modules.roots import assemble_roots
+
+        cwd = self._cwd if self._cwd is not None else Path.cwd()
+        self._roots = assemble_roots(
+            invocation_root=cwd,
+            lib_root=self._lib_root,
+            configured=self._configured_roots,
+            cli=self._extra_cli_roots,
+            cwd=cwd,
+        )
+        return self._roots
 
     # ------------------------------------------------------------------
     # Core evaluation
@@ -329,6 +376,27 @@ class ReplSession:
         pipeline_program, next_start_id = self._repl_wrap_trailing_binder(
             program, next_start_id
         )
+
+        # [1d] Check whether this entry has import declarations or there are
+        # already cached library modules from a prior entry.  If so, use the
+        # graph-mode pipeline which handles cross-module resolution and execution.
+        from agm.agl.syntax.nodes import ImportDecl as _ImportDecl
+
+        has_imports = any(
+            isinstance(item, _ImportDecl) for item in pipeline_program.body.items
+        )
+        use_graph_mode = has_imports or bool(self._loaded_lib_modules)
+
+        if use_graph_mode:
+            return self._eval_entry_graph_mode(
+                text=text,
+                orig_program=orig_program,
+                pipeline_program=pipeline_program,
+                host_env=host_env,
+                tab_warnings=tab_warnings,
+                next_start_id=next_start_id,
+                check_only=check_only,
+            )
 
         # [2] Resolve against the session scope (refs fall through; new decls
         # shadow).  resolve does NOT mutate the parent scope.  Host-registered
@@ -741,6 +809,382 @@ class ReplSession:
             trace_path=self._trace_path,
         )
 
+    def _inject_accumulated_imports(self, program: "Program") -> "Program":
+        """Return a new program with accumulated session imports prepended.
+
+        Prior graph-mode entries may have imported modules via open import.
+        To make those imports persist across entries, we prepend the stored
+        ``ImportDecl`` nodes to the current entry's program items.  Nodes
+        with already-present module_paths are de-duplicated (if the current
+        entry re-imports the same module, the current entry's decl wins).
+        """
+        from agm.agl.syntax.nodes import Block, ImportDecl, Program
+
+        if not self._accumulated_imports:
+            return program
+
+        # Collect (module_path, wildcard) pairs already imported in the current entry.
+        current_import_paths: set[tuple[tuple[str, ...], bool]] = set()
+        for item in program.body.items:
+            if isinstance(item, ImportDecl):
+                current_import_paths.add((tuple(item.module_path), item.wildcard))
+
+        # Build the injected preamble: accumulated imports NOT already in the entry.
+        preamble = [
+            decl
+            for decl in self._accumulated_imports
+            if (tuple(decl.module_path), decl.wildcard) not in current_import_paths
+        ]
+
+        if not preamble:
+            return program
+
+        new_items = tuple(preamble) + program.body.items
+        new_block = Block(
+            items=new_items,
+            span=program.body.span,
+            node_id=program.body.node_id,
+        )
+        return Program(body=new_block, span=program.span, node_id=program.node_id)
+
+    def _eval_entry_graph_mode(
+        self,
+        *,
+        text: str,
+        orig_program: "Program",
+        pipeline_program: "Program",
+        host_env: "HostEnvironment",
+        tab_warnings: list[Diagnostic],
+        next_start_id: int,
+        check_only: bool,
+    ) -> EntryResult:
+        """Graph-mode pipeline for REPL entries that have imports or cached lib modules.
+
+        Builds the module graph from the already-parsed *pipeline_program*, runs
+        the full scope/typecheck pass with the session context, then evaluates
+        or returns a check-only result.
+        """
+        from agm.agl.eval.interpreter import _merge_graph_into_checked_program
+        from agm.agl.modules.errors import (
+            AmbiguousModule,
+            ImportEntryError,
+            ModuleNotFound,
+            ModulePrefixNotFound,
+        )
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.parser import AglSyntaxError
+        from agm.agl.runtime.contract import materialize_contract
+        from agm.agl.scope import AglScopeError
+        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.typecheck import AglTypeError
+        from agm.agl.typecheck.graph import check_graph
+
+        roots = self._ensure_roots()
+
+        # Inject accumulated import declarations from prior entries at the head
+        # of the pipeline program so that open imports persist across entries.
+        entry_program = self._inject_accumulated_imports(pipeline_program)
+
+        try:
+            graph, new_next_id, new_modules = build_repl_graph(
+                entry_program,
+                next_start_id,
+                path=None,
+                cached=self._loaded_lib_modules,
+                roots=roots,
+            )
+        except AglSyntaxError as exc:
+            return self._fail([exc.to_diagnostic()], tab_warnings)
+        except (
+            ModuleNotFound,
+            AmbiguousModule,
+            ModulePrefixNotFound,
+            ImportEntryError,
+        ) as exc:
+            return self._fail([exc.to_diagnostic()], tab_warnings)
+        except Exception as exc:
+            return self._fail([Diagnostic(message=str(exc), line=1)], tab_warnings)
+
+        try:
+            rgraph = resolve_graph(
+                graph,
+                ambient_agents=self._ambient_agents(host_env),
+                entry_parent_scope=self._session_scope,
+                entry_repl_session_scope=self._session_scope,
+            )
+        except AglScopeError as exc:
+            return self._fail([exc.to_diagnostic()], tab_warnings)
+
+        try:
+            cgraph = check_graph(
+                rgraph, host_env.capabilities, entry_seed_env=self._type_env
+            )
+        except AglTypeError as exc:
+            return self._fail([exc.to_diagnostic()], tab_warnings)
+
+        entry_cm = cgraph.modules[ENTRY_ID]
+
+        # Collect warnings from all passes.
+        warnings: list[Diagnostic] = [
+            *tab_warnings,
+            *rgraph.warnings,
+            *cgraph.warnings,
+        ]
+
+        if check_only:
+            checked = _merge_graph_into_checked_program(entry_cm, cgraph)
+            return self._build_check_only_result(orig_program, checked, warnings)
+
+        # Build merged CheckedProgram for param check and echo.
+        checked = _merge_graph_into_checked_program(entry_cm, cgraph)
+
+        pre_eval_result, param_values, entry_program_name, entry_active_config = (
+            self._pre_eval_param_check(orig_program, checked, warnings)
+        )
+        if pre_eval_result is not None:
+            return pre_eval_result
+
+        # Materialize contracts.
+        contracts: dict[int, object] = {}
+        contract_errors: list[Diagnostic] = []
+        for node_id, spec in checked.contract_specs.items():
+            try:
+                contracts[node_id] = materialize_contract(spec, host_env.codecs)
+            except ValueError as exc:
+                contract_errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
+        if contract_errors:
+            return self._fail(contract_errors, warnings)
+
+        return self._evaluate_and_promote_graph_mode(
+            text=text,
+            orig_program=orig_program,
+            checked=checked,
+            entry_cm=entry_cm,
+            cgraph=cgraph,
+            contracts=contracts,
+            host_env=host_env,
+            warnings=warnings,
+            new_next_id=new_next_id,
+            new_modules=new_modules,
+            param_values=param_values,
+            entry_program_name=entry_program_name,
+            entry_active_config=entry_active_config,
+        )
+
+    def _evaluate_and_promote_graph_mode(
+        self,
+        *,
+        text: str,
+        orig_program: "Program",
+        checked: "CheckedProgram",
+        entry_cm: "CheckedModule",
+        cgraph: "CheckedModuleGraph",
+        contracts: dict[int, object],
+        host_env: "HostEnvironment",
+        warnings: list[Diagnostic],
+        new_next_id: int,
+        new_modules: "dict[ModuleId, LoadedModule]",
+        param_values: "dict[str, Value]",
+        entry_program_name: str | None,
+        entry_active_config: dict[str, object],
+    ) -> EntryResult:
+        """Execute a graph-mode entry; promote on success, discard on failure."""
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.eval.scope import Scope
+        from agm.agl.eval.values import AgentValue, Closure
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.repl.agents import AgentCancelled
+        from agm.agl.repl.echo_interpreter import EchoInterpreter
+        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.runtime.runtime import exception_value_to_run_error
+        from agm.agl.runtime.trace import TraceStore
+        from agm.agl.syntax.nodes import AgentDecl, Binder, Declaration, FuncDef
+        from agm.agl.typecheck.types import UnitType
+
+        typed_contracts: dict[int, OutputContract] = {
+            nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
+        }
+
+        # Atomicity snapshot: capture values of any prior binding targeted by :=
+        assign_targets = _assign_targets_in_program(orig_program)
+        value_snapshot: dict[str, Value] = {
+            name: binding.value
+            for name, binding in self._value_scope.bindings.items()
+            if name in assign_targets
+        }
+
+        # Entry scope is a child of the session value scope.
+        child_scope = Scope(parent=self._value_scope)
+
+        # Build per-module frames: existing lib modules reuse cached frames;
+        # new lib modules get fresh frames; entry uses child_scope.
+        module_frames: dict[ModuleId, Scope] = {}
+        for mid, frame in self._lib_module_frames.items():
+            module_frames[mid] = frame
+        new_lib_frames: dict[ModuleId, Scope] = {}
+        for mid in new_modules:
+            frame = Scope(parent=None)
+            module_frames[mid] = frame
+            new_lib_frames[mid] = frame
+        module_frames[ENTRY_ID] = child_scope
+
+        # Install closures for ALL modules (new lib modules + entry).
+        # Existing cached lib module frames already have closures from prior entries.
+        for mid, cm in cgraph.modules.items():
+            if mid in self._lib_module_frames and mid != ENTRY_ID:
+                # Already has closures installed from prior promotion.
+                continue
+            frame = module_frames[mid]
+            for item in cm.resolved.program.body.items:
+                if isinstance(item, FuncDef):
+                    sig = cm.function_signatures.get(item.name)
+                    ret_type: "Type" = sig.result if sig is not None else UnitType()
+                    params = tuple((p.name, p.default) for p in item.params)
+                    closure = Closure(
+                        env=frame,
+                        params=params,
+                        body=item.body,
+                        return_type=ret_type,
+                    )
+                    frame.define(item.name, closure, mutable=False, decl_span=item.span)
+
+        # Install AgentDecls in entry scope.
+        for item in entry_cm.resolved.program.body.items:
+            if isinstance(item, AgentDecl):
+                child_scope.define(
+                    item.name,
+                    AgentValue(name=item.name),
+                    mutable=False,
+                    decl_span=item.span,
+                )
+
+        # Build module_sigs from the checked graph.  All lib modules (including
+        # cached ones re-loaded via injected accumulated imports) are in cgraph.
+        module_sigs: dict[ModuleId, dict[str, FunctionSignature]] = {
+            mid: cm.function_signatures for mid, cm in cgraph.modules.items()
+        }
+
+        trace = TraceStore(path=self._trace_path)
+        trace.run_start()
+
+        pipeline_items = checked.resolved.program.body.items
+        interp = EchoInterpreter(
+            checked=checked,
+            registry=host_env.registry,
+            contracts=typed_contracts,
+            type_env=checked.type_env,
+            loop_limit=self._default_loop_limit,
+            strict_json=self._default_strict_json,
+            source=text,
+            sources={
+                cm.resolved.program.span.source: cm.source_text
+                for cm in cgraph.modules.values()
+            },
+            shell_exec_timeout=self._shell_exec_timeout,
+            trace=trace,
+            param_values=param_values,
+        )
+        last_pipeline_item = pipeline_items[-1] if pipeline_items else None
+        if last_pipeline_item is not None and not isinstance(
+            last_pipeline_item, (Binder, Declaration)
+        ):
+            interp.echo_node_id = last_pipeline_item.node_id
+
+        try:
+            interp.execute_with_frames(child_scope, module_frames, module_sigs)
+        except AglRaise as exc:
+            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            trace.exception(
+                type_name=error.type_name,
+                message=str(error.fields.get("message", "")),
+                trace_id=str(error.fields.get("trace_id", "")),
+                span=exc.span,
+            )
+            return self._abort(orig_program, warnings, trace, value_snapshot, error=error)
+        except (AgentCancelled, KeyboardInterrupt):
+            return self._abort(
+                orig_program,
+                warnings,
+                trace,
+                value_snapshot,
+                diagnostics=[
+                    Diagnostic(message="Agent call cancelled — entry aborted.", line=1)
+                ],
+            )
+
+        trace.run_end(ok=True)
+        captured = interp.captured
+
+        # Success: promote entry bindings and merge new lib module state.
+        self._promote(
+            text=text,
+            program=orig_program,
+            checked=checked,
+            child_scope=child_scope,
+            next_start_id=new_next_id,
+            entry_program_name=entry_program_name,
+            entry_active_config=entry_active_config,
+        )
+        # Collect import decls from the original entry (before import injection)
+        # for accumulation into the session.
+        from agm.agl.syntax.nodes import ImportDecl as _ImportDecl
+
+        entry_import_decls: tuple["ImportDecl", ...] = tuple(
+            item for item in orig_program.body.items if isinstance(item, _ImportDecl)
+        )
+        self._promote_graph_libs(
+            cgraph=cgraph,
+            new_modules=new_modules,
+            new_lib_frames=new_lib_frames,
+            module_sigs=module_sigs,
+            entry_imports=entry_import_decls,
+        )
+
+        kind, name = self._classify(orig_program)
+        value, value_type = self._echo_data(orig_program, checked, captured)
+        return EntryResult(
+            kind=kind,
+            name=name,
+            value=value,
+            value_type=value_type,
+            diagnostics=[],
+            warnings=warnings,
+            error=None,
+            ok=True,
+            trace_path=self._trace_path,
+        )
+
+    def _promote_graph_libs(
+        self,
+        *,
+        cgraph: "CheckedModuleGraph",
+        new_modules: "dict[ModuleId, LoadedModule]",
+        new_lib_frames: "dict[ModuleId, Scope]",
+        module_sigs: "dict[ModuleId, dict[str, FunctionSignature]]",
+        entry_imports: "tuple[ImportDecl, ...]",
+    ) -> None:
+        """Merge newly-loaded library module state into the session cache."""
+        for mid, loaded in new_modules.items():
+            self._loaded_lib_modules[mid] = loaded
+            # new_lib_frames and module_sigs always contain entries for every
+            # module in new_modules (built in _evaluate_and_promote_graph_mode).
+            self._lib_module_frames[mid] = new_lib_frames[mid]
+            self._lib_module_sigs[mid] = module_sigs[mid]
+
+        # Accumulate ImportDecl nodes for persistence across entries.
+        # Existing accumulated imports with the same (module_path, wildcard) key are
+        # overwritten (the new entry's import may have different using/hiding/as clauses).
+        existing_paths: dict[tuple[tuple[str, ...], bool], int] = {
+            (tuple(d.module_path), d.wildcard): i for i, d in enumerate(self._accumulated_imports)
+        }
+        for decl in entry_imports:
+            path_key = (tuple(decl.module_path), decl.wildcard)
+            if path_key in existing_paths:
+                self._accumulated_imports[existing_paths[path_key]] = decl
+            else:
+                self._accumulated_imports.append(decl)
+
     def _abort(
         self,
         program: "Program",
@@ -1055,6 +1499,12 @@ class ReplSession:
         self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
+        # Clear module state (M6).
+        self._roots = None
+        self._loaded_lib_modules = {}
+        self._lib_module_frames = {}
+        self._lib_module_sigs = {}
+        self._accumulated_imports = []
 
     def load_file(self, path: "Path") -> list[EntryResult]:
         """Evaluate the contents of *path* INCREMENTALLY, one item per entry.

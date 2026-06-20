@@ -63,7 +63,7 @@ variable, agent, or function names:
 
 ```text
 record enum type param program agent config def fn let var do until if else
-case of try catch raise as as? and or not is in true false null unit
+case of try catch raise as as? and or not is in true false null
 ```
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the
@@ -91,6 +91,46 @@ binders — but they remain legal as field names.
 `list`, `dict`, and `unit` are **not** reserved; they are recognized
 contextually in type positions. `fn` is reserved (it introduces a lambda).
 `def` is reserved (it introduces a function declaration).
+
+**Module system soft keywords** — `import`, `private`, `qualified`, `using`,
+and `hiding` are **not reserved**. They remain valid identifiers in all
+positions except:
+
+| Keyword | Promoted to | Window |
+|---------|-------------|--------|
+| `import` | `IMPORT` | At item-start (after newline, indent, dedent, `;`, or stream start) |
+| `private` | `PRIVATE` | At item-start |
+| `qualified` | `QUALIFIED` | Within an import line (after `import` keyword, before the next newline or `;`) |
+| `using` | `USING` | Within an import line |
+| `hiding` | `HIDING` | Within an import line |
+
+Examples where they remain plain identifiers:
+
+```agl
+let import = 1          # 'import' not at item-start → VAR_NAME
+let using = "hello"     # 'using' not in import line → VAR_NAME
+def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
+```
+
+## Module qualifiers
+
+`::` separates a **module qualifier** from the name it qualifies. In value
+and type position:
+
+```agl
+foo.bar::thing       # module foo.bar, name thing
+::name               # current module, name name (self-reference)
+A.baz::y             # alias-rooted qualifier, name y
+foo.bar::Color.Red   # module foo.bar, enum Color, variant Red
+```
+
+A qualifier is a dotted module path followed by `::` immediately before the
+name it qualifies. Module path segments are dot-separated lowercase names.
+A leading `::` with no preceding path is the **self-reference** form — it
+refers to the current module.
+
+The typed-call form `callee::[T](args)` (e.g. `ask-request::[Review](…)`) is
+a distinct construct — it is NOT a module qualifier.
 
 ## Identifiers
 
@@ -205,9 +245,13 @@ in function type annotations (`(int) -> text`), `def` return type annotations
 (`fn(x: int) -> text => …`). `=>` is the **branch/lambda-body arrow** — it
 separates a branch condition or pattern from its body.
 
-`::` is the **typed-call introducer**: `callee::[Type](args)` passes a static
-type argument to a built-in call (e.g. `ask-request::[Review](…)`). It is a
-maximal-munch token distinct from two `:` delimiters.
+`::` serves two distinct roles: as the **module-qualifier separator** (see
+[Module qualifiers](#module-qualifiers) above) and as the **typed-call
+introducer** `callee::[Type](args)` (e.g. `ask-request::[Review](…)`). It is
+a maximal-munch token distinct from two `:` delimiters. The two uses are
+disambiguated by context: a `::` immediately preceded by a name or dotted path
+is the qualifier form; a `::` following a `VAR_NAME` and immediately followed
+by `[` is the typed-call form.
 
 `==` is recognized as a distinct token solely so it can be rejected with
 the targeted error **"Use `=` for equality."** — it is not part of the

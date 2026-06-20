@@ -269,6 +269,13 @@ Agent-value dispatch: `_eval_ask_call` extracts the `AgentValue` from the
 `agent:` named argument (or uses the default agent when absent) and issues the
 call via the host runtime, exactly as the former `AgentCall` node did.
 
+Module-graph execution merges node-id-keyed checker dispatch tables into a
+single interpreter view. Binding types from every checked module are copied
+into a fresh execution environment, so imported function bodies retain their
+implicit coercions without mutating a module's checker state. Each checked
+module also retains its normalized source text; runtime source excerpts select
+that text through the `SourceId` carried by the failing node's span.
+
 ## Value rendering
 
 All value display (template/`${…}` interpolation, `print`, `as text`, and REPL
@@ -418,6 +425,30 @@ win, then pragma values, then `[exec]` config. Trace logging is off by default;
 with a clear diagnostic. Config pragmas are an exec/program feature; REPL session
 options come from CLI flags and config files, not source pragmas.
 
+**REPL module import support (M6):** `ReplSession` supports `import` declarations
+at the top of any entry.  When an entry has at least one `ImportDecl` OR there
+are cached library modules from a prior entry, `eval_entry` dispatches to
+`_eval_entry_graph_mode` which runs the full multi-module graph pipeline:
+`build_repl_graph` (builds a `ModuleGraph` from the already-parsed entry program,
+loading only new library modules not in the cache), `resolve_graph`, `check_graph`,
+and `execute_with_frames`.  Library modules loaded on success are cached across
+entries in `_loaded_lib_modules`/`_lib_module_frames`/`_lib_module_sigs`.
+
+**Open-import persistence:** When an entry's `import foo` uses open-import
+semantics (no `qualified` keyword), `foo`'s exported names enter the entry's
+unqualified scope.  To make these names persist across entries, `ReplSession`
+accumulates the `ImportDecl` nodes from each successfully-promoted graph-mode entry
+in `_accumulated_imports`.  On the next graph-mode entry, `_inject_accumulated_imports`
+prepends the accumulated import declarations to the new entry's program before
+building the graph, so prior open-imported names remain in scope.  Re-importing
+the same module in a later entry replaces the earlier accumulated import
+declaration (deduplication by `(module_path, wildcard)`).
+
+**Root set:** Module search roots are assembled lazily on first import use by
+`_ensure_roots` using `assemble_roots`.  The `agm repl` command resolves
+`lib_root` from the `[modules] lib_root` config key (or defaults to `~/.agm/lib`)
+and passes it to `ReplSession(cwd=..., lib_root=..., configured_roots=...)`.
+
 ## Agent declarations and source↔host reconciliation
 
 Named agents must be **declared in source** (`agent NAME [= "runner"]`). The
@@ -456,6 +487,264 @@ always the floor, so every declared agent resolves and also backs `ask`.
 Runner strings (config or source hint) share the `%%` / `%{PROMPT_FILE}`
 prompt-file placeholder handling.
 
+## Source-aware spans
+
+Every `SourceSpan` carries a `SourceId` (a frozen dataclass with a `label: str`)
+in its `source` field (default: `UNKNOWN_SOURCE = SourceId("<agl>")`). The field
+is `compare=False` so spans from different files with identical positions compare
+equal — consistent with how `node_id` is excluded from AST-node equality.
+
+`parse_program` and `parse_program_seeded` accept an optional `source: SourceId`
+parameter. When supplied, every span the `AstBuilder` constructs — and the span
+of any `AglSyntaxError` raised during parsing — is stamped with that `SourceId`.
+The module loader (M2 Task C) passes `SourceId(label=str(canonical_path))` here so
+multi-file diagnostics identify the origin file.
+
+`Diagnostic` has an optional `source_label: str | None` field. `diagnostic_from_span`
+populates it from `span.source.label` for any non-default `SourceId`; for
+`UNKNOWN_SOURCE` spans it leaves `source_label` as `None`, preserving backward
+compatibility — existing callers that pass `source_name=` to `format_diagnostic`
+continue to see their supplied label.
+
+## Graph-aware scope resolution (`agm.agl.scope.graph`)
+
+`resolve_graph(graph)` runs the scope pass over an entire `ModuleGraph` and
+produces a `ResolvedModuleGraph`.  The pipeline has five steps:
+
+1. **Export sets** — `_compute_exports` collects non-private top-level
+   `FuncDef`/`RecordDef`/`EnumDef`/`TypeAlias` names for each module.
+2. **ImportTarget mapping** — each `ImportDecl` node is mapped to either a
+   `SingleTarget` (concrete module) or `WildcardTarget` (set of matched modules).
+3. **ImportEnv per module** — `build_import_env` uses the targets and export sets
+   to build an `ImportEnv` with `unqualified` (bare name → candidate `QName`
+   set) and `qualified` (handle → name → `QName`) maps.
+4. **Whole-graph pre-pass** — all public `FuncDef` and type declarations across
+   all modules are collected into `decl_info` (node-id/span/binder-kind per
+   `(ModuleId, name)`) and `private_info` (marks private names) BEFORE any body
+   is resolved.  This enables cross-module mutual recursion.
+5. **Per-module resolution** — `_Resolver` is instantiated with `module_id`,
+   `import_env`, `decl_info`, `private_info`, and `is_entry`.  Graph-mode
+   enriches `_resolve_varref`: qualified refs (`handle::name` or `::name`
+   self-refs) are dispatched to dedicated helpers; unqualified refs not found
+   in the lexical scope fall back to `import_env.unqualified` lookup with
+   clash-on-use enforcement.  A clash (>1 candidate `QName`) is an error at the
+   reference site.
+
+`BindingRef` carries a `module_id` field (defaults to `ENTRY_ID`) so
+downstream passes can identify which module owns any binding.
+
+**Enforcement** in graph mode: non-entry modules reject config pragmas,
+`let`/`var` binders, `agent`/`param`/`program` declarations, assignment
+statements, and bare expressions.  Import declarations in non-entry modules must
+appear before all other items (header-only).
+
+Single-module programs continue to use `resolve()` (unchanged); they bypass the
+graph machinery entirely.
+
+## Graph-aware evaluation (`agm.agl.eval`)
+
+`execute_graph(checked_graph, registry, contracts, ...)` in
+`agm.agl.eval.interpreter` extends the single-program evaluator to operate over a
+`CheckedModuleGraph`.
+
+**Per-module frames.** One `Scope` frame is created for each module.  All frames
+are created at once before any closure is installed.  Each module's `def`
+closures are then installed into that module's frame (`Closure.env` = the module's
+own frame), so intra-module mutual recursion and cross-module calls both work with
+no ordering constraint.  Entry-module `agent` declarations are installed into the
+entry frame.  `param` declarations are evaluated lazily as part of
+`execute_with_frames`.
+
+**Merged dispatch tables.** The interpreter's `_checked` (a `CheckedProgram`)
+consolidates all modules' side tables into a single merged object:
+`resolved.builtin_calls`, `node_types`, `contract_specs`, and `cast_specs` are
+merged by node id (which is globally unique across modules, as M2 seeds each
+module with a disjoint id range).  This lets closure bodies from any module be
+evaluated by the same interpreter without a per-module dispatch.
+
+**`_eval_var_ref` dispatch.** Variable references to top-level `function_binding`
+or `agent_binding` (as recorded in the resolution side table via
+`BindingRef.kind`) are fetched directly from `module_frames[ref.module_id].bindings[ref.name]`,
+where `ref.name` is the **original declared name** in the owning module.  All
+other binder kinds (let, var, param, pattern, catch) remain lexical
+(`scope.lookup`).  This uniform dispatch handles own-module, open-imported,
+renamed, and qualified references with no name injection.
+
+**BindingRef.name for cross-module refs.** `_make_cross_module_ref` in the scope
+resolver stores `name=src_name` (the original declared name in the owning module),
+not `name=exposed_name` (the renamed/aliased name at the import site).  Eval
+uses the original name to look up values in the owning module's frame; the
+rename is handled at the scope level (the VarRef itself carries the renamed name
+for lexical lookup, but the resolution side table maps it to the original).
+
+**Single-program path.** `execute()` sets `_module_frames = {ENTRY_ID: root_scope}`
+before the pre-pass; `_eval_var_ref` finds the entry frame for all
+own-module top-level references.  The existing path is unchanged.
+
+## Graph-aware type checking (`agm.agl.typecheck.graph`)
+
+`check_graph(resolved_graph, capabilities) → CheckedModuleGraph` extends the type
+checker to operate over a full `ResolvedModuleGraph`.
+
+**Module-qualified type identity.** `RecordType` and `EnumType` now carry a
+`module_id: ModuleId` field (defaulting to `ENTRY_ID`).  Two types with the same
+name but different `module_id`s are distinct types — `foo::Color ≠ bar::Color` even
+when structurally identical.
+
+**Graph type pre-pass.** Before any function body is checked, `_build_graph_type_table`
+runs a genuinely whole-graph two-phase pass:
+
+1. **Phase 1 (shells)** — ALL type shells for ALL modules are registered first:
+   empty `RecordType`/`EnumType` shells stamped with the owning `module_id` go
+   into `graph_type_table`; type aliases are tracked in per-module envs.  All
+   shells are registered before any body is resolved, so forward references across
+   modules work even when the import graph has cycles.
+2. **Phase 2 (bodies in topological order)** — the structural type-definition
+   dependency graph is computed across all modules (a record/enum/alias depends on
+   every type named in its field/variant/alias-target expressions, cross-module
+   included), then Kahn's algorithm produces a topological order (ties broken by
+   `(ModuleId.segments, name)` for determinism).  Each body is resolved in that
+   order so the referenced type is always fully built before it is captured
+   by-value as a field/variant/element type.  A genuine structural type cycle (a
+   type that contains itself infinitely) is an `AglTypeError` consistent with the
+   single-module `_TypeBuilder` behaviour.  Import-graph cycles (D8) are allowed
+   and do not imply structural type cycles.  The result is stored in the shared
+   `graph_type_table: dict[(ModuleId, name), Type]`.
+
+**Cross-module mismatch diagnostics.** `RecordType.__repr__`/`EnumType.__repr__`
+qualify the type name with its owning module when the module is NOT `ENTRY_ID`
+(e.g. `foo::Color`), so mismatch messages distinguish `foo::Color` from
+`bar::Color` rather than rendering both as `Color`.
+
+**Graph function-signature pre-pass.** Before any function body is checked,
+`_build_graph_func_sig_table` resolves the parameter and return type annotations
+for every top-level `FuncDef` in every module (using `graph_type_table` and each
+module's `ImportEnv`), producing a table keyed by the globally-unique
+`FuncDef.node_id`.  No function body is checked in this phase.
+
+**Per-module checking.** `_check_module` creates a `TypeEnvironment` with the
+graph type table and `ImportEnv`, seeds it with the module's own fully-resolved
+types by bare name, seeds ALL function binding types from the whole-graph
+function-signature pre-pass (enabling cross-file mutual recursion — D8/§8.2 —
+regardless of per-module checking order), and then runs the existing
+`_TypeBuilder + _Checker` pipeline.  Non-entry modules are checked before the
+entry module for determinism; function-signature availability no longer depends
+on this order.
+
+**Module-aware type resolution.** `TypeEnvironment` gains graph-mode parameters
+(`graph_type_table`, `import_env`, `module_id`).  Resolution in graph mode:
+- A qualified `MODQUAL::Name` type ref looks up the handle in `import_env.qualified`
+  and then fetches the type from `graph_type_table`.
+- An empty-segment self-ref `::Name` looks up `(module_id, name)` in
+  `graph_type_table`, falling back to the local env for built-ins.
+- An unqualified `Name` in graph mode searches `import_env.unqualified`; if exactly
+  one module exports that type name, it is resolved; multiple exports is an ambiguity
+  error.
+
+**Outputs.** `CheckedModuleGraph` holds a `dict[ModuleId, CheckedModule]`, the
+shared `graph_type_table`, the `entry_id`, and aggregated warnings.  Each
+`CheckedModule` mirrors the single-module `CheckedProgram` shape.
+
+Single-module programs continue to use `check()` (unchanged); `check_graph` on a
+single-entry-only graph is equivalent.
+
+## Module-graph loading (`agm.agl.modules`)
+
+The `modules/` package implements the file-based module system load-and-graph
+layer (M2). It sits between the parser and the scope/typecheck passes; it
+produces no resolved or typed output — that is M3+.
+
+**Module identity.** A module is identified by a `ModuleId` (tuple of segments)
+in `modules/ids.py`. The `ENTRY_ID` sentinel (contains a NUL byte) keys the
+entry program. `ModuleId.relpath()` maps a module id to its relative file path
+(`foo/bar/baz.agl`).
+
+**Root set.** `modules/roots.py` provides `RootSet` — an unordered,
+canonicalized, deduplicated set of search roots. Roots are assembled from the
+invocation directory, global library root (`~/.agm/lib`), configured roots
+(origin-relative), and `-I` CLI flags. The set is unordered by design;
+`sorted_roots()` provides a stable order for diagnostics.
+
+**Resolver.** `modules/resolver.py` provides:
+- `resolve_module(module_id, roots)` — searches all roots for the file;
+  canonicalizes and deduplicates by canonical path; exactly one → ok; zero →
+  `ModuleNotFound` listing all searched roots; ≥2 distinct canonical files →
+  `AmbiguousModule`. No first-root-wins shadowing.
+- `expand_wildcard(prefix, roots)` — globs `<root>/<prefix>.agl` and
+  `<root>/<prefix>/**/*.agl` across all roots; maps each file to its `ModuleId`;
+  enforces global uniqueness; empty result → `ModulePrefixNotFound`. Returns a
+  `dict[ModuleId, Path]` ordered by `ModuleId`.
+
+**Loader.** `modules/loader.py` provides `load_graph(entry_source, *, entry_path, roots)`:
+1. Parse the entry source with `parse_program_seeded(start_id=0)`.
+2. BFS over transitive `ImportDecl`s; wildcard imports expand via
+   `expand_wildcard`. Each file is parsed with a monotonically growing
+   `start_id` seed so **node ids are globally unique (disjoint) across all
+   modules**.
+3. Terminate when a module id is already loaded — makes **cycles finite and
+   safe** (D8).
+4. Reject any import that resolves to the entry file's canonical path —
+   `ImportEntryError` (D9). No rejection for inline (`-c`) entries (no file
+   path).
+5. Compute SCCs via Tarjan's algorithm for diagnostics.
+6. Return `ModuleGraph{modules, entry_id, sccs}` where `modules` is
+   `{ModuleId: LoadedModule}` (entry keyed by `ENTRY_ID`).
+
+Each `LoadedModule` carries: `module_id`, `program` (the `Program` AST), `path`
+(canonical file path, `None` for inline entries), `source` (the `SourceId`
+stamped on every span), and `imports` (top-level `ImportDecl` nodes).
+
+**Errors.** `modules/errors.py` defines `ModuleNotFound`, `AmbiguousModule`,
+`ModulePrefixNotFound`, and `ImportEntryError` — all subclasses of `AglError`,
+each carrying a `SourceSpan` from the triggering import declaration so
+diagnostics are file-attributed.
+
+**Determinism.** All traversal is deterministic regardless of root-set or
+filesystem-discovery order: `sorted_roots()` orders roots, BFS queues are
+sorted by `ModuleId` before enqueuing, and `expand_wildcard` results are ordered
+by `ModuleId`. The SCC algorithm visits nodes in sorted order.
+
+## Host runtime graph integration (`agm.agl.runtime`)
+
+`WorkflowRuntime` exposes a graph-mode API that mirrors the single-file API:
+
+- `prepare_program(source, *, entry_path, roots) → PreparedGraph` — non-raising
+  front-end: calls `load_graph` then `resolve_graph`, captures any exception
+  (including `AglError` subclasses) as a `Diagnostic`.  Returns a `PreparedGraph`
+  dataclass with `resolved_graph: ResolvedModuleGraph | None` (None on error),
+  `diagnostics`, and `warnings`.
+- `discover_params_graph(prepared) → ParamDiscovery` — type-checks the graph and
+  returns typed param declarations from the entry module.  Returns a stub
+  `CheckedProgram` in the `checked` field for compatibility with existing param-
+  wiring code in `agm exec`.
+- `run_prepared_graph(prepared, *, param_values, check_only, log_file) → RunResult`
+  — resumes the pipeline from type checking, validates params, materializes
+  contracts (merging `contract_specs` from ALL modules), and either executes via
+  `execute_graph` or returns the call-site inventory (`check_only=True`).  Agent
+  reconciliation uses `resolved_graph.entry_agents` (only the entry module owns
+  agents).
+
+`PreparedGraph.config_pragmas` and `PreparedGraph.declared_agents` read from the
+entry module's `resolved_graph` when available, falling back to empty/() on
+failure — the same interface as `PreparedProgram`, so the exec command's pragma
+and agent-wiring code is unchanged.
+
+`agm exec` routes ALL programs through the graph pipeline (single-file programs
+produce a graph with only the `ENTRY_ID` module).  It assembles module roots via
+`assemble_roots(invocation_root, lib_root, configured, cli, cwd)` where
+`invocation_root` is the entry file's parent (file exec) or `cwd` (inline `-c`
+exec), and `lib_root` defaults to `Path("~/.agm/lib")` when no config overrides
+it.  Additional roots are supplied via the repeatable `-I/--module-path DIR`
+CLI flag (resolved relative to the invocation cwd) and the `[modules] roots`
+config key.
+
+The module-roots configuration (`agm.config.module_roots`) reads `[modules]`
+sections from the layered config files and returns a `ModuleRootsConfig` with
+`lib_root` (last-write-wins across layers) and `extra` (union across layers).
+
+Multi-file e2e tests live in `tests/test_agl_multifile.py`; static fixture
+modules used by those tests are in `tests/agl/multi_file/`.
+
 ## Package layout and test locations
 
 | Package | Component | Tests |
@@ -465,12 +754,20 @@ prompt-file placeholder handling.
 | `agm.agl.syntax` | 3 — AST dataclasses | `tests/test_agl_ast.py` |
 | `agm.agl.scope` | 4 — name resolution | `tests/test_agl_scope.py` |
 | `agm.agl.typecheck` | 5 — type checking | `tests/test_agl_typecheck.py` |
-| `agm.agl.eval` | 6 — evaluator | `tests/test_agl_eval.py` |
+| `agm.agl.eval` | 6 — evaluator | `tests/test_agl_eval.py`, `tests/test_agl_eval_graph.py` |
 | `agm.agl.runtime` | host API | `tests/test_agl_runtime.py` |
 | `agm.agl.repl` | incremental REPL session (UI-free) | `tests/test_agl_repl_session.py` |
 | `agm.commands.exec` | CLI command | `tests/test_exec_command.py` |
+| `agm.config.module_roots` | module roots config | `tests/test_config_module_roots.py` |
+| `agm.agl.syntax.spans` | `SourceId` / source-aware spans | `tests/test_agl_source_identity.py` |
+| `agm.agl.modules` | module-graph loading | `tests/test_agl_modules_ids.py`, `tests/test_agl_modules_roots.py`, `tests/test_agl_modules_resolver.py`, `tests/test_agl_modules_loader.py` |
+| `agm.agl.scope.imports` | import environment builder | `tests/test_agl_scope_imports.py` |
+| `agm.agl.scope.graph` | graph-aware scope resolver | `tests/test_agl_scope_graph.py` |
+| `agm.agl.typecheck.graph` | graph-aware type checker | `tests/test_agl_typecheck_graph.py` |
 
 The end-to-end acceptance suite lives in `tests/test_agl_e2e.py` and
-`tests/agl/`. It is **green and part of the standing gate** — `just test` /
+`tests/agl/programs/`. It is **green and part of the standing gate** — `just test` /
 `just check` include it with no `--ignore` flag.  All new AgL work must keep
-this suite green.
+this suite green.  Multi-file e2e tests live separately in `tests/test_agl_multifile.py`
+(with fixture modules in `tests/agl/multi_file/`) since they require a module
+root rather than the single-file `.scenarios.json` harness.

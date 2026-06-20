@@ -38,12 +38,22 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
+    DCOLON,
+    DOT,
     GRAMMAR_TOKEN_REMAP,
+    HIDING,
+    IMPORT,
     INDEX_LSQB,
     INT,
     LOOP_BOUND,
     LSQB,
+    MODPATH,
+    MODQUAL,
+    NAME,
+    PRIVATE,
+    QUALIFIED,
     RSQB,
+    USING,
 )
 
 _INDEX_PREDECESSORS = frozenset(
@@ -145,27 +155,237 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
     yield from buf
 
 
+_ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
+
+
+def _retype(tok: Token, new_type: str) -> Token:
+    """Return a copy of *tok* with a new token type, preserving value and span."""
+    return Token(
+        new_type, str(tok),
+        start_pos=tok.start_pos, line=tok.line, column=tok.column,
+        end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
+    )
+
+
+def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
+    """Contextually promote soft keywords in the post-layout token stream.
+
+    Rules:
+    - 'import' → IMPORT when preceded by start-of-file / _NEWLINE / _INDENT /
+      _DEDENT / SEMICOLON (i.e. at item-start position).
+    - 'private' → PRIVATE under the same item-start condition.
+    - 'qualified' → QUALIFIED, 'using' → USING, 'hiding' → HIDING only
+      within an import declaration line (after IMPORT has been emitted on
+      the current logical line, up to the next line/statement terminator).
+    """
+    result: list[Token] = []
+    in_import_line = False
+    prev_type: str | None = None  # None means start-of-stream
+
+    for tok in tokens:
+        tt = tok.type
+        tv = str(tok)
+
+        # Track import-line window: close on line/stmt terminators
+        if tt in ("_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"):
+            in_import_line = False
+
+        if tt == NAME:
+            at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
+            if tv == "import" and at_item_start:
+                tok = _retype(tok, IMPORT)
+                in_import_line = True
+            elif tv == "private" and at_item_start:
+                tok = _retype(tok, PRIVATE)
+            elif in_import_line:
+                if tv == "qualified":
+                    tok = _retype(tok, QUALIFIED)
+                elif tv == "using":
+                    tok = _retype(tok, USING)
+                elif tv == "hiding":
+                    tok = _retype(tok, HIDING)
+
+        result.append(tok)
+        prev_type = tok.type
+
+    return result
+
+
+def _merge_modpath(tokens: list[Token]) -> list[Token]:
+    """Merge import module paths into single MODPATH tokens.
+
+    Pattern: immediately following an IMPORT token, consume
+    NAME (DOT NAME)* into a single MODPATH token whose value
+    is the dotted path (e.g. "foo.bar", "utils").
+
+    This eliminates the LALR(1) shift/reduce conflict between
+    ``var_ref : NAME`` / ``postfix: postfix DOT ...`` (expression grammar)
+    and the ``module_path : NAME (DOT NAME)*`` (import grammar).
+    By merging the path in the lexer, the grammar sees a single MODPATH token
+    rather than the raw NAME DOT ... sequence.
+    """
+    result: list[Token] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok.type == IMPORT and i + 1 < n and tokens[i + 1].type == NAME:
+            result.append(tok)
+            i += 1
+            # Absorb NAME (DOT NAME)*. Module path segments may begin with
+            # either lowercase or uppercase letters.
+            j = i
+            seg_parts: list[str] = [str(tokens[j])]
+            j += 1
+            while (
+                j + 1 < n
+                and tokens[j].type == DOT
+                and tokens[j + 1].type == NAME
+            ):
+                seg_parts.append(str(tokens[j + 1]))
+                j += 2
+            modpath_value = ".".join(seg_parts)
+            first_tok = tokens[i]
+            last_tok = tokens[j - 1]
+            merged = Token(
+                MODPATH,
+                modpath_value,
+                start_pos=first_tok.start_pos,
+                line=first_tok.line,
+                column=first_tok.column,
+                end_line=last_tok.end_line,
+                end_column=last_tok.end_column,
+                end_pos=last_tok.end_pos,
+            )
+            result.append(merged)
+            # If next token is DOT STAR, absorb into a separate STAR token
+            # (wildcard tail). We keep DOT STAR as two tokens for the grammar.
+            i = j
+            continue
+        result.append(tok)
+        i += 1
+    return result
+
+
+def _merge_modqual(tokens: list[Token]) -> list[Token]:
+    """Merge module-qualifier prefixes into single MODQUAL tokens.
+
+    Pattern: NAME (DOT NAME)* DCOLON where the token AFTER DCOLON is NOT LSQB.
+
+    Merges the prefix including '::' into a single MODQUAL token whose value
+    is the dotted qualifier (e.g. "foo.bar", "A", "A.baz"). The DCOLON itself
+    is consumed into the MODQUAL token.
+
+    The `next != LSQB` guard preserves the existing typed-call atom
+    `callee::[T](args)` (NAME DCOLON LSQB must stay intact).
+
+    A leading '::name' (empty qualifier, D9 self-reference) has no preceding
+    name, so no merge fires; the bare DCOLON is handled by the grammar.
+    """
+    result: list[Token] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        tt = tok.type
+        # Check if we start a potential module qualifier:
+        # NAME (DOT NAME)* DCOLON (not followed by LSQB)
+        if tt == NAME:
+            # Scan ahead: collect (DOT NAME)* then DCOLON
+            j = i + 1
+            while j + 1 < n and tokens[j].type == DOT and tokens[j + 1].type == NAME:
+                j += 2
+            # Now tokens[j] should be DCOLON (if this is a qualifier)
+            if j < n and tokens[j].type == DCOLON:
+                # Check the token after DCOLON is not LSQB
+                next_after = tokens[j + 1].type if j + 1 < n else None
+                if next_after != LSQB:
+                    # Merge tokens[i..j] (inclusive of DCOLON at j) into MODQUAL
+                    # Build the qualifier string: segments joined with '.'
+                    seg_parts: list[str] = [str(tokens[i])]
+                    k = i + 1
+                    while k < j:
+                        # skip DOT, take the name
+                        k += 1  # skip DOT
+                        seg_parts.append(str(tokens[k]))
+                        k += 1
+                    qualifier_value = ".".join(seg_parts)
+                    first_tok = tokens[i]
+                    last_tok = tokens[j]  # the DCOLON
+                    merged = Token(
+                        MODQUAL,
+                        qualifier_value,
+                        start_pos=first_tok.start_pos,
+                        line=first_tok.line,
+                        column=first_tok.column,
+                        end_line=last_tok.end_line,
+                        end_column=last_tok.end_column,
+                        end_pos=last_tok.end_pos,
+                    )
+                    result.append(merged)
+                    i = j + 1
+                    continue
+        result.append(tok)
+        i += 1
+    return result
+
+
+def apply_module_passes(tokens: list[Token]) -> list[Token]:
+    """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
+    return _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)))
+
+
+def _is_qual_typed_call_bracket(tokens: list[Token], lsqb_pos: int) -> bool:
+    """Return True when ``tokens[lsqb_pos]`` opens a qualified typed-call bracket.
+
+    A qualified typed call has the form ``MODQUAL NAME [ type_args ] (``.  The
+    ``[`` must stay as ``LSQB`` (not become ``INDEX_LSQB``) so that the
+    grammar rule ``qual_typed_call`` can match it.  We detect the pattern by
+    scanning forward from ``lsqb_pos`` to find the matching ``]`` and checking
+    that the very next token is ``(``.
+
+    The same detection applies to the self-ref form ``DCOLON NAME [``.
+    """
+    # Check the two tokens before the bracket: (MODQUAL | DCOLON) NAME [
+    if lsqb_pos < 2:
+        return False
+    prev2 = tokens[lsqb_pos - 2]
+    prev1 = tokens[lsqb_pos - 1]
+    if prev1.type != "NAME" or prev2.type not in ("MODQUAL", "DCOLON"):
+        return False
+    # Scan for the matching RSQB (brackets may be nested, e.g. list[int]).
+    depth = 1
+    for i in range(lsqb_pos + 1, len(tokens)):
+        t = tokens[i]
+        if t.type in (LSQB, INDEX_LSQB):
+            depth += 1
+        elif t.type == "RSQB":
+            depth -= 1
+            if depth == 0:
+                # Check the token immediately after the closing bracket.
+                next_pos = i + 1
+                return next_pos < len(tokens) and tokens[next_pos].type == "LPAR"
+    return False
+
+
 def _remap_index_brackets(tokens: list[Token]) -> list[Token]:
-    """Turn adjacent expression brackets into INDEX_LSQB for the parser."""
+    """Turn adjacent expression brackets into INDEX_LSQB for the parser.
+
+    The conversion is suppressed for ``MODQUAL NAME [`` (and ``DCOLON NAME [``)
+    when the matching ``]`` is immediately followed by ``(``, which signals a
+    qualified typed call: ``lib::Point[int](x: 1)`` or ``::Self[T](f: v)``.
+    """
     result: list[Token] = []
     previous: Token | None = None
-    for tok in tokens:
+    for i, tok in enumerate(tokens):
         if (
             tok.type == LSQB
             and previous is not None
             and previous.type in _INDEX_PREDECESSORS
             and previous.end_pos == tok.start_pos
+            and not _is_qual_typed_call_bracket(tokens, i)
         ):
-            tok = Token(
-                INDEX_LSQB,
-                str(tok),
-                start_pos=tok.start_pos,
-                line=tok.line,
-                column=tok.column,
-                end_line=tok.end_line,
-                end_column=tok.end_column,
-                end_pos=tok.end_pos,
-            )
+            tok = _retype(tok, INDEX_LSQB)
         result.append(tok)
         previous = tok
     return result
@@ -210,7 +430,8 @@ class AglLexer(Lexer):
         # ``finally`` deposits whatever was collected, including on a LexError.
         scanner = _Scanner(source)
         try:
-            tokens = _remap_index_brackets(list(_remap(layout(scanner.scan()))))
+            after_remap = list(_remap(layout(scanner.scan())))
+            tokens = _remap_index_brackets(apply_module_passes(after_remap))
         finally:
             sink = _TAB_WARNING_SINK.get()
             if sink is not None:

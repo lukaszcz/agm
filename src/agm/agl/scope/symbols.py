@@ -21,6 +21,7 @@ import enum
 from dataclasses import dataclass, field
 
 from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.syntax.nodes import AgentDecl, FuncDef, PragmaValue, Program
 from agm.agl.syntax.spans import SourceSpan
 
@@ -155,6 +156,12 @@ class BindingRef:
         How the binding was introduced.  Drives the precise ``:=`` rejection
         message so a mutation of a catch binder is not mislabelled as a
         ``let`` (F8).
+    ``module_id``
+        The :class:`~agm.agl.modules.ids.ModuleId` of the module that owns
+        this binding.  For single-program resolution (``resolve()``) and all
+        local bindings, this is always :data:`~agm.agl.modules.ids.ENTRY_ID`.
+        For cross-module resolution via ``resolve_graph()``, cross-module
+        references carry the owning library module's id.
     """
 
     name: str
@@ -162,6 +169,7 @@ class BindingRef:
     decl_span: SourceSpan
     decl_node_id: int
     kind: BinderKind
+    module_id: ModuleId = ENTRY_ID
 
 
 # ---------------------------------------------------------------------------
@@ -251,10 +259,11 @@ class ResolvedProgram:
         resolved to (only present when the candidate set has exactly one entry
         and no nearer non-constructor binding shadows it).
     ``qualified_constructor_refs``
-        Maps a ``FieldAccess.node_id`` to ``(owner_name, member)`` when the
-        field access is a type-qualified constructor reference
-        (``Option.some``).  The checker validates that the owner is really an
-        enum and the member a real variant.
+        Maps a ``FieldAccess.node_id`` to ``(owner_name, member, owner_module_id)``
+        when the field access is a type-qualified constructor reference
+        (``Option.some`` or ``mylib::Color.Red``).  ``owner_module_id`` is
+        ``None`` for locally-declared types and the owning ``ModuleId`` for
+        cross-module references.  The checker validates enum-ness and variant.
     """
 
     program: Program
@@ -269,7 +278,9 @@ class ResolvedProgram:
     declared_type_names: frozenset[str] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)
     constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
-    qualified_constructor_refs: dict[int, tuple[str, str]] = field(default_factory=dict)
+    qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = field(
+        default_factory=dict
+    )
 
 
 # ---------------------------------------------------------------------------

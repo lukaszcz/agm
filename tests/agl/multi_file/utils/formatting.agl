@@ -1,0 +1,1 @@
+def format_result(label: text, value: int) -> text = label + ": " + value as text

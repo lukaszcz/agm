@@ -12,9 +12,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.types import (
@@ -241,9 +244,37 @@ class TypeEnvironment:
 
     The ``TypeEnvironment`` is constructed and populated by the
     ``_TypeBuilder`` pre-pass; the main ``_Checker`` visitor then queries it.
+
+    Graph mode (M4)
+    ---------------
+    When ``graph_type_table``, ``import_env``, and ``module_id`` are supplied,
+    the environment becomes module-aware:
+
+    - ``graph_type_table`` maps ``(ModuleId, name)`` to the fully-built
+      ``Type`` objects stamped with their owning ``module_id``.  Built once by
+      the graph pre-pass; shared (read-only) across all per-module envs.
+    - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
+      produced by M3.  Used to resolve qualified and open-imported type names.
+    - ``module_id`` is the owning module of the current env.  ``::Name``
+      (empty-segment qualifier) resolves against this module's own types.
+
+    These fields are ``None`` in the single-program path; the resolution logic
+    in ``resolve_type_expr`` and ``_resolve_name_type`` checks for ``None``
+    before entering the module-aware branches, so the existing path is
+    unchanged when these are absent.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
+        graph_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = None,
+        graph_ctor_sig_table: Mapping[
+            tuple[ModuleId, str, str | None], ConstructorSignature
+        ] | None = None,
+        import_env: ImportEnv | None = None,
+        module_id: ModuleId = ENTRY_ID,
+    ) -> None:
         # user-declared types (records, enums) — name → Type
         self._types: dict[str, Type] = {}
         # alias targets — name → resolved Type (cycle detection uses seen set)
@@ -258,6 +289,26 @@ class TypeEnvironment:
         self._constructor_sigs: dict[tuple[str, str | None], ConstructorSignature] = {}
         # Alias type-params — name → tuple of type-param names (M2).
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
+        # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
+        # Populated in graph mode by the whole-graph function-signature pre-pass so
+        # that _check_declared_name_call can look up the CORRECT signature for a
+        # cross-module callee by its globally-unique decl_node_id rather than by
+        # bare name (which would pick the wrong signature when two modules define
+        # functions with the same name but different signatures).
+        self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
+        # Graph-mode context (M4): None in single-program path.
+        self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
+        # Cross-module generic type definitions: (ModuleId, name) → GenericTypeDef.
+        # Populated by the graph type pre-pass for qualified generic constructor calls.
+        self._graph_generic_table: Mapping[
+            tuple[ModuleId, str], GenericTypeDef
+        ] | None = graph_generic_table
+        # Cross-module constructor signatures: (ModuleId, owner_name, variant) → sig.
+        self._graph_ctor_sig_table: Mapping[
+            tuple[ModuleId, str, str | None], ConstructorSignature
+        ] | None = graph_ctor_sig_table
+        self._import_env: ImportEnv | None = import_env
+        self._module_id: ModuleId = module_id
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -335,11 +386,23 @@ class TypeEnvironment:
 
         Raises ``AglTypeError`` for unknown names or arity mismatches.
         """
-        from agm.agl.typecheck.types import substitute as _subst
-
         gdef = self._generic_types.get(name)
         if gdef is None:
             raise AglTypeError(f"Unknown generic type '{name}'.")
+        return self.instantiate_from_gdef(name, gdef, args)
+
+    def instantiate_from_gdef(
+        self, name: str, gdef: GenericTypeDef, args: tuple[Type, ...]
+    ) -> RecordType | EnumType:
+        """Instantiate a :class:`GenericTypeDef` with *args*, substituting type parameters.
+
+        Unlike :meth:`instantiate_nominal`, this method accepts a pre-looked-up
+        ``GenericTypeDef`` directly, so callers that already have the definition
+        (e.g. cross-module generic constructor checks) do not need to register it
+        in the own-module ``_generic_types`` table.
+        """
+        from agm.agl.typecheck.types import substitute as _subst
+
         if len(args) != len(gdef.type_params):
             raise AglTypeError(
                 f"Type '{name}' requires {len(gdef.type_params)} type argument(s), "
@@ -378,13 +441,24 @@ class TypeEnvironment:
         target (e.g. an alias of ``list[int]``, which has no single name).
         Used for alias-transparent qualifier resolution in qualified
         constructors and ``is`` tests (design §5.4).
+
+        In graph mode, also searches open-imported types when the name is not
+        found locally.
         """
-        if name not in self._types and name not in self._alias_targets:
-            return None
-        try:
-            return self._resolve_name_type(name, span=None, _resolving=frozenset())
-        except AglTypeError:
-            return None
+        if name in self._types or name in self._alias_targets:
+            try:
+                return self._resolve_name_type(name, span=None, _resolving=frozenset())
+            except AglTypeError:
+                return None
+        # Graph mode: look up via open imports.
+        if self._import_env is not None and self._graph_type_table is not None:
+            candidates = self._import_env.unqualified.get(name, frozenset())
+            type_candidates = [
+                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
+            ]
+            if len(type_candidates) == 1:
+                return self._graph_type_table.get((type_candidates[0][0], type_candidates[0][1]))
+        return None
 
     # --- Function signature table ---
 
@@ -397,6 +471,35 @@ class TypeEnvironment:
     def all_function_signatures(self) -> dict[str, FunctionSignature]:
         return dict(self._function_signatures)
 
+    def register_function_signature_by_node_id(
+        self, node_id: int, sig: FunctionSignature
+    ) -> None:
+        """Register a function signature keyed by its declaration ``node_id``.
+
+        Used by the graph pre-pass to seed every module's env with ALL
+        function signatures before any body is checked.  Because ``node_id``
+        is globally unique (M2), signatures from different modules never
+        collide here even when two modules define functions with the same name.
+        """
+        self._function_signatures_by_node_id[node_id] = sig
+
+    def get_function_signature_by_node_id(self, node_id: int) -> FunctionSignature | None:
+        """Return the function signature for a callee's declaration ``node_id``.
+
+        Used by ``_check_declared_name_call`` to look up the correct signature
+        for a callee by its globally-unique declaration node id, avoiding the
+        name collision problem when two modules define same-named functions with
+        different signatures.
+
+        Populated in graph mode by the whole-graph function-signature pre-pass
+        (via :meth:`register_function_signature_by_node_id`) AND in single-
+        program mode by ``_preregister_funcdef`` (which always seeds both the
+        name-keyed and node-id-keyed tables).  Returns ``None`` only for
+        syntactically impossible cases (e.g. a callee node_id not registered
+        because the function body check raised before registration).
+        """
+        return self._function_signatures_by_node_id.get(node_id)
+
     # --- Binding type table ---
 
     def set_binding_type(self, node_id: int, typ: Type) -> None:
@@ -404,6 +507,10 @@ class TypeEnvironment:
 
     def get_binding_type(self, node_id: int) -> Type | None:
         return self._binding_types.get(node_id)
+
+    def copy_binding_types_from(self, other: TypeEnvironment) -> None:
+        """Copy checker-recorded binding types from *other* into this environment."""
+        self._binding_types.update(other._binding_types)
 
     def resolve_binding(self, ref: BindingRef) -> Type | None:
         """Return the declared type for a ``BindingRef``."""
@@ -490,9 +597,14 @@ class TypeEnvironment:
             )
             return DictType(value=val)
         if isinstance(type_expr, NameT):
+            eff_span = span if span is not None else type_expr.span
+            if type_expr.module_qualifier is not None:
+                return self._resolve_qualified_name_type(
+                    type_expr.module_qualifier, type_expr.name, span=eff_span
+                )
             return self._resolve_name_type(
                 type_expr.name,
-                span=span if span is not None else type_expr.span,
+                span=eff_span,
                 _resolving=_resolving,
                 type_vars=type_vars,
             )
@@ -586,14 +698,108 @@ class TypeEnvironment:
                 _resolving=_resolving | {name},
                 type_vars=type_vars,
             )
-        # Direct named type (record, enum, exception).
+        # Direct named type (record, enum, exception, prelude).
         typ = self._types.get(name)
         if typ is not None:
             return typ
+        # Graph mode: unqualified lookup through open-imported names.
+        if self._import_env is not None and self._graph_type_table is not None:
+            candidates = self._import_env.unqualified.get(name, frozenset())
+            # Filter to candidates that are type names in the graph type table.
+            type_candidates: list[QName] = [
+                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
+            ]
+            if len(type_candidates) == 1:
+                qn = type_candidates[0]
+                return self._graph_type_table[(qn[0], qn[1])]
+            elif len(type_candidates) > 1:
+                # Ambiguous: multiple modules export this type name.
+                sorted_candidates = sorted(
+                    f"{qn[0].dotted()}::{qn[1]}" for qn in type_candidates
+                )
+                raise AglTypeError(
+                    f"Ambiguous type '{name}': it is exported by multiple modules "
+                    f"({', '.join(sorted_candidates)}). "
+                    f"Use a qualified reference to disambiguate.",
+                    span=span,
+                )
         raise AglTypeError(
             f"Unknown type '{name}'.",
             span=span,
         )
+
+    def _resolve_qualified_name_type(
+        self,
+        qualifier: object,  # Qualifier from agm.agl.syntax.types
+        name: str,
+        *,
+        span: SourceSpan | None,
+    ) -> Type:
+        """Resolve a module-qualified type reference ``QUALIFIER::Name``.
+
+        Called only in graph mode.  Falls back to the local type namespace
+        (prelude / built-ins) when the qualifier is empty (``::Name``
+        self-reference to the current module) and no graph context exists.
+        """
+        from agm.agl.syntax.types import Qualifier
+
+        assert isinstance(qualifier, Qualifier)
+
+        if self._graph_type_table is None:
+            # Single-module path: module qualifiers have no graph table to consult.
+            # ::Name (empty segments) = current module's own type.
+            if not qualifier.segments:
+                return self._resolve_name_type(name, span=span, _resolving=frozenset())
+            raise AglTypeError(
+                f"Module qualifier '{'.'.join(qualifier.segments)}::' cannot be resolved "
+                "outside of a module graph.",
+                span=span,
+            )
+
+        # ``::Name`` — self-reference to the current module's own type.
+        if not qualifier.segments:
+            key = (self._module_id, name)
+            t = self._graph_type_table.get(key)
+            if t is not None:
+                return t
+            # Fall back to own local types (covers built-ins and prelude).
+            return self._resolve_name_type(name, span=span, _resolving=frozenset())
+
+        # Qualified reference: resolve via ImportEnv.
+        assert self._import_env is not None
+        handle = qualifier.segments
+        handle_map = self._import_env.qualified.get(handle)
+        if handle_map is None:
+            raise AglTypeError(
+                f"Unknown module qualifier '{'.'.join(handle)}::'. "
+                "The module has not been imported or the qualifier is not in scope.",
+                span=span,
+            )
+        qname = handle_map.get(name)
+        if qname is None:
+            raise AglTypeError(
+                f"Type '{name}' is not accessible via qualifier '{'.'.join(handle)}::'. "
+                "It may not be in the imported set S, or may not be exported.",
+                span=span,
+            )
+        t = self._graph_type_table.get((qname[0], qname[1]))
+        if t is not None:
+            return t
+        # Name is in S but isn't a type in the graph table — it might be a function.
+        raise AglTypeError(
+            f"'{'.'.join(handle)}::{name}' does not name a type.",
+            span=span,
+        )
+
+    def non_builtin_type_items(self) -> list[tuple[str, Type]]:
+        """Return ``(name, type)`` pairs for all non-builtin registered types.
+
+        Used by the graph pre-pass to collect type shells into the shared
+        ``graph_type_table`` without accessing the private ``_types`` dict.
+        Builtins (exception types and prelude types) are excluded.
+        """
+        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
+        return [(name, t) for name, t in self._types.items() if name not in builtin]
 
     def all_declared_type_names(self) -> frozenset[str]:
         """Return the full declared type-name set for type-namespace enumeration.
@@ -605,7 +811,55 @@ class TypeEnvironment:
         """
         return frozenset(self._types) | frozenset(self._alias_targets)
 
-    # --- Seeding support (incremental REPL sessions) ---
+    def resolve_type_by_module_id(
+        self, module_id: ModuleId, name: str
+    ) -> Type | None:
+        """Directly look up a type by owning module and name in the graph type table.
+
+        Used for cross-module constructor references when the owning module is
+        already known from scope resolution (e.g. ``mylib::Color.Red``).
+
+        Returns ``None`` in single-program mode or if not found.
+        """
+        if self._graph_type_table is None:
+            return None
+        return self._graph_type_table.get((module_id, name))
+
+    def get_generic_type_from_module(
+        self, module_id: ModuleId, name: str
+    ) -> GenericTypeDef | None:
+        """Look up a cross-module ``GenericTypeDef`` by owning module and name.
+
+        Used to detect and instantiate generic constructors referenced via a
+        module qualifier (e.g. ``lib::Box[int](value: 1)``).  Returns ``None``
+        in single-program mode or when the type is not generic.
+        """
+        if self._graph_generic_table is None:
+            return None
+        return self._graph_generic_table.get((module_id, name))
+
+    def get_ctor_sig_from_module(
+        self, module_id: ModuleId, owner_name: str, variant: str | None
+    ) -> ConstructorSignature | None:
+        """Look up a cross-module ``ConstructorSignature`` by owning module, name, and variant.
+
+        Companion to :meth:`get_generic_type_from_module` for checking cross-module
+        generic constructor calls.  Returns ``None`` in single-program mode or when
+        not found.
+        """
+        if self._graph_ctor_sig_table is None:
+            return None
+        return self._graph_ctor_sig_table.get((module_id, owner_name, variant))
+
+    def all_generic_types(self) -> dict[str, GenericTypeDef]:
+        """Return the own-module generic type map (name → GenericTypeDef)."""
+        return self._generic_types
+
+    def all_constructor_sigs(self) -> list[tuple[tuple[str, str | None], ConstructorSignature]]:
+        """Return all own-module constructor signatures as (key, sig) pairs."""
+        return list(self._constructor_sigs.items())
+
+    # --- Seeding support ---
 
     def seed_from(self, other: TypeEnvironment) -> None:
         """Copy *other*'s user-declared types, aliases, and binding types in.
@@ -626,3 +880,4 @@ class TypeEnvironment:
         self._generic_types.update(other._generic_types)
         self._constructor_sigs.update(other._constructor_sigs)
         self._alias_type_params.update(other._alias_type_params)
+        self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)

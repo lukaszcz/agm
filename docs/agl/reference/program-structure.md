@@ -13,11 +13,24 @@ expression-oriented sequence.
 ```ebnf
 program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
-item       ::= declaration | binder | expr
-declaration ::= record_def | enum_def | type_alias | param_decl
-              | program_decl | agent_decl | func_def | config_pragma
+item       ::= import_decl                        (* header position only *)
+             | config_pragma                      (* header position only *)
+             | "private"? record_def              (* root only *)
+             | "private"? enum_def                (* root only *)
+             | "private"? type_alias              (* root only *)
+             | param_decl                         (* root only *)
+             | program_decl                       (* root only *)
+             | agent_decl                         (* root only *)
+             | "private"? func_def                (* root only *)
+             | binder | expr
 binder     ::= let_decl | var_decl
 ```
+
+### Import declarations
+
+`import` declarations are **header-only**: they must appear before any
+other declaration or expression. See [Modules](modules.md) for the full
+import syntax and semantics.
 
 ### Declarations
 
@@ -27,15 +40,19 @@ The following are **root-only**: a static error if nested inside a block.
   before checking begins; forward references are fine. Each may be **generic**,
   declaring type parameters in a bracketed list after the name
   (`record Box[T]`, `enum Option[T]`, `type Pair[A, B] = …`); see
-  [Generics](generics.md).
+  [Generics](generics.md). Any of these may be prefixed with `private` to
+  restrict visibility to the defining module.
 - **`param` declarations** — the program's host/config/CLI-supplied parameters.
+  Entry-module only.
 - **`program` declaration** — the program name used for params config lookup.
+  Entry-module only.
 - **`agent` declarations** — the names of the agents the program may call.
+  Entry-module only (see [Modules](modules.md)).
 - **`def` declarations** — user-defined functions. Like type declarations,
   all `def`s at the program root are collected before any expression is
   evaluated, enabling mutual recursion (see [Functions](functions.md)). A `def`
   may also be **generic** (`def id[T](x: T) -> T = x`); see
-  [Generics](generics.md).
+  [Generics](generics.md). May be prefixed with `private`.
 
 ### The block's value
 

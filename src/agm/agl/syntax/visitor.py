@@ -52,6 +52,8 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     If,
     IfBranch,
+    ImportDecl,
+    ImportItem,
     IndexAccess,
     IndexTarget,
     InterpSegment,
@@ -96,6 +98,7 @@ from agm.agl.syntax.types import (
     JsonT,
     ListT,
     NameT,
+    Qualifier,
     TextT,
     UnitT,
 )
@@ -152,6 +155,11 @@ class Visitor:
     def visit_AgentT(self, node: AgentT) -> None: ...
     def visit_FuncT(self, node: FuncT) -> None: ...
     def visit_AppliedT(self, node: AppliedT) -> None: ...
+
+    # Module system nodes
+    def visit_Qualifier(self, node: Qualifier) -> None: ...
+    def visit_ImportItem(self, node: ImportItem) -> None: ...
+    def visit_ImportDecl(self, node: ImportDecl) -> None: ...
 
     # Declaration nodes
     def visit_FieldDef(self, node: FieldDef) -> None: ...
@@ -245,6 +253,10 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         AgentT,
         FuncT,
         AppliedT,
+        # module system nodes
+        Qualifier,
+        ImportItem,
+        ImportDecl,
         # declaration nodes
         FieldDef,
         RecordDef,
@@ -336,8 +348,12 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.body, callback)
 
     # --- Type nodes ---
-    elif isinstance(node, (TextT, JsonT, BoolT, IntT, DecimalT, NameT)):
+    elif isinstance(node, (TextT, JsonT, BoolT, IntT, DecimalT)):
         pass  # leaves
+
+    elif isinstance(node, NameT):
+        if node.module_qualifier is not None:
+            walk(node.module_qualifier, callback)
 
     elif isinstance(node, ListT):
         walk(node.elem, callback)
@@ -356,6 +372,17 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, AppliedT):
         for arg in node.args:
             walk(arg, callback)
+
+    # --- Module system nodes ---
+    elif isinstance(node, Qualifier):
+        pass  # leaf — segments are plain strings
+
+    elif isinstance(node, ImportItem):
+        pass  # leaf — name and rename are plain strings
+
+    elif isinstance(node, ImportDecl):
+        for import_item in node.items:
+            walk(import_item, callback)
 
     # --- Declaration nodes ---
     elif isinstance(node, FieldDef):
@@ -448,7 +475,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     # --- Expression nodes ---
     elif isinstance(node, VarRef):
-        pass  # leaf
+        if node.module_qualifier is not None:
+            walk(node.module_qualifier, callback)
 
     elif isinstance(node, FieldAccess):
         walk(node.obj, callback)
@@ -548,6 +576,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.pattern, callback)
 
     elif isinstance(node, ConstructorPattern):
+        if node.module_qualifier is not None:
+            walk(node.module_qualifier, callback)
         for pf in node.fields:
             walk(pf, callback)
 

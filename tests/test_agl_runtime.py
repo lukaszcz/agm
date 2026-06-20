@@ -2621,3 +2621,588 @@ class TestV2AskWithAgentValue:
         result = rt.run('agent helper\nask("question", agent: helper)\n')
         assert result.ok is True
         assert received == ["question"]
+
+
+# ---------------------------------------------------------------------------
+# M5b: PreparedGraph / prepare_program / run_prepared_graph / discover_params_graph
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareProgram:
+    """WorkflowRuntime.prepare_program: graph-mode front-end (M5b)."""
+
+    def test_prepare_program_no_imports_returns_prepared_graph(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A single-file program with no imports produces a valid PreparedGraph."""
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.runtime.runtime import PreparedGraph
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = 1\nx", entry_path=None, roots=roots
+        )
+        assert isinstance(prepared, PreparedGraph)
+        assert prepared.resolved_graph is not None
+        assert prepared.diagnostics == ()
+
+    def test_prepare_program_syntax_error_captured(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A syntax error is captured as a diagnostic, not raised."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = !!!", entry_path=None, roots=roots
+        )
+        assert prepared.resolved_graph is None
+        assert len(prepared.diagnostics) >= 1
+
+    def test_prepare_program_missing_import_captured(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A missing import is captured as a diagnostic, not raised."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "import nonexistent.module\nlet x = 1\nx",
+            entry_path=None,
+            roots=roots,
+        )
+        assert prepared.resolved_graph is None
+        assert len(prepared.diagnostics) >= 1
+        assert "nonexistent.module" in prepared.diagnostics[0].message
+
+    def test_prepare_program_with_valid_import(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A valid import resolves when the module file exists on disk."""
+        from agm.agl.modules.roots import RootSet
+
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+
+        roots = RootSet(roots=frozenset([lib_dir]))
+        entry = "import mymod\nlet r = add(2, 3)\nr"
+        prepared = WorkflowRuntime.prepare_program(
+            entry, entry_path=None, roots=roots
+        )
+        assert prepared.resolved_graph is not None
+        assert prepared.diagnostics == ()
+
+    def test_prepare_program_declared_agents_from_entry(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """declared_agents reads from the entry module only."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            'agent reviewer\nask("q", agent: reviewer)',
+            entry_path=None,
+            roots=roots,
+        )
+        assert prepared.resolved_graph is not None
+        assert any(d.name == "reviewer" for d in prepared.declared_agents)
+
+    def test_prepare_program_config_pragmas_from_entry(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """config_pragmas reads from the entry module."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "config max_iters = 7\nlet x = 1\nx",
+            entry_path=None,
+            roots=roots,
+        )
+        assert prepared.resolved_graph is not None
+        assert prepared.config_pragmas.get("max_iters") == 7
+
+    def test_prepare_program_failure_returns_empty_declared_agents(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """When scope fails, declared_agents returns ()."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = undefined_name", entry_path=None, roots=roots
+        )
+        # scope error → resolved_graph is None
+        assert prepared.resolved_graph is None
+        assert prepared.declared_agents == ()
+
+
+class TestRunPreparedGraph:
+    """WorkflowRuntime.run_prepared_graph: graph execution (M5b)."""
+
+    def test_single_entry_graph_behaves_like_run(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A single-file program via run_prepared_graph returns same result as run()."""
+        from agm.agl.modules.roots import RootSet
+
+        rt = WorkflowRuntime()
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = 1\nx", entry_path=None, roots=roots
+        )
+        result = rt.run_prepared_graph(prepared)
+        assert result.ok is True
+        assert result.error is None
+
+    def test_graph_with_library_module_executes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A two-module graph (entry + library) runs to completion."""
+        from agm.agl.modules.roots import RootSet
+
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+
+        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        entry = "import mymod\nlet r = add(2, 3)\nr"
+        prepared = WorkflowRuntime.prepare_program(
+            entry, entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        result = rt.run_prepared_graph(prepared)
+        assert result.ok is True
+        assert result.error is None
+
+    def test_graph_failure_propagated(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """When the load phase captured a scope error, run_prepared_graph reports it."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = undefined_name", entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        result = rt.run_prepared_graph(prepared)
+        assert result.ok is False
+        assert result.error is None
+        assert len(result.diagnostics) >= 1
+
+    def test_graph_missing_import_propagated(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A missing import error from prepare_program flows through run_prepared_graph."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "import missing.module\nlet x = 1\nx", entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        result = rt.run_prepared_graph(prepared)
+        assert result.ok is False
+        assert "missing.module" in result.diagnostics[0].message
+
+    def test_graph_agents_are_entry_owned(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Agents are entry-program-owned; a registered undeclared agent is an error."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = 1\nx", entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        rt.register_agent("reviewer", lambda req: "resp")  # type: ignore[arg-type]
+        result = rt.run_prepared_graph(prepared)
+        assert result.ok is False
+        assert any("reviewer" in d.message for d in result.diagnostics)
+
+    def test_graph_check_only_returns_call_inventory(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """check_only=True produces call_sites from the entry module."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            'let r = ask("hello")\nprint r', entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime(default_agent=lambda req: "x")  # type: ignore[arg-type]
+        result = rt.run_prepared_graph(prepared, check_only=True)
+        assert result.ok is True
+        assert len(result.call_sites) >= 1
+
+    def test_multimodule_wildcard_import(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Wildcard import brings multiple modules into scope."""
+        from agm.agl.modules.roots import RootSet
+
+        lib_dir = tmp_path / "lib"
+        utils_dir = lib_dir / "utils"
+        utils_dir.mkdir(parents=True)
+        (utils_dir / "math.agl").write_text(
+            "def add(a: int, b: int) -> int = a + b\n"
+        )
+        (utils_dir / "strings.agl").write_text(
+            'def greet(name: text) -> text = "Hello, " + name + "!"\n'
+        )
+
+        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        entry = 'import utils.*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
+        prepared = WorkflowRuntime.prepare_program(
+            entry, entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        result = rt.run_prepared_graph(prepared, check_only=True)
+        assert result.ok is True
+
+    def test_multimodule_qualified_import(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Qualified import requires :: qualifier to access names."""
+        from agm.agl.modules.roots import RootSet
+
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "calc.agl").write_text(
+            "def square(n: int) -> int = n * n\n"
+        )
+
+        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        entry = "import calc qualified\nlet r = calc::square(5)\nr"
+        prepared = WorkflowRuntime.prepare_program(
+            entry, entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        result = rt.run_prepared_graph(prepared)
+        assert result.ok is True
+
+
+class TestDiscoverParamsGraph:
+    """WorkflowRuntime.discover_params_graph: typed param discovery (M5b)."""
+
+    def test_discover_params_no_params(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """discover_params_graph returns empty params for a program with no params."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = 1\nx", entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        discovery = rt.discover_params_graph(prepared)
+        assert discovery.diagnostics == ()
+        assert discovery.params == ()
+
+    def test_discover_params_with_declared_param(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """discover_params_graph discovers typed param declarations."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "param name: text\nprint name",
+            entry_path=None,
+            roots=roots,
+        )
+        rt = WorkflowRuntime()
+        discovery = rt.discover_params_graph(prepared)
+        assert discovery.diagnostics == ()
+        assert len(discovery.params) == 1
+        assert discovery.params[0].name == "name"
+
+    def test_discover_params_failure_returns_diagnostics(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """discover_params_graph returns diagnostics when the prepare phase failed."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "import no_such_module\nlet x = 1", entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        discovery = rt.discover_params_graph(prepared)
+        assert len(discovery.diagnostics) >= 1
+
+
+# ---------------------------------------------------------------------------
+# M5b: coverage gap tests for defensive/exceptional paths
+# ---------------------------------------------------------------------------
+
+
+class TestPreparedGraphDefensivePaths:
+    """Edge-case coverage for PreparedGraph properties and prepare_program error paths."""
+
+    def test_config_pragmas_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
+        """config_pragmas returns {} when resolved_graph has no ENTRY_ID module."""
+        from unittest.mock import MagicMock
+
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.runtime.runtime import PreparedGraph
+
+        # Build a fake resolved_graph with no ENTRY_ID key.
+        fake_graph = MagicMock()
+        fake_graph.modules = {}  # empty — no ENTRY_ID
+        assert ENTRY_ID not in fake_graph.modules
+
+        roots = RootSet(roots=frozenset())
+        pg = PreparedGraph(
+            source="let x = 1",
+            entry_path=None,
+            roots=roots,
+            resolved_graph=fake_graph,
+            diagnostics=(),
+            warnings=(),
+        )
+        assert pg.config_pragmas == {}
+
+    def test_program_name_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
+        """program_name returns None when resolved_graph has no ENTRY_ID module."""
+        from unittest.mock import MagicMock
+
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.runtime.runtime import PreparedGraph
+
+        fake_graph = MagicMock()
+        fake_graph.modules = {}
+
+        roots = RootSet(roots=frozenset())
+        pg = PreparedGraph(
+            source="let x = 1",
+            entry_path=None,
+            roots=roots,
+            resolved_graph=fake_graph,
+            diagnostics=(),
+            warnings=(),
+        )
+        assert pg.program_name is None
+
+    def test_prepare_program_generic_exception_during_load(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A non-AglError exception during load_graph is captured as a diagnostic."""
+        from unittest.mock import patch
+
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset([tmp_path.resolve()]))
+        with patch("agm.agl.modules.loader.load_graph", side_effect=RuntimeError("boom")):
+            prepared = WorkflowRuntime.prepare_program(
+                "let x = 1\nx", entry_path=None, roots=roots
+            )
+        assert len(prepared.diagnostics) >= 1
+        assert "boom" in prepared.diagnostics[0].message
+
+    def test_prepare_program_generic_exception_during_resolve(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A non-AglScopeError exception during resolve_graph is captured."""
+        from unittest.mock import patch
+
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset([tmp_path.resolve()]))
+        with patch(
+            "agm.agl.scope.graph.resolve_graph",
+            side_effect=RuntimeError("resolve fail"),
+        ):
+            prepared = WorkflowRuntime.prepare_program(
+                "let x = 1\nx", entry_path=None, roots=roots
+            )
+        assert len(prepared.diagnostics) >= 1
+        assert "resolve fail" in prepared.diagnostics[0].message
+
+
+class TestDiscoverParamsDefensivePaths:
+    """Edge-case coverage for discover_params_graph and discover_params."""
+
+    def test_discover_params_graph_missing_entry_in_checked_graph(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """discover_params_graph returns diagnostic when checked graph has no entry module."""
+        from unittest.mock import MagicMock, patch
+
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "let x = 1\nx", entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        # Patch check_graph to return a graph with no ENTRY_ID.
+        fake_checked_graph = MagicMock()
+        fake_checked_graph.modules = {}
+
+        with patch(
+            "agm.agl.typecheck.graph.check_graph", return_value=fake_checked_graph
+        ):
+            discovery = rt.discover_params_graph(prepared)
+        assert len(discovery.diagnostics) >= 1
+        assert "Entry module not found" in discovery.diagnostics[0].message
+
+    def test_discover_params_typecheck_failure(self, tmp_path: pathlib.Path) -> None:
+        """discover_params returns diagnostics when typecheck fails."""
+        from unittest.mock import patch
+
+        from agm.agl.typecheck import AglTypeError
+
+        prepared = WorkflowRuntime.prepare(
+            'def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r'
+        )
+        rt = WorkflowRuntime()
+        with patch("agm.agl.typecheck.check", side_effect=AglTypeError("type error")):
+            discovery = rt.discover_params(prepared)
+        assert discovery.checked is None
+        assert len(discovery.diagnostics) >= 1
+
+    def test_run_typecheck_graph_generic_exception_captured(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """_run_typecheck_graph captures generic exceptions as diagnostics."""
+        from unittest.mock import MagicMock, patch
+
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.runtime.runtime import PreparedGraph
+
+        roots = RootSet(roots=frozenset())
+        # Build a PreparedGraph with a fake resolved_graph so we reach check_graph.
+        fake_rg = MagicMock()
+        fake_rg.warnings = ()
+        fake_rg.modules = {}
+
+        pg = PreparedGraph(
+            source="let x = 1",
+            entry_path=None,
+            roots=roots,
+            resolved_graph=fake_rg,
+            diagnostics=(),
+            warnings=(),
+        )
+        rt = WorkflowRuntime()
+        with patch(
+            "agm.agl.typecheck.graph.check_graph",
+            side_effect=RuntimeError("graph type crash"),
+        ):
+            # discover_params_graph will call _run_typecheck_graph internally.
+            discovery = rt.discover_params_graph(pg)
+        assert len(discovery.diagnostics) >= 1
+        assert "graph type crash" in discovery.diagnostics[0].message
+
+
+class TestRunPreparedDefensivePaths:
+    """Edge-case coverage for run_prepared (single-file) and run_prepared_graph."""
+
+    def test_run_prepared_with_precomputed_checked(self) -> None:
+        """run_prepared skips typecheck when pre-computed checked is passed."""
+        from agm.agl.typecheck import check
+
+        prepared = WorkflowRuntime.prepare("let x = 1\nx")
+        assert prepared.resolved is not None
+        rt = WorkflowRuntime()
+        env = rt.host_environment()
+        precomputed = check(prepared.resolved, env.capabilities)
+        # Pass the pre-computed checked: the branch `if checked is None:` is skipped.
+        result = rt.run_prepared(prepared, checked=precomputed)
+        assert result.ok is True
+
+    def test_run_prepared_typecheck_failure(self) -> None:
+        """run_prepared exits early when typecheck fails (checked is None)."""
+        from unittest.mock import patch
+
+        from agm.agl.typecheck import AglTypeError
+
+        prepared = WorkflowRuntime.prepare("let x = 1\nx")
+        rt = WorkflowRuntime()
+        with patch("agm.agl.typecheck.check", side_effect=AglTypeError("tc fail")):
+            result = rt.run_prepared(prepared)
+        assert result.ok is False
+        assert any("tc fail" in d.message for d in result.diagnostics)
+
+    def test_run_prepared_graph_contract_error(self, tmp_path: pathlib.Path) -> None:
+        """run_prepared_graph exits early when a contract spec materializes badly."""
+        from unittest.mock import patch
+
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset())
+        # Use ask() so the checked graph has at least one contract_spec to materialize.
+        prepared = WorkflowRuntime.prepare_program(
+            'let r = ask("hi")\nprint r', entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime(default_agent=lambda req: "ok")  # type: ignore[arg-type]
+        with patch(
+            "agm.agl.runtime.contract.materialize_contract",
+            side_effect=ValueError("bad contract"),
+        ):
+            result = rt.run_prepared_graph(prepared)
+        # A contract error yields a RunResult with ok=False and a contract diagnostic.
+        assert result.ok is False
+        assert any("Contract error" in d.message for d in result.diagnostics)
+
+
+    def test_run_prepared_graph_param_binding_invariant_violation(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """run_prepared_graph raises AssertionError when checker invariant is violated."""
+        from unittest.mock import MagicMock, patch
+
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.typecheck.graph import check_graph as real_check_graph
+
+        roots = RootSet(roots=frozenset())
+        prepared = WorkflowRuntime.prepare_program(
+            "param n: int\nprint n", entry_path=None, roots=roots
+        )
+        rt = WorkflowRuntime()
+        env = rt.host_environment()
+        real_cg = real_check_graph(prepared.resolved_graph, env.capabilities)  # type: ignore[arg-type]
+
+        def fake_check_graph(rg: object, caps: object) -> object:
+            # Return a modified graph where type_env.get_binding_type returns None.
+            fake_graph = MagicMock()
+            real_entry = real_cg.modules[ENTRY_ID]
+            fake_entry = MagicMock()
+            fake_entry.resolved = real_entry.resolved
+            fake_entry.node_types = real_entry.node_types
+            fake_entry.contract_specs = {}
+            fake_entry.call_sites = ()
+            fake_entry.warnings = ()
+            fake_entry.type_env = MagicMock()
+            # get_binding_type returns None → triggers AssertionError.
+            fake_entry.type_env.get_binding_type.return_value = None
+            fake_entry.function_signatures = real_entry.function_signatures
+            fake_entry.cast_specs = {}
+            fake_graph.modules = {ENTRY_ID: fake_entry}
+            fake_graph.warnings = ()
+            return fake_graph
+
+        with patch("agm.agl.typecheck.graph.check_graph", side_effect=fake_check_graph):
+            with pytest.raises(AssertionError, match="checker invariant violated"):
+                rt.run_prepared_graph(prepared, param_values={"n": 7})
+
+
+class TestBuildCallInventoryEdgeCases:
+    """Coverage for _build_call_inventory_from_call_sites skipping non-CallSiteRecord items."""
+
+    def test_non_call_site_record_is_skipped(self, tmp_path: pathlib.Path) -> None:
+        """_build_call_inventory_from_call_sites skips non-CallSiteRecord items."""
+        from agm.agl.runtime.runtime import (
+            _build_call_inventory_from_call_sites,  # type: ignore[attr-defined]
+        )
+
+        # Passing a non-CallSiteRecord in the call_sites tuple should produce no entries.
+        inventory = _build_call_inventory_from_call_sites(("not-a-record",), {})  # type: ignore[arg-type]
+        assert inventory == []

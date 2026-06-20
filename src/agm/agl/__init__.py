@@ -26,6 +26,7 @@ from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.runtime import (
     AgentDeclInfo,
     CallSiteInfo,
+    PreparedGraph,
     PreparedProgram,
     RunError,
     RunResult,
@@ -39,6 +40,7 @@ __all__ = [
     "CallSiteInfo",
     "Diagnostic",
     "format_diagnostic",
+    "PreparedGraph",
     "PreparedProgram",
     "RunError",
     "RunResult",

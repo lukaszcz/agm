@@ -527,6 +527,50 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         assert env.resolve_named_type("Unknown") is None
 
+    def test_resolve_named_type_multiple_candidates_returns_none(self) -> None:
+        # Coverage: env.py resolve_named_type 434->436 — len(type_candidates) != 1.
+        # Two unqualified imports of the same name → ambiguous → return None.
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.scope.imports import ImportEnv
+        mod_a = ModuleId.from_dotted("moda")
+        mod_b = ModuleId.from_dotted("modb")
+        color_a = RecordType(name="Color", fields={})
+        color_b = RecordType(name="Color", fields={})
+        graph_table: dict[tuple[ModuleId, str], RecordType] = {
+            (mod_a, "Color"): color_a,
+            (mod_b, "Color"): color_b,
+        }
+        # Both modules expose "Color" unqualified.
+        unqualified: dict[str, frozenset[tuple[ModuleId, str]]] = {
+            "Color": frozenset({(mod_a, "Color"), (mod_b, "Color")}),
+        }
+        import_env = ImportEnv(unqualified=unqualified, qualified={})
+        env = TypeEnvironment(graph_type_table=graph_table, import_env=import_env)
+        # Both entries are in graph_table → type_candidates has 2 elements → False branch.
+        result = env.resolve_named_type("Color")
+        assert result is None
+
+    def test_resolve_type_by_module_id_no_graph_table(self) -> None:
+        # Coverage: env.py resolve_type_by_module_id line 800 — single-program mode returns None.
+        from agm.agl.modules.ids import ModuleId
+        env = TypeEnvironment()  # no graph_type_table
+        result = env.resolve_type_by_module_id(ModuleId.from_dotted("mymod"), "Color")
+        assert result is None
+
+    def test_get_generic_type_from_module_no_graph_table(self) -> None:
+        # Coverage: env.py get_generic_type_from_module — single-program mode returns None.
+        from agm.agl.modules.ids import ModuleId
+        env = TypeEnvironment()  # no graph_generic_table
+        result = env.get_generic_type_from_module(ModuleId.from_dotted("lib"), "Box")
+        assert result is None
+
+    def test_get_ctor_sig_from_module_no_graph_table(self) -> None:
+        # Coverage: env.py get_ctor_sig_from_module — single-program mode returns None.
+        from agm.agl.modules.ids import ModuleId
+        env = TypeEnvironment()  # no graph_ctor_sig_table
+        result = env.get_ctor_sig_from_module(ModuleId.from_dotted("lib"), "Box", None)
+        assert result is None
+
     def test_resolve_unknown_type_expr_kind_raises(self) -> None:
         env = TypeEnvironment()
         with pytest.raises(AglTypeError, match="Unknown type expression"):
@@ -3407,7 +3451,7 @@ class TestDefensiveGuards:
             resolution={},
             builtin_calls={},
             root_scope=root,
-            qualified_constructor_refs={fa_nid: ("Status", "Pass")},
+            qualified_constructor_refs={fa_nid: ("Status", "Pass", None)},
         )
         # Build a type env with Status as an enum having Pass variant.
         seed = TypeEnvironment()
@@ -5514,3 +5558,46 @@ class TestParseJsonCall:
         """parse_json() with no args is rejected."""
         err = reject_type("parse_json()")
         assert "parse_json" in str(err).lower()
+
+
+class TestImportDeclTypecheck:
+    """Import declarations pass through the type-checker without errors."""
+
+    def test_import_decl_does_not_raise(self) -> None:
+        """A bare import declaration type-checks as unit."""
+        r = accept_type("import foo.bar\n1")
+        assert r  # no exception
+
+    def test_import_with_alias_does_not_raise(self) -> None:
+        r = accept_type("import foo as f\n1")
+        assert r
+
+    def test_import_wildcard_does_not_raise(self) -> None:
+        r = accept_type("import foo.*\n1")
+        assert r
+
+    def test_import_using_does_not_raise(self) -> None:
+        r = accept_type("import foo using bar\n1")
+        assert r
+
+    def test_import_hiding_does_not_raise(self) -> None:
+        r = accept_type("import foo hiding secret\n1")
+        assert r
+
+
+class TestSelfRefTypeInSingleModule:
+    """Self-reference type annotations (::Name) in single-module programs."""
+
+    def test_self_ref_own_record_type_accepted(self) -> None:
+        """'::MyRecord' in a single-module program resolves to the local record type."""
+        r = accept_type("record MyRecord\n  x: int\ndef f() -> ::MyRecord = MyRecord(x: 1)\nf()")
+        # accept_type returns CheckedProgram; just checking it doesn't raise
+        assert r is not None
+
+    def test_self_ref_unknown_type_rejected(self) -> None:
+        """'::NoSuch' when NoSuch is not declared → type error."""
+        reject_type("def f() -> ::NoSuch = 1\nf()")
+
+    def test_module_qualifier_in_single_module_rejected(self) -> None:
+        """'mylib::Point' in single-module (no graph) mode → type error."""
+        reject_type("def f() -> mylib::Point = 1\nf()")

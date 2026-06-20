@@ -477,7 +477,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
-                 [--log|--log-file PATH|--no-log]
+                 [--log|--log-file PATH|--no-log] [-I DIR]...
                  (FILE | -c COMMAND) [--PARAM VALUE]...
 
         Execute an AgL (Agent Language) workflow program from FILE, or from
@@ -502,6 +502,11 @@ _HELP_TEXTS: dict[str, str] = {
           --log-file PATH       Write trace log to PATH.
           --no-log              Disable trace logging (overrides pragma/config).
           --log, --log-file, and --no-log are mutually exclusive.
+          -I DIR, --module-path DIR
+                                Add DIR as an additional module search root
+                                (repeatable). Resolved relative to the invocation
+                                working directory. Joins the unordered root set;
+                                a module id found in two roots is an ambiguity error.
 
         FILE and -c/--command are mutually exclusive; exactly one is required.
 

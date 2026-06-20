@@ -1048,6 +1048,18 @@ def exec_cmd(
             "pragma, or [exec] log = true in config.toml opt in."
         ),
     ),
+    module_paths: list[str] = typer.Option(
+        [],
+        "-I",
+        "--module-path",
+        metavar="DIR",
+        help=(
+            "Add DIR as an additional module search root (repeatable). "
+            "Resolved relative to the invocation working directory. "
+            "Joins the unordered root set; a module id found in two roots is an ambiguity error."
+        ),
+        autocompletion=completion.complete_dir_argument,
+    ),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
@@ -1104,6 +1116,7 @@ def exec_cmd(
             no_log=no_log,
             log_file=log_file,
             log=log,
+            module_paths=module_paths,
         )
     )
 

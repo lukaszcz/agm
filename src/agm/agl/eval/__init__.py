@@ -14,7 +14,7 @@ Public API
 from __future__ import annotations
 
 from agm.agl.eval.exceptions import AglRaise
-from agm.agl.eval.interpreter import Interpreter
+from agm.agl.eval.interpreter import Interpreter, execute_graph
 from agm.agl.eval.scope import Binding, Scope
 from agm.agl.eval.values import (
     UNIT_VALUE,
@@ -44,6 +44,7 @@ __all__ = [
     "DictValue",
     "EnumValue",
     "ExceptionValue",
+    "execute_graph",
     "IntValue",
     "Interpreter",
     "JsonValue",

@@ -404,7 +404,7 @@ Sandbox settings resolution:
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
 | `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 ### `agm exec (FILE | -c COMMAND)`
@@ -413,10 +413,18 @@ Execute an AgL (Agent Language) workflow program, either from a source `FILE` or
 program text given with `-c`/`--command`. The AgL language is documented in the
 [AgL language reference](agl/reference/index.md).
 
+**Multi-file programs**: `agm exec` supports programs that import library modules.
+The runtime assembles a set of search roots: the directory of `FILE` (or cwd for `-c`),
+the global library root (`~/.agm/lib`, overridable via `[modules] lib_root` in config),
+and any additional roots declared under `[modules] roots` in any config layer.
+A module name that resolves to exactly one file across all roots succeeds; zero files
+or two or more distinct files are static errors (exit 1 with a diagnostic).
+
 ```text
 agm exec [--strict-json|--no-strict-json]
          [--max-iters N] [--runner COMMAND]
          [--log|--log-file PATH|--no-log]
+         [-I DIR]...
          (FILE | -c COMMAND) [--PARAM VALUE]...
 ```
 
@@ -433,6 +441,11 @@ Options:
   exactly one strict JSON value and validated against the declared type. Missing
   required params or invalid values are reported before any agent runs. Run
   `agm exec FILE --help` to show the discovered param options for that program.
+- `-I DIR`, `--module-path DIR`: Add `DIR` as an additional module search root (repeatable).
+  Resolved relative to the invocation working directory. Joins the unordered root set alongside
+  the file's directory (or cwd for `-c`), the global library root, and any roots declared in
+  config. A module id found in two roots is an ambiguity error. This option is also how
+  e2e/fixture tests point `agm exec` at test-specific module roots.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences, prose, or
   repair). Overridable per call site with the `strict_json:` named argument to `ask`.
 - `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers exactly

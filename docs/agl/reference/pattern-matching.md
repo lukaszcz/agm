@@ -13,9 +13,14 @@ pattern        ::= "_"                                    (* wildcard *)
                  | literal                                (* literal pattern *)
                  | NAME                                   (* variable binder *)
                  | constructor_pattern
+                 | qual_constructor_pattern               (* module-qualified constructor *)
 
-constructor_pattern ::= NAME ("." NAME)? "(" pattern_fields? ")"
-                 | NAME "." NAME                          (* qualified nullary *)
+constructor_pattern      ::= NAME ("." NAME)? ("(" pattern_fields? ")")?
+                           | NAME "." NAME                (* qualified nullary *)
+qual_constructor_pattern ::= qual_prefix NAME ("." NAME)? ("(" pattern_fields? ")")?
+
+qual_prefix    ::= NAME ("." NAME)* "::"   (* module-qualified prefix *)
+               | "::"                      (* current-module prefix *)
 
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= NAME                                   (* shorthand *)
@@ -93,6 +98,24 @@ Fail(issues: ["stuck"])    # nested literal pattern on a field
 > matches the variant `Pass` — it now binds a variable. Rewrite each bare
 > nullary pattern as a call form (`Pass()`) or a qualified reference
 > (`Review.Pass`).
+
+#### Module-qualified constructor patterns
+
+When a type comes from an imported module, the constructor may be prefixed
+with a module qualifier:
+
+```agl
+import mylib
+
+case value of
+  | mylib::Color.Red  => print "red"
+  | mylib::Color.Blue => print "blue"
+```
+
+The `qual_prefix` form (a module qualifier `module::`) or the self-reference
+form (`::`) may appear before the constructor name. This is useful when two
+open-imported modules export enum types with the same variant name, since
+qualification always disambiguates.
 
 Payload patterns are **field-based, not positional**. `Fail(x)` is valid
 only if the variant actually has a field named `x`; to bind field `issues`

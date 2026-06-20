@@ -180,6 +180,17 @@ EQ_EQ = "EQ_EQ"  # ==
 LOOP_BOUND = "LOOP_BOUND"  # [N] immediately after do — value is the integer string
 
 # ---------------------------------------------------------------------------
+# Module system tokens (contextual / synthetic — %declare in grammar)
+# ---------------------------------------------------------------------------
+IMPORT = "IMPORT"       # contextual: 'import' at item-start
+QUALIFIED = "QUALIFIED" # contextual: 'qualified' in import line
+USING = "USING"         # contextual: 'using' in import line
+HIDING = "HIDING"       # contextual: 'hiding' in import line
+PRIVATE = "PRIVATE"     # contextual: 'private' at item-start
+MODQUAL = "MODQUAL"     # synthetic: merged module-qualifier prefix (e.g. "foo.bar::")
+MODPATH = "MODPATH"     # synthetic: merged module path in import (e.g. "foo.bar")
+
+# ---------------------------------------------------------------------------
 # Grammar token-type mapping
 #
 # Lark grammar rules use string literals for keywords (e.g. ``"pass"``),

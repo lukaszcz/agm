@@ -35,7 +35,7 @@ from lark.tree import Meta
 import agm.agl.syntax as syntax
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE, PragmaValue
-from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.types import (
     AgentT,
     AppliedT,
@@ -43,10 +43,12 @@ from agm.agl.syntax.types import (
     DecimalT,
     DictT,
     FuncT,
+    ImportMode,
     IntT,
     JsonT,
     ListT,
     NameT,
+    Qualifier,
     TextT,
     TypeExpr,
     UnitT,
@@ -84,24 +86,6 @@ def _span_from_meta(meta: Meta) -> SourceSpan:
     )
 
 
-def _span_from_token(tok: Token) -> SourceSpan:
-    """Build a SourceSpan from a Lark Token's position fields."""
-    line = tok.line if tok.line is not None else 1
-    col = tok.column if tok.column is not None else 1
-    pos = tok.start_pos if tok.start_pos is not None else 0
-    end_line = tok.end_line if tok.end_line is not None else line
-    end_col = tok.end_column if tok.end_column is not None else col + len(str(tok))
-    end_pos = tok.end_pos if tok.end_pos is not None else pos + len(str(tok))
-    return SourceSpan(
-        start_line=line,
-        start_col=col,
-        end_line=end_line,
-        end_col=end_col,
-        start_offset=pos,
-        end_offset=end_pos,
-    )
-
-
 # ---------------------------------------------------------------------------
 # AstBuilder
 # ---------------------------------------------------------------------------
@@ -119,7 +103,7 @@ class AstBuilder(Transformer):
     stay globally unique across entries.
     """
 
-    def __init__(self, *, start_id: int = 0) -> None:
+    def __init__(self, *, start_id: int = 0, source: SourceId | None = None) -> None:
         super().__init__()
         self._counter = count(start_id)
         # The next id the counter will hand out.  Tracked explicitly so callers
@@ -127,6 +111,39 @@ class AstBuilder(Transformer):
         # subsequent incremental parse) without having to assume the root node
         # holds the maximum id.  Seeded to ``start_id`` before any node is built.
         self._next_unused: int = start_id
+        # Source identity stamped on every span this builder constructs.
+        # Defaults to UNKNOWN_SOURCE when no source is supplied.
+        self._source: SourceId = source if source is not None else UNKNOWN_SOURCE
+
+    def _span_from_meta(self, meta: Meta) -> SourceSpan:
+        """Build a SourceSpan from Lark tree Meta, stamped with self._source."""
+        return SourceSpan(
+            start_line=meta.line,
+            start_col=meta.column,
+            end_line=meta.end_line,
+            end_col=meta.end_column,
+            start_offset=meta.start_pos,
+            end_offset=meta.end_pos,
+            source=self._source,
+        )
+
+    def _span_from_token(self, tok: Token) -> SourceSpan:
+        """Build a SourceSpan from a Lark Token's position fields, stamped with self._source."""
+        line = tok.line if tok.line is not None else 1
+        col = tok.column if tok.column is not None else 1
+        pos = tok.start_pos if tok.start_pos is not None else 0
+        end_line = tok.end_line if tok.end_line is not None else line
+        end_col = tok.end_column if tok.end_column is not None else col + len(str(tok))
+        end_pos = tok.end_pos if tok.end_pos is not None else pos + len(str(tok))
+        return SourceSpan(
+            start_line=line,
+            start_col=col,
+            end_line=end_line,
+            end_col=end_col,
+            start_offset=pos,
+            end_offset=end_pos,
+            source=self._source,
+        )
 
     def _next_id(self) -> int:
         nid = next(self._counter)
@@ -150,7 +167,7 @@ class AstBuilder(Transformer):
     def start(self, meta: Meta, args: _Args) -> syntax.Program:
         (block,) = args
         assert isinstance(block, syntax.Block)
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.Program(body=block, span=span, node_id=self._next_id())
 
     def block(self, meta: Meta, args: _Args) -> syntax.Block:
@@ -167,7 +184,7 @@ class AstBuilder(Transformer):
         )
         return syntax.Block(
             items=items,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -179,7 +196,7 @@ class AstBuilder(Transformer):
         # Grammar: "param" name type_ann? (EQ expr)?
         name_tok = _find_name_token(args)
         ann, default = _extract_ann_and_optional_expr(args[1:])
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.ParamDecl(
             name=str(name_tok),
             annotation=ann,
@@ -191,7 +208,7 @@ class AstBuilder(Transformer):
     def program_decl(self, meta: Meta, args: _Args) -> syntax.ProgramDecl:
         # Grammar: "program" name
         name_tok = _find_name_token(args)
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.ProgramDecl(
             name=str(name_tok),
             span=span,
@@ -216,7 +233,7 @@ class AstBuilder(Transformer):
                 "interpolation.",
             ).value
         )
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.AgentDecl(
             name=str(name_tok),
             runner=runner,
@@ -231,7 +248,7 @@ class AstBuilder(Transformer):
             a for a in args
             if a is not None and not isinstance(a, Token)
         )
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.ConfigPragma(
             key=str(key_tok),
             value=cast(PragmaValue, raw_value),
@@ -278,7 +295,7 @@ class AstBuilder(Transformer):
             name=str(name_tok),
             fields=fields,
             type_params=type_params_val,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -290,7 +307,7 @@ class AstBuilder(Transformer):
         return syntax.FieldDef(
             name=str(name_tok),
             type_expr=type_expr,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -310,7 +327,7 @@ class AstBuilder(Transformer):
             name=str(name_tok),
             variants=variants,
             type_params=type_params_val,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -329,7 +346,7 @@ class AstBuilder(Transformer):
         return syntax.VariantDef(
             name=str(name_tok),
             fields=fields,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -363,7 +380,7 @@ class AstBuilder(Transformer):
             name=str(name_tok),
             type_expr=type_expr,
             type_params=type_params_val,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -388,7 +405,7 @@ class AstBuilder(Transformer):
             return_type=return_type,
             body=body,
             type_params=type_params_val,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -415,7 +432,7 @@ class AstBuilder(Transformer):
             name=str(name_tok),
             type_expr=type_expr,
             default=default,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -433,7 +450,7 @@ class AstBuilder(Transformer):
         # Grammar: "let" name type_ann? EQ expr
         name_tok = _find_name_token(args)
         ann, value = _extract_ann_and_value(args[1:])
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.LetDecl(
             name=str(name_tok),
             type_ann=ann,
@@ -446,7 +463,7 @@ class AstBuilder(Transformer):
         # Grammar: "var" name type_ann? EQ expr
         name_tok = _find_name_token(args)
         ann, value = _extract_ann_and_value(args[1:])
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.VarDecl(
             name=str(name_tok),
             type_ann=ann,
@@ -479,7 +496,7 @@ class AstBuilder(Transformer):
                 "assignment target must be a variable or indexed variable.",
                 span=lhs.span,
             )
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         return syntax.AssignStmt(
             target=target,
             value=value,
@@ -504,7 +521,7 @@ class AstBuilder(Transformer):
         tok = args[0]
         assert isinstance(tok, Token)
         name = str(tok)
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         nid = self._next_id()
         if name == "text":
             return TextT(span=span, node_id=nid)
@@ -535,7 +552,7 @@ class AstBuilder(Transformer):
                 (),
             ),
         )
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         nid = self._next_id()
         if name == "list":
             if len(type_args) == 1:
@@ -555,7 +572,7 @@ class AstBuilder(Transformer):
 
     def agent_type(self, meta: Meta, args: _Args) -> AgentT:
         """AGENT terminal in type position → AgentT."""
-        return AgentT(span=_span_from_meta(meta), node_id=self._next_id())
+        return AgentT(span=self._span_from_meta(meta), node_id=self._next_id())
 
     def type_arg_list(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
         """type_arg_list: type_expr (COMMA type_expr)*"""
@@ -599,7 +616,7 @@ class AstBuilder(Transformer):
         return FuncT(
             params=param_types,
             result=result_type,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -612,7 +629,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def unit_lit(self, meta: Meta, args: _Args) -> syntax.UnitLit:
-        return syntax.UnitLit(span=_span_from_meta(meta), node_id=self._next_id())
+        return syntax.UnitLit(span=self._span_from_meta(meta), node_id=self._next_id())
 
     def paren_expr(self, meta: Meta, args: _Args) -> syntax.Expr:
         # args: LPAR, expr, RPAR — find the expr (non-Token)
@@ -655,7 +672,7 @@ class AstBuilder(Transformer):
             params=params,
             return_type=return_type,
             body=body,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -668,7 +685,7 @@ class AstBuilder(Transformer):
         assert isinstance(tok, Token)
         return syntax.IntLit(
             value=int(str(tok)),
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -677,22 +694,22 @@ class AstBuilder(Transformer):
         assert isinstance(tok, Token)
         return syntax.DecimalLit(
             value=decimal.Decimal(str(tok)),
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
     def lit_true(self, meta: Meta, args: _Args) -> syntax.BoolLit:
         return syntax.BoolLit(
-            value=True, span=_span_from_meta(meta), node_id=self._next_id()
+            value=True, span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
     def lit_false(self, meta: Meta, args: _Args) -> syntax.BoolLit:
         return syntax.BoolLit(
-            value=False, span=_span_from_meta(meta), node_id=self._next_id()
+            value=False, span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
     def lit_null(self, meta: Meta, args: _Args) -> syntax.NullLit:
-        return syntax.NullLit(span=_span_from_meta(meta), node_id=self._next_id())
+        return syntax.NullLit(span=self._span_from_meta(meta), node_id=self._next_id())
 
     # ------------------------------------------------------------------
     # var_ref / constructor
@@ -702,7 +719,7 @@ class AstBuilder(Transformer):
         tok = args[0]
         assert isinstance(tok, Token)
         return syntax.VarRef(
-            name=str(tok), span=_span_from_meta(meta), node_id=self._next_id()
+            name=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
     # ------------------------------------------------------------------
@@ -719,7 +736,9 @@ class AstBuilder(Transformer):
                 pa, na = cast(tuple[list[syntax.Expr], list[syntax.NamedArg]], a)
                 pos_args = pa
                 named_args = na
-        span = _span_from_meta(meta)
+            # Tokens (LPAR, RPAR) and None are skipped
+
+        span = self._span_from_meta(meta)
         return syntax.Call(
             callee=callee,
             args=tuple(pos_args),
@@ -735,7 +754,7 @@ class AstBuilder(Transformer):
         return syntax.FieldAccess(
             obj=obj_expr,
             field=str(field_tok),
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -746,7 +765,7 @@ class AstBuilder(Transformer):
         return syntax.IndexAccess(
             obj=cast(syntax.Expr, obj_expr),
             index=cast(syntax.Expr, index_expr),
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -780,7 +799,7 @@ class AstBuilder(Transformer):
             callee=callee,
             args=(arg_expr,),
             named_args=(),
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -799,14 +818,14 @@ class AstBuilder(Transformer):
                 result = syntax.FieldAccess(
                     obj=result,
                     field=cast(str, value),
-                    span=_span_from_meta(meta),
+                    span=self._span_from_meta(meta),
                     node_id=self._next_id(),
                 )
             else:
                 result = syntax.IndexAccess(
                     obj=result,
                     index=cast(syntax.Expr, value),
-                    span=_span_from_meta(meta),
+                    span=self._span_from_meta(meta),
                     node_id=self._next_id(),
                 )
         return result
@@ -855,7 +874,7 @@ class AstBuilder(Transformer):
 
         callee = syntax.VarRef(
             name=str(name_tok),
-            span=_span_from_token(name_tok),
+            span=self._span_from_token(name_tok),
             node_id=self._next_id(),
         )
         return syntax.Call(
@@ -863,7 +882,47 @@ class AstBuilder(Transformer):
             args=tuple(pos_args),
             named_args=tuple(named_args),
             type_args=type_args_val,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def qual_typed_call(self, meta: Meta, args: _Args) -> syntax.Call:
+        """qual_typed_call: qual_prefix name LSQB type_arg_list RSQB LPAR arg_list? RPAR
+
+        Module-qualified typed call: ``lib::Point[int](x: 1)`` or ``::MyType[T](f: v)``.
+        Builds a ``Call`` whose callee is a module-qualified ``VarRef``.
+        """
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        type_args_val: tuple[TypeExpr, ...] = cast(
+            tuple[TypeExpr, ...],
+            next(
+                (a for a in args if isinstance(a, tuple) and len(a) > 0
+                 and isinstance(a[0], _ALL_TYPE_EXPRS)),
+                (),
+            ),
+        )
+
+        pos_args: list[syntax.Expr] = []
+        named_args: list[syntax.NamedArg] = []
+        for a in args:
+            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
+                pa, na = cast(tuple[list[syntax.Expr], list[syntax.NamedArg]], a)
+                pos_args = pa
+                named_args = na
+
+        callee = syntax.VarRef(
+            name=str(name_tok),
+            span=self._span_from_token(name_tok),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+        return syntax.Call(
+            callee=callee,
+            args=tuple(pos_args),
+            named_args=tuple(named_args),
+            type_args=type_args_val,
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -907,7 +966,7 @@ class AstBuilder(Transformer):
         return syntax.NamedArg(
             name=str(name_tok),
             value=val_expr,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -920,7 +979,7 @@ class AstBuilder(Transformer):
         right = cast(syntax.Expr, args[-1])
         return syntax.BinaryOp(
             op=op, left=left, right=right,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def bin_or(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
@@ -971,7 +1030,7 @@ class AstBuilder(Transformer):
             expr=cast(syntax.Expr, args[0]),
             target_type=_find_type_expr(args[1:]),
             test_only=test_only,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -990,13 +1049,13 @@ class AstBuilder(Transformer):
     def unary_not(self, meta: Meta, args: _Args) -> syntax.UnaryNot:
         operand = cast(syntax.Expr, args[0])
         return syntax.UnaryNot(
-            operand=operand, span=_span_from_meta(meta), node_id=self._next_id()
+            operand=operand, span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
     def unary_neg(self, meta: Meta, args: _Args) -> syntax.UnaryNeg:
         operand = cast(syntax.Expr, args[-1])
         return syntax.UnaryNeg(
-            operand=operand, span=_span_from_meta(meta), node_id=self._next_id()
+            operand=operand, span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
     # ------------------------------------------------------------------
@@ -1019,7 +1078,7 @@ class AstBuilder(Transformer):
             variant = str(name_toks[0])
         return syntax.IsTest(
             expr=left, qualifier=qualifier, variant=variant, negated=negated,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
@@ -1044,7 +1103,7 @@ class AstBuilder(Transformer):
         body = _find_expr(args[1:])
         return syntax.IfBranch(
             cond=cond, body=body,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def if_else_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
@@ -1052,14 +1111,14 @@ class AstBuilder(Transformer):
         body = _find_expr(args)
         return syntax.IfBranch(
             cond=ELSE, body=body,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def if_expr(self, meta: Meta, args: _Args) -> syntax.If:
         branches = tuple(a for a in args if isinstance(a, syntax.IfBranch))
         return syntax.If(
             branches=branches,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -1077,7 +1136,7 @@ class AstBuilder(Transformer):
         assert isinstance(pat, _pat_types)
         return syntax.CaseBranch(
             pattern=pat, body=body,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def case_expr(self, meta: Meta, args: _Args) -> syntax.Case:
@@ -1086,7 +1145,7 @@ class AstBuilder(Transformer):
         branches = tuple(a for a in args[1:] if isinstance(a, syntax.CaseBranch))
         return syntax.Case(
             subject=subject, branches=branches,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -1101,7 +1160,7 @@ class AstBuilder(Transformer):
         if n <= 0:
             raise AglSyntaxError(
                 f"Loop bound must be a positive integer; got {n}.",
-                span=_span_from_meta(meta),
+                span=self._span_from_meta(meta),
             )
         return n
 
@@ -1122,7 +1181,7 @@ class AstBuilder(Transformer):
         )
         return syntax.Block(
             items=items,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -1146,7 +1205,7 @@ class AstBuilder(Transformer):
         body, condition = exprs[0], exprs[1]
         return syntax.Do(
             limit=limit, body=body, condition=condition,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -1164,7 +1223,7 @@ class AstBuilder(Transformer):
         # Multiple or_exprs: wrap in a Block.
         return syntax.Block(
             items=tuple(cast(syntax.Item, i) for i in items),
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -1212,7 +1271,7 @@ class AstBuilder(Transformer):
         assert body is not None, "catch_clause: no body"
         return syntax.CatchClause(
             exc_type=exc_type, binding=binding, body=body,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def try_expr(self, meta: Meta, args: _Args) -> syntax.Try:
@@ -1225,7 +1284,7 @@ class AstBuilder(Transformer):
         return syntax.Try(
             body=cast(syntax.Expr, try_body),
             handlers=tuple(handlers),
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -1234,7 +1293,7 @@ class AstBuilder(Transformer):
 
     def raise_expr(self, meta: Meta, args: _Args) -> syntax.Raise:
         exc = _find_expr(args)
-        return syntax.Raise(exc=exc, span=_span_from_meta(meta), node_id=self._next_id())
+        return syntax.Raise(exc=exc, span=self._span_from_meta(meta), node_id=self._next_id())
 
     # ------------------------------------------------------------------
     # suite_expr / branch_body
@@ -1261,9 +1320,9 @@ class AstBuilder(Transformer):
         tok = args[0]
         assert isinstance(tok, Token)
         if str(tok) == "_":
-            return syntax.WildcardPattern(span=_span_from_meta(meta), node_id=self._next_id())
+            return syntax.WildcardPattern(span=self._span_from_meta(meta), node_id=self._next_id())
         return syntax.VarPattern(
-            name=str(tok), span=_span_from_meta(meta), node_id=self._next_id()
+            name=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
     def pat_qualified_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
@@ -1280,7 +1339,7 @@ class AstBuilder(Transformer):
                 fields = cast(tuple[syntax.PatternField, ...], a)
         return syntax.ConstructorPattern(
             qualifier=qualifier, name=name, fields=fields,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
@@ -1306,14 +1365,14 @@ class AstBuilder(Transformer):
         meta: Meta,
     ) -> syntax.LiteralPattern:
         return syntax.LiteralPattern(
-            literal=literal, span=_span_from_meta(meta), node_id=self._next_id()
+            literal=literal, span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
     def pat_lit_int(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         tok = args[0]
         assert isinstance(tok, Token)
         lit = syntax.IntLit(
-            value=int(str(tok)), span=_span_from_meta(meta), node_id=self._next_id()
+            value=int(str(tok)), span=self._span_from_meta(meta), node_id=self._next_id()
         )
         return self._literal_pattern(lit, meta)
 
@@ -1322,24 +1381,24 @@ class AstBuilder(Transformer):
         assert isinstance(tok, Token)
         lit = syntax.DecimalLit(
             value=decimal.Decimal(str(tok)),
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
         return self._literal_pattern(lit, meta)
 
     def pat_lit_true(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         lit = syntax.BoolLit(
-            value=True, span=_span_from_meta(meta), node_id=self._next_id()
+            value=True, span=self._span_from_meta(meta), node_id=self._next_id()
         )
         return self._literal_pattern(lit, meta)
 
     def pat_lit_false(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         lit = syntax.BoolLit(
-            value=False, span=_span_from_meta(meta), node_id=self._next_id()
+            value=False, span=self._span_from_meta(meta), node_id=self._next_id()
         )
         return self._literal_pattern(lit, meta)
 
     def pat_lit_null(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
-        lit = syntax.NullLit(span=_span_from_meta(meta), node_id=self._next_id())
+        lit = syntax.NullLit(span=self._span_from_meta(meta), node_id=self._next_id())
         return self._literal_pattern(lit, meta)
 
     def pat_lit_str(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
@@ -1366,18 +1425,237 @@ class AstBuilder(Transformer):
         assert isinstance(pat, _pat_types)
         return syntax.PatternField(
             name=str(name_tok), pattern=pat,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def pat_field_shorthand(self, meta: Meta, args: _Args) -> syntax.PatternField:
         name_tok = _find_name_token(args)
         name = str(name_tok)
         var_pat = syntax.VarPattern(
-            name=name, span=_span_from_meta(meta), node_id=self._next_id()
+            name=name, span=self._span_from_meta(meta), node_id=self._next_id()
         )
         return syntax.PatternField(
             name=name, pattern=var_pat,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta), node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # Import declaration
+    # ------------------------------------------------------------------
+
+    def _import_decl_from_args(
+        self,
+        meta: Meta,
+        args: _Args,
+        *,
+        wildcard: bool,
+    ) -> syntax.ImportDecl:
+        """Shared builder for import_decl_plain and import_decl_wildcard."""
+        module_path: tuple[str, ...] = ()
+        qualified = False
+        alias: str | None = None
+        mode = ImportMode.ALL
+        items: tuple[syntax.ImportItem, ...] = ()
+
+        for a in args:
+            if isinstance(a, Token) and a.type == "QUALIFIED":
+                qualified = True
+            elif isinstance(a, Token) and a.type == "MODPATH":
+                module_path = tuple(str(a).split("."))
+            elif isinstance(a, Token):
+                # Skip IMPORT, DOT, STAR, etc.
+                pass
+            elif type(a) is str:
+                # import_alias result: plain str (not Token, which is also a str subclass)
+                alias = a
+            else:
+                # import_clause result: (ImportMode, items)
+                clause = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...]], a)
+                mode, items = clause
+
+        return syntax.ImportDecl(
+            module_path=module_path,
+            wildcard=wildcard,
+            qualified=qualified,
+            alias=alias,
+            mode=mode,
+            items=items,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def import_decl_plain(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
+        """import_decl_plain: IMPORT MODPATH QUALIFIED? import_alias? import_clause?"""
+        return self._import_decl_from_args(meta, args, wildcard=False)
+
+    def import_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
+        """import_decl_wildcard: IMPORT MODPATH DOT STAR QUALIFIED? import_alias?"""
+        return self._import_decl_from_args(meta, args, wildcard=True)
+
+    def import_alias(self, meta: Meta, args: _Args) -> str:
+        """import_alias: "as" name — return the alias name as a plain str."""
+        tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        return str(tok)
+
+    def import_clause_using(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
+        """import_clause_using: USING import_item (COMMA import_item)*"""
+        import_items = tuple(a for a in args if isinstance(a, syntax.ImportItem))
+        return (ImportMode.USING, import_items)
+
+    def import_clause_hiding(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
+        """import_clause_hiding: HIDING name (COMMA name)*"""
+        hiding_names = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        hiding_items = tuple(
+            syntax.ImportItem(
+                name=name,
+                rename=None,
+                span=self._span_from_meta(meta),
+                node_id=self._next_id(),
+            )
+            for name in hiding_names
+        )
+        return (ImportMode.HIDING, hiding_items)
+
+    def import_item_rename(self, meta: Meta, args: _Args) -> syntax.ImportItem:
+        """import_item_rename: name "as" name"""
+        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        return syntax.ImportItem(
+            name=name_toks[0],
+            rename=name_toks[1],
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def import_item_plain(self, meta: Meta, args: _Args) -> syntax.ImportItem:
+        """import_item_plain: name"""
+        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        return syntax.ImportItem(
+            name=name_toks[0],
+            rename=None,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
+    # Private declarations
+    # ------------------------------------------------------------------
+
+    def private_record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
+        """private_record_def: PRIVATE record_def"""
+        rec = next(a for a in args if isinstance(a, syntax.RecordDef))
+        return syntax.RecordDef(
+            name=rec.name,
+            fields=rec.fields,
+            type_params=rec.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    def private_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
+        """private_enum_def: PRIVATE enum_def"""
+        e = next(a for a in args if isinstance(a, syntax.EnumDef))
+        return syntax.EnumDef(
+            name=e.name,
+            variants=e.variants,
+            type_params=e.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    def private_type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
+        """private_type_alias: PRIVATE type_alias"""
+        ta = next(a for a in args if isinstance(a, syntax.TypeAlias))
+        return syntax.TypeAlias(
+            name=ta.name,
+            type_expr=ta.type_expr,
+            type_params=ta.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    def private_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """private_func_def: PRIVATE func_def"""
+        f = next(a for a in args if isinstance(a, syntax.FuncDef))
+        return syntax.FuncDef(
+            name=f.name,
+            params=f.params,
+            return_type=f.return_type,
+            body=f.body,
+            type_params=f.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Qualified refs
+    # ------------------------------------------------------------------
+
+    def qual_prefix(self, meta: Meta, args: _Args) -> Qualifier:
+        """qual_prefix: MODQUAL | DCOLON"""
+        tok = args[0]
+        assert isinstance(tok, Token)
+        if tok.type == "MODQUAL":
+            segments = tuple(str(tok).split("."))
+        else:
+            # DCOLON — self-reference, empty segments
+            segments = ()
+        return Qualifier(
+            segments=segments,
+            span=self._span_from_token(tok),
+            node_id=self._next_id(),
+        )
+
+    def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
+        """qual_var_ref: qual_prefix NAME"""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        return syntax.VarRef(
+            name=str(name_tok),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+
+    def qual_named_type(self, meta: Meta, args: _Args) -> NameT:
+        """qual_prefix NAME in type position."""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        return NameT(
+            name=str(name_tok),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+
+    def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
+        """pat_qual_constructor: qual_prefix NAME (DOT NAME)? (LPAR pattern_fields? RPAR)?"""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_toks = [a for a in args if isinstance(a, Token) and a.type == "NAME"]
+        qualifier_str: str | None = None
+        if len(name_toks) == 2:
+            qualifier_str = str(name_toks[0])
+            name = str(name_toks[1])
+        else:
+            name = str(name_toks[0])
+        fields: tuple[syntax.PatternField, ...] = ()
+        for a in args:
+            if isinstance(a, tuple) and all(isinstance(x, syntax.PatternField) for x in a):
+                fields = cast(tuple[syntax.PatternField, ...], a)
+        return syntax.ConstructorPattern(
+            qualifier=qualifier_str,
+            name=name,
+            fields=fields,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
         )
 
     # ------------------------------------------------------------------
@@ -1396,7 +1674,7 @@ class AstBuilder(Transformer):
             if isinstance(a, (syntax.TextSegment, syntax.InterpSegment))
             if not (isinstance(a, syntax.TextSegment) and a.text == "")
         ]
-        span = _span_from_meta(meta)
+        span = self._span_from_meta(meta)
         nid = self._next_id()
         if all(isinstance(s, syntax.TextSegment) for s in segments):
             text = "".join(s.text for s in segments if isinstance(s, syntax.TextSegment))
@@ -1412,7 +1690,7 @@ class AstBuilder(Transformer):
         assert isinstance(tok, Token)
         return syntax.TextSegment(
             text=str(tok),
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -1426,7 +1704,7 @@ class AstBuilder(Transformer):
         expr: syntax.Expr = _find_expr(args)
         return syntax.InterpSegment(
             expr=expr,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -1443,7 +1721,7 @@ class AstBuilder(Transformer):
         )
         return syntax.ListLit(
             elements=elements,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -1452,7 +1730,7 @@ class AstBuilder(Transformer):
         entries = tuple(a for a in args if isinstance(a, syntax.DictEntry))
         return syntax.DictLit(
             entries=entries,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -1470,7 +1748,7 @@ class AstBuilder(Transformer):
         return syntax.DictEntry(
             key=key_lit,
             value=val_expr,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -1480,13 +1758,13 @@ class AstBuilder(Transformer):
         val_expr = _find_expr(args[1:])
         key_lit = syntax.StringLit(
             value=str(name_tok),
-            span=_span_from_token(name_tok),
+            span=self._span_from_token(name_tok),
             node_id=self._next_id(),
         )
         return syntax.DictEntry(
             key=key_lit,
             value=val_expr,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 

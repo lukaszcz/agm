@@ -7,6 +7,11 @@
 // leading underscore convention.
 //
 // LALR(1) conflict-freeness verified: 0 shift/reduce, 0 reduce/reduce.
+// Module system (import/private/qualified refs) is conflict-free because:
+//   - import module paths are pre-merged into MODPATH tokens by the lexer,
+//     eliminating the VAR_NAME DOT ambiguity with expression grammar.
+//   - Qualified prefixes are pre-merged into MODQUAL by the lexer, eliminating
+//     the VAR_NAME DCOLON ambiguity with typed_call_atom.
 // See tests/test_agl_parser.py for the mandatory conflict-guard regression.
 //
 // Terminal naming: keyword string literals (e.g. "let") produce uppercase
@@ -73,6 +78,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME
+%declare IMPORT QUALIFIED USING HIDING PRIVATE MODQUAL MODPATH
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
 // string literal "agent") so it can be referenced by name in `field_name`,
@@ -123,6 +129,11 @@ _sep: _NEWLINE | SEMICOLON
             | agent_decl
             | config_pragma
             | func_def
+            | import_decl
+            | private_record_def
+            | private_enum_def
+            | private_type_alias
+            | private_func_def
 
 // ---------------------------------------------------------------------------
 // Type declarations
@@ -235,6 +246,7 @@ type_ann: COLON type_expr
 
 type_expr: LPAR type_list? RPAR THIN_ARROW type_expr       -> func_type
          | name type_lsqb type_arg_list RSQB               -> applied_type
+         | qual_prefix name                                 -> qual_named_type
          | name                                             -> prim_or_name
          | AGENT                                            -> agent_type
 
@@ -425,6 +437,10 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
            | INDEX_LSQB expr RSQB -> juxt_index_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
+// Qualified refs (qual_var_ref/qual_constructor) are NOT included here — they
+// are valid in atom/postfix/juxt-callee position but not as juxt arguments.
+// This keeps DCOLON and MODQUAL out of FIRST(juxt_arg) and avoids an LALR(1)
+// Shift/Reduce conflict between var_ref:VAR_NAME and typed_call_atom:VAR_NAME DCOLON.
 ?juxt_atom: lit_int
           | lit_decimal
           | lit_true
@@ -447,24 +463,24 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 // ---------------------------------------------------------------------------
 // Typed call (explicit type-argument syntax)
 //
-// ``callee::[Type](args)`` — a call that carries a static type argument, used
-// by built-ins whose target type is NOT inferable from context (e.g.
-// ``ask-request::[Review](...)``).  The ``::`` introducer is unambiguous: it
-// is not a valid continuation of any expression, so the parser commits to the
-// typed-call form rather than reducing the callee to a plain ``var_ref``.
+// Two forms are supported:
+//
+//   bare:      ``callee::[Type](args)``   — bare NAME callee (e.g. ask-request)
+//   qualified: ``qual_prefix name[Type](args)`` — module-qualified callee
+//
+// The ``::`` introducer in the bare form is unambiguous because DCOLON never
+// appears in FOLLOW(var_ref).  The qualified form uses MODQUAL (pre-merged by
+// the lexer from ``NAME(DOT NAME)*::``) so it is also conflict-free.
 //
 // Square brackets delimit the type argument (not angle brackets) because the
 // AgL lexer treats ``<`` and ``>`` as identifier-continuation characters, so
 // ``Review>`` would scan as a single token; ``[`` and ``]`` are identifier
 // stop characters and delimit cleanly.  ``type_expr`` uses ``[]`` only for
 // generics (``list[T]``), so nested brackets stay balanced.
-//
-// Only a bare ``NAME`` callee is admitted (atom-level), which keeps the
-// form conflict-free: ``DCOLON`` never appears in ``FOLLOW(var_ref)``, so
-// there is no shift/reduce collision with juxtaposition or list literals.
 // ---------------------------------------------------------------------------
 
-typed_call_atom: name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
+typed_call_atom    : name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
+qual_typed_call    : qual_prefix name LSQB type_arg_list RSQB LPAR arg_list? RPAR
 
 // ---------------------------------------------------------------------------
 // Atom: primary non-operator expressions (transparent)
@@ -480,7 +496,9 @@ typed_call_atom: name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
      | lit_list
      | lit_dict
      | var_ref
+     | qual_var_ref
      | typed_call_atom
+     | qual_typed_call
      | paren_expr_or_unit
 
 // Parenthesized expression or unit literal.
@@ -549,17 +567,56 @@ dict_entry: template COLON expr     -> dict_entry_str
 //   name LPAR ... RPAR → unqualified constructor pattern with payload
 //   name (other) → var binder or bare constructor
 //   literal → literal pattern
-pattern: name DOT name (LPAR pattern_fields? RPAR)?  -> pat_qualified_constructor
-       | name LPAR pattern_fields? RPAR              -> pat_constructor
-       | name                                        -> pat_var_or_wild
-       | INT                                         -> pat_lit_int
-       | DECIMAL                                     -> pat_lit_decimal
-       | "true"                                      -> pat_lit_true
-       | "false"                                     -> pat_lit_false
-       | "null"                                      -> pat_lit_null
-       | template                                    -> pat_lit_str
+pattern: name DOT name (LPAR pattern_fields? RPAR)?         -> pat_qualified_constructor
+       | qual_prefix name (DOT name)? (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
+       | name LPAR pattern_fields? RPAR                     -> pat_constructor
+       | name                                               -> pat_var_or_wild
+       | INT                                                -> pat_lit_int
+       | DECIMAL                                            -> pat_lit_decimal
+       | "true"                                             -> pat_lit_true
+       | "false"                                            -> pat_lit_false
+       | "null"                                             -> pat_lit_null
+       | template                                           -> pat_lit_str
 
 pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
 pattern_field: name COLON pattern   -> pat_field_full
              | name                 -> pat_field_shorthand
+
+// ---------------------------------------------------------------------------
+// Module system: import declarations and private declarations
+//
+// The lexer pre-merges `NAME (DOT NAME)*` after IMPORT into a single
+// MODPATH token, eliminating the LALR(1) ambiguity with the expression grammar.
+// Qualified prefixes `NAME(DOT NAME)*::` are pre-merged into MODQUAL by the
+// lexer, eliminating the DCOLON ambiguity with typed_call_atom.
+// ---------------------------------------------------------------------------
+
+// import_decl: IMPORT MODPATH QUALIFIED? (as ref_name)? import_clause?
+// Wildcard tail (.*) follows MODPATH as DOT STAR.
+import_decl : IMPORT MODPATH DOT STAR QUALIFIED? import_alias? import_clause? -> import_decl_wildcard
+            | IMPORT MODPATH QUALIFIED? import_alias? import_clause? -> import_decl_plain
+
+import_alias : "as" name
+
+import_clause : USING import_item (COMMA import_item)*  -> import_clause_using
+              | HIDING name (COMMA name)*                -> import_clause_hiding
+
+import_item : name "as" name    -> import_item_rename
+            | name               -> import_item_plain
+
+// Private declaration wrappers
+private_record_def  : PRIVATE record_def
+private_enum_def    : PRIVATE enum_def
+private_type_alias  : PRIVATE type_alias
+private_func_def    : PRIVATE func_def
+
+// ---------------------------------------------------------------------------
+// Qualified references in expressions, types, and patterns
+// ---------------------------------------------------------------------------
+
+// qual_prefix: MODQUAL (foo.bar::) or bare DCOLON (self-reference ::)
+qual_prefix : MODQUAL | DCOLON
+
+// Qualified variable/constructor reference in expression position
+qual_var_ref : qual_prefix name

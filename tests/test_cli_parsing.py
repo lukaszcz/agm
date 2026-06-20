@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Protocol
 
 import click
@@ -2195,6 +2196,67 @@ class TestParseLoopSelectArgsExtraPromptFlags:
         )
         assert args.extra_selector_prompt_file == "/tmp/sel.md"
 
+
+
+class TestExecModulePathOption:
+    """Parser-contract tests for the -I/--module-path repeatable option."""
+
+    def test_single_module_path_passed_to_exec_args(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.exec as exec_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(exec_mod, "run", lambda a: calls.append(a))
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        extra_root = tmp_path / "myroot"
+        extra_root.mkdir()
+
+        result = invoke(runner, ["exec", str(agl_file), "-I", str(extra_root)])
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert getattr(calls[0], "module_paths") == [str(extra_root)]
+
+    def test_multiple_module_paths_accumulate(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.exec as exec_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(exec_mod, "run", lambda a: calls.append(a))
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        root_a = tmp_path / "rootA"
+        root_a.mkdir()
+        root_b = tmp_path / "rootB"
+        root_b.mkdir()
+
+        result = invoke(
+            runner,
+            ["exec", str(agl_file), "-I", str(root_a), "--module-path", str(root_b)],
+        )
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert getattr(calls[0], "module_paths") == [str(root_a), str(root_b)]
+
+    def test_no_module_paths_defaults_to_empty_list(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.exec as exec_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(exec_mod, "run", lambda a: calls.append(a))
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = invoke(runner, ["exec", str(agl_file)])
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert getattr(calls[0], "module_paths") == []
 
 
 class TestParseLoopSelectArgsExtraPromptMutualExclusion:

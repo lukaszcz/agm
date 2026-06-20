@@ -233,7 +233,9 @@ let issue = Issue(
 ```
 
 Two record types with identical fields are still distinct types (nominal
-typing).
+typing). Two record types from different modules are also distinct even if
+they have the same name and the same fields — see
+[Module-qualified type identity](#module-qualified-type-identity).
 
 ## Enum types
 
@@ -260,6 +262,69 @@ Construction, qualification, and ambiguity rules are covered in
 [Expressions](expressions.md); destructuring in
 [Pattern matching](pattern-matching.md); the JSON wire shape (the `"$case"`
 tag) in [Agent calls](agent-calls.md).
+
+## Module-qualified type identity
+
+Record types and enum types are identified by **both their name and their
+defining module**. Two types with the same name are distinct types if they
+come from different modules:
+
+```agl
+# In foo.agl
+record Point
+  x: int
+  y: int
+
+# In bar.agl
+record Point
+  x: int
+  y: int
+
+# In entry.agl
+import foo
+import bar
+
+let p: foo::Point = foo::Point(x: 0, y: 0)
+# The next line is a static error: bar::Point is not the same type as foo::Point
+# let q: bar::Point = p
+```
+
+This is **deep nominal identity**: two `Point` types from different modules are
+never interchangeable regardless of structural similarity.
+
+### Qualified type references
+
+A type from an imported module may be named explicitly using the module
+qualifier:
+
+```agl
+import mylib
+import mylib qualified as M
+
+# These are equivalent:
+let p1: mylib::Point = mylib::origin()
+let p2: M::Point     = M::origin()
+```
+
+The qualifier is the handle under which the module was imported. Qualified type
+references work in annotations, cast targets, and constructor expressions. An
+open (unqualified) import also brings the type name into unqualified scope,
+so `Point` (without a qualifier) resolves to `mylib::Point` if `mylib` is
+open-imported and no other open import clashes.
+
+### Self-reference: `::TypeName`
+
+Inside a module, `::TypeName` refers to the **current module's own** type
+named `TypeName`. This resolves directly in the module root, bypassing any
+shadow introduced by an open import:
+
+```agl
+# In mylib.agl
+record Node
+  value: int
+
+def make() -> ::Node = Node(value: 0)   # refers to this module's own Node
+```
 
 ## Type aliases
 

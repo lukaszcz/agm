@@ -377,6 +377,65 @@ appear before all other items (header-only).
 Single-module programs continue to use `resolve()` (unchanged); they bypass the
 graph machinery entirely.
 
+## Graph-aware type checking (`agm.agl.typecheck.graph`)
+
+`check_graph(resolved_graph, capabilities) → CheckedModuleGraph` extends the type
+checker to operate over a full `ResolvedModuleGraph`.
+
+**Module-qualified type identity.** `RecordType` and `EnumType` now carry a
+`module_id: ModuleId` field (defaulting to `ENTRY_ID`).  Two types with the same
+name but different `module_id`s are distinct types — `foo::Color ≠ bar::Color` even
+when structurally identical.
+
+**Graph type pre-pass.** Before any function body is checked, `_build_graph_type_table`
+runs a genuinely whole-graph two-phase pass:
+
+1. **Phase 1 (shells)** — ALL type shells for ALL modules are registered first:
+   empty `RecordType`/`EnumType` shells stamped with the owning `module_id` go
+   into `graph_type_table`; type aliases are tracked in per-module envs.  All
+   shells are registered before any body is resolved, so forward references across
+   modules work even when the import graph has cycles.
+2. **Phase 2 (bodies in topological order)** — the structural type-definition
+   dependency graph is computed across all modules (a record/enum/alias depends on
+   every type named in its field/variant/alias-target expressions, cross-module
+   included), then Kahn's algorithm produces a topological order (ties broken by
+   `(ModuleId.segments, name)` for determinism).  Each body is resolved in that
+   order so the referenced type is always fully built before it is captured
+   by-value as a field/variant/element type.  A genuine structural type cycle (a
+   type that contains itself infinitely) is an `AglTypeError` consistent with the
+   single-module `_TypeBuilder` behaviour.  Import-graph cycles (D8) are allowed
+   and do not imply structural type cycles.  The result is stored in the shared
+   `graph_type_table: dict[(ModuleId, name), Type]`.
+
+**Cross-module mismatch diagnostics.** `RecordType.__repr__`/`EnumType.__repr__`
+qualify the type name with its owning module when the module is NOT `ENTRY_ID`
+(e.g. `foo::Color`), so mismatch messages distinguish `foo::Color` from
+`bar::Color` rather than rendering both as `Color`.
+
+**Per-module checking.** `_check_module` creates a `TypeEnvironment` with the
+graph type table and `ImportEnv`, seeds it with the module's own fully-resolved
+types by bare name, seeds binding types from already-checked modules (so entry can
+call imported functions), and then runs the existing `_TypeBuilder + _Checker`
+pipeline.  Non-entry modules are checked before the entry module so their function
+signatures are available.
+
+**Module-aware type resolution.** `TypeEnvironment` gains graph-mode parameters
+(`graph_type_table`, `import_env`, `module_id`).  Resolution in graph mode:
+- A qualified `MODQUAL::Name` type ref looks up the handle in `import_env.qualified`
+  and then fetches the type from `graph_type_table`.
+- An empty-segment self-ref `::Name` looks up `(module_id, name)` in
+  `graph_type_table`, falling back to the local env for built-ins.
+- An unqualified `Name` in graph mode searches `import_env.unqualified`; if exactly
+  one module exports that type name, it is resolved; multiple exports is an ambiguity
+  error.
+
+**Outputs.** `CheckedModuleGraph` holds a `dict[ModuleId, CheckedModule]`, the
+shared `graph_type_table`, the `entry_id`, and aggregated warnings.  Each
+`CheckedModule` mirrors the single-module `CheckedProgram` shape.
+
+Single-module programs continue to use `check()` (unchanged); `check_graph` on a
+single-entry-only graph is equivalent.
+
 ## Module-graph loading (`agm.agl.modules`)
 
 The `modules/` package implements the file-based module system load-and-graph
@@ -450,6 +509,7 @@ by `ModuleId`. The SCC algorithm visits nodes in sorted order.
 | `agm.agl.modules` | module-graph loading | `tests/test_agl_modules_ids.py`, `tests/test_agl_modules_roots.py`, `tests/test_agl_modules_resolver.py`, `tests/test_agl_modules_loader.py` |
 | `agm.agl.scope.imports` | import environment builder | `tests/test_agl_scope_imports.py` |
 | `agm.agl.scope.graph` | graph-aware scope resolver | `tests/test_agl_scope_graph.py` |
+| `agm.agl.typecheck.graph` | graph-aware type checker | `tests/test_agl_typecheck_graph.py` |
 
 The end-to-end acceptance suite lives in `tests/test_agl_e2e.py` and
 `tests/agl/`. It is **green and part of the standing gate** — `just test` /

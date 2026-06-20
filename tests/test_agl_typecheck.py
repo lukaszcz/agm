@@ -3578,3 +3578,21 @@ class TestImportDeclTypecheck:
     def test_import_hiding_does_not_raise(self) -> None:
         r = accept_type("import foo hiding secret\n1")
         assert r
+
+
+class TestSelfRefTypeInSingleModule:
+    """Self-reference type annotations (::Name) in single-module programs."""
+
+    def test_self_ref_own_record_type_accepted(self) -> None:
+        """'::MyRecord' in a single-module program resolves to the local record type."""
+        r = accept_type("record MyRecord\n  x: int\ndef f() -> ::MyRecord = MyRecord(x: 1)\nf()")
+        # accept_type returns CheckedProgram; just checking it doesn't raise
+        assert r is not None
+
+    def test_self_ref_unknown_type_rejected(self) -> None:
+        """'::NoSuch' when NoSuch is not declared → type error."""
+        reject_type("def f() -> ::NoSuch = 1\nf()")
+
+    def test_module_qualifier_in_single_module_rejected(self) -> None:
+        """'mylib::Point' in single-module (no graph) mode → type error."""
+        reject_type("def f() -> mylib::Point = 1\nf()")

@@ -2,10 +2,15 @@
 
 Public API
 ----------
-- :func:`check` — full type pass:
+- :func:`check` — single-module type pass:
   ``ResolvedProgram × HostCapabilities → CheckedProgram``.
+- :func:`check_graph` — graph-wide type pass:
+  ``ResolvedModuleGraph × HostCapabilities → CheckedModuleGraph``.
 - :class:`CheckedProgram` — frozen dataclass with ``node_types``,
   ``contract_specs``, ``warnings``, and ``function_signatures``.
+- :class:`CheckedModuleGraph` — graph output: per-module ``CheckedModule`` dict
+  plus shared ``graph_type_table``.
+- :class:`CheckedModule` — per-module analogue of ``CheckedProgram``.
 - :class:`OutputContractSpec` — per-call codec + target-type record.
 - :class:`AglTypeError` — fatal type error (span-aware ``AglError`` subclass).
 """
@@ -19,6 +24,7 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
     TypeEnvironment,
 )
+from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
 from agm.agl.typecheck.types import (
     AgentType,
     BoolType,
@@ -43,6 +49,8 @@ __all__ = [
     "BoolType",
     "BottomType",
     "CallSiteRecord",
+    "CheckedModule",
+    "CheckedModuleGraph",
     "CheckedProgram",
     "DecimalType",
     "DictType",
@@ -60,4 +68,5 @@ __all__ = [
     "TypeEnvironment",
     "UnitType",
     "check",
+    "check_graph",
 ]

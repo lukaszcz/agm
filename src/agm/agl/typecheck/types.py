@@ -42,6 +42,8 @@ import enum as _enum
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
+
 # ---------------------------------------------------------------------------
 # Primitive types (singletons-by-construction; frozen dataclasses)
 # ---------------------------------------------------------------------------
@@ -150,17 +152,31 @@ class RecordType:
     """A ``record`` nominal type.
 
     ``fields`` maps field name → field type.
+    ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
+    single-program paths and built-in/prelude types are unaffected).
+    Two ``RecordType`` instances are equal only when ``name``, ``fields``,
+    *and* ``module_id`` all agree — ``foo::Color`` and ``bar::Color`` are
+    distinct nominal types even when structurally identical.
     """
 
     name: str
     fields: Mapping[str, Type]
+    module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property
     def kind(self) -> str:
         return "record"
 
     def __repr__(self) -> str:
-        return self.name
+        # Qualify the type name with its owning module when the module is NOT
+        # the entry module.  This makes cross-module mismatch diagnostics
+        # informative (e.g. "foo::Color" vs "bar::Color" instead of "Color"
+        # vs "Color").  Entry-module, built-in, and single-program types keep
+        # the bare name so existing single-program tests and REPL output are
+        # unchanged.
+        if self.module_id.is_entry:
+            return self.name
+        return f"{self.module_id.dotted()}::{self.name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,17 +184,29 @@ class EnumType:
     """An ``enum`` nominal type.
 
     ``variants`` maps variant name → mapping of field names → field types.
+    ``module_id`` is the owning module (defaults to ``ENTRY_ID``).
+    Two ``EnumType`` instances are equal only when ``name``, ``variants``,
+    *and* ``module_id`` all agree.
     """
 
     name: str
     variants: Mapping[str, Mapping[str, Type]]
+    module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property
     def kind(self) -> str:
         return "enum"
 
     def __repr__(self) -> str:
-        return self.name
+        # Qualify the type name with its owning module when the module is NOT
+        # the entry module.  This makes cross-module mismatch diagnostics
+        # informative (e.g. "foo::Color" vs "bar::Color" instead of "Color"
+        # vs "Color").  Entry-module, built-in, and single-program types keep
+        # the bare name so existing single-program tests and REPL output are
+        # unchanged.
+        if self.module_id.is_entry:
+            return self.name
+        return f"{self.module_id.dotted()}::{self.name}"
 
 
 @dataclass(frozen=True, slots=True)

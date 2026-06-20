@@ -43,6 +43,7 @@ from typing import TypeGuard
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -192,8 +193,9 @@ class _TypeBuilder:
              indirect recursion and report a clear diagnostic.
     """
 
-    def __init__(self, env: TypeEnvironment) -> None:
+    def __init__(self, env: TypeEnvironment, module_id: ModuleId = ENTRY_ID) -> None:
         self._env = env
+        self._module_id = module_id
         # Track user-declared names → declaration span (excludes built-ins).
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum definitions for on-demand phase-2 building.
@@ -213,12 +215,17 @@ class _TypeBuilder:
             if isinstance(item, RecordDef):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
-                self._env.register_type(item.name, RecordType(name=item.name, fields={}))
+                self._env.register_type(
+                    item.name, RecordType(name=item.name, fields={}, module_id=self._module_id)
+                )
                 self._record_defs[item.name] = item
             elif isinstance(item, EnumDef):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
-                self._env.register_type(item.name, EnumType(name=item.name, variants={}))
+                self._env.register_type(
+                    item.name,
+                    EnumType(name=item.name, variants={}, module_id=self._module_id),
+                )
                 self._enum_defs[item.name] = item
             elif isinstance(item, TypeAlias):
                 self._register_name(item.name, item.span)
@@ -293,7 +300,9 @@ class _TypeBuilder:
             seen_fields[fd.name] = fd.span
             field_type = self._resolve_field_type(fd, stmt.name)
             fields[fd.name] = field_type
-        self._env.register_type(stmt.name, RecordType(name=stmt.name, fields=fields))
+        self._env.register_type(
+            stmt.name, RecordType(name=stmt.name, fields=fields, module_id=self._module_id)
+        )
 
     def _build_enum(self, stmt: EnumDef) -> None:
         variants: dict[str, dict[str, Type]] = {}
@@ -317,7 +326,9 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd, f"{stmt.name}.{vd.name}")
             variants[vd.name] = vfields
-        self._env.register_type(stmt.name, EnumType(name=stmt.name, variants=variants))
+        self._env.register_type(
+            stmt.name, EnumType(name=stmt.name, variants=variants, module_id=self._module_id)
+        )
 
     def _resolve_field_type(self, fd: FieldDef, owner: str) -> Type:
         """Resolve a field's TypeExpr to a semantic Type."""
@@ -1586,9 +1597,49 @@ class _Checker:
                 f"'{qualifier}' is not a known enum type.",
                 span=span,
             )
-        if resolved.name != enum_type.name:
+        # Compare by full identity (name + module_id) so foo::Color ≠ bar::Color.
+        if resolved != enum_type:
             raise AglTypeError(
                 f"Qualifier '{qualifier}' resolves to enum '{resolved.name}', "
+                f"but the value has enum type '{enum_type.name}'.",
+                span=span,
+            )
+
+    def _check_module_qualified_variant(
+        self,
+        module_qualifier: object,  # Qualifier
+        enum_name: str,
+        enum_type: EnumType,
+        span: SourceSpan,
+    ) -> None:
+        """Validate a module-qualified enum-type qualifier, e.g. ``mylib::Color``."""
+        from agm.agl.syntax.types import NameT, Qualifier
+
+        assert isinstance(module_qualifier, Qualifier)
+        fake_name_t = NameT(
+            name=enum_name,
+            span=span,
+            node_id=-1,
+            module_qualifier=module_qualifier,
+        )
+        try:
+            resolved = self._env.resolve_type_expr(fake_name_t, span=span)
+        except AglTypeError as exc:
+            raise AglTypeError(
+                f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
+                "is not a known enum type.",
+                span=span,
+            ) from exc
+        if not isinstance(resolved, EnumType):
+            raise AglTypeError(
+                f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
+                "is not a known enum type.",
+                span=span,
+            )
+        if resolved != enum_type:
+            raise AglTypeError(
+                f"Qualifier '{'.'.join(module_qualifier.segments)}::{enum_name}' "
+                f"resolves to enum '{resolved.name}', "
                 f"but the value has enum type '{enum_type.name}'.",
                 span=span,
             )
@@ -1647,6 +1698,9 @@ class _Checker:
     # --- constructor ---
 
     def _check_constructor(self, node: Constructor, *, expected: Type | None) -> Type:
+        # Module-qualified constructor: resolve the qualifier through ImportEnv first.
+        if node.module_qualifier is not None:
+            return self._check_module_qualified_constructor(node)
         if node.qualifier is not None:
             enum_type = self._env.resolve_named_type(node.qualifier)
             if not isinstance(enum_type, EnumType):
@@ -1662,11 +1716,76 @@ class _Checker:
             return self._check_constructor_call(node, enum_type, variant=node.name)
         return self._check_unqualified_constructor(node, expected=expected)
 
+    def _check_module_qualified_constructor(self, node: Constructor) -> Type:
+        """Handle ``module_qualifier::EnumType.Variant`` and ``module_qualifier::Variant``.
+
+        Called when ``node.module_qualifier is not None``.  Resolves the enum
+        type (or record) via the module qualifier in the ``TypeEnvironment``'s
+        graph context, then delegates to ``_check_constructor_call``.
+        """
+        from agm.agl.syntax.types import NameT, Qualifier
+
+        assert node.module_qualifier is not None
+        mq: Qualifier = node.module_qualifier
+
+        if node.qualifier is not None:
+            # ``foo::Color.Red`` — resolve ``foo::Color`` as a NameT-like lookup.
+            fake_name_t = NameT(
+                name=node.qualifier,
+                span=node.span,
+                node_id=node.node_id,
+                module_qualifier=mq,
+            )
+            resolved = self._env.resolve_type_expr(fake_name_t, span=node.span)
+            if not isinstance(resolved, EnumType):
+                raise AglTypeError(
+                    f"'{node.qualifier}' in qualifier '{'.'.join(mq.segments)}::{node.qualifier}'"
+                    " is not a known enum type.",
+                    span=node.span,
+                )
+            if node.name not in resolved.variants:
+                raise AglTypeError(
+                    f"Variant '{node.name}' does not exist in enum '{node.qualifier}'.",
+                    span=node.span,
+                )
+            return self._check_constructor_call(node, resolved, variant=node.name)
+
+        # ``foo::RecordOrVariantName`` — try record first, then enum variant.
+        # Resolve ``foo::Name`` as a type expression.
+        fake_name_t = NameT(
+            name=node.name,
+            span=node.span,
+            node_id=node.node_id,
+            module_qualifier=mq,
+        )
+        name_resolved: Type | None
+        try:
+            name_resolved = self._env.resolve_type_expr(fake_name_t, span=node.span)
+        except AglTypeError:
+            name_resolved = None
+
+        if isinstance(name_resolved, RecordType):
+            return self._check_constructor_call(node, name_resolved)
+        if isinstance(name_resolved, EnumType):
+            # enum used as constructor without variant — not valid
+            raise AglTypeError(
+                f"'{node.name}' is an enum type, not a variant. "
+                f"Use '{node.name}.Variant' syntax.",
+                span=node.span,
+            )
+        raise AglTypeError(
+            f"Unknown constructor '{'.'.join(mq.segments)}::{node.name}'.",
+            span=node.span,
+        )
+
     def _check_unqualified_constructor(
         self, node: Constructor, *, expected: Type | None
     ) -> Type:
         name = node.name
         named_type = self._env.get_type(name)
+        if named_type is None:
+            # In graph mode, look up via open imports (for record/enum type names).
+            named_type = self._env.resolve_named_type(name)
         if isinstance(named_type, RecordType):
             return self._check_constructor_call(node, named_type)
         if isinstance(named_type, ExceptionType):
@@ -1682,6 +1801,8 @@ class _Checker:
             t = self._env.get_type(type_name)
             if isinstance(t, EnumType) and name in t.variants:
                 candidates.append((t, name))
+        # Also collect candidates from the graph type table (open imports).
+        candidates.extend(self._env.get_open_imported_enum_candidates(name))
         if isinstance(expected, EnumType) and (expected, name) in candidates:
             return self._check_constructor_call(node, expected, variant=name)
         if len(candidates) == 1:
@@ -1860,7 +1981,13 @@ class _Checker:
                     span=pattern.span,
                 )
             if pattern.qualifier is not None:
-                self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
+                if pattern.module_qualifier is not None:
+                    # Module-qualified variant qualifier, e.g. ``mylib::Color.Red``.
+                    self._check_module_qualified_variant(
+                        pattern.module_qualifier, pattern.qualifier, subj_type, pattern.span
+                    )
+                else:
+                    self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
             variant_name = pattern.name
             if variant_name not in subj_type.variants:
                 raise AglTypeError(

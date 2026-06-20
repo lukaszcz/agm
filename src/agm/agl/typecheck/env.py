@@ -12,9 +12,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.types import (
@@ -26,6 +29,7 @@ from agm.agl.typecheck.types import (
     CastSpec,
     DecimalType,
     DictType,
+    EnumType,
     FunctionType,
     IntType,
     JsonType,
@@ -196,9 +200,33 @@ class TypeEnvironment:
 
     The ``TypeEnvironment`` is constructed and populated by the
     ``_TypeBuilder`` pre-pass; the main ``_Checker`` visitor then queries it.
+
+    Graph mode (M4)
+    ---------------
+    When ``graph_type_table``, ``import_env``, and ``module_id`` are supplied,
+    the environment becomes module-aware:
+
+    - ``graph_type_table`` maps ``(ModuleId, name)`` to the fully-built
+      ``Type`` objects stamped with their owning ``module_id``.  Built once by
+      the graph pre-pass; shared (read-only) across all per-module envs.
+    - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
+      produced by M3.  Used to resolve qualified and open-imported type names.
+    - ``module_id`` is the owning module of the current env.  ``::Name``
+      (empty-segment qualifier) resolves against this module's own types.
+
+    These fields are ``None`` in the single-program path; the resolution logic
+    in ``resolve_type_expr`` and ``_resolve_name_type`` checks for ``None``
+    before entering the module-aware branches, so the existing path is
+    unchanged when these are absent.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
+        import_env: ImportEnv | None = None,
+        module_id: ModuleId = ENTRY_ID,
+    ) -> None:
         # user-declared types (records, enums) — name → Type
         self._types: dict[str, Type] = {}
         # alias targets — name → resolved Type (cycle detection uses seen set)
@@ -207,6 +235,10 @@ class TypeEnvironment:
         self._binding_types: dict[int, Type] = {}
         # Function signatures — name → FunctionSignature (for declared-name calls).
         self._function_signatures: dict[str, FunctionSignature] = {}
+        # Graph-mode context (M4): None in single-program path.
+        self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
+        self._import_env: ImportEnv | None = import_env
+        self._module_id: ModuleId = module_id
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -263,13 +295,24 @@ class TypeEnvironment:
         target (e.g. an alias of ``list[int]``, which has no single name).
         Used for alias-transparent qualifier resolution in qualified
         constructors and ``is`` tests (design §5.4).
+
+        In graph mode, also searches open-imported types when the name is not
+        found locally.
         """
-        if name not in self._types and name not in self._alias_targets:
-            return None
-        try:
-            return self._resolve_name_type(name, span=None, _resolving=frozenset())
-        except AglTypeError:
-            return None
+        if name in self._types or name in self._alias_targets:
+            try:
+                return self._resolve_name_type(name, span=None, _resolving=frozenset())
+            except AglTypeError:
+                return None
+        # Graph mode: look up via open imports.
+        if self._import_env is not None and self._graph_type_table is not None:
+            candidates = self._import_env.unqualified.get(name, frozenset())
+            type_candidates = [
+                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
+            ]
+            if len(type_candidates) == 1:
+                return self._graph_type_table.get((type_candidates[0][0], type_candidates[0][1]))
+        return None
 
     # --- Function signature table ---
 
@@ -362,9 +405,14 @@ class TypeEnvironment:
             val = self.resolve_type_expr(type_expr.value, _resolving=_resolving)
             return DictType(value=val)
         if isinstance(type_expr, NameT):
+            eff_span = span if span is not None else type_expr.span
+            if type_expr.module_qualifier is not None:
+                return self._resolve_qualified_name_type(
+                    type_expr.module_qualifier, type_expr.name, span=eff_span
+                )
             return self._resolve_name_type(
                 type_expr.name,
-                span=span if span is not None else type_expr.span,
+                span=eff_span,
                 _resolving=_resolving,
             )
         raise AglTypeError(
@@ -392,12 +440,96 @@ class TypeEnvironment:
                 span=span,
                 _resolving=_resolving | {name},
             )
-        # Direct named type (record, enum, exception).
+        # Direct named type (record, enum, exception, prelude).
         typ = self._types.get(name)
         if typ is not None:
             return typ
+        # Graph mode: unqualified lookup through open-imported names.
+        if self._import_env is not None and self._graph_type_table is not None:
+            candidates = self._import_env.unqualified.get(name, frozenset())
+            # Filter to candidates that are type names in the graph type table.
+            type_candidates: list[QName] = [
+                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
+            ]
+            if len(type_candidates) == 1:
+                qn = type_candidates[0]
+                return self._graph_type_table[(qn[0], qn[1])]
+            elif len(type_candidates) > 1:
+                # Ambiguous: multiple modules export this type name.
+                sorted_candidates = sorted(
+                    f"{qn[0].dotted()}::{qn[1]}" for qn in type_candidates
+                )
+                raise AglTypeError(
+                    f"Ambiguous type '{name}': it is exported by multiple modules "
+                    f"({', '.join(sorted_candidates)}). "
+                    f"Use a qualified reference to disambiguate.",
+                    span=span,
+                )
         raise AglTypeError(
             f"Unknown type '{name}'.",
+            span=span,
+        )
+
+    def _resolve_qualified_name_type(
+        self,
+        qualifier: object,  # Qualifier from agm.agl.syntax.types
+        name: str,
+        *,
+        span: SourceSpan | None,
+    ) -> Type:
+        """Resolve a module-qualified type reference ``QUALIFIER::Name``.
+
+        Called only in graph mode.  Falls back to the local type namespace
+        (prelude / built-ins) when the qualifier is empty (``::Name``
+        self-reference to the current module) and no graph context exists.
+        """
+        from agm.agl.syntax.types import Qualifier
+
+        assert isinstance(qualifier, Qualifier)
+
+        if self._graph_type_table is None:
+            # Single-module path: module qualifiers have no graph table to consult.
+            # ::Name (empty segments) = current module's own type.
+            if not qualifier.segments:
+                return self._resolve_name_type(name, span=span, _resolving=frozenset())
+            raise AglTypeError(
+                f"Module qualifier '{'.'.join(qualifier.segments)}::' cannot be resolved "
+                "outside of a module graph.",
+                span=span,
+            )
+
+        # ``::Name`` — self-reference to the current module's own type.
+        if not qualifier.segments:
+            key = (self._module_id, name)
+            t = self._graph_type_table.get(key)
+            if t is not None:
+                return t
+            # Fall back to own local types (covers built-ins and prelude).
+            return self._resolve_name_type(name, span=span, _resolving=frozenset())
+
+        # Qualified reference: resolve via ImportEnv.
+        assert self._import_env is not None
+        handle = qualifier.segments
+        handle_map = self._import_env.qualified.get(handle)
+        if handle_map is None:
+            raise AglTypeError(
+                f"Unknown module qualifier '{'.'.join(handle)}::'. "
+                "The module has not been imported or the qualifier is not in scope.",
+                span=span,
+            )
+        qname = handle_map.get(name)
+        if qname is None:
+            raise AglTypeError(
+                f"Type '{name}' is not accessible via qualifier '{'.'.join(handle)}::'. "
+                "It may not be in the imported set S, or may not be exported.",
+                span=span,
+            )
+        t = self._graph_type_table.get((qname[0], qname[1]))
+        if t is not None:
+            return t
+        # Name is in S but isn't a type in the graph table — it might be a function.
+        raise AglTypeError(
+            f"'{'.'.join(handle)}::{name}' does not name a type.",
             span=span,
         )
 
@@ -405,7 +537,54 @@ class TypeEnvironment:
         """Return the set of all registered type names (including built-ins)."""
         return frozenset(self._types) | frozenset(self._alias_targets)
 
-    # --- Seeding support (incremental REPL sessions) ---
+    def get_open_imported_enum_candidates(
+        self, variant_name: str
+    ) -> list[tuple[EnumType, str]]:
+        """Return all open-imported ``EnumType`` values that have *variant_name* as a variant.
+
+        Used by the unqualified constructor checker (graph mode) to find enum
+        types that are open-imported but not locally declared.  Returns a list
+        of ``(EnumType, variant_name)`` pairs, deterministically ordered by
+        ``(module_id, enum_name)``.
+
+        Returns an empty list in single-program mode (no graph table).
+        """
+        if self._import_env is None or self._graph_type_table is None:
+            return []
+        results: list[tuple[EnumType, str]] = []
+        # Iterate over unqualified open-imported names, looking for enum types
+        # whose variants include variant_name.
+        seen: set[tuple[ModuleId, str]] = set()
+        for _exposed_name, qnames in self._import_env.unqualified.items():
+            for qn in qnames:
+                key = (qn[0], qn[1])
+                if key in seen:
+                    continue
+                seen.add(key)
+                t = self._graph_type_table.get(key)
+                if isinstance(t, EnumType) and variant_name in t.variants:
+                    results.append((t, variant_name))
+        # Deterministic order: sort by (module_id segments, enum_name).
+        def _sort_key(pair: tuple[EnumType, str]) -> tuple[tuple[str, ...], str]:
+            return (pair[0].module_id.segments, pair[0].name)
+
+        results.sort(key=_sort_key)
+        return results
+
+    # --- Seeding support ---
+
+    def seed_binding_types_from(self, other: TypeEnvironment) -> None:
+        """Copy binding types (function signatures + node types) from *other*.
+
+        Used in graph mode to seed the current module's env with the binding
+        types of already-checked modules, so cross-module function references
+        (which carry the callee module's ``decl_node_id``) can be resolved.
+
+        Only binding types are copied — types and aliases are NOT merged, since
+        each module maintains its own type namespace.
+        """
+        self._binding_types.update(other._binding_types)
+        self._function_signatures.update(other._function_signatures)
 
     def seed_from(self, other: TypeEnvironment) -> None:
         """Copy *other*'s user-declared types, aliases, and binding types in.

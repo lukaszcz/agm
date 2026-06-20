@@ -470,14 +470,14 @@ def _build_graph_type_table(
     # graph_type_table.  For aliases: register in the per-module env only
     # (no shell in graph_type_table — the resolved type is added in Step C).
     per_module_envs: dict[ModuleId, TypeEnvironment] = {}
-    per_module_builders: dict[ModuleId, _TypeBuilder] = {}
 
     for mid, rmod in resolved_graph.modules.items():
         env = TypeEnvironment(module_id=mid)
-        builder = _TypeBuilder(env, module_id=mid)
-        _collect_shells_only(builder, rmod.resolved.program)
+        # The builder is transient: it only collects shells into ``env`` (which
+        # bootstraps ``graph_type_table`` below).  Body resolution uses the
+        # cross-module builders built later, not this one.
+        _collect_shells_only(_TypeBuilder(env, module_id=mid), rmod.resolved.program)
         per_module_envs[mid] = env
-        per_module_builders[mid] = builder
 
     # Collect record/enum shells into the shared graph type table.
     # Aliases are NOT added here — their entries will be written in Step C

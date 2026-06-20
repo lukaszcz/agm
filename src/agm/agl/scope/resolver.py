@@ -945,7 +945,7 @@ class _Resolver:
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
             qualifiers = sorted(
-                ".".join(qn[0].segments) + "::" + qn[1] for qn in qnames
+                qn[0].dotted() + "::" + qn[1] for qn in qnames
             )
             hint = ", ".join(qualifiers)
             raise AglScopeError(

@@ -22,6 +22,7 @@ from agm.agl.modules.errors import AmbiguousModule, ModuleNotFound, ModulePrefix
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.syntax.spans import SourceSpan
+from agm.core import fs
 
 
 def resolve_module(
@@ -65,7 +66,7 @@ def resolve_module(
     rel = module_id.relpath().replace("/", os.sep)
     for root in roots.sorted_roots():
         candidate = root / rel
-        if candidate.exists():
+        if fs.exists(candidate):
             canon = candidate.resolve()
             canonical_hits[canon] = root
 
@@ -153,14 +154,14 @@ def expand_wildcard(
     for root in roots.sorted_roots():
         # Pattern 1: <root>/<prefix>.agl — the prefix module itself
         direct = root / (prefix_dir + ".agl")
-        if direct.is_file():
+        if fs.is_file(direct):
             _record_file(direct, root)
 
         # Pattern 2: <root>/<prefix>/**/*.agl — the full subtree
         subtree_root = root / prefix_dir
-        if subtree_root.is_dir():
-            for file_path in subtree_root.rglob("*.agl"):
-                if file_path.is_file():
+        if fs.is_dir(subtree_root):
+            for file_path in fs.rglob(subtree_root, "*.agl"):
+                if fs.is_file(file_path):
                     _record_file(file_path, root)
 
     if not hits:

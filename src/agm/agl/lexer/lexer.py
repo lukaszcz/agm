@@ -160,6 +160,15 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
 _ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
 
 
+def _retype(tok: Token, new_type: str) -> Token:
+    """Return a copy of *tok* with a new token type, preserving value and span."""
+    return Token(
+        new_type, str(tok),
+        start_pos=tok.start_pos, line=tok.line, column=tok.column,
+        end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
+    )
+
+
 def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
@@ -186,37 +195,17 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
         if tt == VAR_NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
             if tv == "import" and at_item_start:
-                tok = Token(
-                    IMPORT, tv,
-                    start_pos=tok.start_pos, line=tok.line, column=tok.column,
-                    end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
-                )
+                tok = _retype(tok, IMPORT)
                 in_import_line = True
             elif tv == "private" and at_item_start:
-                tok = Token(
-                    PRIVATE, tv,
-                    start_pos=tok.start_pos, line=tok.line, column=tok.column,
-                    end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
-                )
+                tok = _retype(tok, PRIVATE)
             elif in_import_line:
                 if tv == "qualified":
-                    tok = Token(
-                        QUALIFIED, tv,
-                        start_pos=tok.start_pos, line=tok.line, column=tok.column,
-                        end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
-                    )
+                    tok = _retype(tok, QUALIFIED)
                 elif tv == "using":
-                    tok = Token(
-                        USING, tv,
-                        start_pos=tok.start_pos, line=tok.line, column=tok.column,
-                        end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
-                    )
+                    tok = _retype(tok, USING)
                 elif tv == "hiding":
-                    tok = Token(
-                        HIDING, tv,
-                        start_pos=tok.start_pos, line=tok.line, column=tok.column,
-                        end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
-                    )
+                    tok = _retype(tok, HIDING)
 
         result.append(tok)
         prev_type = tok.type
@@ -355,16 +344,7 @@ def _remap_index_brackets(tokens: list[Token]) -> list[Token]:
             and previous.type in _INDEX_PREDECESSORS
             and previous.end_pos == tok.start_pos
         ):
-            tok = Token(
-                INDEX_LSQB,
-                str(tok),
-                start_pos=tok.start_pos,
-                line=tok.line,
-                column=tok.column,
-                end_line=tok.end_line,
-                end_column=tok.end_column,
-                end_pos=tok.end_pos,
-            )
+            tok = _retype(tok, INDEX_LSQB)
         result.append(tok)
         previous = tok
     return result

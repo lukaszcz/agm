@@ -34,6 +34,7 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
+from agm.core import fs
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +184,103 @@ def _tarjan_sccs(
 # ---------------------------------------------------------------------------
 
 
+def _load_into_graph(
+    entry_loaded: LoadedModule,
+    *,
+    roots: RootSet,
+    canonical_entry_path: Path | None,
+    seed_modules: dict[ModuleId, LoadedModule],
+    start_id: int,
+) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
+    """BFS the transitive module graph from *entry_loaded*.
+
+    Shared core of :func:`load_graph` and :func:`build_repl_graph`.  *seed_modules*
+    are already-loaded library modules reused without re-parsing (empty for a
+    fresh whole-program load; the REPL cache otherwise).  Newly-discovered
+    modules are parsed with node ids seeded from *start_id* so ids stay disjoint
+    across the graph.
+
+    The import-graph adjacency list is captured during traversal: every wildcard
+    is expanded exactly once (feeding both the BFS queue and the adjacency list),
+    so no module is re-resolved when SCCs are computed.
+
+    Returns the assembled :class:`ModuleGraph`, the next free node id, and the
+    dict of modules loaded during this call (those not in *seed_modules*).
+    """
+    modules: dict[ModuleId, LoadedModule] = dict(seed_modules)
+    modules[ENTRY_ID] = entry_loaded
+    newly_loaded: dict[ModuleId, LoadedModule] = {}
+    adj: dict[ModuleId, list[ModuleId]] = {}
+    next_id = start_id
+
+    # BFS queue: (module id, the import decl that discovered it).  We sort each
+    # batch of newly-discovered ids before enqueuing so the traversal order —
+    # and therefore the start_id seed assignments — are stable regardless of
+    # dict/set ordering.
+    queue: deque[tuple[ModuleId, ImportDecl]] = deque()
+
+    def _resolve_imports(source: ModuleId, imports: tuple[ImportDecl, ...]) -> None:
+        """Record *source*'s import targets in ``adj`` and enqueue new ones."""
+        targets: list[ModuleId] = []
+        new_pairs: list[tuple[ModuleId, ImportDecl]] = []
+        for decl in imports:
+            if decl.wildcard:
+                matched = expand_wildcard(tuple(decl.module_path), roots, span=decl.span)
+                target_ids: list[ModuleId] = list(matched)
+            else:
+                target_ids = [ModuleId(segments=tuple(decl.module_path))]
+            for mid in target_ids:
+                targets.append(mid)
+                if mid not in modules:
+                    new_pairs.append((mid, decl))
+        adj[source] = targets
+        new_pairs.sort(key=_pair_sort_key)
+        queue.extend(new_pairs)
+
+    _resolve_imports(ENTRY_ID, entry_loaded.imports)
+
+    while queue:
+        mid, decl = queue.popleft()
+
+        # Already loaded (cycle, shared dep, or cached) — terminate this branch.
+        if mid in modules:
+            continue
+
+        canon_path = resolve_module(mid, roots, span=decl.span)
+
+        # D9: reject any import that resolves to the entry file.
+        if canonical_entry_path is not None and canon_path == canonical_entry_path:
+            raise ImportEntryError(mid, canonical_entry_path, span=decl.span)
+
+        file_source_id = SourceId(label=str(canon_path))
+        program, next_id = parse_program_seeded(
+            fs.read_text(canon_path),
+            start_id=next_id,
+            source=file_source_id,
+        )
+        loaded = LoadedModule(
+            module_id=mid,
+            program=program,
+            path=canon_path,
+            source=file_source_id,
+            imports=_extract_imports(program),
+        )
+        modules[mid] = loaded
+        newly_loaded[mid] = loaded
+        _resolve_imports(mid, loaded.imports)
+
+    # Seeded (cached) modules are reused as-is and were never re-walked above;
+    # record their adjacency so SCCs cover the whole graph.  Their import targets
+    # were all loaded when they were first discovered, so nothing new is queued.
+    for mid, loaded in modules.items():
+        if mid not in adj:
+            _resolve_imports(mid, loaded.imports)
+
+    sccs = _tarjan_sccs(adj)
+    graph = ModuleGraph(modules=modules, entry_id=ENTRY_ID, sccs=sccs)
+    return graph, next_id, newly_loaded
+
+
 def load_graph(
     entry_source: str,
     *,
@@ -225,121 +323,30 @@ def load_graph(
     canonical_entry_path: Path | None = (
         entry_path.resolve() if entry_path is not None else None
     )
+    label = str(canonical_entry_path) if canonical_entry_path is not None else "<command>"
+    entry_source_id = SourceId(label=label)
 
-    # Entry source identity.
-    if canonical_entry_path is not None:
-        entry_source_id = SourceId(label=str(canonical_entry_path))
-    else:
-        entry_source_id = SourceId(label="<command>")
-
-    # Parse the entry.
     entry_program, next_id = parse_program_seeded(
         entry_source,
         start_id=0,
         source=entry_source_id,
     )
-    entry_imports = _extract_imports(entry_program)
-
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
         program=entry_program,
         path=canonical_entry_path,
         source=entry_source_id,
-        imports=entry_imports,
+        imports=_extract_imports(entry_program),
     )
 
-    # Accumulated modules: module_id → LoadedModule.
-    modules: dict[ModuleId, LoadedModule] = {ENTRY_ID: entry_loaded}
-
-    # BFS queue: module ids to visit next.
-    # We use a deterministic BFS by always sorting the discovered ids before
-    # enqueuing; this ensures the traversal order — and therefore the
-    # start_id seed assignments — are stable regardless of dict/set ordering.
-    queue: deque[tuple[ModuleId, ImportDecl]] = deque()
-
-    def _enqueue_imports(imports: tuple[ImportDecl, ...]) -> None:
-        """Resolve and enqueue all new module ids discovered from *imports*."""
-        # Collect new (module_id, decl) pairs in sorted order for determinism.
-        new_pairs: list[tuple[ModuleId, ImportDecl]] = []
-
-        for decl in imports:
-            if decl.wildcard:
-                # Expand foo.* → dict[ModuleId, Path]
-                matched = expand_wildcard(
-                    tuple(decl.module_path), roots, span=decl.span
-                )
-                for mid in matched:
-                    if mid not in modules:
-                        new_pairs.append((mid, decl))
-            else:
-                mid = ModuleId(segments=tuple(decl.module_path))
-                if mid not in modules:
-                    new_pairs.append((mid, decl))
-
-        # Sort for deterministic BFS order.
-        new_pairs.sort(key=_pair_sort_key)
-        queue.extend(new_pairs)
-
-    _enqueue_imports(entry_imports)
-
-    while queue:
-        mid, decl = queue.popleft()
-
-        # Already loaded (cycle or shared dep) — terminate this branch.
-        if mid in modules:
-            continue
-
-        # Resolve the id to its canonical file path.
-        canon_path = resolve_module(mid, roots, span=decl.span)
-
-        # D9: reject any import that resolves to the entry file.
-        if canonical_entry_path is not None and canon_path == canonical_entry_path:
-            raise ImportEntryError(mid, canonical_entry_path, span=decl.span)
-
-        # Read and parse the file.
-        source_text = canon_path.read_text(encoding="utf-8")
-        file_source_id = SourceId(label=str(canon_path))
-        program, next_id = parse_program_seeded(
-            source_text,
-            start_id=next_id,
-            source=file_source_id,
-        )
-        imports = _extract_imports(program)
-
-        loaded = LoadedModule(
-            module_id=mid,
-            program=program,
-            path=canon_path,
-            source=file_source_id,
-            imports=imports,
-        )
-        modules[mid] = loaded
-
-        _enqueue_imports(imports)
-
-    # Build the import-graph adjacency list for SCC computation.
-    # Every import target was resolved and loaded during the BFS above, so all
-    # target ids are guaranteed to be present in ``modules``.
-    adj: dict[ModuleId, list[ModuleId]] = {mid: [] for mid in modules}
-    for mid, loaded in modules.items():
-        for decl in loaded.imports:
-            if decl.wildcard:
-                # Wildcard: re-expand to get the set of resolved ids.
-                # All matched ids are in ``modules`` (loaded during BFS).
-                matched = expand_wildcard(tuple(decl.module_path), roots)
-                for target_id in matched:
-                    adj[mid].append(target_id)
-            else:
-                target_id = ModuleId(segments=tuple(decl.module_path))
-                adj[mid].append(target_id)
-
-    sccs = _tarjan_sccs(adj)
-
-    return ModuleGraph(
-        modules=modules,
-        entry_id=ENTRY_ID,
-        sccs=sccs,
+    graph, _next_id, _newly_loaded = _load_into_graph(
+        entry_loaded,
+        roots=roots,
+        canonical_entry_path=canonical_entry_path,
+        seed_modules={},
+        start_id=next_id,
     )
+    return graph
 
 
 def build_repl_graph(
@@ -380,93 +387,22 @@ def build_repl_graph(
         - A dict of newly-loaded modules (not in *cached*) for promotion.
     """
     canonical_entry_path: Path | None = path.resolve() if path is not None else None
+    label = str(canonical_entry_path) if canonical_entry_path is not None else "<repl>"
+    entry_source_id = SourceId(label=label)
 
-    # Entry source identity.
-    if canonical_entry_path is not None:
-        entry_source_id = SourceId(label=str(canonical_entry_path))
-    else:
-        entry_source_id = SourceId(label="<repl>")
-
-    entry_imports = _extract_imports(program)
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
         program=program,
         path=canonical_entry_path,
         source=entry_source_id,
-        imports=entry_imports,
+        imports=_extract_imports(program),
     )
 
-    # Start with cached modules + entry.
-    modules: dict[ModuleId, LoadedModule] = dict(cached)
-    modules[ENTRY_ID] = entry_loaded
-    newly_loaded: dict[ModuleId, LoadedModule] = {}
-
-    current_next_id = next_start_id
-
-    # BFS queue.
-    queue: deque[tuple[ModuleId, ImportDecl]] = deque()
-
-    def _enqueue_imports_repl(imports: tuple[ImportDecl, ...]) -> None:
-        new_pairs: list[tuple[ModuleId, ImportDecl]] = []
-        for decl in imports:
-            if decl.wildcard:
-                matched = expand_wildcard(tuple(decl.module_path), roots, span=decl.span)
-                for mid in matched:
-                    if mid not in modules:
-                        new_pairs.append((mid, decl))
-            else:
-                mid = ModuleId(segments=tuple(decl.module_path))
-                if mid not in modules:
-                    new_pairs.append((mid, decl))
-        new_pairs.sort(key=_pair_sort_key)
-        queue.extend(new_pairs)
-
-    _enqueue_imports_repl(entry_imports)
-
-    while queue:
-        mid, decl = queue.popleft()
-        if mid in modules:
-            continue
-
-        # D9: reject any import that resolves to the entry file.
-        canon_path = resolve_module(mid, roots, span=decl.span)
-        if canonical_entry_path is not None and canon_path == canonical_entry_path:
-            raise ImportEntryError(mid, canonical_entry_path, span=decl.span)
-
-        source_text = canon_path.read_text(encoding="utf-8")
-        file_source_id = SourceId(label=str(canon_path))
-        lib_program, current_next_id = parse_program_seeded(
-            source_text,
-            start_id=current_next_id,
-            source=file_source_id,
-        )
-        lib_imports = _extract_imports(lib_program)
-
-        loaded = LoadedModule(
-            module_id=mid,
-            program=lib_program,
-            path=canon_path,
-            source=file_source_id,
-            imports=lib_imports,
-        )
-        modules[mid] = loaded
-        newly_loaded[mid] = loaded
-        _enqueue_imports_repl(lib_imports)
-
-    # Build adjacency list for SCC computation.
-    adj: dict[ModuleId, list[ModuleId]] = {mid: [] for mid in modules}
-    for mid, loaded in modules.items():
-        for decl in loaded.imports:
-            if decl.wildcard:
-                matched = expand_wildcard(tuple(decl.module_path), roots)
-                for target_id in matched:
-                    adj[mid].append(target_id)
-            else:
-                target_id = ModuleId(segments=tuple(decl.module_path))
-                adj[mid].append(target_id)
-
-    sccs = _tarjan_sccs(adj)
-
-    graph = ModuleGraph(modules=modules, entry_id=ENTRY_ID, sccs=sccs)
-    return graph, current_next_id, newly_loaded
+    return _load_into_graph(
+        entry_loaded,
+        roots=roots,
+        canonical_entry_path=canonical_entry_path,
+        seed_modules=cached,
+        start_id=next_start_id,
+    )
 

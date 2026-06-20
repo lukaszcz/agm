@@ -124,6 +124,7 @@ class CheckedModule:
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
     type_env: TypeEnvironment
+    source_text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -656,6 +657,7 @@ def _build_graph_func_sig_table(
 def _check_module(
     mid: ModuleId,
     resolved: ResolvedProgram,
+    source_text: str,
     capabilities: HostCapabilities,
     graph_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
@@ -744,6 +746,7 @@ def _check_module(
         function_signatures=cp.function_signatures,
         cast_specs=cp.cast_specs,
         type_env=cp.type_env,
+        source_text=source_text,
     )
 
 
@@ -816,6 +819,7 @@ def check_graph(
         cm = _check_module(
             mid,
             rmod.resolved,
+            rmod.source_text,
             capabilities,
             graph_type_table,
             import_env_map,

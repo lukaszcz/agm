@@ -217,7 +217,7 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     """Merge import module paths into single MODPATH tokens.
 
     Pattern: immediately following an IMPORT token, consume
-    VAR_NAME (DOT VAR_NAME)* into a single MODPATH token whose value
+    NAME (DOT NAME)* into a single MODPATH token whose value
     is the dotted path (e.g. "foo.bar", "utils").
 
     This eliminates the LALR(1) shift/reduce conflict between
@@ -231,14 +231,20 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     n = len(tokens)
     while i < n:
         tok = tokens[i]
-        if tok.type == IMPORT and i + 1 < n and tokens[i + 1].type == VAR_NAME:
+        name_types = (VAR_NAME, TYPE_NAME)
+        if tok.type == IMPORT and i + 1 < n and tokens[i + 1].type in name_types:
             result.append(tok)
             i += 1
-            # Absorb VAR_NAME (DOT VAR_NAME)*
+            # Absorb NAME (DOT NAME)*. Module path segments may begin with
+            # either lowercase or uppercase letters.
             j = i
             seg_parts: list[str] = [str(tokens[j])]
             j += 1
-            while j + 1 < n and tokens[j].type == DOT and tokens[j + 1].type == VAR_NAME:
+            while (
+                j + 1 < n
+                and tokens[j].type == DOT
+                and tokens[j + 1].type in name_types
+            ):
                 seg_parts.append(str(tokens[j + 1]))
                 j += 2
             modpath_value = ".".join(seg_parts)

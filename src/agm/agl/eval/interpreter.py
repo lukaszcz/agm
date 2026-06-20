@@ -113,7 +113,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import ValidationError
     from agm.agl.runtime.trace import TraceStore
-    from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.syntax.spans import SourceId, SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, FunctionSignature, TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph
     from agm.core.process import ProcessCaptureResult
@@ -182,6 +182,7 @@ class Interpreter:
         loop_limit: int,
         strict_json: bool,
         source: str = "",
+        sources: "Mapping[SourceId, str] | None" = None,
         shell_exec_timeout: float | None = None,
         trace: "TraceStore | None" = None,
         max_call_depth: int = 256,
@@ -193,7 +194,13 @@ class Interpreter:
         self._registry = registry
         self._contracts = contracts
         self._type_env = type_env
-        self._source = normalize_newlines(source)
+        self._sources: dict[SourceId, str] = {
+            source_id: normalize_newlines(source_text)
+            for source_id, source_text in (sources or {}).items()
+            if source_text
+        }
+        if source:
+            self._sources[checked.resolved.program.span.source] = normalize_newlines(source)
         self._loop_limit = loop_limit
         self._strict_json = strict_json
         self._shell_exec_timeout = shell_exec_timeout
@@ -1498,9 +1505,10 @@ class Interpreter:
 
     def _source_slice(self, span: "SourceSpan") -> str:
         """Return the normalized-source text covered by *span*."""
-        if not self._source:
+        source = self._sources.get(span.source, "")
+        if not source:
             return ""
-        return self._source[span.start_offset : span.end_offset]
+        return source[span.start_offset : span.end_offset]
 
     def _get_function_signature(self, module_id: ModuleId, name: str) -> FunctionSignature | None:
         """Look up a function signature in the given module's signatures table."""
@@ -1880,13 +1888,20 @@ def _merge_graph_into_checked_program(
         merged_contract_specs.update(cm.contract_specs)
         merged_cast_specs.update(cm.cast_specs)
 
+    from agm.agl.typecheck.env import TypeEnvironment
+
+    merged_type_env = TypeEnvironment()
+    merged_type_env.seed_from(entry_cm.type_env)
+    for cm in checked_graph.modules.values():
+        merged_type_env.copy_binding_types_from(cm.type_env)
+
     return _CP(
         resolved=merged_resolved,
         node_types=merged_node_types,
         contract_specs=merged_contract_specs,
         call_sites=entry_cm.call_sites,
         warnings=entry_cm.warnings,
-        type_env=entry_cm.type_env,
+        type_env=merged_type_env,
         function_signatures=entry_cm.function_signatures,
         cast_specs=merged_cast_specs,
     )
@@ -1985,10 +2000,14 @@ def execute_graph(
         checked=entry_checked,
         registry=registry,
         contracts=contracts,
-        type_env=entry_cm.type_env,
+        type_env=entry_checked.type_env,
         loop_limit=loop_limit,
         strict_json=strict_json,
         source=source,
+        sources={
+            cm.resolved.program.span.source: cm.source_text
+            for cm in checked_graph.modules.values()
+        },
         shell_exec_timeout=shell_exec_timeout,
         trace=trace,
         max_call_depth=max_call_depth,

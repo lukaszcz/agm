@@ -12,9 +12,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.interpreter import execute_graph
 from agm.agl.eval.values import (
+    DecimalValue,
     EnumValue,
     IntValue,
     RecordValue,
@@ -131,6 +135,34 @@ def test_cross_module_simple_call(tmp_path: Path) -> None:
     entry_source = "import lib\nlet result = lib::double(21)\nresult"
     snap = _run_graph(entry_source, {"lib": lib_source}, tmp_path)
     assert snap["result"] == IntValue(42)
+
+
+def test_imported_function_executes_local_bindings_and_assignment(tmp_path: Path) -> None:
+    """Library-local bindings retain their checker-selected runtime coercions."""
+    lib_source = (
+        "def compute(n: int) -> decimal =\n"
+        "  let base: decimal = n\n"
+        "  var total: decimal = base\n"
+        "  total := total + 1\n"
+        "  total"
+    )
+    entry_source = "import lib\nlet result = lib::compute(41)\nresult"
+
+    snap = _run_graph(entry_source, {"lib": lib_source}, tmp_path)
+
+    assert snap["result"] == DecimalValue(42)
+
+
+def test_library_loop_error_uses_library_source_text(tmp_path: Path) -> None:
+    """Runtime exception metadata slices the source identified by the library span."""
+    lib_source = "def spin() -> unit =\n  do[1] ()\n  until false"
+    entry_source = "import lib\nlib::spin()"
+
+    with pytest.raises(AglRaise) as exc_info:
+        _run_graph(entry_source, {"lib": lib_source}, tmp_path)
+
+    assert exc_info.value.exc.type_name == "MaxIterationsExceeded"
+    assert exc_info.value.exc.fields["condition"] == TextValue("false")
 
 
 def test_open_import_call(tmp_path: Path) -> None:
@@ -508,4 +540,3 @@ def test_self_qualifier_shadows_param_in_exec_mode(
     )
     snap = _run_graph(entry_source, {}, tmp_path)
     assert snap["result"] == IntValue(100), f"Expected 100 (top-level x), got {snap['result']}"
-

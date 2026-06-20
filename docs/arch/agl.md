@@ -191,6 +191,13 @@ Agent-value dispatch: `_eval_ask_call` extracts the `AgentValue` from the
 `agent:` named argument (or uses the default agent when absent) and issues the
 call via the host runtime, exactly as the former `AgentCall` node did.
 
+Module-graph execution merges node-id-keyed checker dispatch tables into a
+single interpreter view. Binding types from every checked module are copied
+into a fresh execution environment, so imported function bodies retain their
+implicit coercions without mutating a module's checker state. Each checked
+module also retains its normalized source text; runtime source excerpts select
+that text through the `SourceId` carried by the failing node's span.
+
 ## Incremental REPL session
 
 `agm.agl.repl.session.ReplSession` is a UI-free incremental driver that runs the

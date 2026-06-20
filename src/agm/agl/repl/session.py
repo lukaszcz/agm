@@ -1066,6 +1066,10 @@ class ReplSession:
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             source=text,
+            sources={
+                cm.resolved.program.span.source: cm.source_text
+                for cm in cgraph.modules.values()
+            },
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
             param_values=param_values,

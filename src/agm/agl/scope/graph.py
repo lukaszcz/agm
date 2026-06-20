@@ -75,6 +75,7 @@ class ResolvedModule:
     resolved: ResolvedProgram
     import_env: ImportEnv
     exports: frozenset[str]
+    source_text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +287,7 @@ def resolve_graph(
             resolved=resolved,
             import_env=import_envs[mid],
             exports=exports[mid],
+            source_text=graph.modules[mid].source_text,
         )
         if is_entry:
             entry_agents = dict(resolved.declared_agents)

@@ -369,6 +369,10 @@ class TypeEnvironment:
     def get_binding_type(self, node_id: int) -> Type | None:
         return self._binding_types.get(node_id)
 
+    def copy_binding_types_from(self, other: TypeEnvironment) -> None:
+        """Copy checker-recorded binding types from *other* into this environment."""
+        self._binding_types.update(other._binding_types)
+
     def resolve_binding(self, ref: BindingRef) -> Type | None:
         """Return the declared type for a ``BindingRef``."""
         return self._binding_types.get(ref.decl_node_id)

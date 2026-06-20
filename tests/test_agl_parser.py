@@ -1996,6 +1996,21 @@ class TestImportDecl:
         assert isinstance(decl, syntax.ImportDecl)
         assert decl.module_path == ("utils",)
 
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ("import FooBar", ("FooBar",)),
+            ("import foo.Qux2", ("foo", "Qux2")),
+        ],
+    )
+    def test_import_path_accepts_uppercase_segments(
+        self, source: str, expected: tuple[str, ...]
+    ) -> None:
+        prog = parse(source)
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.module_path == expected
+
     def test_import_wildcard(self) -> None:
         prog = parse("import foo.bar.*")
         (decl,) = items(prog)

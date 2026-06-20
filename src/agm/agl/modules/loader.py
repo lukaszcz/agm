@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agm.agl.syntax as syntax
+from agm.agl._text import normalize_newlines
 from agm.agl.modules.errors import ImportEntryError
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
@@ -63,6 +64,7 @@ class LoadedModule:
     path: Path | None
     source: SourceId
     imports: tuple[ImportDecl, ...]
+    source_text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,8 +255,9 @@ def _load_into_graph(
             raise ImportEntryError(mid, canonical_entry_path, span=decl.span)
 
         file_source_id = SourceId(label=str(canon_path))
+        source_text = normalize_newlines(fs.read_text(canon_path))
         program, next_id = parse_program_seeded(
-            fs.read_text(canon_path),
+            source_text,
             start_id=next_id,
             source=file_source_id,
         )
@@ -264,6 +267,7 @@ def _load_into_graph(
             path=canon_path,
             source=file_source_id,
             imports=_extract_imports(program),
+            source_text=source_text,
         )
         modules[mid] = loaded
         newly_loaded[mid] = loaded
@@ -337,6 +341,7 @@ def load_graph(
         path=canonical_entry_path,
         source=entry_source_id,
         imports=_extract_imports(entry_program),
+        source_text=normalize_newlines(entry_source),
     )
 
     graph, _next_id, _newly_loaded = _load_into_graph(
@@ -396,6 +401,7 @@ def build_repl_graph(
         path=canonical_entry_path,
         source=entry_source_id,
         imports=_extract_imports(program),
+        source_text="",
     )
 
     return _load_into_graph(
@@ -405,4 +411,3 @@ def build_repl_graph(
         seed_modules=cached,
         start_id=next_start_id,
     )
-

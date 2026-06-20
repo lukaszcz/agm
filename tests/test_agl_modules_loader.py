@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+if TYPE_CHECKING:
+    from agm.agl.syntax.nodes import Program
+
 from agm.agl.modules.errors import AmbiguousModule, ImportEntryError, ModuleNotFound
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import ModuleGraph, load_graph
+from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
@@ -589,3 +593,151 @@ class TestErrorsCarrySpan:
             assert exc.span is not None
         else:
             pytest.fail("Expected ImportEntryError")
+
+
+# ---------------------------------------------------------------------------
+# build_repl_graph — REPL incremental graph construction
+# ---------------------------------------------------------------------------
+
+
+def _parse_for_repl(source: str) -> "Program":
+    from agm.agl.parser.parser import parse_program
+
+    return parse_program(source)
+
+
+class TestBuildReplGraph:
+    """Tests for :func:`~agm.agl.modules.loader.build_repl_graph`."""
+
+    def test_simple_program_no_imports(self, tmp_path: Path) -> None:
+        """Graph for a program with no imports has only ENTRY_ID."""
+        program = _parse_for_repl("let x = 1")
+        graph, _next_id, new_modules = build_repl_graph(
+            program, 1000, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        assert ENTRY_ID in graph.modules
+        assert len(new_modules) == 0
+
+    def test_import_loads_lib_module(self, tmp_path: Path) -> None:
+        """A program with import declarations loads the referenced lib module."""
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
+        program = _parse_for_repl("import mylib\nadd(3, 4)")
+        graph, _next_id, new_modules = build_repl_graph(
+            program, 1000, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        mid = ModuleId(segments=("mylib",))
+        assert mid in graph.modules
+        assert mid in new_modules
+
+    def test_cached_module_not_reloaded(self, tmp_path: Path) -> None:
+        """A module in *cached* is reused without re-loading from disk."""
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
+        mid = ModuleId(segments=("mylib",))
+
+        # First build: loads mylib
+        program1 = _parse_for_repl("import mylib\n()")
+        _, next_id, new1 = build_repl_graph(
+            program1, 0, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        assert mid in new1
+
+        # Second build: mylib already cached; should not appear in new_modules
+        cached: dict[ModuleId, LoadedModule] = {mid: new1[mid]}
+        program2 = _parse_for_repl("import mylib\n()")
+        _, _next2, new2 = build_repl_graph(
+            program2, next_id, path=None, cached=cached, roots=_roots(tmp_path)
+        )
+        assert mid not in new2
+
+    def test_path_sets_entry_source_id(self, tmp_path: Path) -> None:
+        """When *path* is given, the entry source ID uses the canonical path label."""
+        entry_file = tmp_path / "entry.agl"
+        entry_file.write_text("let x = 1\n")
+        program = _parse_for_repl("let x = 1")
+        graph, _next_id, _new = build_repl_graph(
+            program, 0, path=entry_file, cached={}, roots=_roots(tmp_path)
+        )
+        entry_loaded = graph.modules[ENTRY_ID]
+        assert entry_loaded.source is not None
+        assert str(entry_file.resolve()) in entry_loaded.source.label
+
+    def test_wildcard_import_expands_modules(self, tmp_path: Path) -> None:
+        """Wildcard imports (``import pkg.*``) load all modules in the package."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "a.agl").write_text("def fa() -> int = 1\n")
+        (pkg / "b.agl").write_text("def fb() -> int = 2\n")
+        program = _parse_for_repl("import pkg.*\n()")
+        graph, _next_id, new_modules = build_repl_graph(
+            program, 0, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        mid_a = ModuleId(segments=("pkg", "a"))
+        mid_b = ModuleId(segments=("pkg", "b"))
+        assert mid_a in graph.modules
+        assert mid_b in graph.modules
+        assert mid_a in new_modules
+        assert mid_b in new_modules
+
+    def test_import_entry_itself_raises(self, tmp_path: Path) -> None:
+        """An import that resolves to the entry file path raises ImportEntryError."""
+        entry_file = tmp_path / "entry.agl"
+        entry_file.write_text("import entry\n()")
+        program = _parse_for_repl("import entry\n()")
+        with pytest.raises(ImportEntryError):
+            build_repl_graph(
+                program, 0, path=entry_file, cached={}, roots=_roots(tmp_path)
+            )
+
+    def test_wildcard_skips_already_cached_modules(self, tmp_path: Path) -> None:
+        """Wildcard expansion skips modules already present in *cached* or *modules*."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "a.agl").write_text("def fa() -> int = 1\n")
+        (pkg / "b.agl").write_text("def fb() -> int = 2\n")
+        mid_a = ModuleId(segments=("pkg", "a"))
+
+        # First build: load pkg.a via explicit import to pre-cache it.
+        program1 = _parse_for_repl("import pkg.a\n()")
+        _, next_id, new1 = build_repl_graph(
+            program1, 0, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        assert mid_a in new1
+
+        # Second build: wildcard pkg.* with pkg.a already cached.
+        # pkg.a should not appear in new_modules (already in cached).
+        cached: dict[ModuleId, LoadedModule] = {mid_a: new1[mid_a]}
+        program2 = _parse_for_repl("import pkg.*\n()")
+        _, _next2, new2 = build_repl_graph(
+            program2, next_id, path=None, cached=cached, roots=_roots(tmp_path)
+        )
+        mid_b = ModuleId(segments=("pkg", "b"))
+        # pkg.a was already cached, not in new_modules
+        assert mid_a not in new2
+        # pkg.b is new
+        assert mid_b in new2
+
+    def test_bfs_dedup_via_two_imports_same_module(self, tmp_path: Path) -> None:
+        """Two import declarations for the same module result in only one load."""
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
+
+        # Syntactically, you can't have two imports of the same module in one
+        # program; instead, simulate via an entry that imports a module both
+        # directly and via a wildcard that expands to include it.
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "shared.agl").write_text("def f() -> int = 1\n")
+        (pkg / "other.agl").write_text("import pkg.shared\ndef g() -> int = f()\n")
+        # entry imports pkg.shared directly AND pkg.* (which includes pkg.shared)
+        # so pkg.shared would be queued twice: once for direct import and once
+        # via wildcard; BFS should handle the dedup via the 'if mid in modules'
+        # check.
+        program = _parse_for_repl("import pkg.shared\nimport pkg.*\n()")
+        graph, _next_id, new_modules = build_repl_graph(
+            program, 0, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        mid_shared = ModuleId(segments=("pkg", "shared"))
+        # pkg.shared should appear exactly once in the graph
+        assert mid_shared in graph.modules

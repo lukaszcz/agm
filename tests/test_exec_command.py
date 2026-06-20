@@ -2936,3 +2936,146 @@ class TestExecModuleRoots:
         out_b = _run_with_response("World")
         assert "World" in out_b
         assert out_a != out_b
+
+
+class TestExecCliModulePaths:
+    """M6: ``-I/--module-path`` roots are threaded into ``assemble_roots``.
+
+    Tests verify that a module placed only in a ``-I DIR`` root is resolvable
+    by ``agm exec`` when that root is passed via ``ExecArgs.module_paths``.
+    """
+
+    def test_module_in_cli_root_is_resolvable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A module placed only in a -I root is importable by the entry program."""
+        lib_root = tmp_path / "mylibs"
+        lib_root.mkdir()
+        (lib_root / "helper.agl").write_text("def answer() -> int = 99\n")
+
+        # entry.agl lives in a separate directory with no sibling modules
+        entry_dir = tmp_path / "prog"
+        entry_dir.mkdir()
+        entry = entry_dir / "main.agl"
+        entry.write_text("import helper\nlet r = answer()\nprint r\n")
+
+        args = ExecArgs(
+            file=str(entry),
+            command=None,
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[str(lib_root)],
+        )
+        exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "99" in captured.out
+
+    def test_multiple_cli_roots_each_resolvable(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Two -I roots each contribute a distinct module, both resolvable."""
+        root_a = tmp_path / "rootA"
+        root_a.mkdir()
+        (root_a / "mod_a.agl").write_text("def va() -> int = 10\n")
+
+        root_b = tmp_path / "rootB"
+        root_b.mkdir()
+        (root_b / "mod_b.agl").write_text("def vb() -> int = 20\n")
+
+        entry_dir = tmp_path / "entry"
+        entry_dir.mkdir()
+        entry = entry_dir / "prog.agl"
+        entry.write_text(
+            "import mod_a\nimport mod_b\nlet r = va() + vb()\nprint r\n"
+        )
+
+        args = ExecArgs(
+            file=str(entry),
+            command=None,
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[str(root_a), str(root_b)],
+        )
+        exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "30" in captured.out
+
+    def test_module_not_found_without_cli_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Without -I, a module in an external root is not found (exit 1)."""
+        lib_root = tmp_path / "mylibs"
+        lib_root.mkdir()
+        (lib_root / "helper.agl").write_text("def answer() -> int = 99\n")
+
+        entry_dir = tmp_path / "prog"
+        entry_dir.mkdir()
+        entry = entry_dir / "main.agl"
+        entry.write_text("import helper\nlet r = answer()\nprint r\n")
+
+        args = ExecArgs(
+            file=str(entry),
+            command=None,
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[],  # no CLI roots
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "helper" in captured.err
+
+    def test_inline_exec_with_cli_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``-c`` inline exec resolves imports from a -I root."""
+        lib_root = tmp_path / "inlinelibs"
+        lib_root.mkdir()
+        (lib_root / "util.agl").write_text("def greet() -> text = \"Hello!\"\n")
+
+        # cwd is irrelevant — helper is not reachable from cwd; only via -I
+        entry_dir = tmp_path / "work"
+        entry_dir.mkdir()
+
+        from agm.config import context as ctx_mod
+
+        original_ctx = ctx_mod.current_config_context()
+
+        class FakeCtx:
+            home = original_ctx.home
+            proj_dir = original_ctx.proj_dir
+            cwd = entry_dir
+
+        monkeypatch.setattr(exec_command, "current_config_context", lambda: FakeCtx())
+
+        args = ExecArgs(
+            file=None,
+            command="import util\nlet r = greet()\nprint r\n",
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+            module_paths=[str(lib_root)],
+        )
+        exec_command.run(args)
+        captured = capsys.readouterr()
+        assert "Hello!" in captured.out

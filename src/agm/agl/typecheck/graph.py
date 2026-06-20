@@ -660,6 +660,7 @@ def _check_module(
     graph_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
     graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType]],
+    entry_seed_env: TypeEnvironment | None = None,
 ) -> CheckedModule:
     """Type-check one module with a module-aware ``TypeEnvironment``.
 
@@ -674,6 +675,8 @@ def _check_module(
       FunctionType)`` for ALL top-level ``FuncDef``s across ALL modules;
       ``node_id``s are globally unique (M2), so seeding the whole table into
       every module's env is safe and collision-free.
+    - ``entry_seed_env``: when given and ``mid`` is the entry module, the session
+      type env is seeded first so that prior REPL bindings are available (M6).
     """
     import_env = import_env_map[mid]
     assert isinstance(import_env, ImportEnv)
@@ -683,6 +686,12 @@ def _check_module(
         import_env=import_env,
         module_id=mid,
     )
+
+    # Seed from the REPL session type env first (for the entry module in M6 REPL
+    # graph mode).  Graph tables override on collision, so the entry's own types
+    # and function signatures always shadow any session binding with the same name.
+    if mid.is_entry and entry_seed_env is not None:
+        env.seed_from(entry_seed_env)
 
     # Seed env with the module's own fully-resolved types so they're
     # accessible by bare name (no qualifier needed within the module).
@@ -746,6 +755,7 @@ def _check_module(
 def check_graph(
     resolved_graph: ResolvedModuleGraph,
     capabilities: HostCapabilities,
+    entry_seed_env: TypeEnvironment | None = None,
 ) -> CheckedModuleGraph:
     """Run the full type-checking pass over a :class:`ResolvedModuleGraph`.
 
@@ -755,6 +765,11 @@ def check_graph(
         Output of :func:`~agm.agl.scope.graph.resolve_graph`.
     capabilities:
         Immutable host capability catalog (agents, codecs, renderers).
+    entry_seed_env:
+        When given, the entry module's ``TypeEnvironment`` is seeded from this
+        environment before the graph type table and function signatures are
+        installed.  Used by the REPL graph mode (M6) to make prior session
+        bindings available in graph-mode entries.
 
     Returns
     -------
@@ -805,6 +820,7 @@ def check_graph(
             graph_type_table,
             import_env_map,
             graph_func_sig_table,
+            entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
         checked_modules[mid] = cm
         all_warnings.extend(cm.warnings)

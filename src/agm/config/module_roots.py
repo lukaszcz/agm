@@ -22,6 +22,7 @@ For ``roots``, entries from *all* layers are accumulated (union).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,10 +38,11 @@ class ModuleRootsConfig:
     ----------
     lib_root:
         The configured global library root as ``(raw_path_str, origin_dir)``,
-        or ``None`` if no config file sets ``[modules] lib_root``.  The caller
-        (``assemble_roots``) is responsible for applying the default
-        ``~/.agm/lib`` when this is ``None``.  Relative *raw_path_str* values
-        must be resolved against *origin_dir*.
+        or ``None`` if no config file sets ``[modules] lib_root``.  Use
+        :func:`resolve_lib_root` to convert this into a resolved ``Path``
+        (applying ``~`` expansion and resolving relative paths against
+        *origin_dir*).  Relative *raw_path_str* values that start with ``~``
+        must be expanded before the is-absolute check.
     extra:
         Additional configured roots as ``(raw_path_str, origin_dir)`` pairs,
         accumulated across all config layers.  Relative paths resolve against
@@ -92,3 +94,30 @@ def load_module_roots(
                     extra.append((item, origin_dir))
 
     return ModuleRootsConfig(lib_root=lib_root, extra=tuple(extra))
+
+
+def resolve_lib_root(mr_config: ModuleRootsConfig) -> Path:
+    """Resolve the ``lib_root`` from config into an absolute ``Path``.
+
+    Expands ``~`` via :func:`os.path.expanduser` before checking whether the
+    path is absolute, so a configured value like ``"~/mylib"`` is treated as
+    absolute (rooted at the user's home directory) rather than relative to the
+    config file's directory.
+
+    Parameters
+    ----------
+    mr_config:
+        The loaded module-roots configuration.
+
+    Returns
+    -------
+    Path
+        Resolved ``lib_root`` path (not yet canonicalized; ``assemble_roots``
+        applies ``expanduser`` + ``resolve`` on its own paths).  When no
+        ``lib_root`` is configured, returns the expanded ``~/.agm/lib`` default.
+    """
+    if mr_config.lib_root is not None:
+        raw_str, origin_dir = mr_config.lib_root
+        raw_path = Path(os.path.expanduser(raw_str))
+        return raw_path if raw_path.is_absolute() else origin_dir / raw_path
+    return Path(os.path.expanduser("~/.agm/lib"))

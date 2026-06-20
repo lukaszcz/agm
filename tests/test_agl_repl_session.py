@@ -1263,6 +1263,349 @@ class TestFuncDef:
 
 
 # ---------------------------------------------------------------------------
+# REPL import support (M6)
+# ---------------------------------------------------------------------------
+
+
+class TestImports:
+    """REPL import declaration support (M6)."""
+
+    def _make_session_with_root(self, root: Path) -> ReplSession:
+        """Create a ReplSession with *root* as the only module search root."""
+        from agm.agl.modules.roots import assemble_roots
+
+        roots = assemble_roots(
+            invocation_root=root,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+        s = ReplSession()
+        s._roots = roots  # inject roots directly
+        return s
+
+    def test_import_basic_function_call(self, tmp_path: Path) -> None:
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        s = self._make_session_with_root(tmp_path)
+        # Open import: functions are in unqualified scope
+        r = s.eval_entry("import mylib\nadd(3, 4)")
+        assert r.ok, r.diagnostics
+        assert r.kind == "expression"
+        assert _int(r.value) == 7
+
+    def test_import_persists_across_entries(self, tmp_path: Path) -> None:
+        lib = tmp_path / 'util.agl'
+        lib.write_text('def double(x: int) -> int = x * 2\n')
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("import util")
+        assert r1.ok, r1.diagnostics
+        # Open import: double() is in unqualified scope in next entry too
+        r2 = s.eval_entry("double(5)")
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 10
+
+    def test_import_using_hiding(self, tmp_path: Path) -> None:
+        lib = tmp_path / 'funcs.agl'
+        lib.write_text(
+            'def square(n: int) -> int = n * n\ndef cube(n: int) -> int = n * n * n\n'
+        )
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import funcs using square\nsquare(4)")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 16
+
+    def test_import_as_qualifier(self, tmp_path: Path) -> None:
+        lib = tmp_path / 'math.agl'
+        lib.write_text('def inc(n: int) -> int = n + 1\n')
+        s = self._make_session_with_root(tmp_path)
+        # 'as' alias creates qualifier, use :: for qualified access
+        r = s.eval_entry("import math as m\nm::inc(9)")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 10
+
+    def test_self_ref_colon_colon(self, tmp_path: Path) -> None:
+        # ::name should resolve to a prior session binding in graph mode
+        s = self._make_session_with_root(tmp_path)
+        s.eval_entry("let x = 42")
+        lib = tmp_path / 'refs.agl'
+        lib.write_text('def noop(n: int) -> int = n\n')
+        r = s.eval_entry("import refs\n::x")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 42
+
+    def test_self_qualifier_in_repl_returns_session_binding(self, tmp_path: Path) -> None:
+        # Regression (Finding 4): ::x in the REPL (graph mode) must return the
+        # session-level binding, not a same-named lexical param.
+        # A dummy lib import is used to trigger graph mode so ::name resolves correctly.
+        lib = tmp_path / 'dummy.agl'
+        lib.write_text('def noop(n: int) -> int = n\n')
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("let x = 100")
+        assert r1.ok, r1.diagnostics
+        # Import forces graph mode; ::x must still resolve to x=100, not the param.
+        r2 = s.eval_entry("import dummy\ndef shadow(x: int) -> int = ::x\nshadow(7)")
+        assert r2.ok, r2.diagnostics
+        from agm.agl.eval.values import IntValue
+        assert r2.value == IntValue(100), f"Expected 100, got {r2.value}"
+
+    def test_import_error_rollback(self, tmp_path: Path) -> None:
+        lib = tmp_path / 'goodlib.agl'
+        lib.write_text('def val() -> int = 99\n')
+        s = self._make_session_with_root(tmp_path)
+        s.eval_entry("let keep = 1")
+        before = _snapshot(s)
+        # Entry imports goodlib but has a type error; module should NOT be cached
+        r = s.eval_entry('import goodlib\nlet bad: int = "oops"')
+        assert not r.ok
+        assert _snapshot(s) == before
+        # goodlib should NOT have been added to loaded lib modules
+        assert not s._loaded_lib_modules
+
+    def test_import_not_found_error(self, tmp_path: Path) -> None:
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import nonexistent\n1")
+        assert not r.ok
+        assert r.diagnostics
+
+    def test_no_roots_set_but_import_attempted(self) -> None:
+        # Without any configured roots, import should fail gracefully
+        s = ReplSession()
+        from agm.agl.modules.roots import RootSet
+
+        s._roots = RootSet(roots=frozenset())
+        r = s.eval_entry("import something\n1")
+        assert not r.ok
+        assert r.diagnostics
+
+    def test_reuse_cached_module(self, tmp_path: Path) -> None:
+        lib = tmp_path / 'cached.agl'
+        lib.write_text('def greet() -> text = "hello"\n')
+        s = self._make_session_with_root(tmp_path)
+        from agm.agl.modules.ids import ModuleId
+
+        cached_id = ModuleId(segments=("cached",))
+        # Import once to cache it (open import: greet() in unqualified scope)
+        r1 = s.eval_entry("import cached\ngreet()")
+        assert r1.ok, r1.diagnostics
+        # Now cached_id should be in loaded_lib_modules
+        assert cached_id in s._loaded_lib_modules
+        # Import again in next entry (uses cached module; greet() still in scope)
+        r2 = s.eval_entry("greet()")
+        assert r2.ok, r2.diagnostics
+
+    def test_reset_clears_imports(self, tmp_path: Path) -> None:
+        lib = tmp_path / 'temp.agl'
+        lib.write_text('def f() -> int = 1\n')
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import temp\nf()")
+        assert r.ok, r.diagnostics
+        s.reset()
+        assert not s._loaded_lib_modules
+        assert not s._lib_module_frames
+        assert not s._lib_module_sigs
+
+    def test_scope_error_in_graph_mode(self, tmp_path: Path) -> None:
+        # Declaring a reserved built-in name as an agent in graph mode
+        # triggers AglScopeError during resolve_graph.
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import mylib\nagent ask")
+        assert not r.ok
+        assert r.diagnostics
+
+    def test_check_only_graph_mode(self, tmp_path: Path) -> None:
+        # check_only=True in graph mode returns a check result without evaluating.
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import mylib\nadd(1, 2)", check_only=True)
+        assert r.ok, r.diagnostics
+        # check_only does not promote session state.
+        assert s.bindings() == []
+
+    def test_agent_decl_in_graph_mode(self, tmp_path: Path) -> None:
+        # Declaring an agent in graph mode installs it in the entry scope.
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def id_fn(n: int) -> int = n\n')
+        s = self._make_session_with_root(tmp_path)
+        s.register_agent("helper", CountingAgent("ok"))
+        r = s.eval_entry("import mylib\nagent helper\nid_fn(7)")
+        assert r.ok, r.diagnostics
+
+    def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
+        # An AglRaise exception during graph-mode evaluation aborts the entry.
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def boom() -> int = raise Abort(message: "boom")\n')
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import mylib\nboom()")
+        assert not r.ok
+        assert r.error is not None
+
+    def test_re_import_replaces_accumulated(self, tmp_path: Path) -> None:
+        # Re-importing the same module with a different using clause in a later
+        # entry replaces the prior accumulated import declaration (dedup).
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text(
+            'def add(a: int, b: int) -> int = a + b\ndef mul(a: int, b: int) -> int = a * b\n'
+        )
+        s = self._make_session_with_root(tmp_path)
+        # Entry 1: open import of mylib (both add and mul in scope).
+        r1 = s.eval_entry("import mylib\nadd(1, 2)")
+        assert r1.ok, r1.diagnostics
+        assert len(s._accumulated_imports) == 1
+        old_decl = s._accumulated_imports[0]
+        # Entry 2: re-import mylib with 'using mul' only.
+        r2 = s.eval_entry("import mylib using mul\nmul(3, 4)")
+        assert r2.ok, r2.diagnostics
+        # The accumulated import list should still have one entry (replaced, not appended).
+        assert len(s._accumulated_imports) == 1
+        assert s._accumulated_imports[0] is not old_decl
+
+    def test_inject_dedup_skips_already_imported(self, tmp_path: Path) -> None:
+        # When the current entry already imports the same module as an accumulated
+        # import, the injection skips it (line 819 and preamble-empty branch).
+        lib = tmp_path / 'util.agl'
+        lib.write_text('def double(x: int) -> int = x * 2\n')
+        s = self._make_session_with_root(tmp_path)
+        # Entry 1: import util (accumulates it).
+        r1 = s.eval_entry("import util\ndouble(2)")
+        assert r1.ok, r1.diagnostics
+        # Entry 2: explicitly import util again; injection should be skipped.
+        r2 = s.eval_entry("import util\ndouble(5)")
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 10
+
+    def test_ensure_roots_lazy_init(self, tmp_path: Path) -> None:
+        # When a ReplSession is created with cwd= but no explicit _roots,
+        # _ensure_roots() builds the root set lazily on first import.
+        lib = tmp_path / 'lazylib.agl'
+        lib.write_text('def val() -> int = 42\n')
+        s = ReplSession(cwd=tmp_path)
+        r = s.eval_entry("import lazylib\nval()")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 42
+        # Roots were assembled lazily.
+        assert s._roots is not None
+
+    def test_contract_error_in_graph_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A ValueError from materialize_contract during graph-mode execution
+        # returns a failed entry with a "Contract error:" diagnostic.
+        import agm.agl.runtime.contract as contract_mod
+
+        def bad_materialize(spec: object, codecs: object) -> object:
+            raise ValueError("bad contract")
+
+        monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        s = self._make_session_with_root(tmp_path)
+        # The ask() built-in produces a contract spec; trigger it in graph mode.
+        s.register_agent("helper", CountingAgent("ok"))
+        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent: helper)')
+        assert not r.ok
+        assert any("Contract error" in d.message for d in r.diagnostics)
+
+
+    def test_program_decl_conflict_in_graph_mode(self, tmp_path: Path) -> None:
+        # _pre_eval_param_check returning non-None in graph mode:
+        # setting a different program name when one is already set.
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("program first\n1")
+        assert r1.ok, r1.diagnostics
+        # Now in graph mode, try to declare a different program name.
+        r2 = s.eval_entry("import mylib\nprogram second\nadd(1, 2)")
+        assert not r2.ok
+        assert "Program name already set" in r2.diagnostics[0].message
+
+    def test_cancellation_in_graph_mode(self, tmp_path: Path) -> None:
+        # AgentCancelled during graph-mode execution aborts the entry.
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def noop(n: int) -> int = n\n')
+        s = self._make_session_with_root(tmp_path)
+        s.register_agent("helper", _CancellingAgent())
+        r = s.eval_entry("import mylib\nagent helper\nnoop(ask(\"hi\", agent: helper))")
+        assert not r.ok
+        assert r.error is None
+        assert r.diagnostics
+
+    def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
+        # Regression (Finding 1): parse error in an imported module must surface
+        # with source_label pointing to the module file, not a bare line-1 diagnostic
+        # with no location information.
+        lib = tmp_path / 'badmod.agl'
+        lib.write_text('def bad = !!!\n')  # syntax error
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import badmod")
+        assert not r.ok
+        assert len(r.diagnostics) >= 1
+        # The diagnostic must carry source_label pointing to the module file.
+        assert r.diagnostics[0].source_label is not None
+        assert "badmod" in r.diagnostics[0].source_label
+
+    def test_module_not_found_surfaces_clean_diagnostic(self, tmp_path: Path) -> None:
+        # Regression (Finding 1): ModuleNotFound must surface as a proper diagnostic
+        # (not a raw exception stringified at line 1 with no module name context).
+        s = self._make_session_with_root(tmp_path)
+        r = s.eval_entry("import nonexistent_module_xyz")
+        assert not r.ok
+        assert len(r.diagnostics) >= 1
+        assert "nonexistent_module_xyz" in r.diagnostics[0].message
+
+    def test_wildcard_and_plain_import_coexist(self, tmp_path: Path) -> None:
+        # Regression (Finding 2): import foo.* in entry1 and import foo in entry2
+        # must BOTH persist. The dedup key must include the wildcard flag so they
+        # don't clobber each other.
+        # Create a submodule foo.a and a top-level module foo.
+        foo_dir = tmp_path / 'foo'
+        foo_dir.mkdir()
+        (foo_dir / 'a.agl').write_text('def val() -> int = 42\n')
+        (tmp_path / 'foo.agl').write_text('def top() -> int = 99\n')
+        s = self._make_session_with_root(tmp_path)
+        # Entry 1: wildcard import of foo.* (imports foo.a, brings val into scope)
+        r1 = s.eval_entry("import foo.*\nval()")
+        assert r1.ok, r1.diagnostics
+        # Entry 2: plain import of foo (brings top() into scope)
+        r2 = s.eval_entry("import foo\ntop()")
+        assert r2.ok, r2.diagnostics
+        # Entry 3: val() from foo.a must still resolve (wildcard import persists)
+        r3 = s.eval_entry("val()")
+        assert r3.ok, r3.diagnostics
+        from agm.agl.eval.values import IntValue
+        assert r3.value == IntValue(42)
+
+    def test_generic_graph_load_error_surfaces_as_diagnostic(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Covers the last-resort ``except Exception`` fallback in
+        # ``_eval_entry_graph_mode``: a generic error from the graph loader
+        # (not an AglSyntaxError or module error) must still surface as a
+        # failed entry with a diagnostic rather than an uncaught exception.
+        import agm.agl.modules.loader as loader_mod
+
+        original_build = loader_mod.build_repl_graph
+
+        def bad_build(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("unexpected loader failure")
+
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def noop(n: int) -> int = n\n')
+        s = self._make_session_with_root(tmp_path)
+        monkeypatch.setattr(loader_mod, "build_repl_graph", bad_build)
+        r = s.eval_entry("import mylib\nnoop(1)")
+        assert not r.ok
+        assert len(r.diagnostics) >= 1
+        assert "unexpected loader failure" in r.diagnostics[0].message
+        monkeypatch.setattr(loader_mod, "build_repl_graph", original_build)
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

@@ -40,9 +40,12 @@ The following words are **always reserved**: the scanner never emits them as
 `VAR_NAME`.
 
 ```
-record enum type input agent config def fn let var do until if else
-case of try catch raise as and or not is in true false null unit
+record enum type param program agent config def fn let var do until if else
+case of try catch raise as as? and or not is in true false null
 ```
+
+**`as?`** is a single reserved keyword/token — the `?` is part of the lexeme.
+There is no whitespace permitted between `as` and `?`.
 
 **Removed from v1:** `pass` and `print` are no longer reserved. `pass`'s
 role is taken by the unit literal `()`. `print` is a contextual built-in

@@ -356,6 +356,17 @@ def complete_path_argument(
         return []
 
 
+def complete_dir_argument(
+    ctx: click.Context, args: list[str], incomplete: str
+) -> list[str]:
+    """Complete directory paths (directories only, for options like ``-I/--module-path``)."""
+    del ctx, args
+    try:
+        return [c for c in _path_candidates(incomplete) if c.endswith("/")]
+    except (Exception, SystemExit):
+        return []
+
+
 def _configured_command_names(
     section: str, *, home: Path, proj_dir: Path | None, cwd: Path
 ) -> set[str]:

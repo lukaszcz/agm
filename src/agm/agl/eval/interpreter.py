@@ -410,6 +410,17 @@ class Interpreter:
         from agm.agl.scope.symbols import BinderKind
 
         ref = self._checked.resolved.resolution.get(expr.node_id)
+        # A module_qualifier (``::name`` or ``MOD::name``) always denotes a module
+        # top-level binding; fetch from the owning module frame, walking up the
+        # parent chain (e.g. to reach promoted REPL session bindings).  This
+        # bypasses the current lexical scope (fn_scope) so ::x is never shadowed
+        # by a same-named function parameter.
+        if ref is not None and expr.module_qualifier is not None:
+            frame = self._module_frames.get(ref.module_id)
+            if frame is not None:  # pragma: no branch
+                binding = frame.lookup(ref.name)
+                if binding is not None:  # pragma: no branch
+                    return binding.value
         if ref is not None and ref.kind in (BinderKind.function_binding, BinderKind.agent_binding):
             frame = self._module_frames.get(ref.module_id)
             if frame is not None:  # pragma: no branch

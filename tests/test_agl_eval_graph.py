@@ -490,3 +490,22 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
     snap = _run_graph(entry_source, {"a": lib_a_source, "b": lib_b_source}, tmp_path)
     assert snap["ra"] == IntValue(11)
     assert snap["rb"] == TextValue("hi")
+
+
+def test_self_qualifier_shadows_param_in_exec_mode(
+    tmp_path: Path,
+) -> None:
+    """Regression (Finding 4): ``::x`` bypasses a same-named param (exec / graph path).
+
+    Bind the result of ``shadow(7)`` to ``result`` so it appears in the snapshot.
+    The program ends with an expression so the typechecker accepts it.
+    """
+    entry_source = (
+        "let x = 100\n"
+        "def shadow(x: int) -> int = ::x\n"
+        "let result = shadow(7)\n"
+        "result"
+    )
+    snap = _run_graph(entry_source, {}, tmp_path)
+    assert snap["result"] == IntValue(100), f"Expected 100 (top-level x), got {snap['result']}"
+

@@ -63,7 +63,7 @@ variable, agent, or function names:
 
 ```text
 record enum type param program agent config def fn let var do until if else
-case of try catch raise as as? and or not is in true false null unit
+case of try catch raise as as? and or not is in true false null
 ```
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the
@@ -234,9 +234,13 @@ in function type annotations (`(int) -> text`), `def` return type annotations
 (`fn(x: int) -> text => …`). `=>` is the **branch/lambda-body arrow** — it
 separates a branch condition or pattern from its body.
 
-`::` is the **typed-call introducer**: `callee::[Type](args)` passes a static
-type argument to a built-in call (e.g. `ask-request::[Review](…)`). It is a
-maximal-munch token distinct from two `:` delimiters.
+`::` serves two distinct roles: as the **module-qualifier separator** (see
+[Module qualifiers](#module-qualifiers) above) and as the **typed-call
+introducer** `callee::[Type](args)` (e.g. `ask-request::[Review](…)`). It is
+a maximal-munch token distinct from two `:` delimiters. The two uses are
+disambiguated by context: a `::` immediately preceded by a name or dotted path
+is the qualifier form; a `::` following a `VAR_NAME` and immediately followed
+by `[` is the typed-call form.
 
 `==` is recognized as a distinct token solely so it can be rejected with
 the targeted error **"Use `=` for equality."** — it is not part of the

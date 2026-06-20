@@ -376,3 +376,89 @@ class TestMultiFileParams:
         result = rt.run_prepared_graph(prepared, param_values={})
         assert result.ok is False
         assert any("n" in d.message for d in result.diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7: wildcard import with using / hiding (Finding 1 surface-syntax fix)
+# ---------------------------------------------------------------------------
+
+
+class TestWildcardImportUsingHiding:
+    """import pkg.* using … / hiding … works end-to-end through real source."""
+
+    def _make_pkg(self, tmp_path: Path) -> Path:
+        """Create a small package with two modules, each exporting two names."""
+        lib_dir = tmp_path / "lib"
+        pkg_dir = lib_dir / "pkg"
+        pkg_dir.mkdir(parents=True)
+        # pkg.math exports: add, mul
+        (pkg_dir / "math.agl").write_text(
+            "def add(a: int, b: int) -> int = a + b\n"
+            "def mul(a: int, b: int) -> int = a * b\n"
+        )
+        # pkg.text exports: upper (faked as concatenation), join
+        (pkg_dir / "text.agl").write_text(
+            'def join(a: text, b: text) -> text = a + " " + b\n'
+            'def greet(name: text) -> text = "Hello, " + name\n'
+        )
+        return lib_dir
+
+    def test_wildcard_using_restricts_names(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """import pkg.* using add brings only 'add' into scope; 'mul' is inaccessible."""
+        lib_dir = self._make_pkg(tmp_path)
+        # Only 'add' from pkg.math should be in scope; 'mul' must NOT be.
+        source = "import pkg.* using add\nlet r = add(3, 4)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[lib_dir])
+        assert result.ok is True
+        captured = capsys.readouterr()
+        assert "7" in captured.out
+
+    def test_wildcard_using_hidden_name_inaccessible(self, tmp_path: Path) -> None:
+        """Names not listed in 'using' are inaccessible even though exported."""
+        lib_dir = self._make_pkg(tmp_path)
+        # 'mul' is exported by pkg.math but not listed in using → scope error
+        source = "import pkg.* using add\nlet r = mul(3, 4)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[lib_dir])
+        assert result.ok is False
+        assert any("mul" in d.message for d in result.diagnostics)
+
+    def test_wildcard_hiding_removes_name(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """import pkg.* hiding mul brings all names except 'mul' into scope."""
+        lib_dir = self._make_pkg(tmp_path)
+        # 'add' should still be in scope; 'mul' should not.
+        source = "import pkg.* hiding mul\nlet r = add(10, 5)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[lib_dir])
+        assert result.ok is True
+        captured = capsys.readouterr()
+        assert "15" in captured.out
+
+    def test_wildcard_hiding_name_inaccessible(self, tmp_path: Path) -> None:
+        """The hidden name is inaccessible after hiding."""
+        lib_dir = self._make_pkg(tmp_path)
+        source = "import pkg.* hiding mul\nlet r = mul(3, 4)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[lib_dir])
+        assert result.ok is False
+        assert any("mul" in d.message for d in result.diagnostics)
+
+    def test_wildcard_using_multi_module_union(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """using selects a name from every matched module that exports it."""
+        lib_dir = self._make_pkg(tmp_path)
+        # 'add' is in pkg.math and 'greet' is in pkg.text; both should be in scope
+        source = (
+            "import pkg.* using add, greet\n"
+            "let n = add(2, 3)\n"
+            'let s = greet("World")\n'
+            "print n\n"
+            "print s\n"
+        )
+        result = _run_graph(source, roots_dirs=[lib_dir])
+        assert result.ok is True
+        captured = capsys.readouterr()
+        assert "5" in captured.out
+        assert "Hello, World" in captured.out

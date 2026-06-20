@@ -129,6 +129,24 @@ class TestCheckParamCollisions:
         errors = check_param_collisions(params)
         assert "7" in errors[0]
 
+    def test_module_path_collision(self) -> None:
+        from agm.cli_support.exec_params import check_param_collisions
+
+        # param module_path → --module_path normalizes to --module-path (reserved)
+        params = (_make_param("module_path"),)
+        errors = check_param_collisions(params)
+        assert len(errors) == 1
+        assert "module_path" in errors[0]
+
+    def test_log_collision(self) -> None:
+        from agm.cli_support.exec_params import check_param_collisions
+
+        # param log → --log collides with reserved --log
+        params = (_make_param("log"),)
+        errors = check_param_collisions(params)
+        assert len(errors) >= 1
+        assert any("log" in e for e in errors)
+
 
 # ---------------------------------------------------------------------------
 # parse_param_tokens

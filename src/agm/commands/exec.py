@@ -39,7 +39,6 @@ Flag notes:
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import TypeVar
@@ -64,7 +63,7 @@ from agm.config.general import (
     params_config_from_merged,
     parse_timeout,
 )
-from agm.config.module_roots import load_module_roots
+from agm.config.module_roots import load_module_roots, resolve_lib_root
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log_from_layers
@@ -124,14 +123,7 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1) from exc
 
     # Resolve the lib_root path.
-    if mr_config.lib_root is not None:
-        raw_lib, origin_lib_dir = mr_config.lib_root
-        raw_lib_path = Path(os.path.expanduser(raw_lib))
-        resolved_lib_root: Path | None = (
-            raw_lib_path if raw_lib_path.is_absolute() else origin_lib_dir / raw_lib_path
-        )
-    else:
-        resolved_lib_root = Path("~/.agm/lib")
+    resolved_lib_root = resolve_lib_root(mr_config)
 
     # The invocation root is the entry file's directory (for file exec) or
     # the cwd (for -c inline exec).
@@ -144,7 +136,7 @@ def run(args: ExecArgs) -> None:
         invocation_root=invocation_root,
         lib_root=resolved_lib_root,
         configured=mr_config.extra,
-        cli=[],
+        cli=args.module_paths,
         cwd=ctx.cwd,
     )
 

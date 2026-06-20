@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.config.module_roots import ModuleRootsConfig, load_module_roots
+from agm.config.module_roots import ModuleRootsConfig, load_module_roots, resolve_lib_root
 
 
 class TestModuleRootsConfigConstruction:
@@ -222,3 +222,42 @@ class TestLoadModuleRootsLayering:
         assert len(cfg.extra) == 1
         raw, _ = cfg.extra[0]
         assert raw == "/real/path"
+
+
+class TestResolveLibRoot:
+    """Tests for resolve_lib_root — ensures expanduser and path resolution are correct."""
+
+    def test_tilde_prefixed_lib_root_is_expanded(self, tmp_path: Path) -> None:
+        """Regression: a ~-prefixed lib_root must use expanduser, not treated as relative."""
+        import os
+
+        origin = tmp_path / "config"
+        cfg = ModuleRootsConfig(lib_root=("~/mylib", origin), extra=())
+        result = resolve_lib_root(cfg)
+        # ~/mylib must expand to an absolute path rooted at the real home dir.
+        expected = Path(os.path.expanduser("~/mylib"))
+        assert result == expected
+        assert result.is_absolute()
+        # Must NOT be treated as a path relative to the origin directory.
+        assert result != origin / "~/mylib"
+
+    def test_absolute_lib_root_returned_as_is(self, tmp_path: Path) -> None:
+        abs_path = tmp_path / "absolute" / "lib"
+        cfg = ModuleRootsConfig(lib_root=(str(abs_path), tmp_path / "config"), extra=())
+        result = resolve_lib_root(cfg)
+        assert result == abs_path
+
+    def test_relative_lib_root_resolved_against_origin(self, tmp_path: Path) -> None:
+        origin = tmp_path / "config"
+        cfg = ModuleRootsConfig(lib_root=("mylib", origin), extra=())
+        result = resolve_lib_root(cfg)
+        assert result == origin / "mylib"
+
+    def test_none_lib_root_returns_default_agm_lib(self) -> None:
+        """When no lib_root is configured, the default ~/.agm/lib path is returned."""
+        import os
+
+        cfg = ModuleRootsConfig(lib_root=None, extra=())
+        result = resolve_lib_root(cfg)
+        assert result == Path(os.path.expanduser("~/.agm/lib"))
+        assert result.is_absolute()

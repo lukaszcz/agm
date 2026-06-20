@@ -32,6 +32,7 @@ from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.cli_support.args import ReplArgs
 from agm.config.context import current_config_context
 from agm.config.general import load_exec_config, load_params_config
+from agm.config.module_roots import load_module_roots, resolve_lib_root
 from agm.core import dry_run
 from agm.core.log import prepare_trace_log_from_layers
 
@@ -83,6 +84,11 @@ def run(args: ReplArgs) -> None:
             program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
         )
 
+    mod_roots_cfg = load_module_roots(
+        home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
+    )
+    lib_root = resolve_lib_root(mod_roots_cfg)
+
     session = ReplSession(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
@@ -90,6 +96,9 @@ def run(args: ReplArgs) -> None:
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,
         params_config_loader=_params_config_loader,
+        cwd=ctx.cwd,
+        lib_root=lib_root,
+        configured_roots=mod_roots_cfg.extra,
     )
 
     history_path = ctx.home / "repl_history"

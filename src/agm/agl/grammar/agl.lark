@@ -604,7 +604,7 @@ pattern_field: VAR_NAME COLON pattern   -> pat_field_full
 
 // import_decl: IMPORT MODPATH QUALIFIED? (as ref_name)? import_clause?
 // Wildcard tail (.*) follows MODPATH as DOT STAR.
-import_decl : IMPORT MODPATH DOT STAR QUALIFIED? import_alias? -> import_decl_wildcard
+import_decl : IMPORT MODPATH DOT STAR QUALIFIED? import_alias? import_clause? -> import_decl_wildcard
             | IMPORT MODPATH QUALIFIED? import_alias? import_clause? -> import_decl_plain
 
 import_alias : "as" ref_name

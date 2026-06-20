@@ -224,6 +224,7 @@ class _Resolver:
         | None = None,
         private_info: dict[tuple[ModuleId, str], bool] | None = None,
         is_entry: bool = True,
+        repl_session_scope: ScopeNode | None = None,
     ) -> None:
         # Graph-mode parameters (None = single-program mode).
         self._module_id: ModuleId = module_id
@@ -238,6 +239,11 @@ class _Resolver:
         )
         # Whether this module is the entry module (graph mode only).
         self._is_entry: bool = is_entry
+        # Optional REPL session scope for ``::name`` self-ref fallback (M6).
+        # When set, ``_lookup_own_root`` falls back to this scope for names not
+        # in the entry's own root scope, allowing ``::name`` to resolve to a
+        # prior session binding.
+        self._repl_session_scope: ScopeNode | None = repl_session_scope
 
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
@@ -1007,9 +1013,16 @@ class _Resolver:
         We look ONLY in the root frame's direct ``bindings`` dict — we do NOT call
         ``lookup()`` (which walks the parent chain and would fall through to a session
         parent scope or find nested shadows first).
+
+        In the REPL graph mode (M6), if *name* is not in the entry's own root scope,
+        we fall back to the session scope (``_repl_session_scope``) so that
+        ``::name`` can resolve to a prior session binding.
         """
         assert self._root_scope is not None, "_lookup_own_root called outside of run()"
-        return self._root_scope.bindings.get(name)
+        ref = self._root_scope.bindings.get(name)
+        if ref is None and self._repl_session_scope is not None:
+            ref = self._repl_session_scope.bindings.get(name)
+        return ref
 
     def _make_cross_module_ref(
         self,

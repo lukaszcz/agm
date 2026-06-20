@@ -2129,6 +2129,63 @@ class TestImportDecl:
         assert decl.module_path == ("foo", "bar")
         assert decl.alias == "A"
 
+    # --- Wildcard import with using/hiding (Finding 1) ---
+
+    def test_import_wildcard_using(self) -> None:
+        """import foo.* using x, y — wildcard + using clause."""
+        prog = parse("import foo.* using x, y")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
+        assert decl.module_path == ("foo",)
+        assert decl.mode == syntax.ImportMode.USING
+        assert {i.name for i in decl.items} == {"x", "y"}
+        assert decl.alias is None
+        assert decl.qualified is False
+
+    def test_import_wildcard_hiding(self) -> None:
+        """import foo.* hiding x — wildcard + hiding clause."""
+        prog = parse("import foo.* hiding x")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
+        assert decl.module_path == ("foo",)
+        assert decl.mode == syntax.ImportMode.HIDING
+        assert len(decl.items) == 1
+        assert decl.items[0].name == "x"
+
+    def test_import_wildcard_using_with_rename(self) -> None:
+        """import foo.* using x as X — wildcard + using item rename."""
+        prog = parse("import foo.* using x as X")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
+        assert decl.mode == syntax.ImportMode.USING
+        assert len(decl.items) == 1
+        assert decl.items[0].name == "x"
+        assert decl.items[0].rename == "X"
+
+    def test_import_wildcard_qualified_using(self) -> None:
+        """import foo.* qualified using x — wildcard + qualified + using."""
+        prog = parse("import foo.* qualified using x")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
+        assert decl.qualified is True
+        assert decl.mode == syntax.ImportMode.USING
+        assert decl.items[0].name == "x"
+
+    def test_import_wildcard_alias_using(self) -> None:
+        """import foo.bar.* as A using x — wildcard + alias + using."""
+        prog = parse("import foo.bar.* as A using x")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
+        assert decl.module_path == ("foo", "bar")
+        assert decl.alias == "A"
+        assert decl.mode == syntax.ImportMode.USING
+        assert decl.items[0].name == "x"
+
 
 # ---------------------------------------------------------------------------
 # Qualified reference tests

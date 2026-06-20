@@ -59,6 +59,7 @@ def Option(
     callback: Callable[[Context, object, OptionValue], object] | None = ...,
     expose_value: bool = ...,
     is_eager: bool = ...,
+    metavar: str | None = ...,
     help: str | None = ...,
     autocompletion: Callable[..., object] | None = ...,
 ) -> OptionValue: ...

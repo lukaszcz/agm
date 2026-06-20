@@ -92,13 +92,17 @@ Static rules, all checked before execution:
 ## `def` — function declarations
 
 ```ebnf
-func_def ::= "def" VAR_NAME "(" params? ")" "->" type_expr "=" expr
+func_def ::= ["private"] "def" VAR_NAME "(" params? ")" "->" type_expr "=" expr
 ```
 
 `def` is a root-only declaration. It introduces an immutable binding of
 function type in the top-level scope. All `def`s at the program root are
 collected in a pre-pass so they are mutually visible — every `def` may call
-every other `def` (and itself) without forward declaration:
+every other `def` (and itself) without forward declaration.
+
+A `def` may be prefixed with `private`, making it invisible to other modules
+(see [Modules](modules.md)). The `private` modifier has no effect on lexical
+scoping within the same module.
 
 ```agl
 def is_even(n: int) -> bool =
@@ -162,9 +166,11 @@ the runtime after CLI/config resolution.
 agent_decl ::= "agent" VAR_NAME ("=" STRING)?
 ```
 
-`agent` declarations are root-only. Each declared name enters the root scope
-as an **immutable binding of type `agent`**. Agent values may be stored in
-bindings, passed to `def` parameters, and held in `list[agent]`:
+`agent` declarations are root-only and **entry-module only** — they are a
+static error inside an imported library module (see [Modules](modules.md)).
+Each declared name enters the root scope as an **immutable binding of type
+`agent`**. Agent values may be stored in bindings, passed to `def` parameters,
+and held in `list[agent]`:
 
 ```agl
 agent reviewer

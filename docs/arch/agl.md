@@ -285,6 +285,30 @@ win, then pragma values, then `[exec]` config. Trace logging is off by default;
 with a clear diagnostic. Config pragmas are an exec/program feature; REPL session
 options come from CLI flags and config files, not source pragmas.
 
+**REPL module import support (M6):** `ReplSession` supports `import` declarations
+at the top of any entry.  When an entry has at least one `ImportDecl` OR there
+are cached library modules from a prior entry, `eval_entry` dispatches to
+`_eval_entry_graph_mode` which runs the full multi-module graph pipeline:
+`build_repl_graph` (builds a `ModuleGraph` from the already-parsed entry program,
+loading only new library modules not in the cache), `resolve_graph`, `check_graph`,
+and `execute_with_frames`.  Library modules loaded on success are cached across
+entries in `_loaded_lib_modules`/`_lib_module_frames`/`_lib_module_sigs`.
+
+**Open-import persistence:** When an entry's `import foo` uses open-import
+semantics (no `qualified` keyword), `foo`'s exported names enter the entry's
+unqualified scope.  To make these names persist across entries, `ReplSession`
+accumulates the `ImportDecl` nodes from each successfully-promoted graph-mode entry
+in `_accumulated_imports`.  On the next graph-mode entry, `_inject_accumulated_imports`
+prepends the accumulated import declarations to the new entry's program before
+building the graph, so prior open-imported names remain in scope.  Re-importing
+the same module in a later entry replaces the earlier accumulated import
+declaration (deduplication by `(module_path, wildcard)`).
+
+**Root set:** Module search roots are assembled lazily on first import use by
+`_ensure_roots` using `assemble_roots`.  The `agm repl` command resolves
+`lib_root` from the `[modules] lib_root` config key (or defaults to `~/.agm/lib`)
+and passes it to `ReplSession(cwd=..., lib_root=..., configured_roots=...)`.
+
 ## Agent declarations and source↔host reconciliation
 
 Named agents must be **declared in source** (`agent NAME [= "runner"]`). The
@@ -570,7 +594,9 @@ produce a graph with only the `ENTRY_ID` module).  It assembles module roots via
 `assemble_roots(invocation_root, lib_root, configured, cli, cwd)` where
 `invocation_root` is the entry file's parent (file exec) or `cwd` (inline `-c`
 exec), and `lib_root` defaults to `Path("~/.agm/lib")` when no config overrides
-it.  The `-I` CLI flag for extra roots is empty in M5b and wired in M6.
+it.  Additional roots are supplied via the repeatable `-I/--module-path DIR`
+CLI flag (resolved relative to the invocation cwd) and the `[modules] roots`
+config key.
 
 The module-roots configuration (`agm.config.module_roots`) reads `[modules]`
 sections from the layered config files and returns a `ModuleRootsConfig` with

@@ -18,7 +18,8 @@ and is always the root of the import graph.
 ## Importing modules
 
 ```ebnf
-import_decl ::= ["qualified"] "import" module_path [".*"]
+import_decl ::= "import" module_path [".*"]
+                    ["qualified"]
                     ["as" NAME]
                     [("using" | "hiding") name_list]
 
@@ -64,6 +65,13 @@ import utils.strings hiding internal_helper
 `using N1, N2` restricts the open import to only the listed names. `hiding N1,
 N2` opens all public names except the listed ones. Both forms still register
 the module handle for qualified access.
+
+The names in `using`/`hiding` identify **top-level declarations** — `def`,
+`record`, `enum`, and `type` aliases. **Enum variants travel with their enum**
+and are not separately listable in `using`/`hiding`. To import an enum type
+named `Color` (and thereby gain access to `Color.Red` etc.), write `using
+Color`. Writing `using Red` — naming only the variant constructor — is a static
+error ("Red is not exported by module …").
 
 #### Name renames in `using`
 
@@ -134,8 +142,7 @@ is registered from the `as` form.
 
 ## Qualified access: `::`
 
-A name may be accessed with an explicit module qualifier, regardless of what
-was imported:
+A name may be accessed with an explicit module qualifier:
 
 ```agl
 import math
@@ -144,8 +151,21 @@ let r = math::sqrt(2.0)
 
 The qualifier is the **handle** under which the module was imported — either
 the full dot-path (the default, e.g. `math` for `import math` or `foo.bar` for
-`import foo.bar`) or its `as` alias. Qualified access to a **private** name is
-a static error even if the name is otherwise known.
+`import foo.bar`) or its `as` alias.
+
+**Qualified access is bounded by the imported set S.** If you restricted the
+import with `using` or `hiding`, the qualifier can only reach the names in S.
+A `using x, y` import means `module::z` is a static error for any name `z`
+not listed in `using`:
+
+```agl
+import calc using add          # S = {add}
+let r = calc::add(1, 2)        # OK — add is in S
+let s = calc::mul(2, 3)        # STATIC ERROR — mul is not in S
+```
+
+Qualified access to a **private** name is a static error even if the name is
+otherwise known.
 
 ### Self-reference: `::name`
 
@@ -192,9 +212,14 @@ errors** in a library module.
 
 ## Cross-module mutual recursion
 
-Functions in different modules may call each other recursively. The scope pass
-collects all public function declarations across the full import graph before
-resolving any function body, so forward references between modules work without
+Cyclic imports between modules are explicitly allowed: two modules may import
+each other. Because modules are declaration-only (they contain no executable
+top-level code), importing a module never executes it, so there is no
+initialization-order issue.
+
+Functions in different modules may call each other recursively. All public
+function declarations across the full import graph are collected before any
+function body is resolved, so forward references between modules work without
 ordering constraints.
 
 ## Example
@@ -222,9 +247,50 @@ let s = square(4)
 
 ## Module search roots
 
-When an AgL program is executed, the runtime resolves module imports by searching
-an unordered set of **search roots** — directories that are scanned for `.agl`
-files matching the module's dot-path. A module whose dot-path resolves to exactly
-one file across all roots is found; zero matching files is a module-not-found
-error; two or more distinct files for the same id is an ambiguity error (no
-silent shadowing, no priority ordering).
+A module's dot-path must resolve to **exactly one** module definition. If no
+module with that dot-path exists, a module-not-found error is raised. If two or
+more distinct definitions exist for the same dot-path, an ambiguity error is
+raised — there is no priority ordering and no silent shadowing.
+
+## Imports in an interactive session
+
+In an interactive session, `import` declarations are supported. An `import`
+declaration may be entered at any time — it is not restricted to a module header.
+Imported modules are loaded on first use and cached for the rest of the session.
+
+```agl
+# First entry
+import utils.strings
+let result = trim("  hello  ")   # works immediately
+
+# Second entry — prior import is still in scope
+let result2 = trim("  world  ")  # still works
+```
+
+**Open imports persist across entries.** When an entry imports a module with an
+open import (`import foo`), the names it brings into scope remain available in
+subsequent entries. Entering a new `import foo` in a later entry replaces the
+earlier one (for example to change `using`/`hiding`/`as` options).
+
+**Qualified imports across entries** also persist: `import foo qualified as F` in
+entry 1 makes `F::name` available in entry 2 and later.
+
+**`::name` self-reference** in the REPL refers to any name declared in the
+accumulated REPL session — including names declared in prior entries. This lets
+you explicitly bypass an open-imported name that shadows an earlier session
+binding:
+
+```agl
+# Suppose an imported module exports 'helper'
+import util   # exposes 'helper' unqualified
+
+def helper() -> int = 42   # declares a session binding named 'helper'
+
+::helper()   # calls the session's own 'helper', not the imported one
+```
+
+**Declaration-only restriction does not apply in the REPL.** Unlike imported
+library modules, the REPL session behaves like the entry module: bare
+expressions, `let`/`var`, `print`, `exec`, and `ask` calls are all valid at
+any point, interleaved freely with `import` declarations and function/type
+definitions.

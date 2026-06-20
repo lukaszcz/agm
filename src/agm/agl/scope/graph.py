@@ -38,7 +38,7 @@ from agm.agl.scope.imports import (
     build_import_env,
 )
 from agm.agl.scope.resolver import _Resolver
-from agm.agl.scope.symbols import BinderKind, ResolvedProgram
+from agm.agl.scope.symbols import BinderKind, ResolvedProgram, ScopeNode
 from agm.agl.syntax.nodes import (
     AgentDecl,
     EnumDef,
@@ -170,6 +170,8 @@ def resolve_graph(
     graph: ModuleGraph,
     *,
     ambient_agents: frozenset[str] = frozenset(),
+    entry_parent_scope: ScopeNode | None = None,
+    entry_repl_session_scope: ScopeNode | None = None,
 ) -> ResolvedModuleGraph:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
 
@@ -180,6 +182,13 @@ def resolve_graph(
     ambient_agents:
         Agent names the host already backs (passed through to the entry
         resolver; non-entry modules never declare agents).
+    entry_parent_scope:
+        When given, the entry module's root scope is parented to this scope
+        so name lookups fall through to session bindings (REPL incremental
+        mode, M6).
+    entry_repl_session_scope:
+        When given, passed to the entry resolver so ``::name`` self-references
+        can fall back to prior session bindings (REPL graph mode, M6).
 
     Returns
     -------
@@ -264,9 +273,11 @@ def resolve_graph(
             decl_info=decl_info,
             private_info=private_info,
             is_entry=is_entry,
+            repl_session_scope=entry_repl_session_scope if is_entry else None,
         )
         resolved = resolver.run(
             loaded.program,
+            parent_scope=entry_parent_scope if is_entry else None,
             ambient_agents=ambient_agents if is_entry else frozenset(),
         )
         all_warnings.extend(resolved.warnings)

@@ -1552,3 +1552,46 @@ class TestExecCommandShellCompleteEdgeCases:
         assert "--runner" in result
         # No param-option items.
         assert "--msg" not in result
+
+
+class TestCompleteDirArgument:
+    """Tests for ``complete_dir_argument`` (used by ``-I/--module-path``)."""
+
+    def test_returns_only_directories(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "mydir").mkdir()
+        (work / "myfile.txt").write_text("hello")
+        monkeypatch.chdir(work)
+        ctx = click.Context(click.Command("test"))
+        result = completion.complete_dir_argument(ctx, [], "my")
+        assert "mydir/" in result
+        assert all(c.endswith("/") for c in result)
+
+    def test_excludes_files(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "somefile.agl").write_text("")
+        (work / "somedir").mkdir()
+        monkeypatch.chdir(work)
+        ctx = click.Context(click.Command("test"))
+        result = completion.complete_dir_argument(ctx, [], "some")
+        assert "somedir/" in result
+        assert "somefile.agl" not in result
+
+    def test_returns_empty_on_exception(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            completion,
+            "_path_candidates",
+            lambda incomplete: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        ctx = click.Context(click.Command("test"))
+        result = completion.complete_dir_argument(ctx, [], "x")
+        assert result == []

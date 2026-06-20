@@ -4002,3 +4002,5 @@ catch JsonParseError as e =>
 result"""
     snap = _run_source(source)
     assert snap["result"] == JsonValue("{bad")
+
+

@@ -7927,6 +7927,32 @@ class TestReplCommand:
         assert "21" in result.stdout
         assert "42" in result.stdout
 
+    def test_repl_with_configured_lib_root(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """A configured [modules] lib_root is resolved and used by the REPL."""
+        home = Path(env["HOME"])
+        agm_home = home / ".agm"
+        agm_home.mkdir(parents=True, exist_ok=True)
+        # Create a lib directory and a module inside it.
+        lib_dir = tmp_path / "mylib"
+        lib_dir.mkdir()
+        (lib_dir / "math.agl").write_text("def double(n: int) -> int = n * 2\n")
+        # Write a config.toml with a lib_root pointing to our lib dir.
+        (agm_home / "config.toml").write_text(
+            f"[modules]\nlib_root = {str(lib_dir)!r}\n"
+        )
+        work = tmp_path / "work"
+        work.mkdir()
+        result = run_agm(
+            ["repl"],
+            env=env,
+            cwd=str(work),
+            input="import math\ndouble(21)\n:quit\n",
+        )
+        assert result.returncode == 0
+        assert "42" in result.stdout
+
 
 class TestReviewCommand:
     """agm review: run a prompt-driven review runner and save its output."""

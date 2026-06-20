@@ -2278,10 +2278,10 @@ def test_cross_module_constructor_call_positional_args_rejected(tmp_path: Path) 
 
 
 def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path) -> None:
-    """Cross-module generic constructor with explicit type args: lib::Box[int](value: 1)."""
+    """Cross-module generic constructor with explicit type args: lib::Box::[int](value: 1)."""
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "import lib qualified\nlib::Box[int](value: 1)",
+        "entry": "import lib qualified\nlib::Box::[int](value: 1)",
     }
     _check_graph(tmp_path, modules)
 
@@ -2299,7 +2299,7 @@ def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path)
     """Coverage: checker.py _check_cross_module_constructor_call — non-generic with type args."""
     modules = {
         "lib": "record Point\n  x: int",
-        "entry": "import lib qualified\nlib::Point[int](x: 1)",
+        "entry": "import lib qualified\nlib::Point::[int](x: 1)",
     }
     with pytest.raises(AglTypeError, match="not a generic type"):
         _check_graph(tmp_path, modules)

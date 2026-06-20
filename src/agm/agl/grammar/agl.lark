@@ -465,12 +465,12 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 //
 // Two forms are supported:
 //
-//   bare:      ``callee::[Type](args)``   — bare NAME callee (e.g. ask-request)
-//   qualified: ``qual_prefix name[Type](args)`` — module-qualified callee
+//   bare:      ``callee::[Type](args)``          — bare NAME callee (e.g. ask-request)
+//   qualified: ``qual_prefix name::[Type](args)`` — module-qualified callee
 //
-// The ``::`` introducer in the bare form is unambiguous because DCOLON never
-// appears in FOLLOW(var_ref).  The qualified form uses MODQUAL (pre-merged by
-// the lexer from ``NAME(DOT NAME)*::``) so it is also conflict-free.
+// Both forms use ``::`` immediately before the type-argument brackets for
+// consistency: the ``::`` is unambiguous because DCOLON never appears in
+// FOLLOW(var_ref) or FOLLOW(qual_var_ref), eliminating any LALR(1) conflict.
 //
 // Square brackets delimit the type argument (not angle brackets) because the
 // AgL lexer treats ``<`` and ``>`` as identifier-continuation characters, so
@@ -480,7 +480,7 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 // ---------------------------------------------------------------------------
 
 typed_call_atom    : name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
-qual_typed_call    : qual_prefix name LSQB type_arg_list RSQB LPAR arg_list? RPAR
+qual_typed_call    : qual_prefix name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
 
 // ---------------------------------------------------------------------------
 // Atom: primary non-operator expressions (transparent)

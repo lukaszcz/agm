@@ -193,21 +193,8 @@ class TestConflictGuard:
             line for line in log_output.splitlines()
             if "Shift/Reduce" in line or "Reduce/Reduce" in line
         ]
-        # One spurious S/R conflict is known and intentional: after ``qual_prefix name``
-        # the parser sees ``LSQB`` and must decide between reducing to ``qual_var_ref``
-        # (wrong) or shifting into ``qual_typed_call`` (correct).  The conflict is
-        # spurious because plain ``LSQB`` never follows an expression in valid AgL —
-        # index access uses ``INDEX_LSQB`` — so the Reduce branch is never taken.
-        # Lark resolves this as Shift, which is always correct.
-        known_conflicts = {
-            "Shift/Reduce conflict for terminal LSQB: (resolving as shift)",
-        }
-        unexpected = [
-            line for line in conflict_lines
-            if not any(k in line for k in known_conflicts)
-        ]
-        assert unexpected == [], (
-            "Unexpected LALR(1) conflicts detected:\n" + "\n".join(unexpected)
+        assert conflict_lines == [], (
+            "LALR(1) conflicts detected:\n" + "\n".join(conflict_lines)
         )
 
 

@@ -7,12 +7,10 @@ public ``tokenize`` helper.  No scanner/layout internals are tested.
 from __future__ import annotations
 
 import pytest
-from lark import Token
 from lark.lexer import LexerState
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer import AglLexer, LexError, lex_tab_warnings, tokenize
-from agm.agl.lexer.lexer import _is_qual_typed_call_bracket
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -363,37 +361,15 @@ class TestIndexBracketRemap:
             ("NAME", "done"),
         ]
 
-    def test_qual_typed_call_lsqb_not_converted_to_index_lsqb(self) -> None:
-        # lib::Box[int](value: 1) — the [ must stay LSQB, not become INDEX_LSQB.
-        tokens = lark_tok("lib::Box[int](value: 1)")
-        types = [t for t, _ in tokens]
-        idx = types.index("NAME")  # find "Box"
-        assert types[idx + 1] == "LSQB"
+    def test_qual_typed_call_lsqb_is_index_lsqb(self) -> None:
+        # lib::Box::[int](value: 1) — the [ after :: stays LSQB (not adjacent to NAME).
+        # lib::Box[0] — the [ adjacent to NAME becomes INDEX_LSQB (index access).
+        typed_call = lark_tok("lib::Box::[int](value: 1)")
+        assert ("LSQB", "[") in typed_call
+        assert ("INDEX_LSQB", "[") not in typed_call
 
-    def test_qual_typed_call_nested_brackets_lsqb_preserved(self) -> None:
-        # lib::Box[list[int]](value: xs) — outer [ stays LSQB; inner [ becomes INDEX_LSQB.
-        # This exercises the depth>1 path in _is_qual_typed_call_bracket.
-        tokens = lark_tok("lib::Box[list[int]](value: xs)")
-        types = [t for t, _ in tokens]
-        box_idx = next(i for i, (t, v) in enumerate(tokens) if t == "NAME" and v == "Box")
-        assert types[box_idx + 1] == "LSQB"  # outer [ preserved
-        list_idx = next(i for i, (t, v) in enumerate(tokens) if t == "NAME" and v == "list")
-        assert types[list_idx + 1] == "INDEX_LSQB"  # inner [ converted
-
-    def test_is_qual_typed_call_bracket_unclosed_returns_false(self) -> None:
-        # Coverage: lexer.py line 368 — for loop exhausted without finding RSQB.
-        # Constructs a token list with no matching ] to reach the return False at end.
-        def tok(type_: str, value: str) -> Token:
-            t: Token = Token(type_, value)
-            return t
-
-        tokens = [
-            tok("MODQUAL", "lib::"),
-            tok("NAME", "Box"),
-            tok("LSQB", "["),    # pos 2 — the bracket being checked
-            tok("NAME", "int"),  # no RSQB follows — loop exhausts
-        ]
-        assert _is_qual_typed_call_bracket(tokens, 2) is False
+        index = lark_tok("lib::xs[0]")
+        assert ("INDEX_LSQB", "[") in index
 
 
 # ---------------------------------------------------------------------------

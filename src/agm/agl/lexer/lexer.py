@@ -335,46 +335,8 @@ def apply_module_passes(tokens: list[Token]) -> list[Token]:
     return _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)))
 
 
-def _is_qual_typed_call_bracket(tokens: list[Token], lsqb_pos: int) -> bool:
-    """Return True when ``tokens[lsqb_pos]`` opens a qualified typed-call bracket.
-
-    A qualified typed call has the form ``MODQUAL NAME [ type_args ] (``.  The
-    ``[`` must stay as ``LSQB`` (not become ``INDEX_LSQB``) so that the
-    grammar rule ``qual_typed_call`` can match it.  We detect the pattern by
-    scanning forward from ``lsqb_pos`` to find the matching ``]`` and checking
-    that the very next token is ``(``.
-
-    The same detection applies to the self-ref form ``DCOLON NAME [``.
-    """
-    # Check the two tokens before the bracket: (MODQUAL | DCOLON) NAME [
-    if lsqb_pos < 2:
-        return False
-    prev2 = tokens[lsqb_pos - 2]
-    prev1 = tokens[lsqb_pos - 1]
-    if prev1.type != "NAME" or prev2.type not in ("MODQUAL", "DCOLON"):
-        return False
-    # Scan for the matching RSQB (brackets may be nested, e.g. list[int]).
-    depth = 1
-    for i in range(lsqb_pos + 1, len(tokens)):
-        t = tokens[i]
-        if t.type in (LSQB, INDEX_LSQB):
-            depth += 1
-        elif t.type == "RSQB":
-            depth -= 1
-            if depth == 0:
-                # Check the token immediately after the closing bracket.
-                next_pos = i + 1
-                return next_pos < len(tokens) and tokens[next_pos].type == "LPAR"
-    return False
-
-
 def _remap_index_brackets(tokens: list[Token]) -> list[Token]:
-    """Turn adjacent expression brackets into INDEX_LSQB for the parser.
-
-    The conversion is suppressed for ``MODQUAL NAME [`` (and ``DCOLON NAME [``)
-    when the matching ``]`` is immediately followed by ``(``, which signals a
-    qualified typed call: ``lib::Point[int](x: 1)`` or ``::Self[T](f: v)``.
-    """
+    """Turn adjacent expression brackets into INDEX_LSQB for the parser."""
     result: list[Token] = []
     previous: Token | None = None
     for i, tok in enumerate(tokens):
@@ -383,7 +345,6 @@ def _remap_index_brackets(tokens: list[Token]) -> list[Token]:
             and previous is not None
             and previous.type in _INDEX_PREDECESSORS
             and previous.end_pos == tok.start_pos
-            and not _is_qual_typed_call_bracket(tokens, i)
         ):
             tok = _retype(tok, INDEX_LSQB)
         result.append(tok)

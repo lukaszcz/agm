@@ -322,14 +322,18 @@ interpreter, not the agent registry). The `agm repl` command builds ONE
 `AgentMode` and passes that same instance to both the wrapper and the console.
 
 The console's `AglPromptLexer` (`agm.agl.repl.console`) highlights by running the
-real lexer; since identifier case is meaningless, it classifies a `NAME` as a
-type/constructor semantically — matching `syntax.BUILTIN_TYPE_NAMES` or the live
-`ReplSession.type_names()` / `constructor_names()` (declared in prior promoted
-entries). A builtin/declared type colours as a type (record names, which are
-both, resolve to type since the lexer-only pass can't disambiguate); a
-constructor-only name (enum variant) gets the distinct constructor style.
-Without a session it still colours keywords, literals, operators, and the
-builtins.
+real lexer; since identifier case is meaningless, it classifies a `NAME`
+semantically rather than by capitalization. A lexical pass over the buffer
+(`_decl_site_styles`) styles declaration sites positionally — the name after
+`record`/`enum`/`type` is a type, an enum variant after `|` is a constructor —
+and collects those names so their references in the same buffer colour too; this
+makes the in-progress declaration colour and disambiguates a type from a
+like-named constructor. Every other `NAME` is classified by name against
+`syntax.BUILTIN_TYPE_NAMES`, the buffer-local names, and the live
+`ReplSession.type_names()` / `constructor_names()`, with a one-token look-ahead
+so a constructor call (`Box(…)` / `Box::[…]`) colours as a constructor while a
+bare/annotation use colours as a type. Without a session it still colours
+keywords, literals, operators, builtins, and the buffer's own declarations.
 
 ## Config pragma pipeline
 

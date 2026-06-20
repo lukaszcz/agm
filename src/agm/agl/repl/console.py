@@ -54,6 +54,8 @@ from agm.agl.syntax import BUILTIN_TYPE_NAMES
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from lark.lexer import Token
+
     from agm.agl.repl.agents import ConfirmDecision
     from agm.agl.repl.session import ReplSession
 
@@ -117,6 +119,13 @@ _OPERATOR_TOKENS: frozenset[str] = frozenset(
         "COMMA", "DOT", "PIPE", "SEMICOLON", "EQ_EQ",
     }
 )
+# Layout tokens carry no styleable text and are transparent to look-ahead.
+_LAYOUT_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
+# Keywords that introduce a type declaration whose following NAME is the type.
+_DECL_TYPE_KEYWORDS: frozenset[str] = frozenset({"record", "enum", "type"})
+# A NAME that names a constructor is rendered as one when its next significant
+# token starts a call/construction: ``Box(…)`` (LPAR) or ``Box::[…](…)`` (DCOLON).
+_CALL_LOOKAHEAD: frozenset[str] = frozenset({"LPAR", "DCOLON"})
 
 
 def _style_class_for(
@@ -124,19 +133,21 @@ def _style_class_for(
     token_text: str,
     type_names: frozenset[str],
     constructor_names: frozenset[str],
+    next_sig_type: str | None,
 ) -> str | None:
-    """Return the style class for an AgL token, or ``None`` for plain text.
+    """Return the style class for a *reference* AgL token, or ``None`` for plain text.
 
-    Identifier capitalization carries no meaning in AgL, so a ``NAME`` is
-    classified semantically against the *session-declared* names (passed in via
-    *type_names* / *constructor_names*):
+    Declaration sites are styled positionally by :func:`_decl_site_styles`; this
+    classifier handles every other token.  Identifier capitalization carries no
+    meaning in AgL, so a ``NAME`` is classified semantically against the builtin
+    and session/buffer-declared names (*type_names* / *constructor_names*):
 
-    - a builtin or declared *type* name renders as a type.  A record name is
-      both a type and a constructor, and a position-free highlighter cannot tell
-      which is meant, so type wins for those shared names;
-    - a name that is *only* a constructor — an enum variant such as ``ok`` /
-      ``err`` — renders as a constructor (a callable data value, distinct from a
-      type);
+    - a known constructor immediately followed by a call/construction opener
+      (``(`` or ``::``) renders as a constructor — this disambiguates a record
+      name (which is *both* a type and a constructor) at a construction site;
+    - otherwise a builtin or declared type name renders as a type;
+    - a name that is *only* a constructor — e.g. an enum variant ``ok`` used as a
+      first-class value — renders as a constructor;
     - any other ``NAME`` is plain.
 
     When no session is available both sets are empty, so only the builtin types
@@ -151,10 +162,12 @@ def _style_class_for(
     if token_type in _OPERATOR_TOKENS:
         return "class:agl.operator"
     if token_type == "NAME":
-        if token_text in BUILTIN_TYPE_NAMES or token_text in type_names:
-            return "class:agl.type"
-        if token_text in constructor_names:
+        known_type = token_text in BUILTIN_TYPE_NAMES or token_text in type_names
+        known_constructor = token_text in constructor_names
+        if known_constructor and (not known_type or next_sig_type in _CALL_LOOKAHEAD):
             return "class:agl.constructor"
+        if known_type:
+            return "class:agl.type"
         return "class:agl.name"
     return None
 
@@ -254,27 +267,112 @@ def _styled_spans(
 ) -> list[tuple[int, int, str]]:
     """Return ``(start, end, style)`` offsets for the styleable tokens in *text*.
 
+    Declaration sites (the type/constructor name in a ``record``/``enum``/``type``
+    header, and enum variant names) are styled positionally so a type and its
+    constructor are coloured correctly even when they share a name and even while
+    the declaration is still being typed; those names are also folded into the
+    type/constructor sets so their *references* in the same buffer colour too.
+    Every other token is classified by :func:`_style_class_for`.
+
     Synthetic zero-width tokens (INDENT/DEDENT/NEWLINE) and unstyled token types
-    are skipped.  A NAME's style depends on its text (builtin/declared type or
-    constructor), so the token's source slice is passed to the classifier.  A
-    lexer error on a half-typed entry yields no spans (plain text), never a raise.
+    are skipped.  A lexer error on a half-typed entry yields no spans (plain
+    text), never a raise.
     """
-    spans: list[tuple[int, int, str]] = []
     try:
-        for token in tokenize(text):
-            start = token.start_pos
-            end = token.end_pos
-            if start is None or end is None or end <= start:
-                continue
-            style = _style_class_for(
-                token.type, text[start:end], type_names, constructor_names
-            )
-            if style is None:
-                continue
-            spans.append((start, end, style))
+        tokens = list(tokenize(text))
     except Exception:
         return []
+
+    forced, local_types, local_constructors = _decl_site_styles(text, tokens)
+    types = type_names | local_types
+    constructors = constructor_names | local_constructors
+    next_sig = _next_significant_types(tokens)
+
+    spans: list[tuple[int, int, str]] = []
+    for index, token in enumerate(tokens):
+        start = token.start_pos
+        end = token.end_pos
+        if start is None or end is None or end <= start:
+            continue
+        style = forced.get(index)
+        if style is None:
+            style = _style_class_for(
+                token.type, text[start:end], types, constructors, next_sig[index]
+            )
+        if style is None:
+            continue
+        spans.append((start, end, style))
     return spans
+
+
+def _next_significant_types(tokens: "list[Token]") -> list[str | None]:
+    """For each token, the type of the next non-layout token (``None`` if last).
+
+    Drives the call-site look-ahead in :func:`_style_class_for`; layout tokens
+    (NEWLINE/INDENT/DEDENT) are transparent so ``Box`` and ``(`` are adjacent
+    even across the synthetic layout stream.
+    """
+    result: list[str | None] = [None] * len(tokens)
+    nxt: str | None = None
+    for index in range(len(tokens) - 1, -1, -1):
+        result[index] = nxt
+        if tokens[index].type not in _LAYOUT_TOKENS:
+            nxt = tokens[index].type
+    return result
+
+
+def _decl_site_styles(
+    text: str, tokens: "list[Token]"
+) -> tuple[dict[int, str], set[str], set[str]]:
+    """Classify declaration-site names positionally.
+
+    Returns ``(forced, type_names, constructor_names)`` where *forced* maps a
+    token index to the style class to apply verbatim (overriding the name-set
+    classifier), and the two sets collect the buffer's locally-declared type and
+    constructor names so their references colour too.
+
+    Rules: the NAME after ``record`` is a type and a constructor; after ``enum``
+    a type (and opens the variant context); after ``type`` a type alias.  Inside
+    the variant context, a NAME directly after ``|`` is a constructor.  The flat
+    enum variant list carries no keywords, so any keyword closes the context —
+    ensuring the ``|`` of a later ``case``/``if`` is never mistaken for a variant.
+    """
+    forced: dict[int, str] = {}
+    types: set[str] = set()
+    constructors: set[str] = set()
+    expect: str | None = None
+    in_enum_variants = False
+    prev_sig: str | None = None
+
+    for index, token in enumerate(tokens):
+        ttype = token.type
+        if ttype in _LAYOUT_TOKENS:
+            continue
+        if ttype == "NAME":
+            name = text[token.start_pos : token.end_pos]
+            if expect == "record":
+                forced[index] = "class:agl.type"
+                types.add(name)
+                constructors.add(name)
+            elif expect == "enum":
+                forced[index] = "class:agl.type"
+                types.add(name)
+                in_enum_variants = True
+            elif expect == "type":
+                forced[index] = "class:agl.type"
+                types.add(name)
+            elif in_enum_variants and prev_sig == "PIPE":
+                forced[index] = "class:agl.constructor"
+                constructors.add(name)
+            expect = None
+        elif ttype in KEYWORDS:
+            expect = ttype if ttype in _DECL_TYPE_KEYWORDS else None
+            in_enum_variants = False
+        else:
+            expect = None
+        prev_sig = ttype
+
+    return forced, types, constructors
 
 
 def _line_start_offsets(text: str) -> list[int]:

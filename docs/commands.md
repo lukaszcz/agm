@@ -573,9 +573,12 @@ Entry editing:
 - Syntax highlighting and tab-completion are driven from the live session.
   Highlighting colours keywords, string/number literals, operators, the builtin
   types (`text`, `int`, `decimal`, `bool`, `json`, `list`, `dict`, `unit`), and
-  types or constructors declared earlier in the session. Enum variants (pure
-  constructors) get a distinct constructor colour; a record name, which is both
-  a type and a constructor, colours as a type. Completion offers AgL keywords,
+  the types and constructors declared in the session or in the line being typed.
+  Declaration sites colour by position (the name after `record`/`enum`/`type` is
+  a type; an enum variant after `|` is a constructor), so a type and a
+  like-named constructor are distinguished even while you type the declaration.
+  At a use site, a constructor call (`Box(…)`, `ok::[…](…)`) colours as a
+  constructor and a type annotation as a type. Completion offers AgL keywords,
   current binding names, available agent names, and meta-command names.
 - Command history persists under `~/.agm/repl_history`.
 

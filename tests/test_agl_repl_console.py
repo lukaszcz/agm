@@ -365,10 +365,10 @@ class TestLexer:
         assert self._style_of(fragments, "foo") == "class:agl.name"
         assert self._style_of(fragments, "bar") == "class:agl.name"
 
-    def test_record_name_is_styled_as_type(self) -> None:
-        # A record name doubles as a type and a constructor; a position-free
-        # highlighter can't disambiguate, so it colours as a type in both the
-        # annotation and the construction call.
+    def test_record_name_colours_by_position(self) -> None:
+        # A record name doubles as a type and a constructor. In a type annotation
+        # it colours as a type; at a construction call (followed by `(`) it
+        # colours as a constructor.
         session = ReplSession()
         result = session.eval_entry("record Pt\n  x: int\n  y: int")
         assert result.ok
@@ -378,7 +378,7 @@ class TestLexer:
         assert self._style_of(annotation, "Pt") == "class:agl.type"
 
         construction = lexer.lex_document(Document("Pt(x: 1, y: 2)"))(0)
-        assert self._style_of(construction, "Pt") == "class:agl.type"
+        assert self._style_of(construction, "Pt") == "class:agl.constructor"
 
     def test_enum_variant_is_styled_as_constructor(self) -> None:
         # An enum variant is a pure constructor (never a type name), so it gets
@@ -391,6 +391,45 @@ class TestLexer:
         usage = lexer.lex_document(Document("let r: Outcome = ok(value: 1)"))(0)
         assert self._style_of(usage, "Outcome") == "class:agl.type"
         assert self._style_of(usage, "ok") == "class:agl.constructor"
+
+    def test_explicit_type_arg_constructor_is_styled(self) -> None:
+        # A constructor with an explicit type-argument override (`::[…]`) still
+        # colours as a constructor (DCOLON look-ahead).
+        session = ReplSession()
+        assert session.eval_entry("enum Box\n  | wrap(value: int)").ok
+        lexer = AglPromptLexer(session)
+        usage = lexer.lex_document(Document("wrap::[int](value: 1)"))(0)
+        assert self._style_of(usage, "wrap") == "class:agl.constructor"
+
+    def test_type_alias_name_is_styled_as_type(self) -> None:
+        # The aliased name in a `type` declaration colours as a type (and so do
+        # its later references); no session needed.
+        fragments = AglPromptLexer().lex_document(Document("type Id = int"))(0)
+        assert self._style_of(fragments, "Id") == "class:agl.type"
+
+    def test_in_progress_record_declaration_is_styled(self) -> None:
+        # The name in a record header colours immediately, before the entry is
+        # ever submitted (no session needed): positional declaration-site rule.
+        fragments = AglPromptLexer().lex_document(Document("record Box"))(0)
+        assert self._style_of(fragments, "Box") == "class:agl.type"
+
+    def test_in_progress_enum_shares_name_with_constructor(self) -> None:
+        # The reported case: `enum A | A` while typing. The header `A` is the
+        # type, the variant `A` (after `|`) is the constructor — both coloured
+        # distinctly even though they share a name and nothing is in the session.
+        fragments = AglPromptLexer().lex_document(Document("enum A | A"))(0)
+        type_a, ctor_a = (f for f in fragments if f[1] == "A")
+        assert type_a[0] == "class:agl.type"
+        assert ctor_a[0] == "class:agl.constructor"
+
+    def test_later_pipe_is_not_a_variant(self) -> None:
+        # A `|` in a `case` after an enum on the same entry must not be read as a
+        # variant introducer: `y` is a binding pattern, not a constructor.
+        text = "enum A | A\ncase A(x: 1) of | y => y"
+        lexer = AglPromptLexer()
+        getter = lexer.lex_document(Document(text))
+        second_line = getter(1)
+        assert self._style_of(second_line, "y") == "class:agl.name"
 
     def test_declared_type_not_styled_without_session(self) -> None:
         # The same name is plain when no session backs the lexer (a user-defined

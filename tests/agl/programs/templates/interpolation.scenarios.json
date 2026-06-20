@@ -13,7 +13,7 @@
           {
             "agent": "ask",
             "call": 2,
-            "contains": ["data: ", "\"kind\"", "\"demo\"", "\"tags\"", "\"alpha\"", "\"beta\""]
+            "contains": ["data: {\"kind\": \"demo\", \"tags\": [\"alpha\", \"beta\"]}"]
           },
           {
             "agent": "ask",
@@ -21,11 +21,8 @@
             "contains": [
               "Report for ",
               "Ada",
-              "\"name\"",
-              "\"bolt\"",
-              "\"qty\"",
-              "\"$case\"",
-              "\"One\""
+              "Item(name: \"bolt\", qty: 7)",
+              "Pick.One(item: Item(name: \"bolt\", qty: 7))"
             ]
           }
         ]

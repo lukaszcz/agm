@@ -65,10 +65,11 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
 Type AST nodes in `agm.agl.syntax.types` include `UnitT`, `AgentT`, and
 `FuncT(params, result)` for the new v2 types. `FuncT` is purely positional;
 named/default argument information lives only in `FuncDef`/`Param`, not in the
-value type. Generics (rank-1 / prenex parametric polymorphism) add `AppliedT(name,
-args)` — a type application `Name[args]` for user generic types and parameterized
-aliases — and a `type_params: tuple[str, ...]` field on `FuncDef`/`RecordDef`/
-`EnumDef`/`TypeAlias`. `Call.type_args` carries explicit `callee::[T](args)` type
+value type. Generics (rank-1 / prenex parametric polymorphism) add
+`AppliedT(name, args, module_qualifier)` — an optionally qualified type
+application for user generic types and parameterized aliases — and a
+`type_params: tuple[str, ...]` field on `FuncDef`/`RecordDef`/`EnumDef`/
+`TypeAlias`. `Call.type_args` carries explicit postfix `callee::[T](args)` type
 arguments; it is static-only and never evaluated (erased at runtime). The former
 expression-level `Constructor` node is gone: constructors are now ordinary
 `VarRef`/`Call`/`FieldAccess` expressions resolved via scope side tables.
@@ -640,6 +641,10 @@ on this order.
 - An unqualified `Name` in graph mode searches `import_env.unqualified`; if exactly
   one module exports that type name, it is resolved; multiple exports is an ambiguity
   error.
+- Applied generic types use the same qualified/open-import lookup, backed by the
+  graph generic-definition table. That table is also supplied to the whole-graph
+  function-signature prepass so imported applications resolve in parameter and
+  return annotations.
 
 **Outputs.** `CheckedModuleGraph` holds a `dict[ModuleId, CheckedModule]`, the
 shared `graph_type_table`, the `entry_id`, and aggregated warnings.  Each

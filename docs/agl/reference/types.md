@@ -325,6 +325,16 @@ open (unqualified) import also brings the type name into unqualified scope,
 so `Point` (without a qualifier) resolves to `mylib::Point` if `mylib` is
 open-imported and no other open import clashes.
 
+Generic imported types retain the same qualification rules. Apply type
+arguments after the complete qualified name:
+
+```agl
+import mylib
+
+let p1: Box[int] = Box(value: 1)
+let p2: mylib::Box[int] = mylib::Box(value: 2)
+```
+
 ### Self-reference: `::TypeName`
 
 Inside a module, `::TypeName` refers to the **current module's own** type

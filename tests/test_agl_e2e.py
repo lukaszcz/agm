@@ -106,7 +106,19 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
     for name, agent in agents.items():
         if name != "ask":
             runtime.register_agent(name, agent)
-    result = runtime.run(source, param_values=scenario.get("params", {}))
+    module_roots = scenario.get("module_roots", [])
+    if module_roots:
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(
+            roots=frozenset((AGL_DIR / str(root)).resolve() for root in module_roots)
+        )
+        prepared = WorkflowRuntime.prepare_program(source, entry_path=None, roots=roots)
+        result = runtime.run_prepared_graph(
+            prepared, param_values=scenario.get("params", {})
+        )
+    else:
+        result = runtime.run(source, param_values=scenario.get("params", {}))
     return result, agents
 
 

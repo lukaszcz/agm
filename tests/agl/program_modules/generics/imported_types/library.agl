@@ -1,0 +1,6 @@
+record Box[T]
+  value: T
+
+enum Option[T]
+  | none
+  | some(value: T)

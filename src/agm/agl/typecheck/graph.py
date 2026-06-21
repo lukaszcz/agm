@@ -588,6 +588,7 @@ def _build_graph_type_table(
 def _build_graph_func_sig_table(
     resolved_graph: ResolvedModuleGraph,
     graph_type_table: dict[tuple[ModuleId, str], Type],
+    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
 ) -> dict[int, tuple[str, FunctionSignature, FunctionType]]:
     """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
 
@@ -631,6 +632,7 @@ def _build_graph_func_sig_table(
         # types so bare-name local type refs in param annotations resolve.
         env = TypeEnvironment(
             graph_type_table=graph_type_table,
+            graph_generic_table=graph_generic_table,
             import_env=import_env,
             module_id=mid,
         )
@@ -830,7 +832,9 @@ def check_graph(
     # module using the graph_type_table (so cross-module type refs in annotations
     # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
     # (globally unique per M2).
-    graph_func_sig_table = _build_graph_func_sig_table(resolved_graph, graph_type_table)
+    graph_func_sig_table = _build_graph_func_sig_table(
+        resolved_graph, graph_type_table, graph_generic_table
+    )
 
     # Collect import envs for per-module checking.
     import_env_map: dict[ModuleId, object] = {

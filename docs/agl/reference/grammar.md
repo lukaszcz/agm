@@ -111,6 +111,7 @@ type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
             | NAME
             | NAME "[" type_expr ("," type_expr)* "]"   (* applied type *)
+            | qual_prefix NAME "[" type_expr ("," type_expr)* "]"
             | qual_prefix NAME         (* module-qualified type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
@@ -245,9 +246,8 @@ juxt_arg       ::= atom_no_call        (* excludes "("-led forms and calls *)
 postfix        ::= postfix "." NAME                (* field access OR variant qualification *)
                | postfix "(" arg_list? ")"         (* call with parentheses *)
                | postfix "[" expr "]"              (* adjacent bracket only *)
+               | postfix "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
                | atom
-
-typed_call     ::= NAME "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
 
 qual_prefix    ::= NAME ("." NAME)* "::"   (* dotted module path followed by :: *)
                | "::"                      (* self-reference: current module *)
@@ -258,7 +258,6 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | dict_literal
                | NAME                              (* variable / constructor reference *)
                | qual_prefix NAME                  (* module-qualified ref *)
-               | typed_call                        (* e.g. id::[int](5), some::[int](value: 1) *)
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | lambda_expr
@@ -278,9 +277,10 @@ raise_expr ::= "raise" expr
 
 A bare `NAME` atom is resolved by scope and position: it may name a variable,
 an agent, a record constructor, an enum variant, or a generic `def`/constructor
-used as a first-class value. The `typed_call` form carries explicit type
+used as a first-class value. The typed postfix form carries explicit type
 arguments to a generic `def` or constructor (`id::[int](5)`,
-`some::[int](value: 1)`, `apply::[int, int](…)`); see [Generics](generics.md).
+`some::[int](value: 1)`, `Option.some::[int](value: 1)`,
+`apply::[int, int](…)`); see [Generics](generics.md).
 A `postfix "." NAME` is either a field access or a variant qualification,
 disambiguated by the resolved type of the left operand.
 

@@ -419,11 +419,11 @@ because there is no response to parse.
 
 ### Typed-call syntax
 
-`callee::[Type](args)` is a general typed-call form. The `::` introducer is
-unambiguous (it is not a valid continuation of any expression), and the type
-argument is delimited by square brackets because AgL identifiers may contain
-`<` and `>`, so `Review>` would otherwise scan as one token. Only a bare name
-callee is admitted at the atom level.
+`callee::[Type](args)` is a general typed-call form. The typed suffix follows a
+postfix callee, so qualified constructors such as `Option.some::[int](value: 1)`
+are valid as well. The type argument is delimited by square brackets because
+AgL identifiers may contain `<` and `>`, so `Review>` would otherwise scan as
+one token.
 
 ### Arguments
 

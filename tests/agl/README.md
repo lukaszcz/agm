@@ -38,6 +38,7 @@ Layout:
   "scenarios": [
     {
       "name": "snake_case_scenario_id",
+      "module_roots": ["program_modules/example"],
       "params": {"spec": "verbatim text", "rounds": 3},
       "agents": {
         "reviewer": ["first response", "second response"],
@@ -75,6 +76,8 @@ Field notes:
   `default_agent`, since `ask` cannot be registered by name).
 - `runtime` — optional `WorkflowRuntime` constructor overrides
   (`default_loop_limit`, `default_strict_json`).
+- `module_roots` — optional paths relative to `tests/agl/`. When present, the
+  program runs through the multi-file module graph with these library roots.
 - `expect.calls` — exact number of calls per listed agent (retries count as calls).
 - `expect.prompts` — assertions on the rendered user prompt (`request.prompt`) an
   agent received on a given 0-based call index.

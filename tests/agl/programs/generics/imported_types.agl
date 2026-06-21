@@ -1,0 +1,26 @@
+# Imported generics: open and module-qualified applied types in annotations,
+# function signatures, nested applications, constructor calls, qualified enum
+# constructors with explicit type arguments, and generic pattern matching.
+import library
+
+def unbox(box: Box[int]) -> int = box.value
+
+def render(option: library::Option[int]) -> text =
+  case option of
+    | none() => "none"
+    | some(value) => "some ${value}"
+
+param seed: int
+
+let open_box: Box[int] = Box(value: seed)
+let qualified_box: library::Box[int] = library::Box(value: 7)
+let nested: library::Box[Box[int]] = library::Box(value: open_box)
+
+print(unbox(open_box))
+print(qualified_box.value)
+print(nested.value.value)
+
+let some_value = library::Option.some::[int](value: seed + 5)
+let none_value = library::Option.none::[int]()
+print(render(some_value))
+print(render(none_value))

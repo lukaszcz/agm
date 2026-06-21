@@ -26,8 +26,8 @@ print(render(a))
 let b: Option[int] = none
 print(render(b))
 
-# Explicit type-argument override on a generic constructor.
-let c = some::[int](value: 8)
+# Explicit type-argument override on a type-qualified generic constructor.
+let c = Option.some::[int](value: 8)
 print(render(c))
 
 # Qualified constructor expressions select the owning enum.

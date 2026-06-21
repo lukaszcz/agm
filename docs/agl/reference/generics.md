@@ -49,7 +49,8 @@ def singleton[T](x: T) -> list[T] =
 ## Type application
 
 A generic declaration is **used** by applying it to type arguments. The
-applied-type syntax is `Name[arg, …]`:
+applied-type syntax is `Name[arg, …]`; imported declarations may use an open
+name or a module-qualified name such as `lib::Box[int]`:
 
 ```agl
 record Box[T]
@@ -67,6 +68,14 @@ print nested.value.value
 `Box[int]`, `Option[text]`, `Outcome[int, text]`, and the nested
 `Box[Box[int]]` are all applied types. The built-in `list[T]` and
 `dict[text, V]` use exactly the same form.
+
+```agl
+import containers
+
+def unwrap(box: Box[int]) -> int = box.value
+let open_box: Box[int] = Box(value: 1)
+let qualified_box: containers::Box[int] = containers::Box(value: 2)
+```
 
 ## Inference and the explicit `::[…]` override
 
@@ -98,6 +107,7 @@ enum Option[T]
 print(id::[int](9))
 let be = Box::[int](value: 99)
 let s = some::[int](value: 8)
+let qs = Option.some::[int](value: 13)
 let _r = apply::[int, int](10, fn(n: int) -> int => n + 1)
 print be.value
 ```

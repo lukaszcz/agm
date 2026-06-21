@@ -147,6 +147,7 @@ enum Option[T]
 
 let e: Option[int] = none          # T = int, fixed by the annotation
 let s = some::[int](value: 1)      # T pinned explicitly
+let q = Option.some::[int](value: 2) # qualification disambiguates the owner
 ```
 
 ### Constructors as values

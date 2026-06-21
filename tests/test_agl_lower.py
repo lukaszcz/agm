@@ -681,10 +681,6 @@ class TestUnsupportedNodes:
         with pytest.raises(NotImplementedError):
             _lower("def f() -> int = 1\nf()")
 
-    def test_binary_op_raises_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
-            _lower("1 + 2")
-
     def test_indexed_assign_raises_not_implemented(self) -> None:
         """IndexTarget assignment paths are deferred to M3; must raise NotImplementedError."""
         with pytest.raises(NotImplementedError):

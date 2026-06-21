@@ -903,6 +903,76 @@ class TestDefensiveErrors:
         with pytest.raises(InvalidIrError):
             IrInterpreter(prog).run()
 
+    def test_ir_and_non_bool_lhs_raises(self) -> None:
+        """IrAnd with a non-BoolValue lhs raises InvalidIrError."""
+        from agm.agl.ir import IrAnd
+        prog = _make_program(
+            (IrAnd(_LOC, lhs=IrConstInt(_LOC, 1), rhs=IrConstBool(_LOC, True)),),
+        )
+        with pytest.raises(InvalidIrError, match="IrAnd: lhs"):
+            IrInterpreter(prog).run()
+
+    def test_ir_and_non_bool_rhs_raises(self) -> None:
+        """IrAnd with a non-BoolValue rhs raises InvalidIrError."""
+        from agm.agl.ir import IrAnd
+        prog = _make_program(
+            (IrAnd(_LOC, lhs=IrConstBool(_LOC, True), rhs=IrConstInt(_LOC, 1)),),
+        )
+        with pytest.raises(InvalidIrError, match="IrAnd: rhs"):
+            IrInterpreter(prog).run()
+
+    def test_ir_or_non_bool_lhs_raises(self) -> None:
+        """IrOr with a non-BoolValue lhs raises InvalidIrError."""
+        from agm.agl.ir import IrOr
+        prog = _make_program(
+            (IrOr(_LOC, lhs=IrConstInt(_LOC, 1), rhs=IrConstBool(_LOC, False)),),
+        )
+        with pytest.raises(InvalidIrError, match="IrOr: lhs"):
+            IrInterpreter(prog).run()
+
+    def test_ir_or_non_bool_rhs_raises(self) -> None:
+        """IrOr with a non-BoolValue rhs raises InvalidIrError."""
+        from agm.agl.ir import IrOr
+        prog = _make_program(
+            (IrOr(_LOC, lhs=IrConstBool(_LOC, False), rhs=IrConstInt(_LOC, 1)),),
+        )
+        with pytest.raises(InvalidIrError, match="IrOr: rhs"):
+            IrInterpreter(prog).run()
+
+    def test_ir_unary_not_non_bool_raises(self) -> None:
+        """IrUnary NOT with a non-BoolValue raises InvalidIrError."""
+        from agm.agl.ir import IrUnary, UnaryOp
+        prog = _make_program(
+            (IrUnary(_LOC, op=UnaryOp.NOT, kind=None, value=IrConstInt(_LOC, 1)),),
+        )
+        with pytest.raises(InvalidIrError, match="IrUnary NOT"):
+            IrInterpreter(prog).run()
+
+    def test_ir_unary_neg_none_kind_raises(self) -> None:
+        """IrUnary NEG with kind=None raises InvalidIrError at runtime."""
+        from agm.agl.ir import IrUnary, UnaryOp
+        prog = _make_program(
+            (IrUnary(_LOC, op=UnaryOp.NEG, kind=None, value=IrConstInt(_LOC, 5)),),
+        )
+        with pytest.raises(InvalidIrError, match="IrUnary NEG: kind must not be None"):
+            IrInterpreter(prog).run()
+
+    def test_ir_unary_neg_non_numeric_raises(self) -> None:
+        """IrUnary NEG with non-numeric value raises InvalidIrError."""
+        from agm.agl.ir import IrUnary, NumericKind, UnaryOp
+        prog = _make_program(
+            (
+                IrUnary(
+                    _LOC,
+                    op=UnaryOp.NEG,
+                    kind=NumericKind.INT,
+                    value=IrConstText(_LOC, "not-a-number"),
+                ),
+            ),
+        )
+        with pytest.raises(InvalidIrError, match="IrUnary NEG: expected numeric"):
+            IrInterpreter(prog).run()
+
 
 # ---------------------------------------------------------------------------
 # Import isolation: IrInterpreter must not import syntax/scope/typecheck

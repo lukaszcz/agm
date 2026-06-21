@@ -3052,32 +3052,23 @@ def test_module_level_arith_runtime_error() -> None:
         _arith(IntValue(1), BoolValue(True), BinOp.SUB)
 
 
-def test_module_level_div_runtime_error() -> None:
-    # Line 1143: _div raises RuntimeError for incompatible types.
+def test_module_level_div_assertion_error() -> None:
+    # _div raises AssertionError (via arith.py::div) for incompatible types.
     from agm.agl.eval.interpreter import _div
     from agm.agl.eval.values import BoolValue, IntValue
     from agm.agl.runtime.trace import noop_trace
 
-    with pytest.raises(RuntimeError, match="Cannot divide"):
+    with pytest.raises(AssertionError, match="div: expected numeric"):
         _div(BoolValue(True), IntValue(1), trace=noop_trace())
 
 
-def test_module_level_to_decimal_runtime_error() -> None:
-    # Line 1151: _to_decimal raises RuntimeError for non-numeric types.
-    from agm.agl.eval.interpreter import _to_decimal
-    from agm.agl.eval.values import BoolValue
-
-    with pytest.raises(RuntimeError, match="Not a numeric value"):
-        _to_decimal(BoolValue(True))
-
-
-def test_module_level_compare_runtime_error() -> None:
-    # Line 1182: _compare raises RuntimeError for incompatible types.
+def test_module_level_compare_assertion_error() -> None:
+    # _compare raises AssertionError (via arith.py::order) for incompatible types.
     from agm.agl.eval.interpreter import _compare
     from agm.agl.eval.values import BoolValue, IntValue
     from agm.agl.syntax.nodes import BinOp
 
-    with pytest.raises(RuntimeError, match="Cannot compare"):
+    with pytest.raises(AssertionError, match="order: cannot compare"):
         _compare(BoolValue(True), IntValue(1), BinOp.LT)
 
 

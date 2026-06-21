@@ -35,20 +35,35 @@ if TYPE_CHECKING:
 
 from agm.agl.ir.ids import Location, SourceId, SymbolId
 from agm.agl.ir.nodes import (
+    IrAnd,
+    IrArith,
     IrAssign,
     IrBind,
     IrBlock,
     IrCoerce,
+    IrCompare,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrContains,
     IrExpr,
     IrLoad,
     IrMakeDict,
     IrMakeList,
+    IrOr,
+    IrUnary,
+)
+from agm.agl.ir.operations import (
+    ArithKind,
+    ArithOp,
+    CmpOp,
+    CompareKind,
+    ContainsKind,
+    NumericKind,
+    UnaryOp,
 )
 from agm.agl.ir.program import (
     ExecutableModule,
@@ -63,6 +78,7 @@ from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
     BinaryOp,
+    BinOp,
     Block,
     BoolLit,
     Call,
@@ -103,7 +119,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import CheckedProgram
-from agm.agl.typecheck.types import DictType, ListType, Type
+from agm.agl.typecheck.types import DecimalType, DictType, IntType, ListType, TextType, Type
 
 __all__ = ["lower_program"]
 
@@ -270,13 +286,34 @@ class _Lowerer:
                 return self._lower_block(items, span)
 
             # ----------------------------------------------------------
-            # Unsupported M2 nodes — will be M3/M4
+            # Operator nodes — M3b
+            # ----------------------------------------------------------
+            case BinaryOp(op=op, left=left_expr, right=right_expr, span=span):
+                return self._lower_binary_op(op, left_expr, right_expr, span)
+
+            case UnaryNot(operand=operand_expr, span=span):
+                return IrUnary(
+                    location=self._loc(span),
+                    op=UnaryOp.NOT,
+                    kind=None,
+                    value=self.lower_expr(operand_expr),
+                )
+
+            case UnaryNeg(operand=operand_expr, span=span):
+                op_type = self._node_type(operand_expr.node_id)
+                nkind = NumericKind.INT if isinstance(op_type, IntType) else NumericKind.DECIMAL
+                return IrUnary(
+                    location=self._loc(span),
+                    op=UnaryOp.NEG,
+                    kind=nkind,
+                    value=self.lower_expr(operand_expr),
+                )
+
+            # ----------------------------------------------------------
+            # Unsupported M3/M4 nodes — deferred
             # ----------------------------------------------------------
             case (
-                BinaryOp()
-                | UnaryNot()
-                | UnaryNeg()
-                | Call()
+                Call()
                 | Lambda()
                 | If()
                 | Case()
@@ -321,6 +358,144 @@ class _Lowerer:
             for e in node.entries
         )
         return IrMakeDict(location=self._loc(node.span), entries=ir_entries)
+
+    # ------------------------------------------------------------------
+    # Operator helpers (M3b)
+    # ------------------------------------------------------------------
+
+    def _lower_binary_op(
+        self, op: BinOp, left: Expr, right: Expr, span: SourceSpan
+    ) -> IrExpr:
+        """Lower a BinaryOp to the appropriate IR node."""
+        loc = self._loc(span)
+
+        if op is BinOp.AND:
+            return IrAnd(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
+        if op is BinOp.OR:
+            return IrOr(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
+        if op is BinOp.IN:
+            return self._lower_in_op(left, right, loc)
+        if op is BinOp.ADD or op is BinOp.SUB or op is BinOp.MUL:
+            return self._lower_arith(op, left, right, loc)
+        if op is BinOp.DIV:
+            return self._lower_div(left, right, loc)
+        if op is BinOp.EQ or op is BinOp.NEQ:
+            return self._lower_equality(op, left, right, loc)
+        if op is BinOp.LT or op is BinOp.LE or op is BinOp.GT or op is BinOp.GE:
+            return self._lower_ordering(op, left, right, loc)
+        assert_never(op)  # pragma: no cover
+
+    def _lower_arith(
+        self, op: BinOp, left: Expr, right: Expr, loc: Location
+    ) -> IrArith:
+        """Lower an arithmetic binary op (ADD/SUB/MUL)."""
+        left_type = self._node_type(left.node_id)
+        right_type = self._node_type(right.node_id)
+        if isinstance(left_type, TextType) and isinstance(right_type, TextType):
+            common: Type = TextType()
+            kind = ArithKind.TEXT
+        elif isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+            common = DecimalType()
+            kind = ArithKind.DECIMAL
+        else:
+            common = IntType()
+            kind = ArithKind.INT
+        arith_op_map: dict[BinOp, ArithOp] = {
+            BinOp.ADD: ArithOp.ADD,
+            BinOp.SUB: ArithOp.SUB,
+            BinOp.MUL: ArithOp.MUL,
+        }
+        arith_op = arith_op_map[op]
+        return IrArith(
+            location=loc,
+            op=arith_op,
+            kind=kind,
+            lhs=self.lower_coerced(left, common),
+            rhs=self.lower_coerced(right, common),
+        )
+
+    def _lower_div(self, left: Expr, right: Expr, loc: Location) -> IrArith:
+        """Lower a DIV op: always coerce both operands to decimal."""
+        common: Type = DecimalType()
+        return IrArith(
+            location=loc,
+            op=ArithOp.DIV,
+            kind=ArithKind.DECIMAL,
+            lhs=self.lower_coerced(left, common),
+            rhs=self.lower_coerced(right, common),
+        )
+
+    def _lower_equality(
+        self, op: BinOp, left: Expr, right: Expr, loc: Location
+    ) -> IrCompare:
+        """Lower EQ/NEQ: use STRUCTURAL kind with numeric widening if needed."""
+        left_type = self._node_type(left.node_id)
+        right_type = self._node_type(right.node_id)
+        if isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+            common: Type = DecimalType()
+        else:
+            common = left_type
+        cmp_op = CmpOp.EQ if op is BinOp.EQ else CmpOp.NEQ
+        return IrCompare(
+            location=loc,
+            op=cmp_op,
+            kind=CompareKind.STRUCTURAL,
+            lhs=self.lower_coerced(left, common),
+            rhs=self.lower_coerced(right, common),
+        )
+
+    def _lower_ordering(
+        self, op: BinOp, left: Expr, right: Expr, loc: Location
+    ) -> IrCompare:
+        """Lower LT/LE/GT/GE with kind based on operand types."""
+        left_type = self._node_type(left.node_id)
+        right_type = self._node_type(right.node_id)
+        if isinstance(left_type, TextType) and isinstance(right_type, TextType):
+            common: Type = TextType()
+            kind = CompareKind.TEXT
+        elif isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+            common = DecimalType()
+            kind = CompareKind.DECIMAL
+        else:
+            common = IntType()
+            kind = CompareKind.INT
+        cmp_op_map: dict[BinOp, CmpOp] = {
+            BinOp.LT: CmpOp.LT,
+            BinOp.LE: CmpOp.LE,
+            BinOp.GT: CmpOp.GT,
+            BinOp.GE: CmpOp.GE,
+        }
+        cmp_op = cmp_op_map[op]
+        return IrCompare(
+            location=loc,
+            op=cmp_op,
+            kind=kind,
+            lhs=self.lower_coerced(left, common),
+            rhs=self.lower_coerced(right, common),
+        )
+
+    def _lower_in_op(self, item: Expr, container: Expr, loc: Location) -> IrContains:
+        """Lower the IN operator based on container type."""
+        container_type = self._node_type(container.node_id)
+        if isinstance(container_type, ListType):
+            kind = ContainsKind.LIST
+            item_ir = self.lower_coerced(item, container_type.elem)
+        elif isinstance(container_type, DictType):
+            kind = ContainsKind.DICT
+            item_ir = self.lower_expr(item)
+        elif isinstance(container_type, TextType):
+            kind = ContainsKind.TEXT
+            item_ir = self.lower_expr(item)
+        else:  # pragma: no cover
+            raise AssertionError(
+                f"compiler bug: IN on non-container type {container_type!r}"
+            )
+        return IrContains(
+            location=loc,
+            kind=kind,
+            item=item_ir,
+            container=self.lower_expr(container),
+        )
 
     # ------------------------------------------------------------------
     # Block helper

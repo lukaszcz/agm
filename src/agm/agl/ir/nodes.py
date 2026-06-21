@@ -52,25 +52,40 @@ import decimal
 from dataclasses import dataclass
 
 from agm.agl.ir.ids import Location, SymbolId
-from agm.agl.ir.operations import Coercion
+from agm.agl.ir.operations import (
+    ArithKind,
+    ArithOp,
+    CmpOp,
+    Coercion,
+    CompareKind,
+    ContainsKind,
+    NumericKind,
+    UnaryOp,
+)
 
 __all__ = [
+    "IrAnd",
+    "IrArith",
     "IrAssign",
     "IrBind",
     "IrBlock",
     "IrCoerce",
+    "IrCompare",
     "IrConstBool",
     "IrConstDecimal",
     "IrConstInt",
     "IrConstJsonNull",
     "IrConstText",
     "IrConstUnit",
+    "IrContains",
     "IrExpr",
     "IrIndexStep",
     "IrLoad",
     "IrMakeDict",
     "IrMakeList",
+    "IrOr",
     "IrSequence",
+    "IrUnary",
 ]
 
 
@@ -281,6 +296,74 @@ class IrBlock:
 
 
 # ---------------------------------------------------------------------------
+# Operator nodes (M3)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrArith:
+    """IR arithmetic: binary arithmetic operation (add, sub, mul, div)."""
+
+    location: Location
+    op: ArithOp
+    kind: ArithKind
+    lhs: "IrExpr"
+    rhs: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrCompare:
+    """IR comparison: binary comparison operation (eq, neq, lt, le, gt, ge)."""
+
+    location: Location
+    op: CmpOp
+    kind: CompareKind
+    lhs: "IrExpr"
+    rhs: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrContains:
+    """IR containment: x in container (list, dict, text)."""
+
+    location: Location
+    kind: ContainsKind
+    item: "IrExpr"
+    container: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrAnd:
+    """IR short-circuit and."""
+
+    location: Location
+    lhs: "IrExpr"
+    rhs: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrOr:
+    """IR short-circuit or."""
+
+    location: Location
+    lhs: "IrExpr"
+    rhs: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrUnary:
+    """IR unary: NOT (logical) or NEG (numeric).
+
+    ``kind`` is ``None`` for NOT, and a ``NumericKind`` for NEG.
+    """
+
+    location: Location
+    op: UnaryOp
+    kind: "NumericKind | None"
+    value: "IrExpr"
+
+
+# ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
 
@@ -305,4 +388,10 @@ IrExpr = (
     | IrCoerce
     | IrSequence
     | IrBlock
+    | IrArith
+    | IrCompare
+    | IrContains
+    | IrAnd
+    | IrOr
+    | IrUnary
 )

@@ -20,6 +20,7 @@ import enum
 from dataclasses import dataclass
 
 __all__ = [
+    "ArithKind",
     "ArithOp",
     "CmpOp",
     "Coercion",
@@ -32,6 +33,7 @@ __all__ = [
     "MapRecordFields",
     "NumericKind",
     "ToJson",
+    "UnaryOp",
 ]
 
 
@@ -52,6 +54,14 @@ class ArithOp(enum.Enum):
     SUB = "-"
     MUL = "*"
     DIV = "/"
+
+
+class ArithKind(enum.Enum):
+    """Kind tag for arithmetic operations: integer, decimal, or text (ADD only)."""
+
+    INT = "int"
+    DECIMAL = "decimal"
+    TEXT = "text"
 
 
 class CmpOp(enum.Enum):
@@ -78,11 +88,12 @@ class NumericKind(enum.Enum):
 
 
 class CompareKind(enum.Enum):
-    """Kind tag for comparison operations: integer, decimal, or text."""
+    """Kind tag for comparison operations: integer, decimal, text, or structural."""
 
     INT = "int"
     DECIMAL = "decimal"
     TEXT = "text"
+    STRUCTURAL = "structural"
 
 
 class ContainsKind(enum.Enum):
@@ -91,6 +102,13 @@ class ContainsKind(enum.Enum):
     LIST = "list"
     DICT = "dict"
     TEXT = "text"
+
+
+class UnaryOp(enum.Enum):
+    """Kind tag for unary operations: NOT (logical negation) or NEG (numeric negation)."""
+
+    NOT = "not"
+    NEG = "neg"
 
 
 # ---------------------------------------------------------------------------

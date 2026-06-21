@@ -21,6 +21,20 @@ import decimal
 from typing import assert_never
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
+from agm.agl.eval.arith import (
+    AglDivisionByZero,
+    add,
+    contains,
+    div,
+    logical_not,
+    mul,
+    negate,
+    order,
+    sub,
+    value_eq,
+)
+from agm.agl.eval.exceptions import AglRaise
+from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.eval.frames import Cell, Frame
 from agm.agl.eval.values import (
     BoolValue,
@@ -36,23 +50,31 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.ir.nodes import (
+    IrAnd,
+    IrArith,
     IrAssign,
     IrBind,
     IrBlock,
     IrCoerce,
+    IrCompare,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrContains,
     IrExpr,
     IrLoad,
     IrMakeDict,
     IrMakeList,
+    IrOr,
     IrSequence,
+    IrUnary,
 )
 from agm.agl.ir.operations import (
+    ArithOp,
+    CmpOp,
     Coercion,
     IntToDecimal,
     MapDictValues,
@@ -60,13 +82,15 @@ from agm.agl.ir.operations import (
     MapList,
     MapRecordFields,
     ToJson,
+    UnaryOp,
 )
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.runtime.trace import TraceStore, noop_trace
 
-__all__ = ["IrInterpreter", "_apply_coercion"]
+__all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +189,10 @@ class IrInterpreter:
     ``public_name`` and is owned by the entry module.
     """
 
-    def __init__(self, program: ExecutableProgram) -> None:
+    def __init__(self, program: ExecutableProgram, *, trace: TraceStore | None = None) -> None:
         self._program = program
         self._frame: Frame = {}
+        self._trace: TraceStore = trace if trace is not None else noop_trace()
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -284,6 +309,99 @@ class IrInterpreter:
                 for item in items:
                     last = self._eval(item)
                 return last
+
+            case IrArith(op=arith_op, kind=kind, lhs=lhs_expr, rhs=rhs_expr):
+                lhs_val = self._eval(lhs_expr)
+                rhs_val = self._eval(rhs_expr)
+                try:
+                    match arith_op:
+                        case ArithOp.ADD:
+                            return add(kind, lhs_val, rhs_val)
+                        case ArithOp.SUB:
+                            return sub(kind, lhs_val, rhs_val)
+                        case ArithOp.MUL:
+                            return mul(kind, lhs_val, rhs_val)
+                        case ArithOp.DIV:
+                            return div(lhs_val, rhs_val)
+                        case _ as unreachable:  # pragma: no cover
+                            assert_never(unreachable)
+                except AglDivisionByZero:
+                    raise AglRaise(
+                        _make_exc_value(
+                            "ArithmeticError",
+                            "Division by zero",
+                            trace_id=self._trace.new_event_id(),
+                            operation=TextValue("/"),
+                        )
+                    )
+
+            case IrCompare(op=cmp_op, kind=_kind, lhs=lhs_expr, rhs=rhs_expr):
+                lhs_val = self._eval(lhs_expr)
+                rhs_val = self._eval(rhs_expr)
+                match cmp_op:
+                    case CmpOp.EQ:
+                        return BoolValue(value_eq(lhs_val, rhs_val))
+                    case CmpOp.NEQ:
+                        return BoolValue(not value_eq(lhs_val, rhs_val))
+                    case CmpOp.LT | CmpOp.LE | CmpOp.GT | CmpOp.GE:
+                        return BoolValue(order(cmp_op, lhs_val, rhs_val))
+                    case _ as _unreachable_cmp:  # pragma: no cover
+                        assert_never(_unreachable_cmp)
+
+            case IrContains(kind=kind, item=item_expr, container=container_expr):
+                item_val = self._eval(item_expr)
+                container_val = self._eval(container_expr)
+                return BoolValue(contains(kind, item_val, container_val))
+
+            case IrAnd(lhs=lhs_expr, rhs=rhs_expr):
+                lhs_val = self._eval(lhs_expr)
+                if not isinstance(lhs_val, BoolValue):
+                    raise InvalidIrError(
+                        f"IrAnd: lhs is not BoolValue, got {type(lhs_val).__name__}"
+                    )
+                if not lhs_val.value:
+                    return BoolValue(False)
+                rhs_val = self._eval(rhs_expr)
+                if not isinstance(rhs_val, BoolValue):
+                    raise InvalidIrError(
+                        f"IrAnd: rhs is not BoolValue, got {type(rhs_val).__name__}"
+                    )
+                return BoolValue(rhs_val.value)
+
+            case IrOr(lhs=lhs_expr, rhs=rhs_expr):
+                lhs_val = self._eval(lhs_expr)
+                if not isinstance(lhs_val, BoolValue):
+                    raise InvalidIrError(
+                        f"IrOr: lhs is not BoolValue, got {type(lhs_val).__name__}"
+                    )
+                if lhs_val.value:
+                    return BoolValue(True)
+                rhs_val = self._eval(rhs_expr)
+                if not isinstance(rhs_val, BoolValue):
+                    raise InvalidIrError(
+                        f"IrOr: rhs is not BoolValue, got {type(rhs_val).__name__}"
+                    )
+                return BoolValue(rhs_val.value)
+
+            case IrUnary(op=unary_op, kind=kind, value=val_expr):
+                val = self._eval(val_expr)
+                match unary_op:
+                    case UnaryOp.NOT:
+                        if not isinstance(val, BoolValue):
+                            raise InvalidIrError(
+                                f"IrUnary NOT: expected BoolValue, got {type(val).__name__}"
+                            )
+                        return logical_not(val)
+                    case UnaryOp.NEG:
+                        if kind is None:
+                            raise InvalidIrError("IrUnary NEG: kind must not be None")
+                        if not isinstance(val, (IntValue, DecimalValue)):
+                            raise InvalidIrError(
+                                f"IrUnary NEG: expected numeric, got {type(val).__name__}"
+                            )
+                        return negate(kind, val)
+                    case _ as _unreachable_unary:  # pragma: no cover
+                        assert_never(_unreachable_unary)
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

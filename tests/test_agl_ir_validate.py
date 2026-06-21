@@ -19,6 +19,8 @@ import decimal
 import pytest
 
 from agm.agl.ir import (
+    CmpOp,
+    CompareKind,
     ExecutableModule,
     ExecutableProgram,
     FunctionId,
@@ -27,6 +29,7 @@ from agm.agl.ir import (
     IrBind,
     IrBlock,
     IrCoerce,
+    IrCompare,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -690,3 +693,101 @@ class TestInvalidIrErrorExport:
         with pytest.raises(InvalidIrError) as exc_info:
             validate_ir(prog)
         assert str(exc_info.value)  # message is non-empty
+
+
+# ===========================================================================
+# IrCompare: tightened EQ/NEQ ↔ STRUCTURAL constraints
+# ===========================================================================
+
+
+def _make_compare_program(op: CmpOp, kind: CompareKind) -> ExecutableProgram:
+    """Build a minimal program containing a single IrCompare node."""
+    node = IrCompare(
+        location=LOC,
+        op=op,
+        kind=kind,
+        lhs=IrConstInt(location=LOC, value=1),
+        rhs=IrConstInt(location=LOC, value=2),
+    )
+    return _make_program(initializers=(node,))
+
+
+class TestIrCompareTightenedConstraints:
+    """EQ/NEQ ⇒ STRUCTURAL and ordering ops ⇒ non-STRUCTURAL."""
+
+    # --- EQ with non-STRUCTURAL kind must be rejected ---
+
+    def test_eq_with_int_kind_raises(self) -> None:
+        """EQ requires STRUCTURAL kind; INT kind must raise."""
+        prog = _make_compare_program(CmpOp.EQ, CompareKind.INT)
+        with pytest.raises(InvalidIrError, match="EQ/NEQ requires STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_eq_with_decimal_kind_raises(self) -> None:
+        """EQ requires STRUCTURAL kind; DECIMAL kind must raise."""
+        prog = _make_compare_program(CmpOp.EQ, CompareKind.DECIMAL)
+        with pytest.raises(InvalidIrError, match="EQ/NEQ requires STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_eq_with_text_kind_raises(self) -> None:
+        """EQ requires STRUCTURAL kind; TEXT kind must raise."""
+        prog = _make_compare_program(CmpOp.EQ, CompareKind.TEXT)
+        with pytest.raises(InvalidIrError, match="EQ/NEQ requires STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_neq_with_int_kind_raises(self) -> None:
+        """NEQ requires STRUCTURAL kind; INT kind must raise."""
+        prog = _make_compare_program(CmpOp.NEQ, CompareKind.INT)
+        with pytest.raises(InvalidIrError, match="EQ/NEQ requires STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_eq_with_structural_kind_passes(self) -> None:
+        """EQ + STRUCTURAL is valid."""
+        prog = _make_compare_program(CmpOp.EQ, CompareKind.STRUCTURAL)
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_neq_with_structural_kind_passes(self) -> None:
+        """NEQ + STRUCTURAL is valid."""
+        prog = _make_compare_program(CmpOp.NEQ, CompareKind.STRUCTURAL)
+        validate_ir(prog, deep=False)  # no exception
+
+    # --- Ordering ops with STRUCTURAL kind must be rejected ---
+
+    def test_lt_with_structural_kind_raises(self) -> None:
+        """LT requires non-STRUCTURAL kind."""
+        prog = _make_compare_program(CmpOp.LT, CompareKind.STRUCTURAL)
+        with pytest.raises(InvalidIrError, match="ordering op.*STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_le_with_structural_kind_raises(self) -> None:
+        """LE requires non-STRUCTURAL kind."""
+        prog = _make_compare_program(CmpOp.LE, CompareKind.STRUCTURAL)
+        with pytest.raises(InvalidIrError, match="ordering op.*STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_gt_with_structural_kind_raises(self) -> None:
+        """GT requires non-STRUCTURAL kind."""
+        prog = _make_compare_program(CmpOp.GT, CompareKind.STRUCTURAL)
+        with pytest.raises(InvalidIrError, match="ordering op.*STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_ge_with_structural_kind_raises(self) -> None:
+        """GE requires non-STRUCTURAL kind."""
+        prog = _make_compare_program(CmpOp.GE, CompareKind.STRUCTURAL)
+        with pytest.raises(InvalidIrError, match="ordering op.*STRUCTURAL"):
+            validate_ir(prog, deep=False)
+
+    def test_lt_with_int_kind_passes(self) -> None:
+        """LT + INT is valid."""
+        prog = _make_compare_program(CmpOp.LT, CompareKind.INT)
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_gt_with_decimal_kind_passes(self) -> None:
+        """GT + DECIMAL is valid."""
+        prog = _make_compare_program(CmpOp.GT, CompareKind.DECIMAL)
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_le_with_text_kind_passes(self) -> None:
+        """LE + TEXT is valid."""
+        prog = _make_compare_program(CmpOp.LE, CompareKind.TEXT)
+        validate_ir(prog, deep=False)  # no exception

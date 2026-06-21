@@ -1,4 +1,4 @@
-"""Differential oracle harness for M2.
+"""Differential oracle harness for M2/M3.
 
 Runs both the legacy AST interpreter and the new IR pipeline
 (lower_program → IrInterpreter) on the same AgL source and asserts
@@ -10,8 +10,8 @@ Design notes (extensibility for M7)
   the same set of names (source-declared let/var names).  A binding present
   on one side but absent on the other is caught immediately with a diff message
   showing legacy-only / ir-only names.
-- Error comparison will be added in M3 when in-subset runtime errors exist;
-  it will check kind + message + source excerpt.
+- Error comparison is supported via ``assert_oracle_raises`` which checks
+  that both pipelines raise ``AglRaise`` with structurally equivalent exceptions.
 - Trace event sequences and external call sequences are not yet compared (M7).
   The harness asserts they are empty on both sides for the M2 node subset.
 """
@@ -19,10 +19,19 @@ Design notes (extensibility for M7)
 from __future__ import annotations
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.interpreter import Interpreter
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.eval.scope import Scope
-from agm.agl.eval.values import Value
+from agm.agl.eval.values import (
+    DictValue,
+    EnumValue,
+    ExceptionValue,
+    ListValue,
+    RecordValue,
+    TextValue,
+    Value,
+)
 from agm.agl.lower import lower_program
 from agm.agl.parser import parse_program
 from agm.agl.runtime.agents import AgentRegistry
@@ -174,3 +183,103 @@ def assert_oracle_agrees(
     # of traces and external calls is wired in M7.
 
     return legacy, ir
+
+
+def _normalize_value(val: Value) -> Value:
+    """Recursively zero every ``trace_id`` inside any ``ExceptionValue`` in *val*.
+
+    Walks container types (``ListValue``, ``DictValue``) and nominal types
+    (``RecordValue``, ``EnumValue``, ``ExceptionValue``) to find and strip
+    ``trace_id`` fields at any nesting depth.  Non-exception, non-container
+    values are returned unchanged.
+    """
+    if isinstance(val, ExceptionValue):
+        return _normalize_exception(val)
+    if isinstance(val, ListValue):
+        normalized = tuple(_normalize_value(item) for item in val.elements)
+        if normalized == val.elements:
+            return val
+        return ListValue(normalized)
+    if isinstance(val, DictValue):
+        new_entries = {k: _normalize_value(v) for k, v in val.entries.items()}
+        if new_entries == val.entries:
+            return val
+        return DictValue(new_entries)
+    if isinstance(val, RecordValue):
+        new_fields = {k: _normalize_value(v) for k, v in val.fields.items()}
+        if new_fields == val.fields:
+            return val
+        return RecordValue(nominal=val.nominal, display_name=val.display_name, fields=new_fields)
+    if isinstance(val, EnumValue):
+        new_fields = {k: _normalize_value(v) for k, v in val.fields.items()}
+        if new_fields == val.fields:
+            return val
+        return EnumValue(
+            nominal=val.nominal,
+            display_name=val.display_name,
+            variant=val.variant,
+            fields=new_fields,
+        )
+    return val
+
+
+def _normalize_exception(exc: ExceptionValue) -> ExceptionValue:
+    """Strip ``trace_id`` from an ``ExceptionValue`` at all depths.
+
+    Zeros every ``trace_id`` field in *exc* and recursively normalizes any
+    nested ``ExceptionValue`` (or ``ExceptionValue`` inside containers/records/
+    enums) found anywhere in the field tree.  All other fields are preserved
+    without modification.
+    """
+    new_fields: dict[str, Value] = {}
+    for key, field_val in exc.fields.items():
+        if key == "trace_id":
+            new_fields[key] = TextValue("")
+        else:
+            new_fields[key] = _normalize_value(field_val)
+    return ExceptionValue(
+        nominal=exc.nominal,
+        display_name=exc.display_name,
+        fields=new_fields,
+    )
+
+
+def assert_oracle_raises(source: str) -> tuple[ExceptionValue, ExceptionValue]:
+    """Assert that both pipelines raise AglRaise with equivalent exceptions.
+
+    Runs both pipelines, catches AglRaise from both sides, normalizes
+    trace_id fields, and asserts the exceptions are equivalent.
+
+    Returns ``(legacy_exc, ir_exc)`` for additional structural assertions.
+
+    Raises
+    ------
+    ``AssertionError``
+        When either pipeline does not raise, or when the normalized exceptions differ.
+    """
+    legacy_exc: ExceptionValue | None = None
+    ir_exc: ExceptionValue | None = None
+
+    try:
+        _run_legacy(source)
+    except AglRaise as e:
+        legacy_exc = e.exc
+
+    try:
+        _run_ir(source)
+    except AglRaise as e:
+        ir_exc = e.exc
+
+    assert legacy_exc is not None, "Legacy pipeline did not raise AglRaise"
+    assert ir_exc is not None, "IR pipeline did not raise AglRaise"
+
+    norm_legacy = _normalize_exception(legacy_exc)
+    norm_ir = _normalize_exception(ir_exc)
+
+    assert norm_legacy == norm_ir, (
+        f"Oracle exception disagreement:\n"
+        f"  legacy: {norm_legacy!r}\n"
+        f"  ir:     {norm_ir!r}"
+    )
+
+    return legacy_exc, ir_exc

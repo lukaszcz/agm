@@ -246,9 +246,10 @@ class TestCompareKind:
         assert CompareKind.INT
         assert CompareKind.DECIMAL
         assert CompareKind.TEXT
+        assert CompareKind.STRUCTURAL
 
     def test_exhaustive(self) -> None:
-        assert {m.name for m in CompareKind} == {"INT", "DECIMAL", "TEXT"}
+        assert {m.name for m in CompareKind} == {"INT", "DECIMAL", "TEXT", "STRUCTURAL"}
 
 
 class TestContainsKind:

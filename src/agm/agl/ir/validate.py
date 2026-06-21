@@ -36,23 +36,30 @@ from typing import assert_never
 
 from agm.agl.ir.ids import FunctionId, Location, SourceId
 from agm.agl.ir.nodes import (
+    IrAnd,
+    IrArith,
     IrAssign,
     IrBind,
     IrBlock,
     IrCoerce,
+    IrCompare,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrContains,
     IrExpr,
     IrIndexStep,
     IrLoad,
     IrMakeDict,
     IrMakeList,
+    IrOr,
     IrSequence,
+    IrUnary,
 )
+from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
 from agm.agl.ir.program import ExecutableProgram, SourceFile
 from agm.agl.modules.ids import ModuleId
 
@@ -244,6 +251,65 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                 raise InvalidIrError("IrBlock must be non-empty (items is empty)")
             for item in node.items:
                 _validate_expr(item, ctx)
+
+        case IrArith(op=op, kind=kind, lhs=lhs, rhs=rhs):
+            _validate_location(node.location, ctx)
+            # TEXT kind is only valid with ADD
+            if kind is ArithKind.TEXT and op is not ArithOp.ADD:
+                raise InvalidIrError(
+                    f"IrArith: TEXT kind is only valid with ADD, got op={op!r}"
+                )
+            # DIV op requires DECIMAL kind (DIV always returns decimal)
+            if op is ArithOp.DIV and kind is not ArithKind.DECIMAL:
+                raise InvalidIrError(
+                    f"IrArith: DIV op requires DECIMAL kind, got kind={kind!r}"
+                )
+            _validate_expr(lhs, ctx)
+            _validate_expr(rhs, ctx)
+
+        case IrCompare(op=op, kind=kind, lhs=lhs, rhs=rhs):
+            _validate_location(node.location, ctx)
+            # EQ/NEQ requires STRUCTURAL kind
+            if op in (CmpOp.EQ, CmpOp.NEQ) and kind is not CompareKind.STRUCTURAL:
+                raise InvalidIrError(
+                    f"IrCompare: EQ/NEQ requires STRUCTURAL kind, got kind={kind!r}"
+                )
+            # Ordering ops (LT/LE/GT/GE) require a non-STRUCTURAL kind
+            if op in (CmpOp.LT, CmpOp.LE, CmpOp.GT, CmpOp.GE) and kind is CompareKind.STRUCTURAL:
+                raise InvalidIrError(
+                    f"IrCompare: ordering op {op!r} requires INT/DECIMAL/TEXT kind,"
+                    f" got STRUCTURAL"
+                )
+            _validate_expr(lhs, ctx)
+            _validate_expr(rhs, ctx)
+
+        case IrContains(kind=_kind, item=item, container=container):
+            _validate_location(node.location, ctx)
+            _validate_expr(item, ctx)
+            _validate_expr(container, ctx)
+
+        case IrAnd(lhs=lhs, rhs=rhs):
+            _validate_location(node.location, ctx)
+            _validate_expr(lhs, ctx)
+            _validate_expr(rhs, ctx)
+
+        case IrOr(lhs=lhs, rhs=rhs):
+            _validate_location(node.location, ctx)
+            _validate_expr(lhs, ctx)
+            _validate_expr(rhs, ctx)
+
+        case IrUnary(op=op, kind=kind, value=val):
+            _validate_location(node.location, ctx)
+            # NOT requires kind=None; NEG requires kind set
+            if op is UnaryOp.NOT and kind is not None:
+                raise InvalidIrError(
+                    f"IrUnary NOT: kind must be None, got kind={kind!r}"
+                )
+            if op is UnaryOp.NEG and kind is None:
+                raise InvalidIrError(
+                    "IrUnary NEG: kind must not be None"
+                )
+            _validate_expr(val, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

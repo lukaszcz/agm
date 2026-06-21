@@ -9,11 +9,42 @@ from __future__ import annotations
 
 import decimal
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeVar, assert_never, cast
+from typing import TYPE_CHECKING, assert_never, cast
 
 from agm.agl._text import normalize_newlines
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT as _AGL_DECIMAL_CONTEXT
+from agm.agl.eval.arith import (
+    AglDivisionByZero,
+)
+from agm.agl.eval.arith import (
+    add as _arith_add,
+)
+from agm.agl.eval.arith import (
+    contains as _arith_contains,
+)
+from agm.agl.eval.arith import (
+    div as _arith_div,
+)
+from agm.agl.eval.arith import (
+    logical_not as _arith_logical_not,
+)
+from agm.agl.eval.arith import (
+    mul as _arith_mul,
+)
+from agm.agl.eval.arith import (
+    negate as _arith_negate,
+)
+from agm.agl.eval.arith import (
+    order as _arith_order,
+)
+from agm.agl.eval.arith import (
+    sub as _arith_sub,
+)
+from agm.agl.eval.arith import (
+    value_eq as _arith_value_eq,
+)
 from agm.agl.eval.exceptions import AglRaise
+from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
     UNIT_VALUE,
@@ -34,6 +65,7 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.operations import ArithKind, CmpOp, ContainsKind, NumericKind
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.runtime.convert import (
     CastConversionError,
@@ -122,33 +154,11 @@ if TYPE_CHECKING:
     from agm.core.process import ProcessCaptureResult
 
 
-_Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
-
-
 @dataclass(frozen=True)
 class _IndexedAssignmentTarget:
     containers: tuple[tuple[Value, Value], ...]
     container: Value
     index: Value
-
-
-def _make_exc_value(
-    type_name: str, message: str, *, trace_id: str = "", **extra: Value
-) -> ExceptionValue:
-    """Create an ``ExceptionValue`` with ``message`` and optional extra fields.
-
-    Built-in exceptions use ``NominalId(PRELUDE_ID, type_name)``.
-    """
-    fields: dict[str, Value] = {
-        "message": TextValue(message),
-        "trace_id": TextValue(trace_id),
-    }
-    fields.update(extra)
-    return ExceptionValue(
-        nominal=NominalId(PRELUDE_ID, type_name),
-        display_name=type_name,
-        fields=fields,
-    )
 
 
 def _make_match_error(subject: Value, *, trace_id: str = "") -> ExceptionValue:
@@ -1584,21 +1594,20 @@ class Interpreter:
 
     def _eval_unary_not(self, expr: UnaryNot, scope: Scope) -> BoolValue:
         operand = self._eval_expr(expr.operand, scope)
-        if isinstance(operand, BoolValue):
-            return BoolValue(not operand.value)
-        raise AssertionError(  # pragma: no cover
-            f"not: expected bool, got {type(operand).__name__}"
-        )
+        return _arith_logical_not(operand)
 
     def _eval_unary_neg(self, expr: UnaryNeg, scope: Scope) -> IntValue | DecimalValue:
         operand = self._eval_expr(expr.operand, scope)
         if isinstance(operand, IntValue):
-            return IntValue(-operand.value)
-        if isinstance(operand, DecimalValue):
-            return DecimalValue(-operand.value)
-        raise RuntimeError(  # pragma: no cover
-            f"unary -: expected number, got {type(operand).__name__}"
-        )
+            result = _arith_negate(NumericKind.INT, operand)
+        elif isinstance(operand, DecimalValue):
+            result = _arith_negate(NumericKind.DECIMAL, operand)
+        else:
+            raise RuntimeError(  # pragma: no cover
+                f"unary -: expected number, got {type(operand).__name__}"
+            )
+        assert isinstance(result, (IntValue, DecimalValue))
+        return result
 
     def _eval_is_test(self, expr: IsTest, scope: Scope) -> BoolValue:
         value = self._eval_expr(expr.expr, scope)
@@ -1794,30 +1803,27 @@ def _coerce(value: Value, target: Type) -> Value:
 def _add(left: Value, right: Value) -> Value:
     """Addition: numeric or text concatenation."""
     if isinstance(left, IntValue) and isinstance(right, IntValue):
-        return IntValue(left.value + right.value)
-    if isinstance(left, (IntValue, DecimalValue)) and isinstance(
-        right, (IntValue, DecimalValue)
-    ):
-        return DecimalValue(_to_decimal(left) + _to_decimal(right))
+        return _arith_add(ArithKind.INT, left, right)
+    if isinstance(left, (IntValue, DecimalValue)) and isinstance(right, (IntValue, DecimalValue)):
+        return _arith_add(ArithKind.DECIMAL, left, right)
     if isinstance(left, TextValue) and isinstance(right, TextValue):
-        return TextValue(left.value + right.value)
+        return _arith_add(ArithKind.TEXT, left, right)
     raise RuntimeError(f"Cannot add {type(left).__name__} and {type(right).__name__}")
 
 
 def _arith(left: Value, right: Value, op: BinOp) -> Value:
     """Subtraction and multiplication."""
     if isinstance(left, IntValue) and isinstance(right, IntValue):
-        if op == BinOp.SUB:
-            return IntValue(left.value - right.value)
-        return IntValue(left.value * right.value)
-    if isinstance(left, (IntValue, DecimalValue)) and isinstance(
+        kind = ArithKind.INT
+    elif isinstance(left, (IntValue, DecimalValue)) and isinstance(
         right, (IntValue, DecimalValue)
     ):
-        ld, rd = _to_decimal(left), _to_decimal(right)
-        if op == BinOp.SUB:
-            return DecimalValue(ld - rd)
-        return DecimalValue(ld * rd)
-    raise RuntimeError(f"Cannot perform {op.value} on {type(left).__name__}")
+        kind = ArithKind.DECIMAL
+    else:
+        raise RuntimeError(f"Cannot perform {op.value} on {type(left).__name__}")
+    if op is BinOp.SUB:
+        return _arith_sub(kind, left, right)
+    return _arith_mul(kind, left, right)
 
 
 def _div(left: Value, right: Value, *, trace: "TraceStore") -> Value:
@@ -1825,85 +1831,42 @@ def _div(left: Value, right: Value, *, trace: "TraceStore") -> Value:
 
     *trace* is used to mint an event id on division by zero.
     """
-    if isinstance(left, (IntValue, DecimalValue)) and isinstance(
-        right, (IntValue, DecimalValue)
-    ):
-        rd = _to_decimal(right)
-        if rd == decimal.Decimal(0):
-            raise AglRaise(
-                _make_exc_value(
-                    "ArithmeticError",
-                    "Division by zero",
-                    trace_id=trace.new_event_id(),
-                    operation=TextValue("/"),
-                )
+    try:
+        return _arith_div(left, right)
+    except AglDivisionByZero:
+        raise AglRaise(
+            _make_exc_value(
+                "ArithmeticError",
+                "Division by zero",
+                trace_id=trace.new_event_id(),
+                operation=TextValue("/"),
             )
-        return DecimalValue(_to_decimal(left) / rd)
-    raise RuntimeError(f"Cannot divide {type(left).__name__}")
-
-
-def _to_decimal(value: Value) -> decimal.Decimal:
-    if isinstance(value, IntValue):
-        return decimal.Decimal(value.value)
-    if isinstance(value, DecimalValue):
-        return value.value
-    raise RuntimeError(f"Not a numeric value: {type(value).__name__}")
+        )
 
 
 def _value_eq(left: Value, right: Value) -> bool:
     """Value equality with int→decimal widening (design §4.3)."""
-    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
-        return decimal.Decimal(left.value) == right.value
-    if isinstance(left, DecimalValue) and isinstance(right, IntValue):
-        return left.value == decimal.Decimal(right.value)
-    return left == right
+    return _arith_value_eq(left, right)
 
 
 def _compare(left: Value, right: Value, op: BinOp) -> BoolValue:
     """Equality and ordering comparison."""
-    if op == BinOp.EQ:
-        return BoolValue(_value_eq(left, right))
-    if op == BinOp.NEQ:
-        return BoolValue(not _value_eq(left, right))
-
-    # Widen for ordering comparison.
-    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
-        left = DecimalValue(decimal.Decimal(left.value))
-    elif isinstance(left, DecimalValue) and isinstance(right, IntValue):
-        right = DecimalValue(decimal.Decimal(right.value))
-
-    if isinstance(left, IntValue) and isinstance(right, IntValue):
-        return _order_result(left.value, right.value, op)
-    if isinstance(left, DecimalValue) and isinstance(right, DecimalValue):
-        return _order_result(left.value, right.value, op)
-    if isinstance(left, TextValue) and isinstance(right, TextValue):
-        return _order_result(left.value, right.value, op)
-    raise RuntimeError(
-        f"Cannot compare {type(left).__name__} and {type(right).__name__}"
-    )
-
-
-def _order_result(left: _Ordered, right: _Ordered, op: BinOp) -> BoolValue:
-    """Apply an ordering operator to two same-kind comparable keys."""
-    if op == BinOp.LT:
-        return BoolValue(left < right)
-    if op == BinOp.LE:
-        return BoolValue(left <= right)
-    if op == BinOp.GT:
-        return BoolValue(left > right)
-    return BoolValue(left >= right)
+    if op is BinOp.EQ:
+        return BoolValue(_arith_value_eq(left, right))
+    if op is BinOp.NEQ:
+        return BoolValue(not _arith_value_eq(left, right))
+    _op_map = {BinOp.LT: CmpOp.LT, BinOp.LE: CmpOp.LE, BinOp.GT: CmpOp.GT, BinOp.GE: CmpOp.GE}
+    return BoolValue(_arith_order(_op_map[op], left, right))
 
 
 def _in_op(left: Value, right: Value) -> BoolValue:
     """``x in container`` operator."""
     if isinstance(right, ListValue):
-        return BoolValue(any(_value_eq(left, elem) for elem in right.elements))
+        return BoolValue(_arith_contains(ContainsKind.LIST, left, right))
     if isinstance(right, DictValue):
-        if isinstance(left, TextValue):
-            return BoolValue(left.value in right.entries)
-        return BoolValue(False)
+        return BoolValue(_arith_contains(ContainsKind.DICT, left, right))
     if isinstance(right, TextValue) and isinstance(left, TextValue):
-        return BoolValue(left.value in right.value)
+        return BoolValue(_arith_contains(ContainsKind.TEXT, left, right))
     raise RuntimeError(
         f"Cannot use 'in' with {type(left).__name__} and {type(right).__name__}"
     )

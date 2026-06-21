@@ -11,16 +11,45 @@ is raised; it propagates up the Python call stack and is caught by:
   - a ``try``/``catch`` statement evaluator (matching by type name),
   - or the top-level ``WorkflowRuntime.run()`` dispatcher (converts to
     ``RunResult.error``).
+
+``make_builtin_exception`` is the single shared factory for built-in exception
+values.  Both the legacy interpreter and the IR interpreter call it with their
+own trace id (trace-id minting is per-evaluator).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from agm.agl.eval.values import ExceptionValue
+from agm.agl.eval.values import ExceptionValue, TextValue
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import PRELUDE_ID
 
 if TYPE_CHECKING:
+    from agm.agl.eval.values import Value
     from agm.agl.syntax.spans import SourceSpan
+
+
+def make_builtin_exception(
+    type_name: str, message: str, *, trace_id: str = "", **extra: "Value"
+) -> ExceptionValue:
+    """Create an ``ExceptionValue`` for a built-in exception type.
+
+    Built-in exceptions use ``NominalId(PRELUDE_ID, type_name)``.
+    ``trace_id`` is minted by the *caller's* evaluator (per-evaluator identity).
+    Extra keyword arguments become additional fields beyond ``message`` and
+    ``trace_id``.
+    """
+    fields: dict[str, "Value"] = {
+        "message": TextValue(message),
+        "trace_id": TextValue(trace_id),
+    }
+    fields.update(extra)
+    return ExceptionValue(
+        nominal=NominalId(PRELUDE_ID, type_name),
+        display_name=type_name,
+        fields=fields,
+    )
 
 
 class AglRaise(Exception):

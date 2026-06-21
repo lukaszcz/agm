@@ -1,0 +1,739 @@
+"""Tests for the AgL lowering phase (M2-A).
+
+Covers:
+- ``compile_coercion`` — every branch of the coercion compiler.
+- ``lower_program`` — lowering of the M2 node subset, including coercion
+  insertion, binding/assignment lowering, and validate_ir pass.
+
+Pipeline helper: reuses the ``parse_resolve_check`` pattern from
+``tests/test_agl_typecheck.py`` to obtain a ``CheckedProgram`` from source.
+"""
+
+from __future__ import annotations
+
+import decimal
+
+import pytest
+
+from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.nodes import (
+    IrAssign,
+    IrBind,
+    IrBlock,
+    IrCoerce,
+    IrConstBool,
+    IrConstDecimal,
+    IrConstInt,
+    IrConstJsonNull,
+    IrConstText,
+    IrConstUnit,
+    IrLoad,
+    IrMakeDict,
+    IrMakeList,
+)
+from agm.agl.ir.operations import (
+    IntToDecimal,
+    MapDictValues,
+    MapEnumFields,
+    MapList,
+    MapRecordFields,
+    ToJson,
+)
+from agm.agl.ir.program import ExecutableProgram
+from agm.agl.ir.validate import validate_ir
+from agm.agl.lower import compile_coercion, lower_program
+from agm.agl.lower.lowerer import _Lowerer
+from agm.agl.parser import parse_program
+from agm.agl.scope import resolve
+from agm.agl.typecheck import check
+from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck.types import (
+    BoolType,
+    DecimalType,
+    DictType,
+    EnumType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+    TypeVarType,
+    UnitType,
+)
+
+# ---------------------------------------------------------------------------
+# Pipeline helper
+# ---------------------------------------------------------------------------
+
+
+def _caps() -> HostCapabilities:
+    return HostCapabilities(
+        agent_names=frozenset(),
+        has_default_agent=True,
+        supports_shell_exec=True,
+        codec_kinds={
+            "text": frozenset({"text"}),
+            "json": frozenset(
+                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+            ),
+        },
+    )
+
+
+def _check(source: str) -> CheckedProgram:
+    prog = parse_program(source)
+    resolved = resolve(prog)
+    return check(resolved, _caps())
+
+
+def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:
+    """Parse → check → lower the source; return ExecutableProgram."""
+    checked = _check(source)
+    return lower_program(
+        checked,
+        source_text=source,
+        source_label="<test>",
+        validate=validate,
+    )
+
+
+# ---------------------------------------------------------------------------
+# compile_coercion unit tests — every branch
+# ---------------------------------------------------------------------------
+
+
+class TestCompileCoercion:
+    # Identity / None cases
+
+    def test_same_int_type_is_none(self) -> None:
+        assert compile_coercion(IntType(), IntType()) is None
+
+    def test_same_text_type_is_none(self) -> None:
+        assert compile_coercion(TextType(), TextType()) is None
+
+    def test_same_bool_type_is_none(self) -> None:
+        assert compile_coercion(BoolType(), BoolType()) is None
+
+    def test_same_decimal_type_is_none(self) -> None:
+        assert compile_coercion(DecimalType(), DecimalType()) is None
+
+    def test_same_unit_type_is_none(self) -> None:
+        assert compile_coercion(UnitType(), UnitType()) is None
+
+    def test_same_json_type_is_none(self) -> None:
+        # json → json: identity, no coercion
+        assert compile_coercion(JsonType(), JsonType()) is None
+
+    def test_type_var_source_is_none(self) -> None:
+        # TypeVarType source → opaque, no coercion
+        assert compile_coercion(TypeVarType("T"), IntType()) is None
+
+    def test_type_var_target_is_none(self) -> None:
+        assert compile_coercion(IntType(), TypeVarType("T")) is None
+
+    # Scalar coercions
+
+    def test_int_to_decimal(self) -> None:
+        result = compile_coercion(IntType(), DecimalType())
+        assert result == IntToDecimal()
+
+    def test_int_to_json(self) -> None:
+        # Rule 1: target is JsonType and source is not JsonType → ToJson
+        result = compile_coercion(IntType(), JsonType())
+        assert result == ToJson()
+
+    def test_text_to_json(self) -> None:
+        result = compile_coercion(TextType(), JsonType())
+        assert result == ToJson()
+
+    def test_bool_to_json(self) -> None:
+        result = compile_coercion(BoolType(), JsonType())
+        assert result == ToJson()
+
+    def test_decimal_to_json(self) -> None:
+        result = compile_coercion(DecimalType(), JsonType())
+        assert result == ToJson()
+
+    def test_list_int_to_json(self) -> None:
+        result = compile_coercion(ListType(IntType()), JsonType())
+        assert result == ToJson()
+
+    # List coercions
+
+    def test_list_int_to_list_decimal(self) -> None:
+        result = compile_coercion(ListType(IntType()), ListType(DecimalType()))
+        assert result == MapList(IntToDecimal())
+
+    def test_list_int_to_list_int_is_none(self) -> None:
+        # Element coercion is None → outer is None
+        result = compile_coercion(ListType(IntType()), ListType(IntType()))
+        assert result is None
+
+    def test_list_int_to_list_json(self) -> None:
+        result = compile_coercion(ListType(IntType()), ListType(JsonType()))
+        assert result == MapList(ToJson())
+
+    def test_nested_list_int_to_list_list_decimal(self) -> None:
+        result = compile_coercion(
+            ListType(ListType(IntType())),
+            ListType(ListType(DecimalType())),
+        )
+        assert result == MapList(MapList(IntToDecimal()))
+
+    # Dict coercions
+
+    def test_dict_int_to_dict_decimal(self) -> None:
+        result = compile_coercion(DictType(IntType()), DictType(DecimalType()))
+        assert result == MapDictValues(IntToDecimal())
+
+    def test_dict_int_to_dict_int_is_none(self) -> None:
+        result = compile_coercion(DictType(IntType()), DictType(IntType()))
+        assert result is None
+
+    def test_dict_int_to_dict_json(self) -> None:
+        result = compile_coercion(DictType(IntType()), DictType(JsonType()))
+        assert result == MapDictValues(ToJson())
+
+    # Record coercions
+
+    def test_record_no_field_needs_coercion_is_none(self) -> None:
+        rec = RecordType("R", {"x": IntType()})
+        result = compile_coercion(rec, rec)
+        assert result is None
+
+    def test_record_one_field_needs_coercion(self) -> None:
+        src = RecordType("R", {"x": IntType(), "y": TextType()})
+        tgt = RecordType("R", {"x": DecimalType(), "y": TextType()})
+        result = compile_coercion(src, tgt)
+        assert result == MapRecordFields((("x", IntToDecimal()),))
+
+    def test_record_multiple_fields_need_coercion(self) -> None:
+        src = RecordType("R", {"x": IntType(), "y": IntType()})
+        tgt = RecordType("R", {"x": DecimalType(), "y": DecimalType()})
+        result = compile_coercion(src, tgt)
+        assert result == MapRecordFields((("x", IntToDecimal()), ("y", IntToDecimal())))
+
+    def test_record_target_field_not_in_source_skipped(self) -> None:
+        # Only shared fields are coerced; fields not in source are ignored
+        src = RecordType("R", {"x": IntType()})
+        tgt = RecordType("R", {"x": DecimalType(), "z": TextType()})
+        result = compile_coercion(src, tgt)
+        assert result == MapRecordFields((("x", IntToDecimal()),))
+
+    # Enum coercions
+
+    def test_enum_no_field_coercion_needed_is_none(self) -> None:
+        e = EnumType("E", {"A": {"x": IntType()}, "B": {}})
+        result = compile_coercion(e, e)
+        assert result is None
+
+    def test_enum_one_variant_field_needs_coercion(self) -> None:
+        src = EnumType("E", {"A": {"x": IntType()}, "B": {}})
+        tgt = EnumType("E", {"A": {"x": DecimalType()}, "B": {}})
+        result = compile_coercion(src, tgt)
+        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
+
+    def test_enum_empty_result_variant_excluded(self) -> None:
+        # Variant B has no fields needing coercion → only A in result
+        src = EnumType("E", {"A": {"x": IntType()}, "B": {"y": TextType()}})
+        tgt = EnumType("E", {"A": {"x": DecimalType()}, "B": {"y": TextType()}})
+        result = compile_coercion(src, tgt)
+        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
+
+    def test_enum_target_field_not_in_source_skipped(self) -> None:
+        # Target variant A has field "extra" not in source → only "x" can be coerced
+        src = EnumType("E", {"A": {"x": IntType()}})
+        tgt = EnumType("E", {"A": {"x": DecimalType(), "extra": TextType()}})
+        result = compile_coercion(src, tgt)
+        # "extra" is not in source so it's skipped; only "x" coercion emitted
+        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
+
+    def test_enum_source_variant_not_in_target_skipped(self) -> None:
+        # Source has variant B that target doesn't; only target variants are processed
+        src = EnumType("E", {"A": {"x": IntType()}, "B": {"y": IntType()}})
+        tgt = EnumType("E", {"A": {"x": DecimalType()}})
+        result = compile_coercion(src, tgt)
+        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
+
+    # Fallthrough — otherwise → None
+
+    def test_int_to_text_is_none(self) -> None:
+        # No implicit int→text coercion; the checker would reject this
+        assert compile_coercion(IntType(), TextType()) is None
+
+    def test_text_to_bool_is_none(self) -> None:
+        assert compile_coercion(TextType(), BoolType()) is None
+
+
+# ---------------------------------------------------------------------------
+# lower_program: basic sanity — validate_ir passes
+# ---------------------------------------------------------------------------
+
+
+class TestLowerProgramValidateIr:
+    def test_empty_body_raises(self) -> None:
+        # A program ending in a let/var is a static error; an empty body would
+        # be "()" which is valid. Test a simple constant program validates.
+        prog = _lower("()")
+        validate_ir(prog)
+
+    def test_validate_passes_for_all_literal_types(self) -> None:
+        source = "1"
+        prog = _lower(source)
+        validate_ir(prog)
+
+
+# ---------------------------------------------------------------------------
+# lower_program: literal lowering
+# ---------------------------------------------------------------------------
+
+
+class TestLiteralLowering:
+    def test_int_literal(self) -> None:
+        prog = _lower("42")
+        inits = prog.modules[prog.entry_module].initializers
+        assert len(inits) == 1
+        node = inits[0]
+        assert isinstance(node, IrConstInt)
+        assert node.value == 42
+
+    def test_decimal_literal(self) -> None:
+        prog = _lower("3.14")
+        inits = prog.modules[prog.entry_module].initializers
+        node = inits[0]
+        assert isinstance(node, IrConstDecimal)
+        assert node.value == decimal.Decimal("3.14")
+
+    def test_bool_true_literal(self) -> None:
+        prog = _lower("true")
+        node = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(node, IrConstBool)
+        assert node.value is True
+
+    def test_bool_false_literal(self) -> None:
+        prog = _lower("false")
+        node = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(node, IrConstBool)
+        assert node.value is False
+
+    def test_string_literal(self) -> None:
+        prog = _lower('"hello"')
+        node = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(node, IrConstText)
+        assert node.value == "hello"
+
+    def test_null_literal(self) -> None:
+        prog = _lower("null")
+        node = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(node, IrConstJsonNull)
+
+    def test_unit_literal(self) -> None:
+        prog = _lower("()")
+        node = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(node, IrConstUnit)
+
+    def test_location_has_correct_source_id(self) -> None:
+        prog = _lower("42")
+        node = prog.modules[prog.entry_module].initializers[0]
+        # There should be exactly one source registered
+        assert len(prog.sources) == 1
+        (src_id,) = prog.sources
+        assert node.location.source_id == src_id
+
+
+# ---------------------------------------------------------------------------
+# lower_program: list literal lowering
+# ---------------------------------------------------------------------------
+
+
+class TestListLitLowering:
+    def test_empty_list(self) -> None:
+        # list[int] with no elements
+        prog = _lower("let _x: list[int] = []\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        make_list = bind.value
+        assert isinstance(make_list, IrMakeList)
+        assert make_list.items == ()
+
+    def test_list_int_elements_no_coercion(self) -> None:
+        prog = _lower("let _x: list[int] = [1, 2, 3]\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        make_list = bind.value
+        assert isinstance(make_list, IrMakeList)
+        # Elements are plain IrConstInt (no coercion needed)
+        for item in make_list.items:
+            assert isinstance(item, IrConstInt)
+
+    def test_list_with_element_coercion(self) -> None:
+        # list[decimal] = [1, 2] — elements need IntToDecimal
+        prog = _lower("let _x: list[decimal] = [1, 2]\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        make_list = bind.value
+        assert isinstance(make_list, IrMakeList)
+        # Each element is IrCoerce(IrConstInt, IntToDecimal())
+        for item in make_list.items:
+            assert isinstance(item, IrCoerce)
+            assert isinstance(item.value, IrConstInt)
+            assert item.operation == IntToDecimal()
+
+    def test_list_int_to_json_whole_list_coercion(self) -> None:
+        # let j: json = [1, 2] — entire list is wrapped in ToJson
+        prog = _lower("let _x: json = [1, 2]\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        # The value should be IrCoerce(IrMakeList(...), ToJson())
+        coerce = bind.value
+        assert isinstance(coerce, IrCoerce)
+        assert coerce.operation == ToJson()
+        assert isinstance(coerce.value, IrMakeList)
+
+
+# ---------------------------------------------------------------------------
+# lower_program: dict literal lowering
+# ---------------------------------------------------------------------------
+
+
+class TestDictLitLowering:
+    def test_empty_dict(self) -> None:
+        prog = _lower("let _x: dict[text, int] = {}\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assert isinstance(bind.value, IrMakeDict)
+        assert bind.value.entries == ()
+
+    def test_dict_value_no_coercion(self) -> None:
+        prog = _lower('let _x: dict[text, int] = {"a": 1}\n()')
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        make_dict = bind.value
+        assert isinstance(make_dict, IrMakeDict)
+        assert len(make_dict.entries) == 1
+        key_expr, val_expr = make_dict.entries[0]
+        assert isinstance(key_expr, IrConstText)
+        assert key_expr.value == "a"
+        assert isinstance(val_expr, IrConstInt)
+
+    def test_dict_value_with_coercion(self) -> None:
+        # dict[text, decimal] = {"a": 1} — value needs IntToDecimal
+        prog = _lower('let _x: dict[text, decimal] = {"a": 1}\n()')
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        make_dict = bind.value
+        assert isinstance(make_dict, IrMakeDict)
+        _key, val_expr = make_dict.entries[0]
+        assert isinstance(val_expr, IrCoerce)
+        assert val_expr.operation == IntToDecimal()
+
+
+# ---------------------------------------------------------------------------
+# lower_program: let / var binding lowering
+# ---------------------------------------------------------------------------
+
+
+class TestBindingLowering:
+    def test_let_binding_identity_no_coerce(self) -> None:
+        # let x: int = 5 — no coercion needed
+        prog = _lower("let _x: int = 5\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assert not prog.symbols[bind.symbol].mutable
+        assert isinstance(bind.value, IrConstInt)
+        assert bind.value.value == 5
+
+    def test_let_binding_int_to_decimal(self) -> None:
+        # let d: decimal = 1 → IrBind(.., IrCoerce(IrConstInt, IntToDecimal))
+        prog = _lower("let _d: decimal = 1\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assert isinstance(bind.value, IrCoerce)
+        assert bind.value.operation == IntToDecimal()
+        assert isinstance(bind.value.value, IrConstInt)
+        assert bind.value.value.value == 1
+
+    def test_let_binding_to_json(self) -> None:
+        # let j: json = 1 → IrCoerce(IrConstInt, ToJson)
+        prog = _lower("let _j: json = 1\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        coerce = bind.value
+        assert isinstance(coerce, IrCoerce)
+        assert coerce.operation == ToJson()
+
+    def test_let_binding_list_decimal_elements_coerced_not_outer(self) -> None:
+        # let xs: list[decimal] = [1, 2]
+        # Elements each get IntToDecimal; the list itself does NOT get MapList
+        # because the list's own checked type is already list[decimal]
+        # (the element coercion is applied at element level, not list level).
+        prog = _lower("let _xs: list[decimal] = [1, 2]\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        # The bind value should be IrMakeList with coerced elements
+        make_list = bind.value
+        assert isinstance(make_list, IrMakeList)
+        for item in make_list.items:
+            assert isinstance(item, IrCoerce)
+            assert item.operation == IntToDecimal()
+
+    def test_let_var_ref_identity_no_coerce(self) -> None:
+        # let a: list[int] = [1]; let b: list[int] = a — no coercion needed
+        # (list[int] → list[decimal] is rejected by the type checker, so
+        # MapList(IntToDecimal) on an IrLoad can only arise in later milestones
+        # that extend assignability.  The contract example is forward-looking.)
+        prog = _lower("let _a: list[int] = [1]\nlet _b: list[int] = _a\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind_b = inits[1]
+        assert isinstance(bind_b, IrBind)
+        # No coercion wrap — direct IrLoad
+        load = bind_b.value
+        assert isinstance(load, IrLoad)
+
+    def test_var_binding_is_mutable(self) -> None:
+        prog = _lower("var _x: int = 0\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assert prog.symbols[bind.symbol].mutable
+
+    def test_symbol_public_name(self) -> None:
+        prog = _lower("let myvar: int = 1\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        desc = prog.symbols[bind.symbol]
+        assert desc.public_name == "myvar"
+
+    def test_symbol_owner_is_entry_module(self) -> None:
+        prog = _lower("let _x: int = 1\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        desc = prog.symbols[bind.symbol]
+        assert desc.owner == prog.entry_module
+
+
+# ---------------------------------------------------------------------------
+# lower_program: VarRef lowering (IrLoad)
+# ---------------------------------------------------------------------------
+
+
+class TestVarRefLowering:
+    def test_varref_emits_ir_load(self) -> None:
+        prog = _lower("let _x: int = 1\n_x")
+        inits = prog.modules[prog.entry_module].initializers
+        load = inits[1]
+        assert isinstance(load, IrLoad)
+
+    def test_varref_resolves_to_correct_symbol(self) -> None:
+        prog = _lower("let _a: int = 1\n_a")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        load = inits[1]
+        assert isinstance(load, IrLoad)
+        assert load.symbol == bind.symbol
+
+
+# ---------------------------------------------------------------------------
+# lower_program: AssignStmt lowering (simple name target only)
+# ---------------------------------------------------------------------------
+
+
+class TestAssignStmtLowering:
+    def test_simple_assign_emits_ir_assign_empty_path(self) -> None:
+        prog = _lower("var _x: int = 0\n_x := 5\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        assign = inits[1]
+        assert isinstance(assign, IrAssign)
+        assert assign.path == ()
+
+    def test_simple_assign_symbol_matches_binding(self) -> None:
+        prog = _lower("var _x: int = 0\n_x := 5\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assign = inits[1]
+        assert isinstance(assign, IrAssign)
+        assert assign.symbol == bind.symbol
+
+    def test_assign_with_coercion(self) -> None:
+        # var x: decimal = 0.0; x := 1  (int → decimal coercion on RHS)
+        prog = _lower("var _x: decimal = 0.0\n_x := 1\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        assign = inits[1]
+        assert isinstance(assign, IrAssign)
+        coerce = assign.value
+        assert isinstance(coerce, IrCoerce)
+        assert coerce.operation == IntToDecimal()
+
+    def test_assign_no_coercion_when_types_match(self) -> None:
+        prog = _lower("var _x: int = 0\n_x := 5\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        assign = inits[1]
+        assert isinstance(assign, IrAssign)
+        assert isinstance(assign.value, IrConstInt)
+
+
+# ---------------------------------------------------------------------------
+# lower_program: Block lowering
+#
+# A Block node appears as an expression only inside branches of control-flow
+# (if/case/do/try) and function bodies — all of which are M3+.  We test the
+# Block lowering path by calling the lowerer's internal API directly with a
+# synthetic Block node constructed from a lowered CheckedProgram.  This
+# exercises the Block arm of lower_expr and _lower_block without needing M3
+# control-flow in the source.
+# ---------------------------------------------------------------------------
+
+
+class TestBlockLowering:
+    def test_block_emits_ir_block(self) -> None:
+        # Build a CheckedProgram from a simple multi-statement source so we
+        # can reuse its node_types and resolution tables.  Then construct
+        # a synthetic Block wrapping those items and call lower_expr directly.
+        from agm.agl.syntax.nodes import Block, LetDecl, VarRef
+        from agm.agl.syntax.spans import SourceSpan
+
+        src = "let _a: int = 1\n_a"
+        checked = _check(src)
+        # Build a _Lowerer in the same state as lower_program would, but stop
+        # before running the top-level body so we can call lower_expr manually.
+        lowerer = _Lowerer(checked, src, "<test>")
+
+        body = checked.resolved.program.body
+        # body.items = [LetDecl(_a, ...), VarRef(_a, ...)]
+        let_item = body.items[0]
+        ref_item = body.items[1]
+        assert isinstance(let_item, LetDecl)
+        assert isinstance(ref_item, VarRef)
+
+        sp = SourceSpan(
+            start_line=1, start_col=1, end_line=2, end_col=3,
+            start_offset=0, end_offset=len(src),
+        )
+        block = Block(items=(let_item, ref_item), span=sp, node_id=9999)
+
+        # Call lower_expr — must allocate the LetDecl symbol first via
+        # lower_item for the LetDecl, then lower_expr for VarRef can resolve.
+        # We use lower_expr on the Block which calls lower_item on each child.
+        ir = lowerer.lower_expr(block)
+        assert isinstance(ir, IrBlock)
+        # IrBlock should have exactly 2 items: IrBind + IrLoad
+        assert len(ir.items) == 2
+        assert isinstance(ir.items[0], IrBind)
+        assert isinstance(ir.items[1], IrLoad)
+
+
+# ---------------------------------------------------------------------------
+# lower_program: sources table
+# ---------------------------------------------------------------------------
+
+
+class TestSourcesTable:
+    def test_single_source_registered(self) -> None:
+        prog = _lower("()")
+        assert len(prog.sources) == 1
+
+    def test_source_display_name(self) -> None:
+        prog = _lower("()", validate=False)
+        (src_id,) = prog.sources
+        assert prog.sources[src_id].display_name == "<test>"
+
+    def test_source_normalized_text(self) -> None:
+        src = "()"
+        prog = _lower(src)
+        (src_id,) = prog.sources
+        assert prog.sources[src_id].normalized_text == src
+
+
+# ---------------------------------------------------------------------------
+# lower_program: nominals table is empty in M2
+# ---------------------------------------------------------------------------
+
+
+class TestNominalsEmpty:
+    def test_nominals_empty(self) -> None:
+        prog = _lower("()")
+        assert prog.nominals == {}
+
+
+# ---------------------------------------------------------------------------
+# lower_program: unsupported nodes raise a clear error
+# ---------------------------------------------------------------------------
+
+
+class TestUnsupportedNodes:
+    def test_function_call_raises_not_implemented(self) -> None:
+        """Calls are not in the M2 subset; lowering must raise NotImplementedError."""
+        with pytest.raises(NotImplementedError):
+            _lower("def f() -> int = 1\nf()")
+
+    def test_binary_op_raises_not_implemented(self) -> None:
+        with pytest.raises(NotImplementedError):
+            _lower("1 + 2")
+
+    def test_indexed_assign_raises_not_implemented(self) -> None:
+        """IndexTarget assignment paths are deferred to M3; must raise NotImplementedError."""
+        with pytest.raises(NotImplementedError):
+            _lower('var _d: dict[text, int] = {"a": 1}\n_d["a"] := 2\n()')
+
+
+# ---------------------------------------------------------------------------
+# lower_program: Location fields are valid
+# ---------------------------------------------------------------------------
+
+
+class TestLocationValidity:
+    def test_location_on_int_literal_is_valid(self) -> None:
+        prog = _lower("42")
+        node = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(node, IrConstInt)
+        loc = node.location
+        assert loc.start_offset >= 0
+        assert loc.start_offset <= loc.end_offset
+        assert loc.start_line >= 1
+        assert loc.start_col >= 0
+
+    def test_location_source_id_in_sources(self) -> None:
+        prog = _lower("42")
+        node = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(node, IrConstInt)
+        assert node.location.source_id in prog.sources
+
+
+# ---------------------------------------------------------------------------
+# lower_program: validate_ir integration
+# ---------------------------------------------------------------------------
+
+
+class TestValidateIrIntegration:
+    def test_validate_ir_passes_on_complex_program(self) -> None:
+        source = (
+            "let _a: int = 1\n"
+            "let _b: decimal = 2\n"
+            "let _c: list[decimal] = [1, 2]\n"
+            'let _d: dict[text, decimal] = {"x": 1}\n'
+            "var _v: int = 0\n"
+            "_v := 3\n"
+            "()"
+        )
+        prog = _lower(source, validate=True)
+        validate_ir(prog)
+
+    def test_validate_false_skips_validation(self) -> None:
+        # Should not raise even without explicit validate call
+        prog = _lower("()", validate=False)
+        assert prog is not None

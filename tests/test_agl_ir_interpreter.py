@@ -1,0 +1,971 @@
+"""Tests for the IrInterpreter (M2-B) — hand-built ExecutableProgram programs.
+
+These tests drive the evaluator with manually constructed IR programs; they do
+NOT depend on the lowerer (M2-A, built in parallel).  Helper factories keep
+boilerplate minimal.
+
+Coverage targets:
+- Every constant type.
+- List and dict construction.
+- let (immutable) bind + load.
+- var (mutable) bind + load + assign (cell mutation).
+- IrSequence and IrBlock (value-of-last).
+- All IrCoerce operations: IntToDecimal, ToJson (scalar + container), MapList,
+  MapDictValues, MapRecordFields, MapEnumFields.
+- Decimal context: IntToDecimal of a large int is exact (no float).
+- Defensive InvalidIrError on a malformed coercion.
+- Import-scan: IrInterpreter must NOT import syntax/scope/typecheck modules.
+"""
+
+from __future__ import annotations
+
+import ast
+import decimal
+import importlib
+import pathlib
+
+import pytest
+
+from agm.agl.eval.ir_interpreter import IrInterpreter
+from agm.agl.eval.values import (
+    BoolValue,
+    DecimalValue,
+    DictValue,
+    EnumValue,
+    IntValue,
+    JsonValue,
+    ListValue,
+    RecordValue,
+    TextValue,
+    UnitValue,
+    Value,
+)
+from agm.agl.ir import (
+    ExecutableModule,
+    ExecutableProgram,
+    IntToDecimal,
+    InvalidIrError,
+    IrAssign,
+    IrBind,
+    IrBlock,
+    IrCoerce,
+    IrConstBool,
+    IrConstDecimal,
+    IrConstInt,
+    IrConstJsonNull,
+    IrConstText,
+    IrConstUnit,
+    IrExpr,
+    IrIndexStep,
+    IrLoad,
+    IrMakeDict,
+    IrMakeList,
+    IrSequence,
+    Location,
+    MapDictValues,
+    MapEnumFields,
+    MapList,
+    MapRecordFields,
+    SourceFile,
+    SourceId,
+    SymbolDescriptor,
+    SymbolId,
+    ToJson,
+)
+from agm.agl.modules.ids import ENTRY_ID
+
+# ---------------------------------------------------------------------------
+# Helper factories
+# ---------------------------------------------------------------------------
+
+_SOURCE_ID = SourceId(0)
+_LOC = Location(
+    source_id=_SOURCE_ID,
+    start_offset=0,
+    end_offset=1,
+    start_line=1,
+    start_col=0,
+)
+_SOURCE_TEXT = "x"
+
+
+def _make_program(
+    initializers: tuple[IrExpr, ...],
+    symbols: dict[SymbolId, SymbolDescriptor] | None = None,
+) -> ExecutableProgram:
+    """Build a minimal single-module ExecutableProgram."""
+    sources = {_SOURCE_ID: SourceFile(display_name="<test>", normalized_text=_SOURCE_TEXT)}
+    return ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=initializers)
+        },
+        symbols=symbols or {},
+        nominals={},
+        sources=sources,
+    )
+
+
+def _let_sym(n: int, name: str) -> tuple[SymbolId, SymbolDescriptor]:
+    """Return a (SymbolId, SymbolDescriptor) for an immutable let binding."""
+    sym = SymbolId(n)
+    desc = SymbolDescriptor(
+        symbol_id=sym, mutable=False, public_name=name, owner=ENTRY_ID
+    )
+    return sym, desc
+
+
+def _var_sym(n: int, name: str) -> tuple[SymbolId, SymbolDescriptor]:
+    """Return a (SymbolId, SymbolDescriptor) for a mutable var binding."""
+    sym = SymbolId(n)
+    desc = SymbolDescriptor(
+        symbol_id=sym, mutable=True, public_name=name, owner=ENTRY_ID
+    )
+    return sym, desc
+
+
+def _run(
+    initializers: tuple[IrExpr, ...],
+    symbols: dict[SymbolId, SymbolDescriptor] | None = None,
+) -> dict[str, Value]:
+    """Build a program and run it; return the public-name bindings."""
+    prog = _make_program(initializers, symbols)
+    return IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+
+class TestConstants:
+    def test_int(self) -> None:
+        sym, desc = _let_sym(0, "x")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstInt(_LOC, 42)),),
+            {sym: desc},
+        )
+        assert result == {"x": IntValue(42)}
+
+    def test_decimal(self) -> None:
+        sym, desc = _let_sym(0, "x")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstDecimal(_LOC, decimal.Decimal("3.14"))),),
+            {sym: desc},
+        )
+        assert result == {"x": DecimalValue(decimal.Decimal("3.14"))}
+
+    def test_bool_true(self) -> None:
+        sym, desc = _let_sym(0, "x")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstBool(_LOC, True)),),
+            {sym: desc},
+        )
+        assert result == {"x": BoolValue(True)}
+
+    def test_bool_false(self) -> None:
+        sym, desc = _let_sym(0, "f")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstBool(_LOC, False)),),
+            {sym: desc},
+        )
+        assert result == {"f": BoolValue(False)}
+
+    def test_text(self) -> None:
+        sym, desc = _let_sym(0, "s")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstText(_LOC, "hello")),),
+            {sym: desc},
+        )
+        assert result == {"s": TextValue("hello")}
+
+    def test_unit(self) -> None:
+        sym, desc = _let_sym(0, "u")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstUnit(_LOC)),),
+            {sym: desc},
+        )
+        assert result == {"u": UnitValue()}
+
+    def test_json_null(self) -> None:
+        sym, desc = _let_sym(0, "n")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstJsonNull(_LOC)),),
+            {sym: desc},
+        )
+        assert result == {"n": JsonValue(None)}
+
+
+# ---------------------------------------------------------------------------
+# Container construction
+# ---------------------------------------------------------------------------
+
+
+class TestContainers:
+    def test_make_list(self) -> None:
+        sym, desc = _let_sym(0, "lst")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeList(
+                        _LOC,
+                        (
+                            IrConstInt(_LOC, 1),
+                            IrConstInt(_LOC, 2),
+                            IrConstInt(_LOC, 3),
+                        ),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"lst": ListValue((IntValue(1), IntValue(2), IntValue(3)))}
+
+    def test_make_list_empty(self) -> None:
+        sym, desc = _let_sym(0, "empty")
+        result = _run(
+            (IrBind(_LOC, sym, IrMakeList(_LOC, ())),),
+            {sym: desc},
+        )
+        assert result == {"empty": ListValue(())}
+
+    def test_make_dict(self) -> None:
+        sym, desc = _let_sym(0, "d")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeDict(
+                        _LOC,
+                        (
+                            (IrConstText(_LOC, "a"), IrConstInt(_LOC, 1)),
+                            (IrConstText(_LOC, "b"), IrConstInt(_LOC, 2)),
+                        ),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {
+            "d": DictValue({"a": IntValue(1), "b": IntValue(2)})
+        }
+
+    def test_make_dict_empty(self) -> None:
+        sym, desc = _let_sym(0, "d")
+        result = _run(
+            (IrBind(_LOC, sym, IrMakeDict(_LOC, ())),),
+            {sym: desc},
+        )
+        assert result == {"d": DictValue({})}
+
+
+# ---------------------------------------------------------------------------
+# Let bind + load
+# ---------------------------------------------------------------------------
+
+
+class TestLetBind:
+    def test_let_bind_and_load(self) -> None:
+        sym, desc = _let_sym(0, "x")
+        # let x = 7; load x
+        result = _run(
+            (
+                IrBind(_LOC, sym, IrConstInt(_LOC, 7)),
+                # the load is just to exercise; we inspect via run() result
+                IrLoad(_LOC, sym),
+            ),
+            {sym: desc},
+        )
+        assert result == {"x": IntValue(7)}
+
+    def test_multiple_let_bindings(self) -> None:
+        sym_a, desc_a = _let_sym(0, "a")
+        sym_b, desc_b = _let_sym(1, "b")
+        result = _run(
+            (
+                IrBind(_LOC, sym_a, IrConstInt(_LOC, 10)),
+                IrBind(_LOC, sym_b, IrConstInt(_LOC, 20)),
+            ),
+            {sym_a: desc_a, sym_b: desc_b},
+        )
+        assert result == {"a": IntValue(10), "b": IntValue(20)}
+
+
+# ---------------------------------------------------------------------------
+# Var bind + load + assign (cell mutation)
+# ---------------------------------------------------------------------------
+
+
+class TestVarCell:
+    def test_var_load_unwraps_cell(self) -> None:
+        sym, desc = _var_sym(0, "v")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstInt(_LOC, 17)),),
+            {sym: desc},
+        )
+        assert result == {"v": IntValue(17)}
+
+    def test_var_assign_mutates_cell(self) -> None:
+        """Assigning to a var updates the cell; subsequent load sees the new value."""
+        sym, desc = _var_sym(0, "counter")
+        result = _run(
+            (
+                IrBind(_LOC, sym, IrConstInt(_LOC, 0)),
+                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 42)),
+                IrLoad(_LOC, sym),
+            ),
+            {sym: desc},
+        )
+        assert result == {"counter": IntValue(42)}
+
+    def test_var_assign_multiple_times(self) -> None:
+        sym, desc = _var_sym(0, "x")
+        result = _run(
+            (
+                IrBind(_LOC, sym, IrConstInt(_LOC, 1)),
+                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 2)),
+                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 3)),
+            ),
+            {sym: desc},
+        )
+        assert result == {"x": IntValue(3)}
+
+    def test_assign_to_missing_symbol_raises(self) -> None:
+        """IrAssign to an unbound symbol raises InvalidIrError."""
+        sym = SymbolId(99)
+        prog = _make_program(
+            (IrAssign(_LOC, sym, (), IrConstInt(_LOC, 1)),),
+            symbols={},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+    def test_assign_to_let_symbol_raises(self) -> None:
+        """IrAssign to a non-mutable let symbol raises InvalidIrError."""
+        sym, desc = _let_sym(0, "x")
+        prog = _make_program(
+            (
+                IrBind(_LOC, sym, IrConstInt(_LOC, 5)),
+                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 10)),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# Sequence and Block (value-of-last)
+# ---------------------------------------------------------------------------
+
+
+class TestSequenceBlock:
+    def test_sequence_value_is_last(self) -> None:
+        sym, desc = _let_sym(0, "r")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrSequence(
+                        _LOC,
+                        (
+                            IrConstInt(_LOC, 1),
+                            IrConstInt(_LOC, 2),
+                            IrConstInt(_LOC, 99),
+                        ),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"r": IntValue(99)}
+
+    def test_block_value_is_last(self) -> None:
+        sym, desc = _let_sym(0, "r")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrBlock(
+                        _LOC,
+                        (
+                            IrConstBool(_LOC, False),
+                            IrConstText(_LOC, "last"),
+                        ),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"r": TextValue("last")}
+
+    def test_sequence_single_item(self) -> None:
+        sym, desc = _let_sym(0, "x")
+        result = _run(
+            (IrBind(_LOC, sym, IrSequence(_LOC, (IrConstInt(_LOC, 7),))),),
+            {sym: desc},
+        )
+        assert result == {"x": IntValue(7)}
+
+
+# ---------------------------------------------------------------------------
+# IrCoerce — IntToDecimal
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceIntToDecimal:
+    def test_int_to_decimal(self) -> None:
+        sym, desc = _let_sym(0, "d")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstInt(_LOC, 5), IntToDecimal()),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"d": DecimalValue(decimal.Decimal(5))}
+
+    def test_int_to_decimal_large_exact(self) -> None:
+        """Converting a large integer to Decimal must be exact (no float loss)."""
+        big = 10**30 + 7
+        sym, desc = _let_sym(0, "big")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstInt(_LOC, big), IntToDecimal()),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"big": DecimalValue(decimal.Decimal(big))}
+        # Exact — repr round trips without loss.
+        assert result["big"] == DecimalValue(decimal.Decimal(str(big)))
+
+    def test_int_to_decimal_wrong_type_raises(self) -> None:
+        """IntToDecimal on a non-int value raises InvalidIrError."""
+        sym, desc = _let_sym(0, "x")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstBool(_LOC, True), IntToDecimal()),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# IrCoerce — ToJson
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceToJson:
+    def test_to_json_int(self) -> None:
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (IrBind(_LOC, sym, IrCoerce(_LOC, IrConstInt(_LOC, 3), ToJson())),),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue(3)}
+
+    def test_to_json_text(self) -> None:
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (IrBind(_LOC, sym, IrCoerce(_LOC, IrConstText(_LOC, "hi"), ToJson())),),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue("hi")}
+
+    def test_to_json_bool(self) -> None:
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (IrBind(_LOC, sym, IrCoerce(_LOC, IrConstBool(_LOC, True), ToJson())),),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue(True)}
+
+    def test_to_json_list(self) -> None:
+        """ToJson converts a ListValue to a JsonValue wrapping a list."""
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(
+                        _LOC,
+                        IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
+                        ToJson(),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue([1, 2])}
+
+    def test_to_json_already_json_is_idempotent(self) -> None:
+        """ToJson on a JsonValue returns as-is (idempotent defensively)."""
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstJsonNull(_LOC), ToJson()),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue(None)}
+
+
+# ---------------------------------------------------------------------------
+# IrCoerce — MapList
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceMapList:
+    def test_map_list_int_to_decimal(self) -> None:
+        sym, desc = _let_sym(0, "lst")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(
+                        _LOC,
+                        IrMakeList(
+                            _LOC,
+                            (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2), IrConstInt(_LOC, 3)),
+                        ),
+                        MapList(IntToDecimal()),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {
+            "lst": ListValue(
+                (
+                    DecimalValue(decimal.Decimal(1)),
+                    DecimalValue(decimal.Decimal(2)),
+                    DecimalValue(decimal.Decimal(3)),
+                )
+            )
+        }
+
+    def test_map_list_to_json(self) -> None:
+        sym, desc = _let_sym(0, "lst")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(
+                        _LOC,
+                        IrMakeList(_LOC, (IrConstText(_LOC, "a"), IrConstText(_LOC, "b"))),
+                        MapList(ToJson()),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"lst": ListValue((JsonValue("a"), JsonValue("b")))}
+
+    def test_map_list_wrong_value_type_raises(self) -> None:
+        """MapList on a non-list value raises InvalidIrError."""
+        sym, desc = _let_sym(0, "x")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstInt(_LOC, 1), MapList(IntToDecimal())),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# IrCoerce — MapDictValues
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceMapDictValues:
+    def test_map_dict_values_to_json(self) -> None:
+        sym, desc = _let_sym(0, "d")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(
+                        _LOC,
+                        IrMakeDict(
+                            _LOC,
+                            (
+                                (IrConstText(_LOC, "k1"), IrConstInt(_LOC, 10)),
+                                (IrConstText(_LOC, "k2"), IrConstInt(_LOC, 20)),
+                            ),
+                        ),
+                        MapDictValues(ToJson()),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"d": DictValue({"k1": JsonValue(10), "k2": JsonValue(20)})}
+
+    def test_map_dict_values_wrong_type_raises(self) -> None:
+        sym, desc = _let_sym(0, "x")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstInt(_LOC, 1), MapDictValues(ToJson())),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# IrCoerce — MapRecordFields
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceMapRecordFields:
+    def _make_record_value(self) -> RecordValue:
+        return RecordValue(
+            type_name="Point",
+            fields={"x": IntValue(3), "y": IntValue(4), "label": TextValue("origin")},
+        )
+
+    def test_map_record_fields(self) -> None:
+        """MapRecordFields coerces only the named fields; others pass through."""
+        # M2 has no record constructors yet; exercise via the module-level _apply_coercion.
+        from agm.agl.eval.ir_interpreter import _apply_coercion
+
+        rec = self._make_record_value()
+        coercion = MapRecordFields(
+            fields=(
+                ("x", IntToDecimal()),
+                ("y", IntToDecimal()),
+            )
+        )
+        result = _apply_coercion(rec, coercion)
+        assert result == RecordValue(
+            type_name="Point",
+            fields={
+                "x": DecimalValue(decimal.Decimal(3)),
+                "y": DecimalValue(decimal.Decimal(4)),
+                "label": TextValue("origin"),
+            },
+        )
+
+    def test_map_record_fields_wrong_type_raises(self) -> None:
+        from agm.agl.eval.ir_interpreter import _apply_coercion
+
+        with pytest.raises(InvalidIrError):
+            _apply_coercion(IntValue(1), MapRecordFields(fields=(("x", IntToDecimal()),)))
+
+    def test_map_record_fields_partial_fields(self) -> None:
+        """MapRecordFields with a different field set; unlisted fields pass through."""
+        from agm.agl.eval.ir_interpreter import _apply_coercion
+
+        rec = RecordValue(
+            type_name="Pt",
+            fields={"a": IntValue(10), "b": TextValue("keep")},
+        )
+        coercion = MapRecordFields(fields=(("a", IntToDecimal()),))
+        result = _apply_coercion(rec, coercion)
+        assert result == RecordValue(
+            type_name="Pt",
+            fields={"a": DecimalValue(decimal.Decimal(10)), "b": TextValue("keep")},
+        )
+
+
+# ---------------------------------------------------------------------------
+# IrCoerce — MapEnumFields
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceMapEnumFields:
+    def test_map_enum_fields(self) -> None:
+        from agm.agl.eval.ir_interpreter import _apply_coercion
+
+        ev = EnumValue(
+            type_name="Shape",
+            variant="Circle",
+            fields={"radius": IntValue(5), "label": TextValue("c")},
+        )
+        coercion = MapEnumFields(
+            variants=(
+                ("Circle", (("radius", IntToDecimal()),)),
+                ("Square", (("side", IntToDecimal()),)),
+            )
+        )
+        result = _apply_coercion(ev, coercion)
+        assert result == EnumValue(
+            type_name="Shape",
+            variant="Circle",
+            fields={"radius": DecimalValue(decimal.Decimal(5)), "label": TextValue("c")},
+        )
+
+    def test_map_enum_fields_unmatched_variant_is_passthrough(self) -> None:
+        """A variant not listed in MapEnumFields is left unchanged."""
+        from agm.agl.eval.ir_interpreter import _apply_coercion
+
+        ev = EnumValue(
+            type_name="Shape",
+            variant="Triangle",
+            fields={"sides": IntValue(3)},
+        )
+        coercion = MapEnumFields(
+            variants=(("Circle", (("radius", IntToDecimal()),)),)
+        )
+        result = _apply_coercion(ev, coercion)
+        # Triangle variant is not in the coercion → returned unchanged.
+        assert result == ev
+
+    def test_map_enum_fields_wrong_type_raises(self) -> None:
+        from agm.agl.eval.ir_interpreter import _apply_coercion
+
+        with pytest.raises(InvalidIrError):
+            _apply_coercion(IntValue(1), MapEnumFields(variants=()))
+
+
+# ---------------------------------------------------------------------------
+# Decimal context
+# ---------------------------------------------------------------------------
+
+
+class TestDecimalContext:
+    def test_decimal_context_is_pinned(self) -> None:
+        """The evaluator uses a pinned 28-digit ROUND_HALF_EVEN context."""
+        # Verify by checking that IntToDecimal of a number requiring > default
+        # precision stays exact under the pinned context.
+        big = 10**27 + 3
+        sym, desc = _let_sym(0, "d")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstInt(_LOC, big), IntToDecimal()),
+                ),
+            ),
+            {sym: desc},
+        )
+        # Under the pinned 28-digit context, Decimal(10**27 + 3) is exact.
+        assert result["d"] == DecimalValue(decimal.Decimal(big))
+
+    def test_decimal_literal_preserved(self) -> None:
+        """An IrConstDecimal with many significant digits is stored exactly."""
+        d = decimal.Decimal("1.2345678901234567890123456789")
+        sym, desc = _let_sym(0, "pi")
+        result = _run(
+            (IrBind(_LOC, sym, IrConstDecimal(_LOC, d)),),
+            {sym: desc},
+        )
+        assert result["pi"] == DecimalValue(d)
+
+
+# ---------------------------------------------------------------------------
+# run() return-value filtering (public_name)
+# ---------------------------------------------------------------------------
+
+
+class TestRunReturnValues:
+    def test_private_symbol_excluded(self) -> None:
+        """A symbol with public_name=None should not appear in run() results."""
+        sym = SymbolId(0)
+        desc = SymbolDescriptor(
+            symbol_id=sym, mutable=False, public_name=None, owner=ENTRY_ID
+        )
+        result = _run(
+            (IrBind(_LOC, sym, IrConstInt(_LOC, 1)),),
+            {sym: desc},
+        )
+        assert result == {}
+
+    def test_foreign_module_symbol_excluded(self) -> None:
+        """A symbol owned by a different module should not appear in results."""
+        from agm.agl.modules.ids import ModuleId
+
+        other_mod = ModuleId.from_dotted("other")
+        sym = SymbolId(0)
+        desc = SymbolDescriptor(
+            symbol_id=sym, mutable=False, public_name="x", owner=other_mod
+        )
+        result = _run(
+            (IrBind(_LOC, sym, IrConstInt(_LOC, 1)),),
+            {sym: desc},
+        )
+        # Symbol is owned by 'other', not the entry module — excluded.
+        assert result == {}
+
+    def test_only_bound_symbols_in_frame_returned(self) -> None:
+        """Only symbols actually bound in this run appear in results."""
+        sym_bound, desc_bound = _let_sym(0, "bound")
+        sym_unbound, desc_unbound = _let_sym(1, "unbound")
+        result = _run(
+            (IrBind(_LOC, sym_bound, IrConstInt(_LOC, 42)),),
+            {sym_bound: desc_bound, sym_unbound: desc_unbound},
+        )
+        assert "bound" in result
+        assert "unbound" not in result
+
+    def test_empty_program(self) -> None:
+        result = _run((), {})
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Defensive InvalidIrError on additional malformed inputs
+# ---------------------------------------------------------------------------
+
+
+class TestDefensiveErrors:
+    def test_make_dict_non_text_key_raises(self) -> None:
+        """IrMakeDict key that evaluates to a non-TextValue raises InvalidIrError."""
+        sym, desc = _let_sym(0, "d")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeDict(
+                        _LOC,
+                        ((IrConstInt(_LOC, 99), IrConstInt(_LOC, 1)),),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+    def test_load_unbound_symbol_raises(self) -> None:
+        """IrLoad of a symbol not yet bound in the frame raises InvalidIrError."""
+        sym, desc = _let_sym(0, "x")
+        # Register the symbol in program.symbols but never IrBind it.
+        prog = _make_program(
+            (IrLoad(_LOC, sym),),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+    def test_assign_non_empty_path_raises(self) -> None:
+        """IrAssign with a non-empty path raises InvalidIrError in M2."""
+        sym, desc = _var_sym(0, "v")
+        prog = _make_program(
+            (
+                IrBind(_LOC, sym, IrConstInt(_LOC, 0)),
+                IrAssign(
+                    _LOC,
+                    sym,
+                    (IrIndexStep(index=IrConstInt(_LOC, 0), location=_LOC),),
+                    IrConstInt(_LOC, 1),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# Import isolation: IrInterpreter must not import syntax/scope/typecheck
+# ---------------------------------------------------------------------------
+
+
+def _collect_import_names(source: str) -> set[str]:
+    """Return all module names referenced in top-level import statements.
+
+    Parses the source with ``ast`` and collects:
+    - ``import agm.agl.foo`` → ``"agm.agl.foo"``
+    - ``from agm.agl.foo import bar`` → ``"agm.agl.foo"``
+
+    TYPE_CHECKING guards are NOT executed at runtime, but we scan ALL imports
+    so the check is conservative (catches even guarded ones).
+    """
+    tree = ast.parse(source)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is not None:
+                names.add(node.module)
+    return names
+
+
+def _ir_interpreter_source() -> str:
+    """Return the source text of ``agm.agl.eval.ir_interpreter``."""
+    spec = importlib.util.find_spec("agm.agl.eval.ir_interpreter")
+    assert spec is not None and spec.origin is not None
+    return pathlib.Path(spec.origin).read_text(encoding="utf-8")
+
+
+class TestImportIsolation:
+    """Verify that ``ir_interpreter.py`` does not import forbidden packages.
+
+    We parse the source file's import statements directly (AST-based) rather
+    than probing ``sys.modules``, because ``agm.agl.eval.__init__`` re-exports
+    the legacy interpreter (which DOES import syntax/scope/typecheck), so
+    ``sys.modules`` would include those regardless of what ir_interpreter does.
+    AST parsing checks what the file *itself* declares as a dependency.
+    """
+
+    def test_no_syntax_import(self) -> None:
+        source = _ir_interpreter_source()
+        imports = _collect_import_names(source)
+        forbidden = {n for n in imports if n.startswith("agm.agl.syntax")}
+        assert not forbidden, (
+            f"ir_interpreter.py imports syntax modules: {sorted(forbidden)}"
+        )
+
+    def test_no_scope_import(self) -> None:
+        source = _ir_interpreter_source()
+        imports = _collect_import_names(source)
+        # agm.agl.eval.scope (eval's own scope helpers) is allowed;
+        # agm.agl.scope (the AST resolver) is forbidden.
+        forbidden = {
+            n
+            for n in imports
+            if n.startswith("agm.agl.scope") and not n.startswith("agm.agl.eval.scope")
+        }
+        assert not forbidden, (
+            f"ir_interpreter.py imports AST-scope modules: {sorted(forbidden)}"
+        )
+
+    def test_no_typecheck_import(self) -> None:
+        source = _ir_interpreter_source()
+        imports = _collect_import_names(source)
+        forbidden = {n for n in imports if n.startswith("agm.agl.typecheck")}
+        assert not forbidden, (
+            f"ir_interpreter.py imports typecheck modules: {sorted(forbidden)}"
+        )

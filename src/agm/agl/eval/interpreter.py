@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, assert_never, cast
 
 from agm.agl._text import normalize_newlines
+from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT as _AGL_DECIMAL_CONTEXT
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
@@ -121,11 +122,6 @@ if TYPE_CHECKING:
 
 
 _Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
-
-# Pinned decimal context for all AgL arithmetic (F7).  AgL semantics must not
-# depend on the host's ambient ``decimal`` context — a host that lowered
-# ``getcontext().prec`` would otherwise change results such as ``1 / 3``.
-_AGL_DECIMAL_CONTEXT = decimal.Context(prec=28, rounding=decimal.ROUND_HALF_EVEN)
 
 
 @dataclass(frozen=True)

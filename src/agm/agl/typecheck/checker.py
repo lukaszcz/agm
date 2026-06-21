@@ -940,6 +940,22 @@ class _Checker:
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
         sig = self._env.get_constructor_signature(owner_name, variant)
+        # Open-imported generic constructor used as a bare value: the own-module
+        # env has no signature for it; fall back to the owning module's graph
+        # tables (mirrors the call-position path in _check_constructor_callee_call).
+        imported_gdef: GenericTypeDef | None = None
+        imported_source_name = owner_name
+        if sig is None:
+            # A generic constructor with no own-module signature must be open-imported
+            # (the scope resolver guarantees the reference resolved to some type).
+            imported = self._env.get_open_imported_generic_type(owner_name)
+            assert imported is not None, (
+                f"No constructor signature for {owner_name}.{variant}"
+            )
+            module_id, imported_source_name, imported_gdef = imported
+            sig = self._env.get_ctor_sig_from_module(
+                module_id, imported_source_name, variant
+            )
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
 
         if not sig.field_names:
@@ -960,8 +976,13 @@ class _Checker:
                         f"Add a type annotation (e.g. 'let x: {owner_name}[…] = …').",
                         span=span,
                     )
-            concrete_type = self._env.instantiate_nominal(
-                owner_name, tuple(subst[p] for p in type_params)
+            concrete_args = tuple(subst[p] for p in type_params)
+            concrete_type = (
+                self._env.instantiate_from_gdef(
+                    imported_source_name, imported_gdef, concrete_args
+                )
+                if imported_gdef is not None
+                else self._env.instantiate_nominal(owner_name, concrete_args)
             )
             return self._check_constructor_call(
                 owner=concrete_type, variant=variant, args=(), span=span
@@ -2736,7 +2757,11 @@ class _Checker:
             # Generic constructor: route to generic call handler.
             gdef = None
             sig = None
-            imported = self._env.get_open_imported_generic_type(node.callee.name)
+            # Look up the imported generic type by its OWNER name, not the callee
+            # name: for an enum variant constructor (e.g. `some`), the callee name
+            # is the variant, but only the enum TYPE name (`Option`) is registered
+            # in the import map (enum variants travel with their enum).
+            imported = self._env.get_open_imported_generic_type(ctor_ref.owner_name)
             if imported is not None:
                 module_id, source_name, gdef = imported
                 sig = self._env.get_ctor_sig_from_module(

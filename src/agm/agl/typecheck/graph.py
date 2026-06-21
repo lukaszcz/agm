@@ -639,6 +639,12 @@ def _build_graph_func_sig_table(
         for (t_mid, t_name), t in graph_type_table.items():
             if t_mid == mid:
                 env.register_type(t_name, t)
+        # Also seed the module's own generic types so bare-name local generic
+        # refs in param/return annotations (e.g. `o: Option[T]`) resolve here —
+        # mirroring the register_type seeding above for non-generic types.
+        for (g_mid, g_name), gdef in graph_generic_table.items():
+            if g_mid == mid:
+                env.register_generic_type(g_name, gdef)
 
         for item in program.body.items:
             if not isinstance(item, FuncDef):

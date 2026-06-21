@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "x_less_than_y",
+      "module_roots": ["program_modules/modules/import_forms"],
+      "params": {"x": 3, "y": 8},
+      "expect": {
+        "stdout": "sum=11\ngo!\n8\n3\n9\nalpha\nbeta\n10\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "x_greater_than_y",
+      "module_roots": ["program_modules/modules/import_forms"],
+      "params": {"x": 10, "y": 2},
+      "expect": {
+        "stdout": "sum=12\ngo!\n10\n2\n100\nalpha\nbeta\n17\n",
+        "calls": {}
+      }
+    }
+  ]
+}

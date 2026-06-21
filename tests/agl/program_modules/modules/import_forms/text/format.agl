@@ -1,0 +1,3 @@
+# Library module (dot-path text.format) imported with `using … as` rename.
+def label(name: text, value: int) -> text = name + "=" + value as text
+def shout(s: text) -> text = s + "!"

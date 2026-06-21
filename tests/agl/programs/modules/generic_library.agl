@@ -1,0 +1,27 @@
+# Modules × generics × enums/records × pattern matching × casts: a library
+# module (`collections`) exports a generic `Option[T]`, a generic `Pair[A, B]`,
+# and generic functions over them. The entry imports it open and exercises the
+# imported generics at int AND text (erasure across the module boundary),
+# qualified type annotations and constructors, pattern matching on imported
+# variants, and `as text` rendering. A param drives the payload and the branch.
+import collections
+
+param seed: int
+param empty: bool
+
+# Imported generic enum at int; imported generic function consumes it.
+let maybe: Option[int] = if empty => none else => some(value: seed)
+print(or_else(maybe, 0) as text)
+
+# Pattern matching on the imported variant (brought in unqualified by the open import).
+case maybe of
+  | none() => print "empty"
+  | some(value) => print "value ${value}"
+
+# The SAME imported definition at text — erasure across the module boundary.
+let word: Option[text] = if empty => none else => some(value: "w${seed}")
+print(or_else(word, "fallback"))
+
+# Qualified generic record type + qualified constructor, then field access.
+let p: collections::Pair[int, text] = collections::make_pair(seed, "tag")
+print "${p.first}:${p.second}"

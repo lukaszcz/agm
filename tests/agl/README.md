@@ -22,12 +22,16 @@ Layout:
 | `basics/` | `let`/`var`/`:=`, params, agent calls, print rendering |
 | `calls/` | `ask` parse policies (`Retry`/`Abort`), format options |
 | `canonical/` | Multi-agent review/fix workflows |
+| `casts/` | `as`/`as?` casts, `CastError`/`JsonParseError`, `parse_json` |
 | `control/` | `if`/`case`/`do…until`/`try…catch`/`raise` |
 | `errors/` | Exception types, field access in catch, rethrow |
 | `exec/` | Shell execution, `ExecResult` structured handle |
 | `exprs/` | Arithmetic, comparisons, string operations |
 | `functions/` | User-defined functions: recursion, default args, first-class values, lambdas, `ask(agent:)` in a `def` body |
+| `generics/` | Generic types/functions: inference, explicit `::[…]` overrides, erasure, HOFs, imported generics |
 | `inline/` | Single-expression programs |
+| `modules/` | Multi-file module programs (via `module_roots`): imports combined with generics, casts, records/enums, pattern matching, and cross-module mutual recursion |
+| `rendering/` | Console/value rendering: nesting, escaping, exception rendering |
 | `templates/` | Template interpolation |
 | `types/` | Records, enums, `json`, `list`, `dict` |
 

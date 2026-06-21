@@ -1,0 +1,14 @@
+# Library module imported by programs/modules/casts_across_modules.agl. Exports
+# cast-based helpers: a total `as?`-guarded text→int with a fallback, and a
+# fallible `json → Point` validation that raises CastError on a schema mismatch.
+record Point
+  x: int
+  y: int
+
+def to_int_or(s: text, fallback: int) -> int =
+  if s as? int =>
+    s as int
+  else =>
+    fallback
+
+def parse_point(raw: text) -> Point = parse_json(raw) as Point

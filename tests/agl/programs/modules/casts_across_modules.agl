@@ -1,0 +1,33 @@
+# Modules × casts × records × error handling × agents: a library module
+# (`parsing`) provides cast-based helpers — a total `as?`-guarded text→int and a
+# fallible `json → Point` validation. The entry imports it both qualified (`as p`)
+# and selectively (`using to_int_or`), feeds host params and an agent response
+# through the imported casts, and catches the CastError / JsonParseError that the
+# imported `parse_point` raises across the module boundary.
+import parsing qualified as p
+import parsing using to_int_or
+
+agent source
+
+param amount
+param point_json
+
+# Imported `as?`-guarded cast: succeeds or falls back, never raises.
+print(to_int_or(amount, -1) as text)
+
+# Imported fallible cast across the module boundary; caught here on failure.
+try
+  let pt = p::parse_point(point_json)
+  print "point ${pt.x},${pt.y}"
+catch CastError as e =>
+  print "bad point: ${e.source_type} -> ${e.target_type}"
+catch JsonParseError as e =>
+  print "bad json: ${e.raw}"
+
+# An agent supplies JSON text; the imported helper validates it to a record.
+try
+  let raw: text = ask("Return a point as JSON.", agent: source)
+  let pt = p::parse_point(raw)
+  print "agent point ${pt.x},${pt.y}"
+catch CastError as e =>
+  print "agent bad point: ${e.target_type}"

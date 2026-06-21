@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "present_payloads_int_and_text",
+      "module_roots": ["program_modules/modules/generic_library"],
+      "params": {"seed": 5, "empty": false},
+      "expect": {
+        "stdout": "5\nvalue 5\nw5\n5:tag\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "empty_payloads_use_fallbacks",
+      "module_roots": ["program_modules/modules/generic_library"],
+      "params": {"seed": 9, "empty": true},
+      "expect": {
+        "stdout": "0\nempty\nfallback\n9:tag\n",
+        "calls": {}
+      }
+    }
+  ]
+}

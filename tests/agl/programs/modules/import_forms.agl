@@ -1,0 +1,38 @@
+# Modules: the import surface in combination with functions and casts. Exercises
+# an open import, a qualified-as import, a `using … as` rename, a `.*` wildcard
+# over a dotted prefix with alias re-rooting, qualified `::` access, a `private`
+# helper reached only through its public wrapper, and `::name` self-reference
+# bypassing a shadowing parameter. A param drives the numbers.
+import num.arith
+import num.stats qualified as st
+import text.format using label, shout as yell
+import lib.* qualified as L
+
+param x: int
+param y: int
+
+# A top-level def in the entry, deliberately shadowed below by a parameter.
+def tag() -> int = 7
+
+# `::tag()` bypasses the `tag` parameter to call this module's own top-level def.
+def bump(tag: int) -> int = tag + ::tag()
+
+# Open import: `add` and `label` are available unqualified.
+print(label("sum", add(x, y)))
+
+# `using shout as yell`: only the renamed `yell` is valid.
+print(yell("go"))
+
+# Qualified-as access into num.stats.
+print(st::max2(x, y) as text)
+print(st::min2(x, y) as text)
+
+# A private helper reached only through its public wrapper.
+print(via_secret(x) as text)
+
+# Wildcard alias re-rooting: lib.a → L.a, lib.b → L.b.
+print(L.a::alpha())
+print(L.b::beta())
+
+# Self-reference inside a shadowing parameter scope.
+print(bump(x) as text)

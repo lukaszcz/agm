@@ -1,0 +1,2 @@
+# Library module (dot-path lib.b) matched by the entry's `import lib.*` wildcard.
+def beta() -> text = "beta"

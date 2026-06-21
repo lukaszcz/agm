@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "even_number",
+      "module_roots": ["program_modules/modules/mutual_recursion"],
+      "params": {"n": 4},
+      "expect": {
+        "stdout": "true\nfalse\neven: 4\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "odd_number",
+      "module_roots": ["program_modules/modules/mutual_recursion"],
+      "params": {"n": 7},
+      "expect": {
+        "stdout": "false\ntrue\nodd: 7\n",
+        "calls": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# Library module that consumes the even/odd cycle and exports an enum result.
+# Imports `even` (which imports `odd`), so the entry reaches a three-module graph.
+import even
+
+enum Parity
+  | even_p
+  | odd_p
+
+def classify(n: int) -> Parity = if is_even(n) => even_p else => odd_p

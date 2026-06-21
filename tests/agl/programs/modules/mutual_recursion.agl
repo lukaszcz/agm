@@ -1,0 +1,19 @@
+# Modules: cross-module mutual recursion (cyclic imports) combined with control
+# flow and pattern matching. `even` imports `odd` and `odd` imports `even`, so
+# the mutually recursive predicates span a cyclic import. A third module
+# (`parity`) consumes the cycle and returns an imported enum that the entry
+# pattern-matches. A param chooses the number under test.
+import even
+import odd
+import parity
+
+param n: int
+
+# Mutually recursive predicates defined across a cyclic import (even ↔ odd).
+print(is_even(n) as text)
+print(is_odd(n) as text)
+
+# `parity::classify` runs the cycle and yields an imported enum value.
+case parity::classify(n) of
+  | even_p() => print "even: ${n}"
+  | odd_p() => print "odd: ${n}"

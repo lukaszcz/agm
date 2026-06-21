@@ -121,7 +121,9 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
             new_fields = dict(value.fields)
             for field_name, child_op in field_coercions:
                 new_fields[field_name] = _apply_coercion(new_fields[field_name], child_op)
-            return RecordValue(type_name=value.type_name, fields=new_fields)
+            return RecordValue(
+                nominal=value.nominal, display_name=value.display_name, fields=new_fields
+            )
 
         case MapEnumFields(variants=variant_coercions):
             if not isinstance(value, EnumValue):
@@ -135,7 +137,8 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
                     for field_name, child_op in field_coercions:
                         new_fields[field_name] = _apply_coercion(new_fields[field_name], child_op)
                     return EnumValue(
-                        type_name=value.type_name,
+                        nominal=value.nominal,
+                        display_name=value.display_name,
                         variant=value.variant,
                         fields=new_fields,
                     )

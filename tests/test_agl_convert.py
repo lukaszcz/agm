@@ -29,6 +29,8 @@ from agm.agl.eval.values import (
     RecordValue,
     TextValue,
 )
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.runtime.convert import (
     CastConversionError,
     StrictJsonParseError,
@@ -246,7 +248,9 @@ class TestJsonObjToValue:
         rec_type = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
         result = json_obj_to_value({"x": 1, "y": 2}, rec_type)
         assert result == RecordValue(
-            type_name="Point", fields={"x": IntValue(1), "y": IntValue(2)}
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
+            fields={"x": IntValue(1), "y": IntValue(2)},
         )
 
     def test_record_missing_field_raises(self) -> None:
@@ -267,7 +271,12 @@ class TestJsonObjToValue:
             variants={"Red": {}, "Blue": {}},
         )
         result = json_obj_to_value({"$case": "Red"}, enum_type)
-        assert result == EnumValue(type_name="Color", variant="Red", fields={})
+        assert result == EnumValue(
+            nominal=NominalId(ENTRY_ID, "Color"),
+            display_name="Color",
+            variant="Red",
+            fields={},
+        )
 
     def test_enum_bad_case_raises(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {}})
@@ -421,7 +430,9 @@ class TestConvertValue:
         rec_type = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
         result = convert_value(TextValue('{"x": 1, "y": 2}'), TextType(), rec_type)
         assert result == RecordValue(
-            type_name="Point", fields={"x": IntValue(1), "y": IntValue(2)}
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
+            fields={"x": IntValue(1), "y": IntValue(2)},
         )
 
     def test_text_to_record_failure(self) -> None:
@@ -458,7 +469,11 @@ class TestConvertValue:
     def test_json_to_record_success(self) -> None:
         rec_type = RecordType(name="P", fields={"x": IntType()})
         result = convert_value(JsonValue({"x": 7}), JsonType(), rec_type)
-        assert result == RecordValue(type_name="P", fields={"x": IntValue(7)})
+        assert result == RecordValue(
+            nominal=NominalId(ENTRY_ID, "P"),
+            display_name="P",
+            fields={"x": IntValue(7)},
+        )
 
     def test_json_to_record_failure(self) -> None:
         rec_type = RecordType(name="P", fields={"x": IntType()})
@@ -623,19 +638,33 @@ class TestConvertValueNominalToText:
 
     def test_record_to_text_agl_form(self) -> None:
         rec_type = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
-        rv = RecordValue(type_name="Point", fields={"x": IntValue(3), "y": IntValue(4)})
+        rv = RecordValue(
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
+            fields={"x": IntValue(3), "y": IntValue(4)},
+        )
         result = convert_value(rv, rec_type, TextType())
         assert result == TextValue("Point(x: 3, y: 4)")
 
     def test_enum_to_text_agl_form(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
-        ev = EnumValue(type_name="Color", variant="Red", fields={})
+        ev = EnumValue(
+            nominal=NominalId(ENTRY_ID, "Color"),
+            display_name="Color",
+            variant="Red",
+            fields={},
+        )
         result = convert_value(ev, enum_type, TextType())
         assert result == TextValue("Color.Red")
 
     def test_enum_with_fields_to_text_agl_form(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
-        ev = EnumValue(type_name="Color", variant="Blue", fields={"n": IntValue(7)})
+        ev = EnumValue(
+            nominal=NominalId(ENTRY_ID, "Color"),
+            display_name="Color",
+            variant="Blue",
+            fields={"n": IntValue(7)},
+        )
         result = convert_value(ev, enum_type, TextType())
         assert result == TextValue("Color.Blue(n: 7)")
 
@@ -646,7 +675,8 @@ class TestConvertValueNominalToText:
                     "source_type": TextType(), "target_type": TextType(), "raw": TextType()},
         )
         exc_val = ExceptionValue(
-            type_name="CastError",
+            nominal=NominalId(PRELUDE_ID, "CastError"),
+            display_name="CastError",
             fields={
                 "message": TextValue("cannot parse"),
                 "trace_id": TextValue("evt-1"),
@@ -681,21 +711,35 @@ class TestConvertValueNominalToJson:
 
     def test_record_to_json(self) -> None:
         rec_type = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
-        rv = RecordValue(type_name="Point", fields={"x": IntValue(3), "y": IntValue(4)})
+        rv = RecordValue(
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
+            fields={"x": IntValue(3), "y": IntValue(4)},
+        )
         result = convert_value(rv, rec_type, JsonType())
         # Record → json: field object (construction-order keys from fields dict)
         assert result == JsonValue({"x": 3, "y": 4})
 
     def test_enum_to_json(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
-        ev = EnumValue(type_name="Color", variant="Blue", fields={"n": IntValue(7)})
+        ev = EnumValue(
+            nominal=NominalId(ENTRY_ID, "Color"),
+            display_name="Color",
+            variant="Blue",
+            fields={"n": IntValue(7)},
+        )
         result = convert_value(ev, enum_type, JsonType())
         # Enum → json: "$case"-tagged object
         assert result == JsonValue({"$case": "Blue", "n": 7})
 
     def test_enum_nullary_to_json(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {}})
-        ev = EnumValue(type_name="Color", variant="Red", fields={})
+        ev = EnumValue(
+            nominal=NominalId(ENTRY_ID, "Color"),
+            display_name="Color",
+            variant="Red",
+            fields={},
+        )
         result = convert_value(ev, enum_type, JsonType())
         assert result == JsonValue({"$case": "Red"})
 
@@ -705,7 +749,8 @@ class TestConvertValueNominalToJson:
             fields={"message": TextType(), "trace_id": TextType()},
         )
         exc_val = ExceptionValue(
-            type_name="Abort",
+            nominal=NominalId(ENTRY_ID, "Abort"),
+            display_name="Abort",
             fields={"message": TextValue("stop"), "trace_id": TextValue("evt-2")},
         )
         result = convert_value(exc_val, exc_type, JsonType())
@@ -717,14 +762,23 @@ class TestConvertValueNominalToJson:
     def test_record_to_json_is_total(self) -> None:
         """record → json is TOTAL_JSON — convert_value never raises CastConversionError."""
         rec_type = RecordType(name="P", fields={"x": IntType()})
-        rv = RecordValue(type_name="P", fields={"x": IntValue(1)})
+        rv = RecordValue(
+            nominal=NominalId(ENTRY_ID, "P"),
+            display_name="P",
+            fields={"x": IntValue(1)},
+        )
         # Must not raise
         result = convert_value(rv, rec_type, JsonType())
         assert isinstance(result, JsonValue)
 
     def test_enum_to_json_is_total(self) -> None:
         enum_type = EnumType(name="E", variants={"A": {}})
-        ev = EnumValue(type_name="E", variant="A", fields={})
+        ev = EnumValue(
+            nominal=NominalId(ENTRY_ID, "E"),
+            display_name="E",
+            variant="A",
+            fields={},
+        )
         result = convert_value(ev, enum_type, JsonType())
         assert isinstance(result, JsonValue)
 
@@ -733,7 +787,8 @@ class TestConvertValueNominalToJson:
             name="TypeError", fields={"message": TextType(), "trace_id": TextType()}
         )
         exc_val = ExceptionValue(
-            type_name="TypeError",
+            nominal=NominalId(ENTRY_ID, "TypeError"),
+            display_name="TypeError",
             fields={"message": TextValue("oops"), "trace_id": TextValue("t1")},
         )
         result = convert_value(exc_val, exc_type, JsonType())

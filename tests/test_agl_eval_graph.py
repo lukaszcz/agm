@@ -25,6 +25,7 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
+from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
@@ -161,7 +162,7 @@ def test_library_loop_error_uses_library_source_text(tmp_path: Path) -> None:
     with pytest.raises(AglRaise) as exc_info:
         _run_graph(entry_source, {"lib": lib_source}, tmp_path)
 
-    assert exc_info.value.exc.type_name == "MaxIterationsExceeded"
+    assert exc_info.value.exc.display_name == "MaxIterationsExceeded"
     assert exc_info.value.exc.fields["condition"] == TextValue("false")
 
 
@@ -214,7 +215,9 @@ def test_module_qualified_record_constructor(tmp_path: Path) -> None:
     entry_source = "import lib\nlet p = lib::Point(x: 10, y: 32)\np"
     snap = _run_graph(entry_source, {"lib": lib_source}, tmp_path)
     assert snap["p"] == RecordValue(
-        type_name="Point", fields={"x": IntValue(10), "y": IntValue(32)}
+        nominal=NominalId(ModuleId.from_dotted("lib"), "Point"),
+        display_name="Point",
+        fields={"x": IntValue(10), "y": IntValue(32)},
     )
 
 
@@ -224,7 +227,12 @@ def test_module_qualified_enum_constructor(tmp_path: Path) -> None:
     # Qualified enum variant syntax: lib::Color.Red
     entry_source = "import lib\nlet c = lib::Color.Red\nc"
     snap = _run_graph(entry_source, {"lib": lib_source}, tmp_path)
-    assert snap["c"] == EnumValue(type_name="Color", variant="Red", fields={})
+    assert snap["c"] == EnumValue(
+        nominal=NominalId(ModuleId.from_dotted("lib"), "Color"),
+        display_name="Color",
+        variant="Red",
+        fields={},
+    )
 
 
 def test_two_library_functions_same_name(tmp_path: Path) -> None:

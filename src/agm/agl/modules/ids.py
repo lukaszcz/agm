@@ -82,7 +82,7 @@ class ModuleId:
 
 
 # ------------------------------------------------------------------
-# Entry sentinel
+# Sentinels
 # ------------------------------------------------------------------
 
 #: Distinguished sentinel representing the entry module (the script passed to
@@ -90,3 +90,16 @@ class ModuleId:
 #: byte, so no real ``.agl`` file on disk can produce a colliding ``ModuleId``
 #: via :meth:`ModuleId.from_dotted`.  Use ``module_id.is_entry`` to test.
 ENTRY_ID: ModuleId = ModuleId(segments=(_ENTRY_SEGMENT,))
+
+# Reserved segment used exclusively in the PRELUDE_ID sentinel.  Contains a NUL
+# byte (different from _ENTRY_SEGMENT) so it cannot collide with any real module
+# or with ENTRY_ID.
+_PRELUDE_SEGMENT = "\x00prelude"
+
+#: Distinguished sentinel representing the built-in prelude / standard library.
+#: Used as the ``module_id`` component of :class:`~agm.agl.ir.ids.NominalId`
+#: for all built-in exception types (``RecursionError``, ``IndexError``,
+#: ``AgentParseError``, etc.) and other prelude nominals that have no source
+#: module.  Its reserved segment contains a NUL byte and can never be produced
+#: by :meth:`ModuleId.from_dotted`.
+PRELUDE_ID: ModuleId = ModuleId(segments=(_PRELUDE_SEGMENT,))

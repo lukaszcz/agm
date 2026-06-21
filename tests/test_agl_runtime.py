@@ -22,6 +22,8 @@ import pytest
 
 from agm.agl import AglError, SourceSpan, WorkflowRuntime
 from agm.agl.diagnostics import format_diagnostic, format_diagnostic_location
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.runtime import Diagnostic, RunResult
 from agm.agl.typecheck.types import Type
@@ -381,7 +383,8 @@ class TestUncaughtAgentCallErrorSpan:
 
         def agent(req: AgentRequest) -> str:
             exc_val = ExceptionValue(
-                type_name="CustomError",
+                nominal=NominalId(ENTRY_ID, "CustomError"),
+                display_name="CustomError",
                 fields={"message": TextValue("boom")},
             )
             raise AglRaise(exc_val, span=existing)
@@ -787,7 +790,8 @@ class TestDecimalSerialization:
         from agm.agl.runtime.runtime import exception_value_to_run_error
 
         exc = ExceptionValue(
-            type_name="ValidationError",
+            nominal=NominalId(ENTRY_ID, "ValidationError"),
+            display_name="ValidationError",
             fields={
                 "message": TextValue("bad"),
                 "amount": DecimalValue(decimal.Decimal("0.1")),
@@ -1190,7 +1194,8 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
 
         v = RecordValue(
-            type_name="Issue",
+            nominal=NominalId(ENTRY_ID, "Issue"),
+            display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
         assert render_value(v) == 'Issue(title: "Missing tests", severity: 3)'
@@ -1200,7 +1205,7 @@ class TestRenderValue:
         from agm.agl.eval.values import RecordValue
         from agm.agl.runtime.render import render_value
 
-        v = RecordValue(type_name="Empty", fields={})
+        v = RecordValue(nominal=NominalId(ENTRY_ID, "Empty"), display_name="Empty", fields={})
         assert render_value(v) == "Empty()"
 
     def test_record_nested_record(self) -> None:
@@ -1209,11 +1214,13 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
 
         author = RecordValue(
-            type_name="Author",
+            nominal=NominalId(ENTRY_ID, "Author"),
+            display_name="Author",
             fields={"name": TextValue("Ada"), "active": BoolValue(True)},
         )
         issue = RecordValue(
-            type_name="Issue",
+            nominal=NominalId(ENTRY_ID, "Issue"),
+            display_name="Issue",
             fields={"title": TextValue("Missing tests"), "author": author},
         )
         out = render_value(issue)
@@ -1225,7 +1232,8 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
 
         v = RecordValue(
-            type_name="Issue",
+            nominal=NominalId(ENTRY_ID, "Issue"),
+            display_name="Issue",
             fields={
                 "title": TextValue("Missing tests"),
                 "severity": IntValue(3),
@@ -1244,7 +1252,10 @@ class TestRenderValue:
         from agm.agl.eval.values import EnumValue, IntValue
         from agm.agl.runtime.render import render_value
 
-        v = EnumValue(type_name="Outcome", variant="Partial", fields={"left": IntValue(2)})
+        v = EnumValue(
+            nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
+            variant="Partial", fields={"left": IntValue(2)},
+        )
         assert render_value(v) == "Outcome.Partial(left: 2)"
 
     def test_enum_nullary_variant(self) -> None:
@@ -1252,7 +1263,10 @@ class TestRenderValue:
         from agm.agl.eval.values import EnumValue
         from agm.agl.runtime.render import render_value
 
-        v = EnumValue(type_name="Outcome", variant="Done", fields={})
+        v = EnumValue(
+            nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
+            variant="Done", fields={},
+        )
         assert render_value(v) == "Outcome.Done"
 
     def test_enum_multi_field_payload(self) -> None:
@@ -1261,7 +1275,8 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
 
         v = EnumValue(
-            type_name="E",
+            nominal=NominalId(ENTRY_ID, "E"),
+            display_name="E",
             variant="V",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
         )
@@ -1277,7 +1292,8 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
 
         v = ExceptionValue(
-            type_name="CastError",
+            nominal=NominalId(PRELUDE_ID, "CastError"),
+            display_name="CastError",
             fields={
                 "message": TextValue('cannot parse "x" as int'),
                 "trace_id": TextValue("evt-7"),
@@ -1299,7 +1315,8 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
 
         v = ExceptionValue(
-            type_name="Abort",
+            nominal=NominalId(ENTRY_ID, "Abort"),
+            display_name="Abort",
             fields={
                 "message": TextValue("fatal"),
                 "trace_id": TextValue("abc123"),
@@ -1357,7 +1374,8 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
 
         v = RecordValue(
-            type_name="R",
+            nominal=NominalId(ENTRY_ID, "R"),
+            display_name="R",
             fields={"data": JsonValue({"a": 1, "b": 2})},
         )
         out = render_value(v)
@@ -1438,7 +1456,9 @@ class TestSerialize:
         from agm.agl.eval.values import IntValue, RecordValue
         from agm.agl.runtime.serialize import value_to_json_obj
 
-        result = value_to_json_obj(RecordValue(type_name="R", fields={"x": IntValue(5)}))
+        result = value_to_json_obj(RecordValue(
+            nominal=NominalId(ENTRY_ID, "R"), display_name="R", fields={"x": IntValue(5)}
+        ))
         assert result == {"x": 5}
 
     def test_enum_value_serialized(self) -> None:
@@ -1446,7 +1466,10 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
 
         result = value_to_json_obj(
-            EnumValue(type_name="E", variant="A", fields={"msg": TextValue("hi")})
+            EnumValue(
+                nominal=NominalId(ENTRY_ID, "E"), display_name="E",
+                variant="A", fields={"msg": TextValue("hi")},
+            )
         )
         assert result == {"$case": "A", "msg": "hi"}
 
@@ -1454,7 +1477,9 @@ class TestSerialize:
         from agm.agl.eval.values import EnumValue
         from agm.agl.runtime.serialize import value_to_json_obj
 
-        result = value_to_json_obj(EnumValue(type_name="E", variant="Done", fields={}))
+        result = value_to_json_obj(EnumValue(
+            nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="Done", fields={}
+        ))
         assert result == {"$case": "Done"}
 
     def test_exception_value_serialized(self) -> None:
@@ -1462,7 +1487,10 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
 
         result = value_to_json_obj(
-            ExceptionValue(type_name="Err", fields={"message": TextValue("oops")})
+            ExceptionValue(
+                nominal=NominalId(ENTRY_ID, "Err"), display_name="Err",
+                fields={"message": TextValue("oops")},
+            )
         )
         assert result == {"message": "oops"}
 
@@ -1633,7 +1661,8 @@ class TestRuntimeErrorPaths:
         def bad_agent(req: object) -> str:
             raise AglRaise(
                 ExceptionValue(
-                    type_name="Abort",
+                    nominal=NominalId(ENTRY_ID, "Abort"),
+                    display_name="Abort",
                     fields={"message": TextValue("stopped"), "trace_id": TextValue("")},
                 )
             )
@@ -1752,7 +1781,8 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.runtime import RunError, exception_value_to_run_error
 
         exc_val = ExceptionValue(
-            type_name="AgentParseError",
+            nominal=NominalId(PRELUDE_ID, "AgentParseError"),
+            display_name="AgentParseError",
             fields={
                 "message": TextValue("failed"),
                 "trace_id": TextValue(""),
@@ -1765,9 +1795,16 @@ class TestRuntimeErrorPaths:
                 "json_val": JsonValue({"k": "v"}),
                 "list_val": ListValue(elements=(IntValue(1),)),
                 "dict_val": DictValue(entries={"x": IntValue(2)}),
-                "rec_val": RecordValue(type_name="R", fields={"f": TextValue("v")}),
-                "enum_val": EnumValue(type_name="E", variant="V", fields={}),
-                "exc_val": ExceptionValue(type_name="Inner", fields={}),
+                "rec_val": RecordValue(
+                    nominal=NominalId(ENTRY_ID, "R"), display_name="R",
+                    fields={"f": TextValue("v")},
+                ),
+                "enum_val": EnumValue(
+                    nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="V", fields={}
+                ),
+                "exc_val": ExceptionValue(
+                    nominal=NominalId(ENTRY_ID, "Inner"), display_name="Inner", fields={}
+                ),
                 "none_val": JsonValue(None),
             },
         )
@@ -1814,7 +1851,8 @@ class TestRuntimeErrorPaths:
 
         def bad_execute(self: Interpreter, root_scope: object) -> None:
             exc_val = ExceptionValue(
-                type_name="Abort",
+                nominal=NominalId(ENTRY_ID, "Abort"),
+                display_name="Abort",
                 fields={"message": TextValue("fatal"), "trace_id": TextValue("")},
             )
             raise AglRaise(exc_val)

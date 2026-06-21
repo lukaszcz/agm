@@ -174,7 +174,8 @@ def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
     # Local imports keep runtime → eval dependency cycle-free at module level;
     # this mirrors the existing pattern in ``agm.agl.runtime.runtime``.
     from agm.agl.eval.exceptions import AglRaise
-    from agm.agl.eval.values import ExceptionValue
+    from agm.agl.eval.values import ExceptionValue, NominalId
+    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.trace import new_trace_id
     from agm.agl.values import JsonValue, TextValue
 
@@ -189,7 +190,8 @@ def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
     )
 
     exc_val = ExceptionValue(
-        type_name="AgentCallError",
+        nominal=NominalId(PRELUDE_ID, "AgentCallError"),
+        display_name="AgentCallError",
         fields={
             "message": TextValue(message),
             "trace_id": TextValue(new_trace_id()),

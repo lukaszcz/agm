@@ -27,6 +27,8 @@ from agm.agl.eval.values import (
     UnitValue,
     Value,
 )
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.runtime.codec import OutputCodec
 from agm.agl.runtime.request import AgentRequest, AgentResponse, ValidationError
 
@@ -306,7 +308,9 @@ let x = case c of
 x"""
     snap = _run_source(source)
     assert snap["x"] == IntValue(1)
-    assert snap["c"] == EnumValue(type_name="Color", variant="Red", fields={})
+    assert snap["c"] == EnumValue(
+        nominal=NominalId(ENTRY_ID, "Color"), display_name="Color", variant="Red", fields={}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +327,7 @@ case c of
   | Red() => ()"""
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source)
-    assert exc_info.value.exc.type_name == "MatchError"
+    assert exc_info.value.exc.display_name == "MatchError"
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +419,7 @@ until x = 99
 ()"""
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source, loop_limit=3)
-    assert exc_info.value.exc.type_name == "MaxIterationsExceeded"
+    assert exc_info.value.exc.display_name == "MaxIterationsExceeded"
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +452,7 @@ raise AgentParseError(message: "boom", raw: "", normalized_raw: "",
     expected_schema: null, validation_errors: null, metadata: null)"""
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source)
-    assert exc_info.value.exc.type_name == "AgentParseError"
+    assert exc_info.value.exc.display_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +566,7 @@ let r = inf(0)
 r"""
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source, max_call_depth=5)
-    assert exc_info.value.exc.type_name == "RecursionError"
+    assert exc_info.value.exc.display_name == "RecursionError"
 
 
 # ---------------------------------------------------------------------------
@@ -640,7 +644,7 @@ def test_exec_call() -> None:
     snap = _run_source(source, supports_shell_exec=True)
     result = snap["r"]
     assert isinstance(result, RecordValue)
-    assert result.type_name == "ExecResult"
+    assert result.display_name == "ExecResult"
     assert result.fields.get("stdout") == TextValue("hello")
 
 
@@ -729,7 +733,7 @@ def test_ask_request_text_default() -> None:
     snap = _run_source(source)
     r = snap["r"]
     assert isinstance(r, RecordValue)
-    assert r.type_name == "AgentRequest"
+    assert r.display_name == "AgentRequest"
     assert r.fields["agent"] == TextValue("ask")
     assert r.fields["prompt"] == TextValue("hello")
     assert r.fields["attempt"] == IntValue(0)
@@ -738,7 +742,7 @@ def test_ask_request_text_default() -> None:
     assert option.variant == "Some"
     oc = option.fields["value"]
     assert isinstance(oc, RecordValue)
-    assert oc.type_name == "OutputContract"
+    assert oc.display_name == "OutputContract"
     assert oc.fields["target_type"] == TextValue("text")
     assert oc.fields["codec_name"] == TextValue("text")
 
@@ -764,7 +768,9 @@ def test_ask_unit_preserves_agent_exception_span(has_span: bool) -> None:
 
     def agent(request: AgentRequest) -> str:
         raise AglRaise(
-            ExceptionValue(type_name="AgentError", fields={}),
+            ExceptionValue(
+                nominal=NominalId(PRELUDE_ID, "AgentError"), display_name="AgentError", fields={}
+            ),
             span=existing_span,
         )
 
@@ -782,7 +788,8 @@ def test_ask_request_unit_has_no_output_contract() -> None:
     snap = _run_source('let r = ask-request::[unit]("Q")\nr')
     option = snap["r"].fields["output_contract"]
     assert option == EnumValue(
-        type_name="OutputContractOption",
+        nominal=NominalId(PRELUDE_ID, "OutputContractOption"),
+        display_name="OutputContractOption",
         variant="None",
         fields={},
     )
@@ -1034,7 +1041,7 @@ def test_division_by_zero() -> None:
     source = "let r = 1 / 0\nr"
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source)
-    assert exc_info.value.exc.type_name == "ArithmeticError"
+    assert exc_info.value.exc.display_name == "ArithmeticError"
 
 
 # ---------------------------------------------------------------------------
@@ -1142,9 +1149,15 @@ def test_dict_value_eq_and_hash() -> None:
 def test_record_value_eq_and_hash() -> None:
     from agm.agl.eval.values import IntValue, RecordValue
 
-    r1 = RecordValue(type_name="Foo", fields={"x": IntValue(1)})
-    r2 = RecordValue(type_name="Foo", fields={"x": IntValue(1)})
-    r3 = RecordValue(type_name="Bar", fields={"x": IntValue(1)})
+    r1 = RecordValue(
+        nominal=NominalId(ENTRY_ID, "Foo"), display_name="Foo", fields={"x": IntValue(1)}
+    )
+    r2 = RecordValue(
+        nominal=NominalId(ENTRY_ID, "Foo"), display_name="Foo", fields={"x": IntValue(1)}
+    )
+    r3 = RecordValue(
+        nominal=NominalId(ENTRY_ID, "Bar"), display_name="Bar", fields={"x": IntValue(1)}
+    )
     assert r1 == r2
     assert hash(r1) == hash(r2)
     assert r1 != r3
@@ -1159,9 +1172,17 @@ def test_record_value_eq_and_hash() -> None:
 def test_enum_value_eq_and_hash() -> None:
     from agm.agl.eval.values import EnumValue, IntValue
 
-    e1 = EnumValue(type_name="Color", variant="Red", fields={"n": IntValue(1)})
-    e2 = EnumValue(type_name="Color", variant="Red", fields={"n": IntValue(1)})
-    e3 = EnumValue(type_name="Color", variant="Blue", fields={})
+    e1 = EnumValue(
+        nominal=NominalId(ENTRY_ID, "Color"), display_name="Color", variant="Red",
+        fields={"n": IntValue(1)},
+    )
+    e2 = EnumValue(
+        nominal=NominalId(ENTRY_ID, "Color"), display_name="Color", variant="Red",
+        fields={"n": IntValue(1)},
+    )
+    e3 = EnumValue(
+        nominal=NominalId(ENTRY_ID, "Color"), display_name="Color", variant="Blue", fields={}
+    )
     assert e1 == e2
     assert hash(e1) == hash(e2)
     assert e1 != e3
@@ -1176,9 +1197,17 @@ def test_enum_value_eq_and_hash() -> None:
 def test_exception_value_eq_and_hash() -> None:
     from agm.agl.eval.values import ExceptionValue, TextValue
 
-    ex1 = ExceptionValue(type_name="MyError", fields={"message": TextValue("oops")})
-    ex2 = ExceptionValue(type_name="MyError", fields={"message": TextValue("oops")})
-    ex3 = ExceptionValue(type_name="OtherError", fields={})
+    ex1 = ExceptionValue(
+        nominal=NominalId(ENTRY_ID, "MyError"), display_name="MyError",
+        fields={"message": TextValue("oops")},
+    )
+    ex2 = ExceptionValue(
+        nominal=NominalId(ENTRY_ID, "MyError"), display_name="MyError",
+        fields={"message": TextValue("oops")},
+    )
+    ex3 = ExceptionValue(
+        nominal=NominalId(ENTRY_ID, "OtherError"), display_name="OtherError", fields={}
+    )
     assert ex1 == ex2
     assert hash(ex1) == hash(ex2)
     assert ex1 != ex3
@@ -1410,7 +1439,7 @@ catch ArithmeticError =>
   ()"""
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source)
-    assert exc_info.value.exc.type_name == "AgentParseError"
+    assert exc_info.value.exc.display_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -1696,7 +1725,7 @@ def test_exec_nonzero_exit_returns_exec_result() -> None:
     snap = _run_source(source, supports_shell_exec=True)
     result = snap["r"]
     assert isinstance(result, RecordValue)
-    assert result.type_name == "ExecResult"
+    assert result.display_name == "ExecResult"
     exit_code = result.fields["exit_code"]
     assert isinstance(exit_code, IntValue)
     assert exit_code.value == 1
@@ -1759,7 +1788,7 @@ def test_exec_timeout_raises() -> None:
     with pytest.raises(AglRaise) as exc_info:
         interp.execute(root_scope)
     exc = exc_info.value.exc
-    assert exc.type_name == "ExecError"
+    assert exc.display_name == "ExecError"
     from agm.agl.eval.values import BoolValue as BV
 
     assert exc.fields.get("timed_out") == BV(True)
@@ -1831,7 +1860,10 @@ enum Res | Ok(val: int) | Err(msg: text)
 let r = Ok(val: 42)
 r"""
     snap = _run_source(source)
-    assert snap["r"] == EnumValue(type_name="Res", variant="Ok", fields={"val": IntValue(42)})
+    assert snap["r"] == EnumValue(
+        nominal=NominalId(ENTRY_ID, "Res"), display_name="Res", variant="Ok",
+        fields={"val": IntValue(42)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1848,7 +1880,9 @@ let p = Point(x: 3, y: 4)
 p"""
     snap = _run_source(source)
     assert snap["p"] == RecordValue(
-        type_name="Point", fields={"x": IntValue(3), "y": IntValue(4)}
+        nominal=NominalId(ENTRY_ID, "Point"),
+        display_name="Point",
+        fields={"x": IntValue(3), "y": IntValue(4)},
     )
 
 
@@ -1867,7 +1901,7 @@ e"""
     snap = _run_source(source)
     e = snap["e"]
     assert isinstance(e, ExceptionValue)
-    assert e.type_name == "ArithmeticError"
+    assert e.display_name == "ArithmeticError"
     assert e.fields["message"] == TextValue("oops")
 
 
@@ -1917,7 +1951,7 @@ until x = 99
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source, loop_limit=1)
     exc = exc_info.value.exc
-    assert exc.type_name == "MaxIterationsExceeded"
+    assert exc.display_name == "MaxIterationsExceeded"
 
 
 # ---------------------------------------------------------------------------
@@ -2048,14 +2082,15 @@ def test_ask_agent_parse_error_on_failure() -> None:
 
         raise AR(
             ExceptionValue(
-                type_name="AgentCallError",
+                nominal=NominalId(PRELUDE_ID, "AgentCallError"),
+                display_name="AgentCallError",
                 fields={"message": TV("agent failed"), "trace_id": TV("")},
             )
         )
 
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source, default_agent=agent)
-    assert exc_info.value.exc.type_name == "AgentCallError"
+    assert exc_info.value.exc.display_name == "AgentCallError"
 
 
 # ---------------------------------------------------------------------------
@@ -2098,7 +2133,7 @@ def test_exec_structured_returns_exec_result() -> None:
     snap = _run_source(source, supports_shell_exec=True)
     result = snap["r"]
     assert isinstance(result, RecordValue)
-    assert result.type_name == "ExecResult"
+    assert result.display_name == "ExecResult"
     assert result.fields.get("exit_code") == IntValue(0)
 
 
@@ -2264,8 +2299,12 @@ def test_describe_value_primitives() -> None:
     assert _describe_value(BV(True)) == "bool"
     assert _describe_value(JsonValue(None)) == "json"
     assert _describe_value(ListValue(elements=())) == "list"
-    assert _describe_value(RecordValue(type_name="Foo", fields={})) == "Foo"
-    assert _describe_value(ExceptionValue(type_name="MyErr", fields={})) == "MyErr"
+    assert _describe_value(
+        RecordValue(nominal=NominalId(ENTRY_ID, "Foo"), display_name="Foo", fields={})
+    ) == "Foo"
+    assert _describe_value(
+        ExceptionValue(nominal=NominalId(ENTRY_ID, "MyErr"), display_name="MyErr", fields={})
+    ) == "MyErr"
 
 
 # ---------------------------------------------------------------------------
@@ -2404,7 +2443,7 @@ def test_source_slice_empty_and_non_empty() -> None:
     )
     with pytest.raises(AglRaise) as exc_info1:
         interp_empty.execute(root_scope1)
-    assert exc_info1.value.exc.type_name == "MaxIterationsExceeded"
+    assert exc_info1.value.exc.display_name == "MaxIterationsExceeded"
     cond1 = exc_info1.value.exc.fields.get("condition")
     assert cond1 == TV("")
 
@@ -2421,7 +2460,7 @@ def test_source_slice_empty_and_non_empty() -> None:
     )
     with pytest.raises(AglRaise) as exc_info2:
         interp_full.execute(root_scope2)
-    assert exc_info2.value.exc.type_name == "MaxIterationsExceeded"
+    assert exc_info2.value.exc.display_name == "MaxIterationsExceeded"
     cond2 = exc_info2.value.exc.fields.get("condition")
     # The source slice of the "until n = 99" condition expression.
     assert cond2 == TV("n = 99")
@@ -2474,7 +2513,8 @@ def test_ask_agl_raise_span_set_from_none() -> None:
     def agent(req: AgentRequest) -> str:
         raise AR(
             ExceptionValue(
-                type_name="AgentCallError",
+                nominal=NominalId(PRELUDE_ID, "AgentCallError"),
+                display_name="AgentCallError",
                 fields={"message": TV("fail"), "trace_id": TV("")},
             ),
             span=None,
@@ -2485,7 +2525,7 @@ def test_ask_agl_raise_span_set_from_none() -> None:
     exc = exc_info.value
     # The span should have been filled in by the acquire closure.
     assert exc.span is not None
-    assert exc.exc.type_name == "AgentCallError"
+    assert exc.exc.display_name == "AgentCallError"
 
 
 def test_ask_agl_raise_span_already_set() -> None:
@@ -2504,7 +2544,8 @@ def test_ask_agl_raise_span_already_set() -> None:
     def agent(req: AgentRequest) -> str:
         raise AR(
             ExceptionValue(
-                type_name="AgentCallError",
+                nominal=NominalId(PRELUDE_ID, "AgentCallError"),
+                display_name="AgentCallError",
                 fields={"message": TV("fail"), "trace_id": TV("")},
             ),
             span=existing_span,
@@ -2515,7 +2556,7 @@ def test_ask_agl_raise_span_already_set() -> None:
     exc = exc_info.value
     # The span should NOT have been overwritten.
     assert exc.span == existing_span
-    assert exc.exc.type_name == "AgentCallError"
+    assert exc.exc.display_name == "AgentCallError"
 
 
 # ---------------------------------------------------------------------------
@@ -2534,7 +2575,8 @@ let p = Pt(x: 1, y: 2)
 p"""
     snap = _run_source(source)
     assert snap["p"] == RecordValue(
-        type_name="Pt",
+        nominal=NominalId(ENTRY_ID, "Pt"),
+        display_name="Pt",
         fields={"x": DecimalValue(decimal.Decimal("1")), "y": DecimalValue(decimal.Decimal("2"))},
     )
 
@@ -2601,7 +2643,7 @@ def test_exec_nonzero_exit_structured_returns_exec_result() -> None:
     snap = _run_source(source, supports_shell_exec=True)
     result = snap["r"]
     assert isinstance(result, RecordValue)
-    assert result.type_name == "ExecResult"
+    assert result.display_name == "ExecResult"
     exit_code = result.fields.get("exit_code")
     assert isinstance(exit_code, IntValue)
     assert exit_code.value != 0
@@ -2674,7 +2716,10 @@ def test_run_parse_attempts_retry_policy() -> None:
 
     # Retry with n=2 → max_attempts = 3
     retry_policy = EnumValue(
-        type_name="ParsePolicy", variant="Retry", fields={"n": IV(2)}
+        nominal=NominalId(PRELUDE_ID, "ParsePolicy"),
+        display_name="ParsePolicy",
+        variant="Retry",
+        fields={"n": IV(2)},
     )
 
     call_count = [0]
@@ -2810,7 +2855,7 @@ def test_run_parse_attempts_failure_raises_agent_parse_error() -> None:
             make_failure_message=make_msg,
         )
     exc = exc_info.value.exc
-    assert exc.type_name == "AgentParseError"
+    assert exc.display_name == "AgentParseError"
     from agm.agl.eval.values import TextValue
 
     assert exc.fields["agent"] == TextValue("test-agent")
@@ -2828,7 +2873,7 @@ def test_ask_parse_failure_covers_on_parsed_error_msg() -> None:
     with pytest.raises(AglRaise) as exc_info:
         _run_source_with_json_codec(source, default_agent=agent)
     exc = exc_info.value.exc
-    assert exc.type_name == "AgentParseError"
+    assert exc.display_name == "AgentParseError"
 
 
 def test_ask_parse_failure_with_schema_validation_errors() -> None:
@@ -2849,7 +2894,7 @@ r"""
     with pytest.raises(AglRaise) as exc_info:
         _run_source_with_json_codec(source, default_agent=agent)
     exc = exc_info.value.exc
-    assert exc.type_name == "AgentParseError"
+    assert exc.display_name == "AgentParseError"
 
 
 def test_run_parse_attempts_on_parsed_called_with_errors() -> None:
@@ -2898,7 +2943,10 @@ def test_run_parse_attempts_on_parsed_called_with_errors() -> None:
 
     # Use retry policy so we get 2 attempts.
     retry_policy = EnumValue(
-        type_name="ParsePolicy", variant="Retry", fields={"n": IntValue(1)}
+        nominal=NominalId(PRELUDE_ID, "ParsePolicy"),
+        display_name="ParsePolicy",
+        variant="Retry",
+        fields={"n": IntValue(1)},
     )
 
     parsed_calls: list[str] = []
@@ -2973,7 +3021,7 @@ def test_run_parse_attempts_empty_error_state() -> None:
             make_failure_message=lambda raw, n: f"silent fail after {n}",
         )
     exc = exc_info.value.exc
-    assert exc.type_name == "AgentParseError"
+    assert exc.display_name == "AgentParseError"
     from agm.agl.eval.values import JsonValue
 
     # last_errors was () so validation_errors should be empty list.
@@ -3245,7 +3293,7 @@ def test_eval_exec_call_non_text_command() -> None:
     with pytest.raises(AglRaise) as exc_info:
         interp._eval_exec_call(call, scope)
     # "42" is not a valid shell command → will exit with nonzero.
-    assert exc_info.value.exc.type_name == "ExecError"
+    assert exc_info.value.exc.display_name == "ExecError"
 
 
 def test_apply_closure_func_name_no_sig() -> None:
@@ -3387,7 +3435,7 @@ def test_exec_spawn_error_raises_exec_error() -> None:
     ):
         with pytest.raises(AglRaise) as exc_info:
             _run_source('let r = exec("echo hi")\nr', supports_shell_exec=True)
-    assert exc_info.value.exc.type_name == "ExecError"
+    assert exc_info.value.exc.display_name == "ExecError"
     msg = exc_info.value.exc.fields["message"]
     assert isinstance(msg, TextValue)
     assert "spawn" in msg.value.lower()
@@ -3405,7 +3453,7 @@ def test_exec_json_target_parse_failure_raises_agent_parse_error() -> None:
     with pytest.raises(AglRaise) as exc_info:
         _run_source_with_json_codec(source, supports_shell_exec=True)
     exc = exc_info.value.exc
-    assert exc.type_name == "AgentParseError"
+    assert exc.display_name == "AgentParseError"
     # make_exec_failure_message includes "exec output failed to parse"
     exc_msg = exc.fields["message"]
     assert isinstance(exc_msg, TextValue)
@@ -3463,7 +3511,7 @@ def test_structured_exec_nonzero_exit_returns_exec_result() -> None:
     snap = _run_source(source, supports_shell_exec=True)
     result = snap["r"]
     assert isinstance(result, RecordValue)
-    assert result.type_name == "ExecResult"
+    assert result.display_name == "ExecResult"
     exit_code = result.fields["exit_code"]
     assert isinstance(exit_code, IntValue)
     assert exit_code.value == 7
@@ -3497,7 +3545,7 @@ def test_parsed_exec_nonzero_raises_exec_error() -> None:
     source = "let r: text = exec(\"sh -c 'exit 3'\")\nr"
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source, supports_shell_exec=True)
-    assert exc_info.value.exc.type_name == "ExecError"
+    assert exc_info.value.exc.display_name == "ExecError"
     exit_code_val = exc_info.value.exc.fields["exit_code"]
     assert isinstance(exit_code_val, IntValue)
     assert exit_code_val.value == 3
@@ -3522,7 +3570,7 @@ def test_structured_exec_spawn_failure_raises_exec_error() -> None:
     with patch("agm.core.process.run_capture_result", return_value=spawn_result):
         with pytest.raises(AglRaise) as exc_info:
             _run_source(source, supports_shell_exec=True)
-    assert exc_info.value.exc.type_name == "ExecError"
+    assert exc_info.value.exc.display_name == "ExecError"
 
 
 def test_text_exec_spawn_error_raises_exec_error() -> None:
@@ -3544,7 +3592,7 @@ def test_text_exec_spawn_error_raises_exec_error() -> None:
     with patch("agm.core.process.run_capture_result", return_value=spawn_result):
         with pytest.raises(AglRaise) as exc_info:
             _run_source(source, supports_shell_exec=True)
-    assert exc_info.value.exc.type_name == "ExecError"
+    assert exc_info.value.exc.display_name == "ExecError"
     spawn_msg = exc_info.value.exc.fields["message"]
     assert isinstance(spawn_msg, TextValue)
     assert "spawn" in spawn_msg.value.lower()
@@ -3569,7 +3617,7 @@ def test_text_exec_timeout_raises_exec_error() -> None:
     with patch("agm.core.process.run_capture_result", return_value=timeout_result):
         with pytest.raises(AglRaise) as exc_info:
             _run_source(source, supports_shell_exec=True)
-    assert exc_info.value.exc.type_name == "ExecError"
+    assert exc_info.value.exc.display_name == "ExecError"
     timeout_msg = exc_info.value.exc.fields["message"]
     assert isinstance(timeout_msg, TextValue)
     assert "timed out" in timeout_msg.value.lower()
@@ -3589,7 +3637,9 @@ def test_record_constructor_value_called_positionally() -> None:
     snap = _run_source(
         "record Box\n  item: int\nlet make = Box\nlet b = make(5)\nb"
     )
-    assert snap["b"] == RecordValue(type_name="Box", fields={"item": IntValue(5)})
+    assert snap["b"] == RecordValue(
+        nominal=NominalId(ENTRY_ID, "Box"), display_name="Box", fields={"item": IntValue(5)}
+    )
 
 
 def test_record_constructor_value_field_access() -> None:
@@ -3604,7 +3654,8 @@ def test_enum_payload_variant_value_called_positionally() -> None:
         "enum E\n  | Nope\n  | Wrap(value: int)\nlet w = Wrap\nlet v = w(7)\nv"
     )
     assert snap["v"] == EnumValue(
-        type_name="E", variant="Wrap", fields={"value": IntValue(7)}
+        nominal=NominalId(ENTRY_ID, "E"), display_name="E",
+        variant="Wrap", fields={"value": IntValue(7)},
     )
 
 
@@ -3613,7 +3664,8 @@ def test_qualified_enum_payload_variant_value_called_positionally() -> None:
         "enum E\n  | Nope\n  | Wrap(value: int)\nlet w = E.Wrap\nlet v = w(7)\nv"
     )
     assert snap["v"] == EnumValue(
-        type_name="E", variant="Wrap", fields={"value": IntValue(7)}
+        nominal=NominalId(ENTRY_ID, "E"), display_name="E",
+        variant="Wrap", fields={"value": IntValue(7)},
     )
 
 
@@ -3631,10 +3683,12 @@ def test_generic_constructor_value_erasure_two_instantiations() -> None:
         "a"
     )
     assert snap["a"] == EnumValue(
-        type_name="Opt", variant="Wrap", fields={"value": IntValue(7)}
+        nominal=NominalId(ENTRY_ID, "Opt"), display_name="Opt",
+        variant="Wrap", fields={"value": IntValue(7)},
     )
     assert snap["b"] == EnumValue(
-        type_name="Opt", variant="Wrap", fields={"value": TextValue("hi")}
+        nominal=NominalId(ENTRY_ID, "Opt"), display_name="Opt",
+        variant="Wrap", fields={"value": TextValue("hi")},
     )
 
 
@@ -3648,7 +3702,8 @@ def test_generic_qualified_constructor_value_erasure() -> None:
         "a"
     )
     assert snap["a"] == EnumValue(
-        type_name="Opt", variant="Wrap", fields={"value": IntValue(42)}
+        nominal=NominalId(ENTRY_ID, "Opt"), display_name="Opt",
+        variant="Wrap", fields={"value": IntValue(42)},
     )
 
 
@@ -3665,7 +3720,9 @@ def test_generic_record_constructor_value_through_hof() -> None:
         "let r = apply(7, mk)\n"
         "r"
     )
-    assert snap["r"] == RecordValue(type_name="Box", fields={"value": IntValue(7)})
+    assert snap["r"] == RecordValue(
+        nominal=NominalId(ENTRY_ID, "Box"), display_name="Box", fields={"value": IntValue(7)}
+    )
 
 
 def test_generic_enum_constructor_value_through_hof() -> None:
@@ -3679,7 +3736,8 @@ def test_generic_enum_constructor_value_through_hof() -> None:
         "r"
     )
     assert snap["r"] == EnumValue(
-        type_name="Wrapper", variant="wrap", fields={"value": TextValue("hi")}
+        nominal=NominalId(ENTRY_ID, "Wrapper"), display_name="Wrapper",
+        variant="wrap", fields={"value": TextValue("hi")},
     )
 
 
@@ -3694,7 +3752,9 @@ def test_non_generic_constructor_value_through_hof() -> None:
         'let r = apply("x", mk)\n'
         "r"
     )
-    assert snap["r"] == RecordValue(type_name="Tag", fields={"label": TextValue("x")})
+    assert snap["r"] == RecordValue(
+        nominal=NominalId(ENTRY_ID, "Tag"), display_name="Tag", fields={"label": TextValue("x")}
+    )
 
 
 def test_constructor_value_render_and_serialize() -> None:
@@ -3702,8 +3762,12 @@ def test_constructor_value_render_and_serialize() -> None:
     from agm.agl.runtime.render import render_value, render_value_repl
     from agm.agl.runtime.serialize import value_to_json_obj
 
-    record_cv = ConstructorValue(owner_name="Box", variant=None)
-    enum_cv = ConstructorValue(owner_name="E", variant="Wrap")
+    record_cv = ConstructorValue(
+        nominal=NominalId(ENTRY_ID, "Box"), display_name="Box", variant=None
+    )
+    enum_cv = ConstructorValue(
+        nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="Wrap"
+    )
 
     assert render_value(record_cv) == "<constructor Box>"
     assert render_value(enum_cv) == "<constructor E.Wrap>"
@@ -3718,7 +3782,9 @@ def test_constructor_value_describe_value_is_function() -> None:
     from agm.agl.eval.interpreter import _describe_value
     from agm.agl.eval.values import ConstructorValue
 
-    assert _describe_value(ConstructorValue(owner_name="Box", variant=None)) == "function"
+    assert _describe_value(
+        ConstructorValue(nominal=NominalId(ENTRY_ID, "Box"), display_name="Box", variant=None)
+    ) == "function"
 
 
 # ---------------------------------------------------------------------------
@@ -3851,7 +3917,11 @@ record Point
 let p: Point = "{json_str}" as Point
 p"""
     snap = _run_source(source)
-    assert snap["p"] == RecordValue(type_name="Point", fields={"x": IntValue(1), "y": IntValue(2)})
+    assert snap["p"] == RecordValue(
+        nominal=NominalId(ENTRY_ID, "Point"),
+        display_name="Point",
+        fields={"x": IntValue(1), "y": IntValue(2)},
+    )
 
 
 def test_cast_text_to_enum_success() -> None:
@@ -3861,7 +3931,9 @@ enum Color | Red | Green
 let c: Color = "{json_str}" as Color
 c"""
     snap = _run_source(source)
-    assert snap["c"] == EnumValue(type_name="Color", variant="Red", fields={})
+    assert snap["c"] == EnumValue(
+        nominal=NominalId(ENTRY_ID, "Color"), display_name="Color", variant="Red", fields={}
+    )
 
 
 # --- Fallible casts: json -> typed ---
@@ -3875,7 +3947,11 @@ let j: json = {"x": 1, "y": 2}
 let p: Point = j as Point
 p"""
     snap = _run_source(source)
-    assert snap["p"] == RecordValue(type_name="Point", fields={"x": IntValue(1), "y": IntValue(2)})
+    assert snap["p"] == RecordValue(
+        nominal=NominalId(ENTRY_ID, "Point"),
+        display_name="Point",
+        fields={"x": IntValue(1), "y": IntValue(2)},
+    )
 
 
 def test_cast_json_to_enum_success() -> None:
@@ -3885,7 +3961,9 @@ let j: json = {"$case": "Blue"}
 let c: Color = j as Color
 c"""
     snap = _run_source(source)
-    assert snap["c"] == EnumValue(type_name="Color", variant="Blue", fields={})
+    assert snap["c"] == EnumValue(
+        nominal=NominalId(ENTRY_ID, "Color"), display_name="Color", variant="Blue", fields={}
+    )
 
 
 def test_cast_json_to_int_success() -> None:
@@ -3931,7 +4009,7 @@ def test_cast_text_to_int_failure_raises_cast_error() -> None:
     with pytest.raises(AglRaise) as exc_info:
         _run_source('let x = "abc" as int\nx')
     exc = exc_info.value.exc
-    assert exc.type_name == "CastError"
+    assert exc.display_name == "CastError"
     assert isinstance(exc.fields["source_type"], TextValue)
     assert exc.fields["source_type"].value == "text"
     assert isinstance(exc.fields["target_type"], TextValue)
@@ -3947,7 +4025,7 @@ def test_cast_decimal_to_int_non_integral_raises_cast_error() -> None:
     with pytest.raises(AglRaise) as exc_info:
         _run_source("let x = 3.5 as int\nx")
     exc = exc_info.value.exc
-    assert exc.type_name == "CastError"
+    assert exc.display_name == "CastError"
     assert exc.fields["source_type"] == TextValue("decimal")
     assert exc.fields["target_type"] == TextValue("int")
 
@@ -3956,7 +4034,7 @@ def test_cast_text_to_bool_failure_raises_cast_error() -> None:
     with pytest.raises(AglRaise) as exc_info:
         _run_source('let x = "notabool" as bool\nx')
     exc = exc_info.value.exc
-    assert exc.type_name == "CastError"
+    assert exc.display_name == "CastError"
 
 
 def test_cast_text_to_record_malformed_raises_cast_error() -> None:
@@ -3968,7 +4046,7 @@ let p: Point = "not json" as Point
 p"""
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source)
-    assert exc_info.value.exc.type_name == "CastError"
+    assert exc_info.value.exc.display_name == "CastError"
 
 
 # --- try/catch CastError end-to-end ---
@@ -4100,7 +4178,7 @@ ok
 """
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source)
-    assert exc_info.value.exc.type_name == "IndexError"
+    assert exc_info.value.exc.display_name == "IndexError"
 
 
 def test_cast_as_propagates_source_exception() -> None:
@@ -4112,7 +4190,7 @@ y
 """
     with pytest.raises(AglRaise) as exc_info:
         _run_source(source)
-    assert exc_info.value.exc.type_name == "IndexError"
+    assert exc_info.value.exc.display_name == "IndexError"
 
 
 def test_cast_test_propagates_unexpected_conversion_error(
@@ -4158,7 +4236,7 @@ def test_parse_json_failure_raises_json_parse_error() -> None:
     with pytest.raises(AglRaise) as exc_info:
         _run_source('let x: json = parse_json("{bad")\nx')
     exc = exc_info.value.exc
-    assert exc.type_name == "JsonParseError"
+    assert exc.display_name == "JsonParseError"
     assert isinstance(exc.fields["raw"], TextValue)
     assert exc.fields["raw"].value == "{bad"
     assert isinstance(exc.fields["message"], TextValue)

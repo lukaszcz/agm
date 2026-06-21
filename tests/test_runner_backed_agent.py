@@ -352,7 +352,7 @@ class TestAgentCallErrorSeam:
         with pytest.raises(AglRaise) as exc_info:
             registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
         exc_val = exc_info.value.exc
-        assert exc_val.type_name == "AgentCallError"
+        assert exc_val.display_name == "AgentCallError"
 
     def test_spawn_failure_raises_agl_raise(self) -> None:
         from agm.agl.eval.exceptions import AglRaise
@@ -364,7 +364,7 @@ class TestAgentCallErrorSeam:
         with pytest.raises(AglRaise) as exc_info:
             registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
         exc_val = exc_info.value.exc
-        assert exc_val.type_name == "AgentCallError"
+        assert exc_val.display_name == "AgentCallError"
 
     def test_timeout_raises_agl_raise(self) -> None:
         from agm.agl.eval.exceptions import AglRaise
@@ -376,7 +376,7 @@ class TestAgentCallErrorSeam:
         with pytest.raises(AglRaise) as exc_info:
             registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
         exc_val = exc_info.value.exc
-        assert exc_val.type_name == "AgentCallError"
+        assert exc_val.display_name == "AgentCallError"
 
     def test_cause_field_preserved(self) -> None:
         from agm.agl.eval.exceptions import AglRaise

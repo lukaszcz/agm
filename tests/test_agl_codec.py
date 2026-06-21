@@ -757,7 +757,7 @@ class TestTypedValueConstruction:
         result = codec.parse(raw, typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
-        assert result.value.type_name == "Issue"
+        assert result.value.display_name == "Issue"
         assert result.value.fields["title"] == TextValue("Bug")
         assert result.value.fields["severity"] == IntValue(5)
         assert result.value.fields["description"] == TextValue("Oh no")
@@ -768,7 +768,7 @@ class TestTypedValueConstruction:
         result = codec.parse('{"$case": "Pass"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
-        assert result.value.type_name == "Review"
+        assert result.value.display_name == "Review"
         assert result.value.variant == "Pass"
         assert result.value.fields == {}
 
@@ -990,7 +990,7 @@ class TestValidationErrorsThroughRuntime:
                 default_agent=lambda req: '{"title": "Bug"}',
             )
         exc = exc_info.value.exc
-        assert exc.type_name == "AgentParseError"
+        assert exc.display_name == "AgentParseError"
         ve = exc.fields["validation_errors"]
         assert isinstance(ve, JsonValue)
         assert isinstance(ve.raw, list)
@@ -1389,7 +1389,7 @@ class TestWorkflowRuntimeWireUp:
                 default_agent=lambda req: "```json\n6\n```",
             )
         exc = exc_info.value.exc
-        assert exc.type_name == "AgentParseError"
+        assert exc.display_name == "AgentParseError"
 
     def test_runtime_default_strict_json_applies(self) -> None:
         """default_strict_json=True on runtime applies to calls without explicit option."""
@@ -1401,7 +1401,7 @@ class TestWorkflowRuntimeWireUp:
                 strict_json=True,
             )
         exc = exc_info.value.exc
-        assert exc.type_name == "AgentParseError"
+        assert exc.display_name == "AgentParseError"
 
     def test_parse_error_becomes_agent_parse_error(self) -> None:
         let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())
@@ -1411,7 +1411,7 @@ class TestWorkflowRuntimeWireUp:
                 default_agent=lambda req: "not json at all",
             )
         exc = exc_info.value.exc
-        assert exc.type_name == "AgentParseError"
+        assert exc.display_name == "AgentParseError"
         # In v2 the agent field reflects the built-in "ask" call site (default agent path).
         assert exc.fields.get("agent") == TextValue("ask")
 
@@ -1420,7 +1420,7 @@ class TestWorkflowRuntimeWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec((let_n,), default_agent=lambda req: "bad")
         exc = exc_info.value.exc
-        assert exc.type_name == "AgentParseError"
+        assert exc.display_name == "AgentParseError"
         assert "target_type" in exc.fields
 
     def test_decimal_exactness_end_to_end(self) -> None:

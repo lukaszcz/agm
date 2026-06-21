@@ -33,7 +33,8 @@ from agm.agl.eval.values import (
     UnitValue,
     Value,
 )
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.runtime.convert import (
     CastConversionError,
     StrictJsonParseError,
@@ -134,13 +135,20 @@ class _IndexedAssignmentTarget:
 def _make_exc_value(
     type_name: str, message: str, *, trace_id: str = "", **extra: Value
 ) -> ExceptionValue:
-    """Create an ``ExceptionValue`` with ``message`` and optional extra fields."""
+    """Create an ``ExceptionValue`` with ``message`` and optional extra fields.
+
+    Built-in exceptions use ``NominalId(PRELUDE_ID, type_name)``.
+    """
     fields: dict[str, Value] = {
         "message": TextValue(message),
         "trace_id": TextValue(trace_id),
     }
     fields.update(extra)
-    return ExceptionValue(type_name=type_name, fields=fields)
+    return ExceptionValue(
+        nominal=NominalId(PRELUDE_ID, type_name),
+        display_name=type_name,
+        fields=fields,
+    )
 
 
 def _make_match_error(subject: Value, *, trace_id: str = "") -> ExceptionValue:
@@ -415,7 +423,26 @@ class Interpreter:
             # Constructor with fields used as a value → callable ConstructorValue;
             # a nullary/zero-field constructor builds the bare value directly.
             if isinstance(self._checked.node_types.get(expr.node_id), FunctionType):
-                return ConstructorValue(owner_name=cref.owner_name, variant=cref.variant)
+                # Look up the owner type to get its module_id.
+                raw_owner = self._type_env.get_type(cref.owner_name)
+                if raw_owner is None:
+                    raw_owner = getattr(
+                        self._type_env.get_generic_type(cref.owner_name), "template", None
+                    )
+                # NOTE (M3d): the legacy interpreter falls back to ENTRY_ID when the owner type
+                # isn't a concrete RecordType/EnumType in the env. Once constructors are lowered
+                # and program.nominals is populated, the linker-assigned NominalId is authoritative;
+                # this legacy fallback can mis-attribute an imported generic constructor's module.
+                c_module_id = (
+                    raw_owner.module_id
+                    if isinstance(raw_owner, (RecordType, EnumType))
+                    else ENTRY_ID
+                )
+                return ConstructorValue(
+                    nominal=NominalId(c_module_id, cref.owner_name),
+                    display_name=cref.owner_name,
+                    variant=cref.variant,
+                )
             return self._build_constructor_value(expr.node_id, expr.name, (), scope)
 
         from agm.agl.scope.symbols import BinderKind
@@ -450,10 +477,25 @@ class Interpreter:
             # Qualified constructor with fields used as a value → ConstructorValue;
             # a nullary/zero-field constructor builds the bare value directly.
             if isinstance(self._checked.node_types.get(expr.node_id), FunctionType):
-                owner_name, variant, _mid = (
+                owner_name, variant, qcr_mid = (
                     self._checked.resolved.qualified_constructor_refs[expr.node_id]
                 )
-                return ConstructorValue(owner_name=owner_name, variant=variant)
+                # Use the module_id from the qualified constructor ref.
+                raw_qcr = self._type_env.get_type(owner_name)
+                if raw_qcr is None:
+                    raw_qcr = getattr(
+                        self._type_env.get_generic_type(owner_name), "template", None
+                    )
+                qcr_module_id = (
+                    raw_qcr.module_id
+                    if isinstance(raw_qcr, (RecordType, EnumType))
+                    else (qcr_mid if qcr_mid is not None else ENTRY_ID)
+                )
+                return ConstructorValue(
+                    nominal=NominalId(qcr_module_id, owner_name),
+                    display_name=owner_name,
+                    variant=variant,
+                )
             return self._build_constructor_value(expr.node_id, expr.field, (), scope)
         obj = self._eval_expr(expr.obj, scope)
         if isinstance(obj, (RecordValue, ExceptionValue)):
@@ -902,7 +944,8 @@ class Interpreter:
                     0,  # pragma: no cover – checker enforces IntLit; default unreachable
                 )
                 return EnumValue(
-                    type_name="ParsePolicy",
+                    nominal=NominalId(PRELUDE_ID, "ParsePolicy"),
+                    display_name="ParsePolicy",
                     variant="Retry",
                     fields={"n": IntValue(n_val)},
                 )
@@ -1063,13 +1106,15 @@ class Interpreter:
 
             if isinstance(expr.type_args[0], UnitT):
                 return RecordValue(
-                    type_name="AgentRequest",
+                    nominal=NominalId(PRELUDE_ID, "AgentRequest"),
+                    display_name="AgentRequest",
                     fields={
                         "agent": TextValue(agent_name),
                         "prompt": TextValue(prompt_text),
                         "attempt": IntValue(0),
                         "output_contract": EnumValue(
-                            type_name="OutputContractOption",
+                            nominal=NominalId(PRELUDE_ID, "OutputContractOption"),
+                            display_name="OutputContractOption",
                             variant="None",
                             fields={},
                         ),
@@ -1088,7 +1133,8 @@ class Interpreter:
             )
 
         output_contract_value = RecordValue(
-            type_name="OutputContract",
+            nominal=NominalId(PRELUDE_ID, "OutputContract"),
+            display_name="OutputContract",
             fields={
                 "target_type": TextValue(repr(contract.target_type)),
                 "codec_name": TextValue(contract.codec.name),
@@ -1099,13 +1145,15 @@ class Interpreter:
             },
         )
         return RecordValue(
-            type_name="AgentRequest",
+            nominal=NominalId(PRELUDE_ID, "AgentRequest"),
+            display_name="AgentRequest",
             fields={
                 "agent": TextValue(agent_name),
                 "prompt": TextValue(prompt_text),
                 "attempt": IntValue(0),
                 "output_contract": EnumValue(
-                    type_name="OutputContractOption",
+                    nominal=NominalId(PRELUDE_ID, "OutputContractOption"),
+                    display_name="OutputContractOption",
                     variant="Some",
                     fields={"value": output_contract_value},
                 ),
@@ -1147,7 +1195,8 @@ class Interpreter:
             result, _ = self._run_shell_capture(command, exec_span)
             exit_code = result.returncode if result.returncode is not None else 0
             return RecordValue(
-                type_name="ExecResult",
+                nominal=NominalId(PRELUDE_ID, "ExecResult"),
+                display_name="ExecResult",
                 fields={
                     "stdout": TextValue(result.stdout.rstrip("\n")),
                     "exit_code": IntValue(exit_code),
@@ -1381,17 +1430,21 @@ class Interpreter:
         consistent with erasure).  Exceptions never reach here — the checker
         rejects exception-constructor-as-value.
         """
-        field_types = self._constructor_field_types(cv.owner_name, cv.variant)
+        field_types = self._constructor_field_types(cv.nominal, cv.variant)
         arg_values: dict[str, Value] = {
             fname: _coerce(self._eval_expr(arg, scope), ftype)
             for (fname, ftype), arg in zip(field_types.items(), call.args, strict=True)
         }
         if cv.variant is None:
-            return RecordValue(type_name=cv.owner_name, fields=arg_values)
-        return EnumValue(type_name=cv.owner_name, variant=cv.variant, fields=arg_values)
+            return RecordValue(
+                nominal=cv.nominal, display_name=cv.display_name, fields=arg_values
+            )
+        return EnumValue(
+            nominal=cv.nominal, display_name=cv.display_name, variant=cv.variant, fields=arg_values
+        )
 
     def _constructor_field_types(
-        self, owner_name: str, variant: str | None
+        self, nominal: NominalId, variant: str | None
     ) -> dict[str, Type]:
         """Ordered field name → declared field-type template for a constructor.
 
@@ -1399,6 +1452,7 @@ class Interpreter:
         concrete type) so first-class constructor values can be built under
         type erasure without consulting the call site's result type.
         """
+        owner_name = nominal.declared_name
         gdef = self._type_env.get_generic_type(owner_name)
         if gdef is not None:
             owner_type: Type | None = gdef.template
@@ -1435,7 +1489,11 @@ class Interpreter:
                 fname: _coerce(arg_values[fname], ftype)
                 for fname, ftype in typ.fields.items()
             }
-            return RecordValue(type_name=typ.name, fields=coerced)
+            return RecordValue(
+                nominal=NominalId(typ.module_id, typ.name),
+                display_name=typ.name,
+                fields=coerced,
+            )
 
         if isinstance(typ, ExcType):
             # ``trace_id`` is the only auto-injected field (the type checker
@@ -1446,7 +1504,12 @@ class Interpreter:
                 fname: (_coerce(arg_values[fname], ftype) if fname in arg_values else trace_val)
                 for fname, ftype in typ.fields.items()
             }
-            return ExceptionValue(type_name=typ.name, fields=fields)
+            # ExceptionType has no module_id — built-in exceptions use PRELUDE_ID.
+            return ExceptionValue(
+                nominal=NominalId(PRELUDE_ID, typ.name),
+                display_name=typ.name,
+                fields=fields,
+            )
 
         # Enum-variant constructor.
         assert isinstance(typ, EnumType), (
@@ -1458,7 +1521,12 @@ class Interpreter:
             fname: _coerce(arg_values[fname], ftype)
             for fname, ftype in variant_fields.items()
         }
-        return EnumValue(type_name=typ.name, variant=variant_name, fields=coerced2)
+        return EnumValue(
+            nominal=NominalId(typ.module_id, typ.name),
+            display_name=typ.name,
+            variant=variant_name,
+            fields=coerced2,
+        )
 
     def _eval_binary_op(self, expr: BinaryOp, scope: Scope) -> Value:
         op = expr.op
@@ -1702,7 +1770,8 @@ def _coerce(value: Value, target: Type) -> Value:
         )
     if isinstance(target, RecordType) and isinstance(value, RecordValue):
         return RecordValue(
-            type_name=value.type_name,
+            nominal=value.nominal,
+            display_name=value.display_name,
             fields={
                 k: _coerce(v, target.fields[k]) if k in target.fields else v
                 for k, v in value.fields.items()
@@ -1711,7 +1780,8 @@ def _coerce(value: Value, target: Type) -> Value:
     if isinstance(target, EnumType) and isinstance(value, EnumValue):
         variant_fields = target.variants.get(value.variant, {})
         return EnumValue(
-            type_name=value.type_name,
+            nominal=value.nominal,
+            display_name=value.display_name,
             variant=value.variant,
             fields={
                 k: _coerce(v, variant_fields[k]) if k in variant_fields else v
@@ -1840,12 +1910,12 @@ def _in_op(left: Value, right: Value) -> BoolValue:
 
 
 def _matches_catch(handler: CatchClause, exc: ExceptionValue) -> bool:
-    """Check if *handler* catches an exception of type *exc.type_name*."""
+    """Check if *handler* catches an exception of type *exc.display_name*."""
     if handler.exc_type is None:
         return True
     if handler.exc_type == "_" or handler.exc_type == "Exception":
         return True
-    return handler.exc_type == exc.type_name
+    return handler.exc_type == exc.display_name
 
 
 def _assign_target_slot_type(target: AssignTarget, root_type: Type) -> Type:
@@ -1939,11 +2009,11 @@ def _match_pattern(
 def _describe_value(value: Value) -> str:
     """Return the AgL type-name of *value* (design §8.1 ``scrutinee_type``)."""
     if isinstance(value, EnumValue):
-        return value.type_name
+        return value.display_name
     if isinstance(value, RecordValue):
-        return value.type_name
+        return value.display_name
     if isinstance(value, ExceptionValue):
-        return value.type_name
+        return value.display_name
     if isinstance(value, TextValue):
         return "text"
     if isinstance(value, IntValue):

@@ -37,6 +37,6 @@ class AglRaise(Exception):
     """
 
     def __init__(self, exc: ExceptionValue, *, span: "SourceSpan | None" = None) -> None:
-        super().__init__(exc.type_name)
+        super().__init__(exc.display_name)
         self.exc = exc
         self.span: SourceSpan | None = span

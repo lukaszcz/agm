@@ -153,8 +153,8 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
 
     if isinstance(value, ConstructorValue):
         if value.variant is not None:
-            return f"<constructor {value.owner_name}.{value.variant}>"
-        return f"<constructor {value.owner_name}>"
+            return f"<constructor {value.display_name}.{value.variant}>"
+        return f"<constructor {value.display_name}>"
 
     if isinstance(value, Closure):
         return _closure_surface(value)
@@ -181,9 +181,9 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
 
     if isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
         prefix = (
-            f"{value.type_name}.{value.variant}"
+            f"{value.display_name}.{value.variant}"
             if isinstance(value, EnumValue)
-            else value.type_name
+            else value.display_name
         )
         if not value.fields:
             return prefix if isinstance(value, EnumValue) else f"{prefix}()"

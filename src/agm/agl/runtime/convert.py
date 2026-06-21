@@ -47,6 +47,7 @@ from agm.agl.eval.values import (
     IntValue,
     JsonValue,
     ListValue,
+    NominalId,
     RecordValue,
     TextValue,
     Value,
@@ -222,7 +223,11 @@ def json_to_value(obj: object, typ: Type) -> BaseValue:
             if field_name not in obj:
                 raise ValueError(f"Missing field {field_name!r}")
             fields[field_name] = json_to_value(obj[field_name], field_type)
-        return RecordValue(type_name=typ.name, fields=fields)
+        return RecordValue(
+            nominal=NominalId(typ.module_id, typ.name),
+            display_name=typ.name,
+            fields=fields,
+        )
 
     if isinstance(typ, EnumType):
         if not isinstance(obj, dict):
@@ -243,7 +248,12 @@ def json_to_value(obj: object, typ: Type) -> BaseValue:
                     f"Enum variant {case_val!r} is missing field {field_name!r}"
                 )
             payload[field_name] = json_to_value(obj[field_name], field_type)
-        return EnumValue(type_name=typ.name, variant=case_val, fields=payload)
+        return EnumValue(
+            nominal=NominalId(typ.module_id, typ.name),
+            display_name=typ.name,
+            variant=case_val,
+            fields=payload,
+        )
 
     # ExceptionType is not wire-serialised by the JSON codec.
     raise ValueError(f"Cannot deserialise type {typ!r} from JSON")

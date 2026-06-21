@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
+from agm.agl.ir.ids import NominalId
+
 # ---------------------------------------------------------------------------
 # Re-export all leaf tags and helpers from the canonical home
 # ---------------------------------------------------------------------------
@@ -63,11 +65,16 @@ class ConstructorValue:
     represented at runtime.  Like ``AgentValue`` it is not renderable or
     comparable by the language.
 
-    ``owner_name`` is the owning type name; ``variant`` is the enum variant
-    name, or ``None`` for a record constructor.
+    ``nominal`` is the ``NominalId`` (module + declared name) of the owning
+    type.  ``display_name`` is the user-facing name for rendering.  ``variant``
+    is the enum variant name, or ``None`` for a record constructor.
+
+    Equality and hash are by ``(nominal, variant)``; ``display_name`` is
+    excluded (rendering metadata only).
     """
 
-    owner_name: str
+    nominal: NominalId
+    display_name: str = field(compare=False, hash=False)
     variant: str | None
 
 
@@ -141,29 +148,50 @@ class DictValue:
 
 @dataclass(frozen=True, slots=True)
 class RecordValue:
-    """A record-typed value."""
+    """A record-typed value.
 
-    type_name: str
+    ``nominal`` is the ``NominalId`` (module + declared name) — the identity
+    key.  ``display_name`` is the user-facing name for rendering and
+    diagnostics; it is excluded from equality and hash.  ``fields`` holds
+    the record's field values.
+
+    Equality and hash are by ``(nominal, fields)``; ``display_name`` is
+    excluded (rendering metadata only, mirroring how ``RecordType`` excludes
+    ``fields`` from its own equality).
+    """
+
+    nominal: NominalId
+    display_name: str = field(compare=False, hash=False)
     fields: "dict[str, Value]" = field(default_factory=dict)
 
     def __hash__(self) -> int:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds:
         # equal values (e.g. JsonValue(1) == JsonValue(Decimal("1.0"))) hash the same.
         return hash(
-            (self.type_name, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
+            (self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
         )
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, RecordValue):
-            return self.type_name == other.type_name and self.fields == other.fields
+            return self.nominal == other.nominal and self.fields == other.fields
         return NotImplemented
 
 
 @dataclass(frozen=True, slots=True)
 class EnumValue:
-    """An enum-typed value: the active variant name plus any payload fields."""
+    """An enum-typed value: the active variant name plus any payload fields.
 
-    type_name: str
+    ``nominal`` is the ``NominalId`` (module + declared name) — the identity
+    key.  ``display_name`` is the user-facing name for rendering and
+    diagnostics; it is excluded from equality and hash.  ``variant`` is the
+    active variant name.  ``fields`` holds the variant's payload field values.
+
+    Equality and hash are by ``(nominal, variant, fields)``; ``display_name``
+    is excluded (rendering metadata only).
+    """
+
+    nominal: NominalId
+    display_name: str = field(compare=False, hash=False)
     variant: str
     fields: "dict[str, Value]" = field(default_factory=dict)
 
@@ -171,7 +199,7 @@ class EnumValue:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
         return hash(
             (
-                self.type_name,
+                self.nominal,
                 self.variant,
                 tuple(sorted((k, hash(v)) for k, v in self.fields.items())),
             )
@@ -180,7 +208,7 @@ class EnumValue:
     def __eq__(self, other: object) -> bool:
         if isinstance(other, EnumValue):
             return (
-                self.type_name == other.type_name
+                self.nominal == other.nominal
                 and self.variant == other.variant
                 and self.fields == other.fields
             )
@@ -191,24 +219,31 @@ class EnumValue:
 class ExceptionValue:
     """A built-in AgL exception value.
 
-    ``type_name`` is the exception class name (e.g. ``"AgentParseError"``).
+    ``nominal`` is the ``NominalId`` (module + declared name) — the identity
+    key.  Built-in exceptions use ``NominalId(PRELUDE_ID, name)``.
+    ``display_name`` is the user-facing exception class name (e.g.
+    ``"AgentParseError"``); it is excluded from equality and hash.
     ``fields`` maps the exception's declared field names to their values.
     The ``"message"`` and ``"trace_id"`` fields are always present (base
     ``Exception`` contract).
+
+    Equality and hash are by ``(nominal, fields)``; ``display_name`` is
+    excluded (rendering metadata only).
     """
 
-    type_name: str
+    nominal: NominalId
+    display_name: str = field(compare=False, hash=False)
     fields: "dict[str, Value]" = field(default_factory=dict)
 
     def __hash__(self) -> int:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
         return hash(
-            (self.type_name, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
+            (self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
         )
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, ExceptionValue):
-            return self.type_name == other.type_name and self.fields == other.fields
+            return self.nominal == other.nominal and self.fields == other.fields
         return NotImplemented
 
 
@@ -247,6 +282,7 @@ __all__ = [
     "IntValue",
     "JsonValue",
     "ListValue",
+    "NominalId",
     "RecordValue",
     "TextValue",
     "UnitValue",

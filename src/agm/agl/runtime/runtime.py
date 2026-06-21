@@ -1642,7 +1642,7 @@ def exception_value_to_run_error(
     if isinstance(span, SourceSpan):
         line = span.start_line
         col = span.start_col
-    return RunError(type_name=exc.type_name, fields=fields, line=line, col=col)
+    return RunError(type_name=exc.display_name, fields=fields, line=line, col=col)
 
 
 def _build_call_inventory_from_call_sites(

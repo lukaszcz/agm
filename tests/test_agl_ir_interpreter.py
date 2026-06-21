@@ -72,6 +72,7 @@ from agm.agl.ir import (
     SymbolId,
     ToJson,
 )
+from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID
 
 # ---------------------------------------------------------------------------
@@ -657,7 +658,8 @@ class TestCoerceMapDictValues:
 class TestCoerceMapRecordFields:
     def _make_record_value(self) -> RecordValue:
         return RecordValue(
-            type_name="Point",
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
             fields={"x": IntValue(3), "y": IntValue(4), "label": TextValue("origin")},
         )
 
@@ -675,7 +677,8 @@ class TestCoerceMapRecordFields:
         )
         result = _apply_coercion(rec, coercion)
         assert result == RecordValue(
-            type_name="Point",
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
             fields={
                 "x": DecimalValue(decimal.Decimal(3)),
                 "y": DecimalValue(decimal.Decimal(4)),
@@ -694,13 +697,15 @@ class TestCoerceMapRecordFields:
         from agm.agl.eval.ir_interpreter import _apply_coercion
 
         rec = RecordValue(
-            type_name="Pt",
+            nominal=NominalId(ENTRY_ID, "Pt"),
+            display_name="Pt",
             fields={"a": IntValue(10), "b": TextValue("keep")},
         )
         coercion = MapRecordFields(fields=(("a", IntToDecimal()),))
         result = _apply_coercion(rec, coercion)
         assert result == RecordValue(
-            type_name="Pt",
+            nominal=NominalId(ENTRY_ID, "Pt"),
+            display_name="Pt",
             fields={"a": DecimalValue(decimal.Decimal(10)), "b": TextValue("keep")},
         )
 
@@ -715,7 +720,8 @@ class TestCoerceMapEnumFields:
         from agm.agl.eval.ir_interpreter import _apply_coercion
 
         ev = EnumValue(
-            type_name="Shape",
+            nominal=NominalId(ENTRY_ID, "Shape"),
+            display_name="Shape",
             variant="Circle",
             fields={"radius": IntValue(5), "label": TextValue("c")},
         )
@@ -727,7 +733,8 @@ class TestCoerceMapEnumFields:
         )
         result = _apply_coercion(ev, coercion)
         assert result == EnumValue(
-            type_name="Shape",
+            nominal=NominalId(ENTRY_ID, "Shape"),
+            display_name="Shape",
             variant="Circle",
             fields={"radius": DecimalValue(decimal.Decimal(5)), "label": TextValue("c")},
         )
@@ -737,7 +744,8 @@ class TestCoerceMapEnumFields:
         from agm.agl.eval.ir_interpreter import _apply_coercion
 
         ev = EnumValue(
-            type_name="Shape",
+            nominal=NominalId(ENTRY_ID, "Shape"),
+            display_name="Shape",
             variant="Triangle",
             fields={"sides": IntValue(3)},
         )

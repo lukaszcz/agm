@@ -681,10 +681,31 @@ class TestUnsupportedNodes:
         with pytest.raises(NotImplementedError):
             _lower("def f() -> int = 1\nf()")
 
-    def test_indexed_assign_raises_not_implemented(self) -> None:
-        """IndexTarget assignment paths are deferred to M3; must raise NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            _lower('var _d: dict[text, int] = {"a": 1}\n_d["a"] := 2\n()')
+    def test_qualified_enum_constructor_raises_not_implemented(self) -> None:
+        """Qualified constructor FieldAccess (e.g. Color.Red) raises NotImplementedError."""
+        source = """\
+enum Color
+  | Red
+  | Blue
+
+let c = Color.Red
+()
+"""
+        with pytest.raises(NotImplementedError, match="qualified constructor"):
+            _lower(source)
+
+    def test_indexed_assign_lowers_to_ir_assign_with_path(self) -> None:
+        """IndexTarget assignment lowers to IrAssign with a non-empty path (M3c)."""
+        from agm.agl.ir import IrAssign
+        prog = _lower('var _d: dict[text, int] = {"a": 1}\n_d["a"] := 2\n()')
+        entry = prog.modules[prog.entry_module]
+        # AssignStmt lowers directly to IrAssign in the initializers list
+        found = False
+        for node in entry.initializers:
+            if isinstance(node, IrAssign):
+                assert len(node.path) >= 1
+                found = True
+        assert found, "Expected IrAssign(path=[...]) in initializers"
 
 
 # ---------------------------------------------------------------------------
@@ -733,3 +754,73 @@ class TestValidateIrIntegration:
         # Should not raise even without explicit validate call
         prog = _lower("()", validate=False)
         assert prog is not None
+
+
+# ---------------------------------------------------------------------------
+# Direct _Lowerer unit test — IrField lowering (non-constructor FieldAccess)
+# ---------------------------------------------------------------------------
+
+
+class TestIrFieldLowering:
+    """Unit tests for the IrField lowering path in _Lowerer.lower_expr.
+
+    FieldAccess nodes that resolve to records/exceptions (rather than
+    qualified constructor references) lower to IrField.  These tests exercise
+    the _Lowerer directly because end-to-end lowering of FieldAccess requires
+    constructor calls (M4, deferred).
+    """
+
+    def test_field_access_lowers_to_ir_field(self) -> None:
+        """Non-constructor FieldAccess lowers to IrField with correct field name.
+
+        We construct a minimal FieldAccess AST node whose node_id is NOT in
+        qualified_constructor_refs, pair it with a UnitLit obj (so lower_expr
+        can recurse cleanly), and assert the result is IrField.
+        """
+        from agm.agl.ir.nodes import IrField
+        from agm.agl.syntax.nodes import FieldAccess, UnitLit
+        from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+
+        # Build a CheckedProgram from the trivial source "()" — we only need the
+        # resolved/type-table scaffolding, not the actual program body.
+        checked = _check("()")
+
+        # A fresh node_id not present in qualified_constructor_refs.
+        fake_node_id = 99999
+        assert fake_node_id not in checked.resolved.qualified_constructor_refs
+
+        span = SourceSpan(
+            start_line=1, start_col=1, end_line=1, end_col=5,
+            start_offset=0, end_offset=4, source=UNKNOWN_SOURCE,
+        )
+        unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
+        field_access = FieldAccess(obj=unit_lit, field="myfield", span=span, node_id=fake_node_id)
+
+        lowerer = _Lowerer(checked, "()", "<test>")
+        result = lowerer.lower_expr(field_access)
+
+        assert isinstance(result, IrField)
+        assert result.field == "myfield"
+
+    def test_kind_for_non_container_raises_assertion(self) -> None:
+        """_kind_for_container raises AssertionError for a non-container type.
+
+        Defensive guard: can only be triggered by a compiler bug (well-typed IR
+        never passes a non-container type here).
+        """
+        import pytest
+        checked = _check("()")
+        lowerer = _Lowerer(checked, "()", "<test>")
+        with pytest.raises(AssertionError, match="compiler bug"):
+            lowerer._kind_for_container(IntType())
+
+    def test_elem_type_for_non_container_raises_assertion(self) -> None:
+        """_elem_type_for_container raises AssertionError for a non-container type.
+
+        Defensive guard: can only be triggered by a compiler bug.
+        """
+        import pytest
+        checked = _check("()")
+        lowerer = _Lowerer(checked, "()", "<test>")
+        with pytest.raises(AssertionError, match="compiler bug"):
+            lowerer._elem_type_for_container(TextType())

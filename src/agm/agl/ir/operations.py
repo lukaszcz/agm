@@ -26,6 +26,7 @@ __all__ = [
     "Coercion",
     "CompareKind",
     "ContainsKind",
+    "IndexKind",
     "IntToDecimal",
     "MapDictValues",
     "MapEnumFields",
@@ -102,6 +103,13 @@ class ContainsKind(enum.Enum):
     LIST = "list"
     DICT = "dict"
     TEXT = "text"
+
+
+class IndexKind(enum.Enum):
+    """Kind tag for index access: list or dict."""
+
+    LIST = "list"
+    DICT = "dict"
 
 
 class UnaryOp(enum.Enum):

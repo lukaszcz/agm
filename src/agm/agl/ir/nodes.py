@@ -59,6 +59,7 @@ from agm.agl.ir.operations import (
     Coercion,
     CompareKind,
     ContainsKind,
+    IndexKind,
     NumericKind,
     UnaryOp,
 )
@@ -79,12 +80,18 @@ __all__ = [
     "IrConstUnit",
     "IrContains",
     "IrExpr",
+    "IrField",
+    "IrIndex",
     "IrIndexStep",
     "IrLoad",
     "IrMakeDict",
     "IrMakeList",
     "IrOr",
+    "IrRenderTemplate",
     "IrSequence",
+    "IrTemplateSegment",
+    "IrTemplateText",
+    "IrTemplateValue",
     "IrUnary",
 ]
 
@@ -209,6 +216,7 @@ class IrIndexStep:
     This is a helper child record and is NOT a member of ``IrExpr``.
     """
 
+    kind: IndexKind
     index: "IrExpr"
     location: Location
 
@@ -364,6 +372,56 @@ class IrUnary:
 
 
 # ---------------------------------------------------------------------------
+# Field/index access and template nodes (M3c)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrField:
+    """IR field read: obj.field on a record or exception value."""
+
+    location: Location
+    value: "IrExpr"
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrIndex:
+    """IR index access: obj[index] on a list (LIST) or dict (DICT)."""
+
+    location: Location
+    kind: IndexKind
+    value: "IrExpr"
+    index: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrTemplateText:
+    """A literal text fragment in a template — NOT an IrExpr."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrTemplateValue:
+    """An interpolated expression in a template — NOT an IrExpr."""
+
+    value: "IrExpr"
+
+
+#: Closed union of template segment types (not members of IrExpr).
+IrTemplateSegment = IrTemplateText | IrTemplateValue
+
+
+@dataclass(frozen=True, slots=True)
+class IrRenderTemplate:
+    """IR template rendering."""
+
+    location: Location
+    segments: "tuple[IrTemplateSegment, ...]"
+
+
+# ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
 
@@ -394,4 +452,7 @@ IrExpr = (
     | IrAnd
     | IrOr
     | IrUnary
+    | IrField
+    | IrIndex
+    | IrRenderTemplate
 )

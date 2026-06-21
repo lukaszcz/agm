@@ -43,6 +43,7 @@ from agm.agl.eval.values import (
 from agm.agl.ir import (
     ExecutableModule,
     ExecutableProgram,
+    IndexKind,
     IntToDecimal,
     InvalidIrError,
     IrAssign,
@@ -56,6 +57,7 @@ from agm.agl.ir import (
     IrConstText,
     IrConstUnit,
     IrExpr,
+    IrField,
     IrIndexStep,
     IrLoad,
     IrMakeDict,
@@ -885,23 +887,24 @@ class TestDefensiveErrors:
         with pytest.raises(InvalidIrError):
             IrInterpreter(prog).run()
 
-    def test_assign_non_empty_path_raises(self) -> None:
-        """IrAssign with a non-empty path raises InvalidIrError in M2."""
+    def test_assign_with_path_list(self) -> None:
+        """IrAssign with a non-empty path performs indexed assignment on a list."""
+        from agm.agl.eval.values import IntValue, ListValue
         sym, desc = _var_sym(0, "v")
         prog = _make_program(
             (
-                IrBind(_LOC, sym, IrConstInt(_LOC, 0)),
+                IrBind(_LOC, sym, IrMakeList(_LOC, (IrConstInt(_LOC, 10), IrConstInt(_LOC, 20)))),
                 IrAssign(
                     _LOC,
                     sym,
-                    (IrIndexStep(index=IrConstInt(_LOC, 0), location=_LOC),),
-                    IrConstInt(_LOC, 1),
+                    (IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 0), location=_LOC),),
+                    IrConstInt(_LOC, 99),
                 ),
             ),
             {sym: desc},
         )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
+        result = IrInterpreter(prog).run()
+        assert result["v"] == ListValue((IntValue(99), IntValue(20)))
 
     def test_ir_and_non_bool_lhs_raises(self) -> None:
         """IrAnd with a non-BoolValue lhs raises InvalidIrError."""
@@ -971,6 +974,207 @@ class TestDefensiveErrors:
             ),
         )
         with pytest.raises(InvalidIrError, match="IrUnary NEG: expected numeric"):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# IrField — field read on RecordValue / ExceptionValue
+# ---------------------------------------------------------------------------
+
+
+class TestIrField:
+    """Tests for the IrField node in IrInterpreter."""
+
+    def _run_with_record(
+        self,
+        record: RecordValue,
+        field_name: str,
+    ) -> Value:
+        """Run an IrField read on a pre-built RecordValue.
+
+        Seeds the frame with the record before running, using IrLoad → IrField.
+        The record symbol is NOT in initializers so that the IrBind for it does
+        not overwrite our pre-seeded value. We seed the frame directly and only
+        include the IrBind for the output binding.
+        """
+        sym, desc = _let_sym(0, "rec")
+        out_sym, out_desc = _let_sym(1, "out")
+        # Only the output binding is in initializers; the record is pre-seeded.
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrField(_LOC, value=IrLoad(_LOC, sym), field=field_name),
+                ),
+            ),
+            {sym: desc, out_sym: out_desc},
+        )
+        # Pre-seed the frame with the RecordValue so IrLoad finds it during run().
+        return IrInterpreter(prog, initial_frame={sym: record}).run()["out"]
+
+    def test_ir_field_reads_record_field(self) -> None:
+        """IrField returns the value of a named field from a RecordValue."""
+        rec = RecordValue(
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
+            fields={"x": IntValue(3), "y": IntValue(4)},
+        )
+        result = self._run_with_record(rec, "x")
+        assert result == IntValue(3)
+
+    def test_ir_field_reads_second_field(self) -> None:
+        """IrField returns the correct value when multiple fields are present."""
+        rec = RecordValue(
+            nominal=NominalId(ENTRY_ID, "Point"),
+            display_name="Point",
+            fields={"x": IntValue(3), "y": IntValue(7)},
+        )
+        result = self._run_with_record(rec, "y")
+        assert result == IntValue(7)
+
+    def test_ir_field_on_non_record_raises(self) -> None:
+        """IrField on a non-RecordValue/non-ExceptionValue raises InvalidIrError."""
+        prog = _make_program(
+            (
+                IrBind(_LOC, SymbolId(0), IrConstInt(_LOC, 42)),
+                IrBind(
+                    _LOC,
+                    SymbolId(1),
+                    IrField(_LOC, value=IrLoad(_LOC, SymbolId(0)), field="x"),
+                ),
+            ),
+            {
+                SymbolId(0): SymbolDescriptor(
+                    symbol_id=SymbolId(0), mutable=False, public_name="n", owner=ENTRY_ID
+                ),
+                SymbolId(1): SymbolDescriptor(
+                    symbol_id=SymbolId(1), mutable=False, public_name="out", owner=ENTRY_ID
+                ),
+            },
+        )
+        with pytest.raises(InvalidIrError, match="IrField"):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# IrAssign with path — IndexError / KeyError at intermediate and final steps
+# ---------------------------------------------------------------------------
+
+
+class TestIrAssignPathErrors:
+    """Tests for IrAssign path error handling (IndexError/KeyError in path steps).
+
+    These tests exercise the exception-handling branches in IrInterpreter._eval
+    for the IrAssign case with a non-empty path.  Each test constructs a depth-2
+    assignment where the intermediate or final index is out-of-range or missing.
+    """
+
+    def _var(self, n: int, name: str) -> tuple[SymbolId, SymbolDescriptor]:
+        return _var_sym(n, name)
+
+    def test_assign_path_intermediate_list_oob_raises(self) -> None:
+        """IrAssign: intermediate step with out-of-bounds list index raises AglRaise."""
+        from agm.agl.eval.exceptions import AglRaise
+        # xss = [[1, 2]], then xss[5][0] := 99 — step 0 is OOB
+        sym, desc = self._var(0, "xss")
+        inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
+        prog = _make_program(
+            (
+                IrBind(_LOC, sym, IrMakeList(_LOC, (inner,))),
+                IrAssign(
+                    _LOC,
+                    sym,
+                    (
+                        IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 5), location=_LOC),
+                        IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 0), location=_LOC),
+                    ),
+                    IrConstInt(_LOC, 99),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(AglRaise):
+            IrInterpreter(prog).run()
+
+    def test_assign_path_intermediate_dict_missing_key_raises(self) -> None:
+        """IrAssign: intermediate step with missing dict key raises AglRaise."""
+        from agm.agl.eval.exceptions import AglRaise
+        # m = {"a": [1, 2]}, then m["z"]["a"] := 99 — step 0 key is missing
+        sym, desc = self._var(0, "m")
+        inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
+        prog = _make_program(
+            (
+                IrBind(_LOC, sym, IrMakeDict(_LOC, ((IrConstText(_LOC, "a"), inner),))),
+                IrAssign(
+                    _LOC,
+                    sym,
+                    (
+                        IrIndexStep(
+                            kind=IndexKind.DICT,
+                            index=IrConstText(_LOC, "z"),
+                            location=_LOC,
+                        ),
+                        IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 0), location=_LOC),
+                    ),
+                    IrConstInt(_LOC, 99),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(AglRaise):
+            IrInterpreter(prog).run()
+
+    def test_assign_path_final_list_oob_raises(self) -> None:
+        """IrAssign: final step with out-of-bounds list index raises AglRaise."""
+        from agm.agl.eval.exceptions import AglRaise
+        # xs = [1, 2], then xs[5] := 99 — final step is OOB
+        sym, desc = self._var(0, "xs")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC, sym, IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
+                ),
+                IrAssign(
+                    _LOC,
+                    sym,
+                    (IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 5), location=_LOC),),
+                    IrConstInt(_LOC, 99),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(AglRaise):
+            IrInterpreter(prog).run()
+
+    def test_assign_path_final_dict_missing_key_raises(self) -> None:
+        """IrAssign: final step with missing dict key raises AglRaise."""
+        from agm.agl.eval.exceptions import AglRaise
+        # m = {"a": 1}, then m["z"] := 99 — final step key is missing
+        sym, desc = self._var(0, "m")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeDict(_LOC, ((IrConstText(_LOC, "a"), IrConstInt(_LOC, 1)),)),
+                ),
+                IrAssign(
+                    _LOC,
+                    sym,
+                    (
+                        IrIndexStep(
+                            kind=IndexKind.DICT,
+                            index=IrConstText(_LOC, "z"),
+                            location=_LOC,
+                        ),
+                    ),
+                    IrConstInt(_LOC, 99),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(AglRaise):
             IrInterpreter(prog).run()
 
 

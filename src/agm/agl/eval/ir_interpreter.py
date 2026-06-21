@@ -36,11 +36,13 @@ from agm.agl.eval.arith import (
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.eval.frames import Cell, Frame
+from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.eval.values import (
     BoolValue,
     DecimalValue,
     DictValue,
     EnumValue,
+    ExceptionValue,
     IntValue,
     JsonValue,
     ListValue,
@@ -65,17 +67,23 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrExpr,
+    IrField,
+    IrIndex,
     IrLoad,
     IrMakeDict,
     IrMakeList,
     IrOr,
+    IrRenderTemplate,
     IrSequence,
+    IrTemplateText,
+    IrTemplateValue,
     IrUnary,
 )
 from agm.agl.ir.operations import (
     ArithOp,
     CmpOp,
     Coercion,
+    IndexKind,
     IntToDecimal,
     MapDictValues,
     MapEnumFields,
@@ -189,10 +197,54 @@ class IrInterpreter:
     ``public_name`` and is owned by the entry module.
     """
 
-    def __init__(self, program: ExecutableProgram, *, trace: TraceStore | None = None) -> None:
+    def __init__(
+        self,
+        program: ExecutableProgram,
+        *,
+        initial_frame: Frame | None = None,
+        # TEMPORARY test-only seam — remove in M3d once IrMakeRecord makes RecordValues
+        # constructible end-to-end (see _plan-context.md "Tracked deferred parity items").
+        # Until then, tests that exercise IrField success paths seed the frame with a
+        # pre-built RecordValue via this parameter rather than lowering a constructor call.
+        trace: TraceStore | None = None,
+    ) -> None:
         self._program = program
-        self._frame: Frame = {}
+        self._frame: Frame = dict(initial_frame) if initial_frame is not None else {}
         self._trace: TraceStore = trace if trace is not None else noop_trace()
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _index_failure(self, err: AglIndexOutOfRange | AglMissingKey) -> AglRaise:
+        """Convert an index/key sentinel into an ``AglRaise`` with the appropriate fields.
+
+        Centralises the three identical sentinel-wrapping sites (IrIndex handler and both
+        steps of the IrAssign-with-path handler) so the exception message and field shapes
+        are defined exactly once.
+        """
+        match err:
+            case AglIndexOutOfRange():
+                return AglRaise(
+                    _make_exc_value(
+                        "IndexError",
+                        f"List index {err.index} out of range for length {err.length}",
+                        trace_id=self._trace.new_event_id(),
+                        index=IntValue(err.index),
+                        length=IntValue(err.length),
+                    ),
+                )
+            case AglMissingKey():
+                return AglRaise(
+                    _make_exc_value(
+                        "KeyError",
+                        f"Dict key {err.key!r} is missing",
+                        trace_id=self._trace.new_event_id(),
+                        key=TextValue(err.key),
+                    ),
+                )
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -275,10 +327,6 @@ class IrInterpreter:
                 return value
 
             case IrAssign(symbol=sym, path=path, value=val_expr):
-                if path:
-                    raise InvalidIrError(
-                        "IrAssign with non-empty path is not supported in M2"
-                    )
                 slot = self._frame.get(sym)
                 if not isinstance(slot, Cell):
                     desc = self._program.symbols.get(sym)
@@ -290,9 +338,39 @@ class IrInterpreter:
                         f"IrAssign: symbol_id={sym.value!r}"
                         f" (public_name={desc.public_name!r}) is not a mutable var"
                     )
+                if not path:
+                    # Simple assignment
+                    new_value = self._eval(val_expr)
+                    slot.value = new_value
+                    return new_value
+                # Indexed assignment with non-empty path
+                root = slot.value
+                # Traverse all intermediate steps, collecting (container, index_val, kind)
+                containers: list[tuple[Value, Value, IndexKind]] = []
+                current = root
+                for step in path[:-1]:
+                    idx_val = self._eval(step.index)
+                    try:
+                        next_val = index_get(step.kind, current, idx_val)
+                    except (AglIndexOutOfRange, AglMissingKey) as e:
+                        raise self._index_failure(e)
+                    containers.append((current, idx_val, step.kind))
+                    current = next_val
+                # Final step: evaluate index, validate via index_get
+                final_step = path[-1]
+                final_idx = self._eval(final_step.index)
+                try:
+                    index_get(final_step.kind, current, final_idx)
+                except (AglIndexOutOfRange, AglMissingKey) as e:
+                    raise self._index_failure(e)
+                # Evaluate RHS once
                 new_value = self._eval(val_expr)
-                slot.value = new_value
-                return new_value
+                # Rebuild containers leaf-outward
+                updated = index_set(final_step.kind, current, final_idx, new_value)
+                for container, idx_val, kind in reversed(containers):
+                    updated = index_set(kind, container, idx_val, updated)
+                slot.value = updated
+                return updated
 
             case IrCoerce(value=val_expr, operation=op):
                 value = self._eval(val_expr)
@@ -402,6 +480,36 @@ class IrInterpreter:
                         return negate(kind, val)
                     case _ as _unreachable_unary:  # pragma: no cover
                         assert_never(_unreachable_unary)
+
+            case IrField(value=val_expr, field=field_name):
+                val = self._eval(val_expr)
+                if not isinstance(val, (RecordValue, ExceptionValue)):
+                    raise InvalidIrError(
+                        f"IrField: expected RecordValue or ExceptionValue,"
+                        f" got {type(val).__name__}"
+                    )
+                return val.fields[field_name]
+
+            case IrIndex(kind=kind, value=val_expr, index=idx_expr):
+                container = self._eval(val_expr)
+                index_val = self._eval(idx_expr)
+                try:
+                    return index_get(kind, container, index_val)
+                except (AglIndexOutOfRange, AglMissingKey) as e:
+                    raise self._index_failure(e)
+
+            case IrRenderTemplate(segments=segs):
+                from agm.agl.runtime.render import render_value
+                parts: list[str] = []
+                for seg in segs:
+                    match seg:
+                        case IrTemplateText(text=t):
+                            parts.append(t)
+                        case IrTemplateValue(value=v_expr):
+                            parts.append(render_value(self._eval(v_expr)))
+                        case _ as unreachable_seg:  # pragma: no cover
+                            assert_never(unreachable_seg)
+                return TextValue("".join(parts))
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

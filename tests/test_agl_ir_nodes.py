@@ -29,6 +29,7 @@ from agm.agl.ir import (
     ExecutableModule,
     ExecutableProgram,
     FunctionId,
+    IndexKind,
     IntToDecimal,
     IrAssign,
     IrBind,
@@ -366,7 +367,9 @@ class TestIrExprUnion:
     def test_index_step_not_in_expr_union(self) -> None:
         # IrIndexStep is a helper record, not a member of IrExpr.
         # We verify this by confirming it is not an instance of any IrExpr member type.
-        step = IrIndexStep(index=IrConstInt(location=LOC, value=0), location=LOC)
+        step = IrIndexStep(
+            kind=IndexKind.LIST, index=IrConstInt(location=LOC, value=0), location=LOC
+        )
         assert not isinstance(step, IrConstInt)
         assert not isinstance(step, IrConstDecimal)
         assert not isinstance(step, IrConstBool)
@@ -513,12 +516,15 @@ class TestIrBindingsStorage:
 
     def test_ir_index_step(self) -> None:
         idx = IrConstInt(location=LOC, value=0)
-        step = IrIndexStep(index=idx, location=LOC)
+        step = IrIndexStep(kind=IndexKind.LIST, index=idx, location=LOC)
+        assert step.kind is IndexKind.LIST
         assert step.index == idx
         assert step.location == LOC
 
     def test_ir_index_step_frozen(self) -> None:
-        step = IrIndexStep(index=IrConstInt(location=LOC, value=0), location=LOC)
+        step = IrIndexStep(
+            kind=IndexKind.LIST, index=IrConstInt(location=LOC, value=0), location=LOC
+        )
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(step, "index", IrConstInt(location=LOC, value=1))
 
@@ -531,7 +537,7 @@ class TestIrBindingsStorage:
 
     def test_ir_assign_with_path(self) -> None:
         idx_expr = IrConstInt(location=LOC, value=0)
-        step = IrIndexStep(index=idx_expr, location=LOC)
+        step = IrIndexStep(kind=IndexKind.LIST, index=idx_expr, location=LOC)
         val = IrConstText(location=LOC, value="v")
         n = IrAssign(location=LOC, symbol=SYM0, path=(step,), value=val)
         assert len(n.path) == 1

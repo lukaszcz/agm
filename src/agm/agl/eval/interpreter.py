@@ -45,6 +45,7 @@ from agm.agl.eval.arith import (
 )
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
+from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
     UNIT_VALUE,
@@ -65,7 +66,7 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.operations import ArithKind, CmpOp, ContainsKind, NumericKind
+from agm.agl.ir.operations import ArithKind, CmpOp, ContainsKind, IndexKind, NumericKind
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.runtime.convert import (
     CastConversionError,
@@ -313,11 +314,7 @@ class Interpreter:
                 )
                 value = self._eval_expr(item.value, scope)
                 coerced = _coerce(value, slot_type)
-                updated = self._assign_prepared_index_target(
-                    prepared,
-                    coerced,
-                    span=item.span,
-                )
+                updated = self._assign_prepared_index_target(prepared, coerced)
             scope.assign_value(ref.name, updated)
             self._trace.mutation(name=ref.name, value=updated, span=item.span)
             return UNIT_VALUE
@@ -521,28 +518,19 @@ class Interpreter:
 
     def _index_value(self, obj: Value, index: Value, *, span: SourceSpan) -> Value:
         if isinstance(obj, ListValue):
-            if not isinstance(index, IntValue):
-                raise RuntimeError(  # pragma: no cover
-                    f"List index must be IntValue, got {type(index).__name__}"
-                )
-            return obj.elements[self._normalize_list_index(index.value, len(obj.elements), span)]
-        if isinstance(obj, DictValue):
-            if not isinstance(index, TextValue):
-                raise RuntimeError(  # pragma: no cover
-                    f"Dict index must be TextValue, got {type(index).__name__}"
-                )
-            if index.value not in obj.entries:
-                raise self._key_error(index.value, span)
-            return obj.entries[index.value]
-        raise RuntimeError(  # pragma: no cover
-            f"Index access on non-list/dict: {type(obj).__name__}"
-        )
-
-    def _normalize_list_index(self, index: int, length: int, span: SourceSpan) -> int:
-        normalized = index if index >= 0 else length + index
-        if normalized < 0 or normalized >= length:
-            raise self._index_error(index, length, span)
-        return normalized
+            kind = IndexKind.LIST
+        elif isinstance(obj, DictValue):
+            kind = IndexKind.DICT
+        else:
+            raise RuntimeError(  # pragma: no cover
+                f"Index access on non-list/dict: {type(obj).__name__}"
+            )
+        try:
+            return index_get(kind, obj, index)
+        except AglIndexOutOfRange as e:
+            raise self._index_error(e.index, e.length, span)
+        except AglMissingKey as e:
+            raise self._key_error(e.key, span)
 
     def _index_error(self, index: int, length: int, span: SourceSpan) -> AglRaise:
         return AglRaise(
@@ -609,42 +597,22 @@ class Interpreter:
         self,
         target: _IndexedAssignmentTarget,
         value: Value,
-        *,
-        span: SourceSpan,
     ) -> Value:
-        updated = self._replace_index_value(target.container, target.index, value, span=span)
+        updated = self._replace_index_value(target.container, target.index, value)
         for container, index in reversed(target.containers):
-            updated = self._replace_index_value(container, index, updated, span=span)
+            updated = self._replace_index_value(container, index, updated)
         return updated
 
-    def _replace_index_value(
-        self,
-        obj: Value,
-        index: Value,
-        value: Value,
-        *,
-        span: SourceSpan,
-    ) -> Value:
+    def _replace_index_value(self, obj: Value, index: Value, value: Value) -> Value:
         if isinstance(obj, ListValue):
-            if not isinstance(index, IntValue):
-                raise RuntimeError(  # pragma: no cover
-                    f"List index must be IntValue, got {type(index).__name__}"
-                )
-            normalized = self._normalize_list_index(index.value, len(obj.elements), span)
-            elements = list(obj.elements)
-            elements[normalized] = value
-            return ListValue(tuple(elements))
-        if isinstance(obj, DictValue):
-            if not isinstance(index, TextValue):
-                raise RuntimeError(  # pragma: no cover
-                    f"Dict index must be TextValue, got {type(index).__name__}"
-                )
-            entries = dict(obj.entries)
-            entries[index.value] = value
-            return DictValue(entries)
-        raise RuntimeError(  # pragma: no cover
-            f"Indexed assignment on non-list/dict: {type(obj).__name__}"
-        )
+            kind = IndexKind.LIST
+        elif isinstance(obj, DictValue):
+            kind = IndexKind.DICT
+        else:
+            raise RuntimeError(  # pragma: no cover
+                f"Indexed assignment on non-list/dict: {type(obj).__name__}"
+            )
+        return index_set(kind, obj, index, value)
 
     def _eval_template(self, expr: Template, scope: Scope) -> str:
         """Evaluate *expr* to a string: text segments verbatim, interpolation rendered."""

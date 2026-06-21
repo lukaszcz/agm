@@ -28,10 +28,7 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm (D4).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, assert_never
-
-if TYPE_CHECKING:
-    from agm.agl.syntax.nodes import AssignTarget
+from typing import assert_never
 
 from agm.agl.ir.ids import Location, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -50,10 +47,16 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrExpr,
+    IrField,
+    IrIndex,
+    IrIndexStep,
     IrLoad,
     IrMakeDict,
     IrMakeList,
     IrOr,
+    IrRenderTemplate,
+    IrTemplateText,
+    IrTemplateValue,
     IrUnary,
 )
 from agm.agl.ir.operations import (
@@ -62,6 +65,7 @@ from agm.agl.ir.operations import (
     CmpOp,
     CompareKind,
     ContainsKind,
+    IndexKind,
     NumericKind,
     UnaryOp,
 )
@@ -77,6 +81,7 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
+    AssignTarget,
     BinaryOp,
     BinOp,
     Block,
@@ -95,6 +100,7 @@ from agm.agl.syntax.nodes import (
     If,
     ImportDecl,
     IndexAccess,
+    InterpSegment,
     IntLit,
     IsTest,
     Item,
@@ -109,6 +115,7 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     StringLit,
     Template,
+    TextSegment,
     Try,
     TypeAlias,
     UnaryNeg,
@@ -310,6 +317,48 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
+            # Field access → IrField (M3c)
+            # ----------------------------------------------------------
+            case FieldAccess(obj=obj_expr, field=field_name, span=span, node_id=nid):
+                # Qualified constructor references (e.g. Mod.Variant) are deferred to M3d.
+                if nid in self._checked.resolved.qualified_constructor_refs:
+                    raise NotImplementedError(
+                        "Lowering of qualified constructor FieldAccess is not yet implemented"
+                    )
+                return IrField(
+                    location=self._loc(span),
+                    value=self.lower_expr(obj_expr),
+                    field=field_name,
+                )
+
+            # ----------------------------------------------------------
+            # Index access → IrIndex (M3c)
+            # ----------------------------------------------------------
+            case IndexAccess(obj=obj_expr, index=index_expr, span=span):
+                container_type = self._node_type(obj_expr.node_id)
+                kind = self._kind_for_container(container_type)
+                return IrIndex(
+                    location=self._loc(span),
+                    kind=kind,
+                    value=self.lower_expr(obj_expr),
+                    index=self.lower_expr(index_expr),
+                )
+
+            # ----------------------------------------------------------
+            # Template string → IrRenderTemplate (M3c)
+            # ----------------------------------------------------------
+            case Template(segments=segments, span=span):
+                ir_segs: list[IrTemplateText | IrTemplateValue] = []
+                for seg in segments:
+                    if isinstance(seg, TextSegment):
+                        ir_segs.append(IrTemplateText(text=seg.text))
+                    elif isinstance(seg, InterpSegment):
+                        ir_segs.append(IrTemplateValue(value=self.lower_expr(seg.expr)))
+                    else:
+                        assert_never(seg)  # pragma: no cover
+                return IrRenderTemplate(location=self._loc(span), segments=tuple(ir_segs))
+
+            # ----------------------------------------------------------
             # Unsupported M3/M4 nodes — deferred
             # ----------------------------------------------------------
             case (
@@ -320,11 +369,8 @@ class _Lowerer:
                 | Do()
                 | Try()
                 | Raise()
-                | FieldAccess()
-                | IndexAccess()
                 | Cast()
                 | IsTest()
-                | Template()
             ):
                 raise NotImplementedError(
                     f"Lowering of {type(node).__name__!r} is not yet implemented "
@@ -575,24 +621,78 @@ class _Lowerer:
         span: SourceSpan,
         assign_node_id: int,
     ) -> IrAssign:
-        """Lower a simple-name assignment (M2: IndexTarget not supported)."""
-        if not isinstance(target, NameTarget):
-            raise NotImplementedError(
-                "Indexed-assignment paths are not yet supported in M2 lowering "
-                f"(got target type {type(target).__name__!r})"
-            )
+        """Lower an assignment statement (simple name or indexed path)."""
         ref = self._checked.resolved.resolution.get(assign_node_id)
         assert ref is not None, (
             f"compiler bug: no resolution for AssignStmt node_id={assign_node_id!r}"
         )
         sym = self._sym_for_decl(ref.decl_node_id)
-        slot_type = self._binding_type_for(ref.decl_node_id)
+
+        if isinstance(target, NameTarget):
+            slot_type = self._binding_type_for(ref.decl_node_id)
+            ir_val = self.lower_coerced(rhs, slot_type)
+            return IrAssign(
+                location=self._loc(span),
+                symbol=sym,
+                path=(),
+                value=ir_val,
+            )
+
+        # IndexTarget: flatten the index path into IrIndexStep list.
+        root_type = self._binding_type_for(ref.decl_node_id)
+        steps: list[IrIndexStep] = []
+        container_type = self._collect_index_steps_from_obj(target.obj, root_type, steps)
+        kind = self._kind_for_container(container_type)
+        steps.append(IrIndexStep(
+            kind=kind,
+            index=self.lower_expr(target.index),
+            location=self._loc(target.span),
+        ))
+        slot_type = self._elem_type_for_container(container_type)
         ir_val = self.lower_coerced(rhs, slot_type)
         return IrAssign(
             location=self._loc(span),
             symbol=sym,
-            path=(),
+            path=tuple(steps),
             value=ir_val,
+        )
+
+    def _kind_for_container(self, t: Type) -> IndexKind:
+        """Return IndexKind for a container type (LIST or DICT)."""
+        if isinstance(t, ListType):
+            return IndexKind.LIST
+        if isinstance(t, DictType):
+            return IndexKind.DICT
+        raise AssertionError(f"compiler bug: non-container type in index path: {t!r}")
+
+    def _elem_type_for_container(self, t: Type) -> Type:
+        """Return the element/value type for a container type."""
+        if isinstance(t, ListType):
+            return t.elem
+        if isinstance(t, DictType):
+            return t.value
+        raise AssertionError(f"compiler bug: non-container type in index path: {t!r}")
+
+    def _collect_index_steps_from_obj(
+        self, obj: Expr, root_type: Type, out: list[IrIndexStep]
+    ) -> Type:
+        """Recursively descend into obj (VarRef or IndexAccess), collecting IrIndexSteps.
+
+        Returns the container type at the deepest level (i.e., the type of ``obj``).
+        """
+        if isinstance(obj, VarRef):
+            return root_type
+        if isinstance(obj, IndexAccess):
+            parent_type = self._collect_index_steps_from_obj(obj.obj, root_type, out)
+            kind = self._kind_for_container(parent_type)
+            out.append(IrIndexStep(
+                kind=kind,
+                index=self.lower_expr(obj.index),
+                location=self._loc(obj.span),
+            ))
+            return self._elem_type_for_container(parent_type)
+        raise AssertionError(  # pragma: no cover
+            f"compiler bug: unexpected expr in indexed assignment path: {type(obj).__name__}"
         )
 
     # ------------------------------------------------------------------

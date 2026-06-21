@@ -51,12 +51,17 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrExpr,
+    IrField,
+    IrIndex,
     IrIndexStep,
     IrLoad,
     IrMakeDict,
     IrMakeList,
     IrOr,
+    IrRenderTemplate,
     IrSequence,
+    IrTemplateText,
+    IrTemplateValue,
     IrUnary,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
@@ -310,6 +315,26 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                     "IrUnary NEG: kind must not be None"
                 )
             _validate_expr(val, ctx)
+
+        case IrField(value=val):
+            _validate_location(node.location, ctx)
+            _validate_expr(val, ctx)
+
+        case IrIndex(kind=_kind, value=val, index=idx):
+            _validate_location(node.location, ctx)
+            _validate_expr(val, ctx)
+            _validate_expr(idx, ctx)
+
+        case IrRenderTemplate(segments=segs):
+            _validate_location(node.location, ctx)
+            for seg in segs:
+                match seg:
+                    case IrTemplateText():
+                        pass
+                    case IrTemplateValue(value=val):
+                        _validate_expr(val, ctx)
+                    case _ as unreachable_seg:  # pragma: no cover
+                        assert_never(unreachable_seg)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

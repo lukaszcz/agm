@@ -24,6 +24,7 @@ from agm.agl.ir import (
     ExecutableModule,
     ExecutableProgram,
     FunctionId,
+    IndexKind,
     IntToDecimal,
     IrAssign,
     IrBind,
@@ -36,11 +37,16 @@ from agm.agl.ir import (
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrField,
+    IrIndex,
     IrIndexStep,
     IrLoad,
     IrMakeDict,
     IrMakeList,
+    IrRenderTemplate,
     IrSequence,
+    IrTemplateText,
+    IrTemplateValue,
     Location,
     NominalDescriptor,
     NominalId,
@@ -211,7 +217,7 @@ class TestValidProgram:
         validate_ir(prog, deep=False)  # no exception
 
     def test_assign_with_index_path(self) -> None:
-        idx_step = IrIndexStep(index=_int(0), location=LOC)
+        idx_step = IrIndexStep(kind=IndexKind.LIST, index=_int(0), location=LOC)
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(idx_step,), value=_int(99))
         prog = _make_program(initializers=(assign,))
         validate_ir(prog)
@@ -269,7 +275,7 @@ class TestCheapTierLocation:
 
     def test_index_step_bad_location(self) -> None:
         bad_loc = loc(start_offset=-5, end_offset=0)
-        step = IrIndexStep(index=_int(0), location=bad_loc)
+        step = IrIndexStep(kind=IndexKind.LIST, index=_int(0), location=bad_loc)
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
         prog = _make_program(initializers=(assign,))
         with pytest.raises(InvalidIrError, match="start_offset"):
@@ -277,7 +283,9 @@ class TestCheapTierLocation:
 
     def test_index_step_index_bad_location(self) -> None:
         bad_loc = loc(start_offset=10, end_offset=5)
-        step = IrIndexStep(index=IrConstInt(location=bad_loc, value=0), location=LOC)
+        step = IrIndexStep(
+            kind=IndexKind.LIST, index=IrConstInt(location=bad_loc, value=0), location=LOC
+        )
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
         prog = _make_program(initializers=(assign,))
         with pytest.raises(InvalidIrError, match="start_offset"):
@@ -565,7 +573,7 @@ class TestDeepTierLocationSourceId:
     def test_index_step_location_source_id_missing(self) -> None:
         """IrIndexStep.location source_id is also validated."""
         bad_loc = loc(source_id=SID1)
-        step = IrIndexStep(index=_int(), location=bad_loc)
+        step = IrIndexStep(kind=IndexKind.LIST, index=_int(), location=bad_loc)
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
         prog = _make_program(initializers=(assign,))
         with pytest.raises(InvalidIrError, match="source_id"):
@@ -791,3 +799,116 @@ class TestIrCompareTightenedConstraints:
         """LE + TEXT is valid."""
         prog = _make_compare_program(CmpOp.LE, CompareKind.TEXT)
         validate_ir(prog, deep=False)  # no exception
+
+
+# ---------------------------------------------------------------------------
+# IrField / IrIndex / IrRenderTemplate validation
+# ---------------------------------------------------------------------------
+
+
+class TestIrFieldValidation:
+    """Structural validation for IrField nodes."""
+
+    def test_ir_field_valid_passes(self) -> None:
+        """IrField with valid location and sub-expr passes validation."""
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), "x")),)
+        )
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_field_bad_location_raises(self) -> None:
+        """IrField with an invalid location raises InvalidIrError."""
+        bad_loc = Location(
+            source_id=SourceId(999), start_offset=0, end_offset=1, start_line=1, start_col=0
+        )
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, IrField(bad_loc, IrConstInt(LOC, 1), "x")),)
+        )
+        with pytest.raises(InvalidIrError, match="source_id"):
+            validate_ir(prog, deep=True)
+
+
+class TestIrIndexValidation:
+    """Structural validation for IrIndex nodes."""
+
+    def test_ir_index_valid_passes(self) -> None:
+        """IrIndex with valid sub-expressions passes validation."""
+        prog = _make_program(
+            initializers=(
+                IrBind(
+                    LOC,
+                    SYM0,
+                    IrIndex(LOC, IndexKind.LIST, IrMakeList(LOC, ()), IrConstInt(LOC, 0)),
+                ),
+            )
+        )
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_index_bad_location_raises(self) -> None:
+        """IrIndex with an invalid location raises InvalidIrError."""
+        bad_loc = Location(
+            source_id=SourceId(999), start_offset=0, end_offset=1, start_line=1, start_col=0
+        )
+        prog = _make_program(
+            initializers=(
+                IrBind(
+                    LOC,
+                    SYM0,
+                    IrIndex(
+                        bad_loc, IndexKind.LIST, IrMakeList(LOC, ()), IrConstInt(LOC, 0)
+                    ),
+                ),
+            )
+        )
+        with pytest.raises(InvalidIrError, match="source_id"):
+            validate_ir(prog, deep=True)
+
+
+class TestIrRenderTemplateValidation:
+    """Structural validation for IrRenderTemplate nodes."""
+
+    def test_ir_render_template_text_only_passes(self) -> None:
+        """IrRenderTemplate with only text segments passes validation."""
+        prog = _make_program(
+            initializers=(
+                IrBind(
+                    LOC,
+                    SYM0,
+                    IrRenderTemplate(LOC, (IrTemplateText("hello"),)),
+                ),
+            )
+        )
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_render_template_with_value_passes(self) -> None:
+        """IrRenderTemplate with an IrTemplateValue segment passes validation."""
+        prog = _make_program(
+            initializers=(
+                IrBind(
+                    LOC,
+                    SYM0,
+                    IrRenderTemplate(
+                        LOC,
+                        (IrTemplateText("n="), IrTemplateValue(IrConstInt(LOC, 7))),
+                    ),
+                ),
+            )
+        )
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_render_template_bad_location_raises(self) -> None:
+        """IrRenderTemplate with an invalid location raises InvalidIrError."""
+        bad_loc = Location(
+            source_id=SourceId(999), start_offset=0, end_offset=1, start_line=1, start_col=0
+        )
+        prog = _make_program(
+            initializers=(
+                IrBind(
+                    LOC,
+                    SYM0,
+                    IrRenderTemplate(bad_loc, (IrTemplateText("hi"),)),
+                ),
+            )
+        )
+        with pytest.raises(InvalidIrError, match="source_id"):
+            validate_ir(prog, deep=True)

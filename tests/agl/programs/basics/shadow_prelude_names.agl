@@ -1,0 +1,18 @@
+# Built-in prelude constructor names (exception types like `Retry`/`Abort` and
+# prelude records like `ExecResult`/`AgentRequest`) are conveniences that a
+# user declaration at the program scope may shadow — they are not reserved
+# keywords. A `let` shadows the constructor binding for a value, and a `def`
+# shadows it for a function, both without an "already declared" collision.
+param n: int
+
+# `let` shadows the built-in `ExecResult` prelude record constructor.
+let ExecResult = n * 2
+print "${ExecResult}"
+
+# `let` shadows the built-in `AgentRequest` prelude record constructor.
+let AgentRequest = "req-${n}"
+print AgentRequest
+
+# `def` shadows the built-in `Retry` exception constructor.
+def Retry(x: int) -> int = x + 1
+print "${Retry(n)}"

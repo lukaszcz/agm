@@ -518,8 +518,28 @@ def substitute(t: Type, subst: Mapping[str, Type]) -> Type:
 
 
 def contains_type_var(t: Type) -> bool:
-    """Return ``True`` if *t* contains any free type variable."""
-    return bool(free_type_vars(t))
+    """Return ``True`` if *t* contains any free type variable.
+
+    Short-circuits on the first ``TypeVarType`` found instead of collecting the
+    full free-variable set (this is called per-argument in the inference loops).
+    """
+    if isinstance(t, TypeVarType):
+        return True
+    if isinstance(t, ListType):
+        return contains_type_var(t.elem)
+    if isinstance(t, DictType):
+        return contains_type_var(t.value)
+    if isinstance(t, FunctionType):
+        return any(contains_type_var(p) for p in t.params) or contains_type_var(t.result)
+    if isinstance(t, RecordType):
+        return any(contains_type_var(ta) for ta in t.type_args) or any(
+            contains_type_var(ft) for ft in t.fields.values()
+        )
+    if isinstance(t, EnumType):
+        return any(contains_type_var(ta) for ta in t.type_args) or any(
+            contains_type_var(ft) for vfields in t.variants.values() for ft in vfields.values()
+        )
+    return False
 
 
 # ---------------------------------------------------------------------------

@@ -264,6 +264,12 @@ class ResolvedProgram:
         (``Option.some`` or ``mylib::Color.Red``).  ``owner_module_id`` is
         ``None`` for locally-declared types and the owning ``ModuleId`` for
         cross-module references.  The checker validates enum-ness and variant.
+    ``bare_variant_patterns``
+        ``node_id`` of every ``VarPattern`` whose bare name denotes an in-scope
+        constructor binding and is therefore a (nullary) constructor pattern
+        rather than a variable binder.  The checker validates that the name is a
+        nullary variant of the scrutinee enum; the interpreter matches it
+        positionally without binding.
     """
 
     program: Program
@@ -281,6 +287,7 @@ class ResolvedProgram:
     qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = field(
         default_factory=dict
     )
+    bare_variant_patterns: frozenset[int] = frozenset()
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,22 @@
+# Imported generic constructors used as FIRST-CLASS VALUES and then called.
+# The value-call path builds the imported type under erasure by resolving its
+# definition from the merged runtime type environment, which must carry the
+# library module's generic/record definitions (not just the entry module's).
+# A payload enum constructor (`some`) and a record constructor (`Pair`), both
+# open-imported from `collections`, are bound as values and called positionally.
+import collections
+
+param n: int
+
+# Imported generic ENUM payload constructor as a value, called positionally.
+let mk: (int) -> Option[int] = some
+let o: Option[int] = mk(n)
+# Bare `none` is an open-imported nullary variant → a constructor pattern.
+case o of
+  | none => print "none"
+  | some(value) => print "value ${value}"
+
+# Imported generic RECORD constructor as a value, called positionally.
+let mkp: (int, text) -> Pair[int, text] = Pair
+let p: Pair[int, text] = mkp(n, "tag")
+print "${p.first}:${p.second}"

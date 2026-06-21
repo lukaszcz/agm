@@ -121,6 +121,17 @@ reference to an ambiguous name is a scope error — type-qualification
 (`FieldAccess` node → `(owner, member)`). `ConstructorRef` carries the owner's
 `type_params` so later passes can instantiate generic constructors.
 
+**Bare names in patterns**: a bare name in a `case` pattern is a constructor
+pattern when it denotes an in-scope constructor (lexical or open-imported, and
+not shadowed by a nearer ordinary binding), otherwise a variable binder. The
+scope pass makes this resolution-directed (never spelling-directed) call in
+`_bind_pattern_vars` and records the constructor-pattern node ids in
+`ResolvedProgram.bare_variant_patterns`; it binds no variable for those. The
+checker validates each as a *nullary* variant of the scrutinee enum (a
+field-bearing variant requires an explicit call form), and the interpreter
+matches it by variant name without binding. The graph eval merge unions every
+module's `bare_variant_patterns`.
+
 ## Type system
 
 `agm.agl.typecheck` adds these semantic types to the v2 system:

@@ -264,6 +264,17 @@ constructor for the rest of its scope, exactly like any other shadowing.
 def shadow(tagged: int) -> int = tagged * 10   # parameter hides the constructor
 ```
 
+The same applies to the **built-in** constructor names — the exception types
+(`Abort`, `Retry`, …) and prelude records (`ExecResult`, `AgentRequest`). They
+are conveniences, not reserved words: a `let`, `var`, `def`, or `param` may
+declare any of them, shadowing the built-in constructor for the rest of the
+scope.
+
+```agl
+let ExecResult = 0          # shadows the prelude record constructor
+def Retry(n: int) -> int = n + 1   # shadows the exception constructor
+```
+
 ## Lexical scoping
 
 All binding is statically scoped. The program root is a scope, and these

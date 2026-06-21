@@ -13,9 +13,10 @@ param empty: bool
 let maybe: Option[int] = if empty => none else => some(value: seed)
 print(or_else(maybe, 0) as text)
 
-# Pattern matching on the imported variant (brought in unqualified by the open import).
+# Pattern matching on the imported variant (brought in unqualified by the open
+# import); the bare `none` is a nullary constructor pattern, not a binder.
 case maybe of
-  | none() => print "empty"
+  | none => print "empty"
   | some(value) => print "value ${value}"
 
 # The SAME imported definition at text — erasure across the module boundary.

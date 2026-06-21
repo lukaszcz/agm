@@ -800,8 +800,9 @@ class Interpreter:
     def _eval_case(self, expr: Case, scope: Scope) -> Value:
         """Evaluate a ``case`` expression; raise MatchError on no match."""
         subject = self._eval_expr(expr.subject, scope)
+        bare_variants = self._checked.resolved.bare_variant_patterns
         for branch in expr.branches:
-            matched, bindings = _match_pattern(branch.pattern, subject)
+            matched, bindings = _match_pattern(branch.pattern, subject, bare_variants)
             if matched:
                 branch_scope = Scope(parent=scope)
                 for name, val in bindings.items():
@@ -1879,11 +1880,14 @@ def _index_target_container_type(obj: Expr, root_type: Type) -> Type:
     )
 
 
-def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Value]]:
+def _match_pattern(
+    pattern: Pattern, value: Value, bare_variants: frozenset[int]
+) -> tuple[bool, dict[str, Value]]:
     """Try to match *pattern* against *value*.
 
     Returns ``(matched, bindings)`` where ``bindings`` maps new variable
-    names to their bound values.
+    names to their bound values.  ``bare_variants`` holds the ``node_id`` of
+    every ``VarPattern`` that is actually a nullary constructor pattern.
     """
     from agm.agl.syntax.nodes import (
         BoolLit,
@@ -1899,6 +1903,9 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
         return True, {}
 
     if isinstance(pattern, VarPattern):
+        if pattern.node_id in bare_variants:
+            assert isinstance(value, EnumValue), "variant pattern on non-enum value"
+            return value.variant == pattern.name, {}
         return True, {pattern.name: value}
 
     if isinstance(pattern, LiteralPattern):
@@ -1924,7 +1931,7 @@ def _match_pattern(pattern: Pattern, value: Value) -> tuple[bool, dict[str, Valu
         bindings: dict[str, Value] = {}
         for field_pat in pattern.fields:
             field_val = value.fields[field_pat.name]
-            matched, sub_bindings = _match_pattern(field_pat.pattern, field_val)
+            matched, sub_bindings = _match_pattern(field_pat.pattern, field_val, bare_variants)
             if not matched:
                 return False, {}
             bindings.update(sub_bindings)
@@ -1999,6 +2006,7 @@ def _merge_graph_into_checked_program(
     merged_builtin_calls: dict[int, BuiltinKind] = dict(entry_cm.resolved.builtin_calls)
     merged_constructor_refs = dict(entry_cm.resolved.constructor_refs)
     merged_qcr = dict(entry_cm.resolved.qualified_constructor_refs)
+    merged_bare_variants: set[int] = set(entry_cm.resolved.bare_variant_patterns)
     for mid, cm in checked_graph.modules.items():
         if mid == checked_graph.entry_id:
             continue
@@ -2006,6 +2014,7 @@ def _merge_graph_into_checked_program(
         merged_builtin_calls.update(cm.resolved.builtin_calls)
         merged_constructor_refs.update(cm.resolved.constructor_refs)
         merged_qcr.update(cm.resolved.qualified_constructor_refs)
+        merged_bare_variants.update(cm.resolved.bare_variant_patterns)
 
     # Build a merged ResolvedProgram using the entry's program and root_scope
     # but with combined dispatch tables.
@@ -2021,6 +2030,7 @@ def _merge_graph_into_checked_program(
         warnings=entry_cm.resolved.warnings,
         constructor_refs=merged_constructor_refs,
         qualified_constructor_refs=merged_qcr,
+        bare_variant_patterns=frozenset(merged_bare_variants),
     )
 
     # Merge node_types, contract_specs, cast_specs from all modules.
@@ -2036,10 +2046,19 @@ def _merge_graph_into_checked_program(
 
     from agm.agl.typecheck.env import TypeEnvironment
 
+    # Seed the combined eval-time env from EVERY module's type tables, not just
+    # the entry's: a first-class constructor value of an imported generic/record
+    # type is built positionally under erasure by resolving its owner from this
+    # env (interpreter `_constructor_field_types`), so library generic/record
+    # definitions and constructor signatures must be present too.  Library
+    # modules are seeded first and the entry last, so entry definitions win on
+    # any same-name collision.  ``seed_from`` also carries binding types.
     merged_type_env = TypeEnvironment()
+    for mid, cm in checked_graph.modules.items():
+        if mid == checked_graph.entry_id:
+            continue
+        merged_type_env.seed_from(cm.type_env)
     merged_type_env.seed_from(entry_cm.type_env)
-    for cm in checked_graph.modules.values():
-        merged_type_env.copy_binding_types_from(cm.type_env)
 
     return _CP(
         resolved=merged_resolved,

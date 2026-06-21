@@ -39,24 +39,25 @@ case result of
 
 ### Variable binder
 
-A **bare name** in a pattern is always a variable binder: it matches anything
-and binds the scrutinee to that name as an immutable, branch-local value.
-Capitalization carries no meaning ([Lexical structure](lexical-structure.md)),
-so this is true regardless of how the name is written — `other`, `Other`, and
-`OTHER` are all binders:
+A bare name in a pattern is a **variable binder** — it matches anything and
+binds the scrutinee to that name as an immutable, branch-local value — *unless*
+the name denotes an in-scope constructor, in which case it is a **constructor
+pattern** for that variant (see [Constructor patterns](#constructor-patterns)
+below). What a bare name denotes is fixed by whether it resolves to a
+constructor, never by its spelling: capitalization carries no meaning
+([Lexical structure](lexical-structure.md)). So `other`, `result`, and
+`leftover` are binders precisely when no constructor of that name is in scope:
 
 ```agl
 case result of
   | Blocked(reason) => raise Abort(message: reason)
-  | other => print other
+  | other => print other            # 'other' names no constructor → binder
 ```
 
-> **A bare name never matches a constructor.** Because there is only one class
-> of identifier, a bare name cannot be a nullary variant by virtue of its
-> spelling. To match a constructor you must use a form the grammar recognizes
-> as a constructor pattern — call syntax `name()` or a qualified
-> `Enum.variant` (see below). A bare `Pass` in a pattern binds a variable
-> called `Pass`; it does **not** match the variant `Pass`.
+A nearer ordinary binding — a `let`, `var`, parameter, or enclosing pattern
+variable — **shadows** a constructor, exactly as in expression position
+([Bindings and scope](bindings-and-scope.md)). Under such a shadow a bare name
+the constructor would otherwise claim is again a plain binder.
 
 ### Literal patterns
 
@@ -81,23 +82,28 @@ Restrictions:
 
 ### Constructor patterns
 
-A constructor pattern matches one enum variant and optionally destructures
-its payload. A constructor pattern is distinguished from a bare-name binder by
-its **syntax**, not by spelling: it is either a call form `name(…)` (the
-parentheses may be empty) or a qualified `Enum.variant`:
+A constructor pattern matches one enum variant and optionally destructures its
+payload. A pattern is a constructor pattern when it is one of:
+
+- a **bare name that denotes an in-scope constructor** — matches that variant
+  (nullary variants only; see below),
+- a **call form** `name(…)`, where the parentheses may be empty, or
+- a **qualified** `Enum.variant`.
 
 ```agl
-Pass()                     # nullary variant (empty call form)
+Pass                       # nullary variant — bare name that names a constructor
+Pass()                     # nullary variant, explicit call form
 Review.Pass                # nullary variant, qualified (aliases resolve transparently)
 Fail(issues)               # shorthand: binds field 'issues' to name 'issues'
 Fail(issues: xs)           # binds field 'issues' to name 'xs'
 Fail(issues: ["stuck"])    # nested literal pattern on a field
 ```
 
-> **Migration note.** A *bare* nullary pattern such as `case Pass` no longer
-> matches the variant `Pass` — it now binds a variable. Rewrite each bare
-> nullary pattern as a call form (`Pass()`) or a qualified reference
-> (`Review.Pass`).
+A **bare** constructor name matches **nullary** variants only. A bare name for a
+variant that has fields is a static error directing you to an explicit form, so
+the discarded payload is acknowledged: write `Fail(...)`, `Fail(_)`, or
+destructure the fields. The call and qualified forms apply to every variant;
+the bare form is a convenience for the common nullary case.
 
 #### Module-qualified constructor patterns
 
@@ -193,7 +199,7 @@ until review is Pass
 
 case review of
   | Fail(issues) => artifact := ask("Fix ${issues}", agent: impl)
-  | Pass() => ()
+  | Pass => ()
 ```
 
 `is` / `is not` also apply to generic enum instances; qualify the variant the

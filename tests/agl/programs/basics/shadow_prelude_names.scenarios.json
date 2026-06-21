@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "shadow_with_let_and_def",
+      "params": {"n": 4},
+      "expect": {
+        "stdout": "8\nreq-4\n5\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "different_param",
+      "params": {"n": 7},
+      "expect": {
+        "stdout": "14\nreq-7\n8\n",
+        "calls": {}
+      }
+    }
+  ]
+}

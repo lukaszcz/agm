@@ -1,0 +1,24 @@
+# Generic constructor and function inference thread the surrounding type
+# annotation into the arguments, so an empty-list literal in argument position
+# resolves its element type from the expected result type (e.g. `Bag[int]`)
+# instead of demanding a redundant local annotation. A host param drives the
+# non-empty payloads so the same generic body builds distinct runtime values.
+record Bag[T]
+  items: list[T]
+
+def wrap[T](xs: list[T]) -> Bag[T] = Bag(items: xs)
+
+param n: int
+
+# Empty-list field resolved purely from the `Bag[int]` annotation.
+let empty: Bag[int] = Bag(items: [])
+print empty.items
+
+# Non-empty construction for contrast (inference from the payload).
+let full: Bag[int] = Bag(items: [n, n + 1])
+print full.items
+
+# Generic function whose empty-list argument is resolved from the expected
+# `Bag[text]` result type.
+let words: Bag[text] = wrap([])
+print words.items

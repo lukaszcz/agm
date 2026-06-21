@@ -116,6 +116,11 @@ from agm.agl.syntax.spans import SourceSpan
 # Sourced from ``symbols.BUILTIN_CALL_NAMES`` (the single source of truth).
 _BUILTIN_CALL_NAMES = BUILTIN_CALL_NAMES
 
+# Sentinel ``owner_decl_node_id`` for built-in constructor candidates (exceptions
+# and prelude types), which have no source-level declaration node.  User
+# declarations may shadow bindings carrying this sentinel.
+_BUILTIN_CONSTRUCTOR_NODE_ID = -1
+
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
@@ -279,6 +284,9 @@ class _Resolver:
         self._constructor_refs: dict[int, ConstructorRef] = {}
         # Qualified constructor refs: FieldAccess.node_id -> (owner_name, member, owner_module_id).
         self._qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = {}
+        # VarPattern.node_id of bare names that denote a constructor (nullary
+        # variant patterns), not variable binders.
+        self._bare_variant_patterns: set[int] = set()
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -369,6 +377,7 @@ class _Resolver:
             },
             constructor_refs=dict(self._constructor_refs),
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
+            bare_variant_patterns=frozenset(self._bare_variant_patterns),
         )
 
     # ------------------------------------------------------------------
@@ -482,7 +491,7 @@ class _Resolver:
             cref = ConstructorRef(
                 owner_name=exc_name,
                 variant=None,
-                owner_decl_node_id=-1,
+                owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                 type_params=(),
             )
             self._constructor_candidates.setdefault(exc_name, []).append(cref)
@@ -497,7 +506,7 @@ class _Resolver:
                         cref = ConstructorRef(
                             owner_name=type_name,
                             variant=variant_name,
-                            owner_decl_node_id=-1,
+                            owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                             type_params=(),
                         )
                         self._constructor_candidates.setdefault(variant_name, []).append(cref)
@@ -505,7 +514,7 @@ class _Resolver:
                 cref = ConstructorRef(
                     owner_name=type_name,
                     variant=None,
-                    owner_decl_node_id=-1,
+                    owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                     type_params=(),
                 )
                 self._constructor_candidates.setdefault(type_name, []).append(cref)
@@ -564,8 +573,14 @@ class _Resolver:
         scope = self._current_scope()
         for name, crefs in self._constructor_candidates.items():
             if name in scope.bindings:
-                # A non-constructor binding (def/agent) with the same name already
-                # occupies this slot — report a duplicate-binding error.
+                # Built-in constructor candidates (sentinel decl_node_id, e.g. the
+                # prelude `Retry`/`ExecResult` names) are conveniences and yield to
+                # any user declaration that already claimed the name — skip rather
+                # than raise so a `def Retry()`/`agent Retry` is legal.
+                if all(c.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID for c in crefs):
+                    continue
+                # A user-declared constructor colliding with a non-constructor
+                # binding (def/agent) of the same name is a genuine duplicate.
                 raise AglScopeError(
                     f"Name '{name}' is already declared in this scope.",
                     span=None,
@@ -738,9 +753,19 @@ class _Resolver:
             self._pop_scope()
 
     def _define(self, name: str, ref: BindingRef) -> None:
-        """Define *name* in the current scope; error on redeclaration."""
+        """Define *name* in the current scope; error on redeclaration.
+
+        A user declaration may shadow a built-in constructor binding (e.g. the
+        prelude ``Retry``/``ExecResult`` names), which carry the sentinel
+        ``decl_node_id`` and have no source declaration; genuine user-declared
+        names still collide.
+        """
         scope = self._current_scope()
-        if name in scope.bindings:
+        existing = scope.bindings.get(name)
+        if existing is not None and not (
+            existing.kind is BinderKind.constructor_binding
+            and existing.decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+        ):
             raise AglScopeError(
                 f"Name '{name}' is already declared in this scope.",
                 span=ref.decl_span,
@@ -1481,6 +1506,12 @@ class _Resolver:
         Raises ``AglScopeError`` on duplicate names within the same pattern.
         """
         if isinstance(pattern, VarPattern):
+            if self._pattern_name_is_constructor(pattern, scope):
+                # A bare name that denotes an in-scope constructor is a nullary
+                # constructor pattern, not a variable binder.  The checker
+                # validates it is a nullary variant of the scrutinee enum.
+                self._bare_variant_patterns.add(pattern.node_id)
+                return
             self._check_not_reserved(pattern.name, pattern.span)
             ref = BindingRef(
                 name=pattern.name,
@@ -1503,6 +1534,24 @@ class _Resolver:
 
     def _bind_pattern_field_vars(self, pf: PatternField, scope: ScopeNode) -> None:
         self._bind_pattern_vars(pf.pattern, scope)
+
+    def _pattern_name_is_constructor(self, pattern: VarPattern, scope: ScopeNode) -> bool:
+        """True when a bare pattern name denotes an in-scope constructor binding.
+
+        A bare name in pattern position is a constructor pattern (not a variable
+        binder) exactly when, as a value reference, it would denote a constructor
+        — a lexically visible or open-imported record/enum constructor.  A nearer
+        non-constructor binding shadows the constructor, in which case the bare
+        name is an ordinary binder.  The checker then verifies the name is a
+        nullary variant of the scrutinee enum.
+        """
+        ref = scope.lookup(pattern.name)
+        if ref is not None:
+            # A nearer ordinary binding shadows the constructor → binder.
+            return ref.kind is BinderKind.constructor_binding
+        # Not lexically visible: an open-imported constructor still counts — its
+        # candidates are seeded into the candidate table from the import env.
+        return bool(self._constructor_candidates.get(pattern.name))
 
 
 # ---------------------------------------------------------------------------

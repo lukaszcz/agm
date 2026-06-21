@@ -38,7 +38,7 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypeGuard
 
 from agm.agl.capabilities import HostCapabilities
@@ -904,7 +904,7 @@ class _Checker:
                     )
                 assert isinstance(typ, FunctionType)
                 subst: dict[str, Type] = {}
-                self._match_unsolved(typ, expected, subst, span=node.span)
+                self._match(typ, expected, subst, span=node.span, challenge=False)
                 for p in sig.type_params:
                     if p not in subst:
                         raise AglTypeError(
@@ -959,23 +959,37 @@ class _Checker:
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
 
         if not sig.field_names:
-            # Nullary variant: infer type args from expected nominal enum type.
+            # Nullary variant: infer type args from the expected nominal enum type.
+            # Match on FULL nominal identity (name AND owning module), not just the
+            # name — two modules may export same-named generic enums, and borrowing
+            # type args from the wrong one would mis-instantiate this constructor.
+            if imported_gdef is not None:
+                owner_module_id = imported_gdef.template.module_id
+                nominal_name = imported_source_name
+            else:
+                local_gdef = self._env.get_generic_type(owner_name)
+                assert local_gdef is not None, f"No generic type def for '{owner_name}'"
+                owner_module_id = local_gdef.template.module_id
+                nominal_name = owner_name
             subst: dict[str, Type] = {}
             if (
                 expected is not None
                 and isinstance(expected, EnumType)
-                and expected.name == owner_name
+                and expected.name == nominal_name
+                and expected.module_id == owner_module_id
             ):
                 for p, ta in zip(type_params, expected.type_args):
                     subst[p] = ta
-            for p in type_params:
-                if p not in subst:
-                    raise AglTypeError(
-                        f"Cannot infer type argument(s) for '{owner_name}': "
-                        "no contextual type available. "
-                        f"Add a type annotation (e.g. 'let x: {owner_name}[…] = …').",
-                        span=span,
-                    )
+            self._require_all_solved(
+                type_params,
+                subst,
+                span=span,
+                message_for=lambda p: (
+                    f"Cannot infer type argument(s) for '{owner_name}': "
+                    "no contextual type available. "
+                    f"Add a type annotation (e.g. 'let x: {owner_name}[…] = …')."
+                ),
+            )
             concrete_args = tuple(subst[p] for p in type_params)
             concrete_type = (
                 self._env.instantiate_from_gdef(
@@ -993,16 +1007,18 @@ class _Checker:
             if expected is not None and isinstance(expected, FunctionType):
                 # Match field templates against expected function params.
                 for ft, ep in zip(sig.field_templates, expected.params):
-                    self._match_unsolved(ft, ep, subst, span=span)
-                self._match_unsolved(sig.result_template, expected.result, subst, span=span)
-            for p in type_params:
-                if p not in subst:
-                    raise AglTypeError(
-                        f"Cannot infer type argument(s) for constructor '{owner_name}': "
-                        "no contextual type available. "
-                        f"Add a type annotation (e.g. 'let f: ({owner_name}[…]) = …').",
-                        span=span,
-                    )
+                    self._match(ft, ep, subst, span=span, challenge=False)
+                self._match(sig.result_template, expected.result, subst, span=span, challenge=False)
+            self._require_all_solved(
+                type_params,
+                subst,
+                span=span,
+                message_for=lambda p: (
+                    f"Cannot infer type argument(s) for constructor '{owner_name}': "
+                    "no contextual type available. "
+                    f"Add a type annotation (e.g. 'let f: ({owner_name}[…]) = …')."
+                ),
+            )
             concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
             concrete_result = substitute(sig.result_template, subst)
             return FunctionType(params=concrete_params, result=concrete_result)
@@ -1051,27 +1067,28 @@ class _Checker:
                 subst[p] = resolved_arg
         else:
             # Inference path: match field arg types against field templates.
+            # A hint from the expected result type lets annotation-requiring
+            # literals (e.g. an empty list field on `let b: Box[int] = Box(items: [])`)
+            # resolve before the field arguments are individually checked.
+            hint = self._result_hint(sig.result_template, expected, span=span)
             named_by_field = {na.name: na for na in named_args}
             for field_name, field_template in zip(sig.field_names, sig.field_templates):
                 if field_name in named_by_field:
                     na = named_by_field[field_name]
-                    partially = substitute(field_template, subst)
-                    if contains_type_var(partially):
-                        arg_type = self._check_expr(na.value, expected=None)
-                    else:
-                        arg_type = self._check_expr(na.value, expected=partially)
-                    self._match(field_template, arg_type, subst, span=na.span)
+                    self._infer_arg(field_template, na.value, subst, hint, span=na.span)
             # Fill remaining unsolved from expected result type.
             if expected is not None:
-                self._match_unsolved(sig.result_template, expected, subst, span=span)
+                self._match(sig.result_template, expected, subst, span=span, challenge=False)
             # Verify all type params were solved.
-            for p in type_params:
-                if p not in subst:
-                    raise AglTypeError(
-                        f"Cannot infer type argument '{p}' for constructor '{owner_name}'; "
-                        f"supply it explicitly via '{owner_name}::[…]' or add a type annotation.",
-                        span=span,
-                    )
+            self._require_all_solved(
+                type_params,
+                subst,
+                span=span,
+                message_for=lambda p: (
+                    f"Cannot infer type argument '{p}' for constructor '{owner_name}'; "
+                    f"supply it explicitly via '{owner_name}::[…]' or add a type annotation."
+                ),
+            )
 
         # Instantiate the nominal type.
         concrete_args = tuple(subst[p] for p in type_params)
@@ -1677,18 +1694,30 @@ class _Checker:
     # --- type-variable matching (one-sided unification) ---
 
     def _match(
-        self, template: Type, concrete: Type, subst: dict[str, Type], *, span: SourceSpan
+        self,
+        template: Type,
+        concrete: Type,
+        subst: dict[str, Type],
+        *,
+        span: SourceSpan,
+        challenge: bool = True,
     ) -> None:
         """One-sided unification: bind type vars in *template* to *concrete* types.
 
-        Raises ``AglTypeError`` on inconsistent bindings (same type var, different
-        concrete types).  Silently stops on structural shape mismatches (the
-        assignability check will report the error).
+        With ``challenge=True`` (the default, used for argument inference) an
+        already-bound type var that disagrees with *concrete* raises
+        ``AglTypeError``.  With ``challenge=False`` only currently-unbound
+        variables are bound and existing bindings are left untouched — used to
+        fill remaining type vars from an expected result type (which must not
+        override what the arguments already inferred).
+
+        Silently stops on structural shape mismatches (the assignability check
+        will report the error).
         """
         if isinstance(template, TypeVarType):
             p = template.name
             if p in subst:
-                if subst[p] != concrete:
+                if challenge and subst[p] != concrete:
                     raise AglTypeError(
                         f"Inconsistent type argument: '{p}' was inferred as "
                         f"'{subst[p]!r}' from one argument but '{concrete!r}' from another.",
@@ -1698,14 +1727,14 @@ class _Checker:
                 subst[p] = concrete
             return
         if isinstance(template, ListType) and isinstance(concrete, ListType):
-            self._match(template.elem, concrete.elem, subst, span=span)
+            self._match(template.elem, concrete.elem, subst, span=span, challenge=challenge)
         elif isinstance(template, DictType) and isinstance(concrete, DictType):
-            self._match(template.value, concrete.value, subst, span=span)
+            self._match(template.value, concrete.value, subst, span=span, challenge=challenge)
         elif isinstance(template, FunctionType) and isinstance(concrete, FunctionType):
             if len(template.params) == len(concrete.params):
                 for tp, cp in zip(template.params, concrete.params):
-                    self._match(tp, cp, subst, span=span)
-                self._match(template.result, concrete.result, subst, span=span)
+                    self._match(tp, cp, subst, span=span, challenge=challenge)
+                self._match(template.result, concrete.result, subst, span=span, challenge=challenge)
         elif (
             isinstance(template, (RecordType, EnumType))
             and isinstance(concrete, (RecordType, EnumType))
@@ -1714,37 +1743,60 @@ class _Checker:
             and len(template.type_args) == len(concrete.type_args)
         ):
             for ta, ca in zip(template.type_args, concrete.type_args):
-                self._match(ta, ca, subst, span=span)
+                self._match(ta, ca, subst, span=span, challenge=challenge)
         # Shape mismatch, primitive mismatch, or nominal mismatch: stop (best-effort).
 
-    def _match_unsolved(
-        self, template: Type, concrete: Type, subst: dict[str, Type], *, span: SourceSpan
+    def _infer_arg(
+        self,
+        template: Type,
+        arg_expr: Expr,
+        subst: dict[str, Type],
+        hint: Mapping[str, Type],
+        *,
+        span: SourceSpan,
     ) -> None:
-        """Like ``_match`` but only binds currently-unbound variables; never challenges
-        existing bindings."""
-        if isinstance(template, TypeVarType):
-            p = template.name
+        """Check one argument against a (possibly type-var) parameter/field *template*
+        and unify the result into *subst*.
+
+        When the template, after applying the already-solved bindings, is fully
+        concrete it is passed to ``_check_expr`` as the expected type so that
+        annotation-requiring literals (notably ``[]``) can be resolved.  *hint*
+        supplies advisory bindings derived from the expected result type — used
+        only to make the expected type concrete, never to seed ``subst`` (which
+        stays authoritative, driven by the checked argument type).
+        """
+        partially = substitute(template, {**hint, **subst})
+        expected = None if contains_type_var(partially) else partially
+        arg_type = self._check_expr(arg_expr, expected=expected)
+        self._match(template, arg_type, subst, span=span)
+
+    def _require_all_solved(
+        self,
+        type_params: tuple[str, ...],
+        subst: Mapping[str, Type],
+        *,
+        span: SourceSpan,
+        message_for: Callable[[str], str],
+    ) -> None:
+        """Raise ``AglTypeError`` for the first type parameter left unsolved after inference."""
+        for p in type_params:
             if p not in subst:
-                subst[p] = concrete
-            return
-        if isinstance(template, ListType) and isinstance(concrete, ListType):
-            self._match_unsolved(template.elem, concrete.elem, subst, span=span)
-        elif isinstance(template, DictType) and isinstance(concrete, DictType):
-            self._match_unsolved(template.value, concrete.value, subst, span=span)
-        elif isinstance(template, FunctionType) and isinstance(concrete, FunctionType):
-            if len(template.params) == len(concrete.params):
-                for tp, cp in zip(template.params, concrete.params):
-                    self._match_unsolved(tp, cp, subst, span=span)
-                self._match_unsolved(template.result, concrete.result, subst, span=span)
-        elif (
-            isinstance(template, (RecordType, EnumType))
-            and isinstance(concrete, (RecordType, EnumType))
-            and type(template) is type(concrete)
-            and template.name == concrete.name
-            and len(template.type_args) == len(concrete.type_args)
-        ):
-            for ta, ca in zip(template.type_args, concrete.type_args):
-                self._match_unsolved(ta, ca, subst, span=span)
+                raise AglTypeError(message_for(p), span=span)
+
+    def _result_hint(
+        self, result_template: Type, expected: Type | None, *, span: SourceSpan
+    ) -> dict[str, Type]:
+        """Advisory type-arg bindings derived from an expected result type.
+
+        Matched non-challenging against *result_template* so a surrounding
+        annotation (e.g. ``let b: Box[int] = …``) can give an argument literal a
+        concrete expected type before the arguments themselves are checked.
+        Empty when *expected* is absent or its shape does not match.
+        """
+        hint: dict[str, Type] = {}
+        if expected is not None:
+            self._match(result_template, expected, hint, span=span, challenge=False)
+        return hint
 
     # --- shared call-argument checker ---
 
@@ -1842,40 +1894,33 @@ class _Checker:
         else:
             # --- Inference path ---
             subst = {}
+            # A hint from the expected result type lets annotation-requiring
+            # literals in argument position (e.g. an empty list) resolve.
+            hint = self._result_hint(sig.result, expected, span=node.span)
             # Infer from positional args.
             for i, arg in enumerate(node.args):
                 if i >= len(sig.params):
                     break
-                param_template = sig.params[i][1]
-                partially = substitute(param_template, subst)
-                if contains_type_var(partially):
-                    arg_type = self._check_expr(arg, expected=None)
-                else:
-                    arg_type = self._check_expr(arg, expected=partially)
-                self._match(param_template, arg_type, subst, span=arg.span)
+                self._infer_arg(sig.params[i][1], arg, subst, hint, span=arg.span)
             # Infer from named args.
             for na in node.named_args:
                 for pname, ptype, _ in sig.params:
                     if pname == na.name:
-                        param_template = ptype
-                        partially = substitute(param_template, subst)
-                        if contains_type_var(partially):
-                            arg_type = self._check_expr(na.value, expected=None)
-                        else:
-                            arg_type = self._check_expr(na.value, expected=partially)
-                        self._match(param_template, arg_type, subst, span=na.span)
+                        self._infer_arg(ptype, na.value, subst, hint, span=na.span)
                         break
             # Try to fill remaining unsolved vars from expected result type.
             if expected is not None:
-                self._match_unsolved(sig.result, expected, subst, span=node.span)
+                self._match(sig.result, expected, subst, span=node.span, challenge=False)
             # Verify all type params were inferred.
-            for p in sig.type_params:
-                if p not in subst:
-                    raise AglTypeError(
-                        f"Cannot infer type argument '{p}' for call to '{func_name}'; "
-                        f"supply it explicitly via '{func_name}::[…]'.",
-                        span=node.span,
-                    )
+            self._require_all_solved(
+                sig.type_params,
+                subst,
+                span=node.span,
+                message_for=lambda p: (
+                    f"Cannot infer type argument '{p}' for call to '{func_name}'; "
+                    f"supply it explicitly via '{func_name}::[…]'."
+                ),
+            )
 
         # Substitute to get the concrete signature.
         sub_params = tuple((n, substitute(pt, subst), hd) for n, pt, hd in sig.params)
@@ -2961,7 +3006,12 @@ class _Checker:
                     span=pattern.span,
                 )
         elif isinstance(pattern, VarPattern):
-            self._env.set_binding_type(pattern.node_id, subj_type)
+            if pattern.node_id in self._resolved.bare_variant_patterns:
+                # A bare name denoting an in-scope constructor: a nullary
+                # variant pattern, not a binder.  Validate it statically.
+                self._check_bare_variant_pattern(pattern, subj_type)
+            else:
+                self._env.set_binding_type(pattern.node_id, subj_type)
         else:
             assert isinstance(pattern, ConstructorPattern), (
                 f"Unexpected pattern kind: {type(pattern).__name__}"
@@ -3005,6 +3055,34 @@ class _Checker:
                 field_type = vfields[pf.name]
                 self._bind_pattern_types(pf.pattern, field_type, pf)
 
+    def _check_bare_variant_pattern(self, pattern: VarPattern, subj_type: Type) -> None:
+        """Validate a bare-name nullary variant pattern (``| Red =>``).
+
+        The name has already been classified as an in-scope constructor by the
+        resolver; here it must additionally be a *nullary* variant of the
+        scrutinee's enum.  A field-bearing variant requires the explicit call
+        form so the discarded payload is acknowledged.
+        """
+        if not isinstance(subj_type, EnumType):
+            raise AglTypeError(
+                f"Cannot match constructor pattern '{pattern.name}' against "
+                f"non-enum type '{subj_type!r}'.",
+                span=pattern.span,
+            )
+        if pattern.name not in subj_type.variants:
+            raise AglTypeError(
+                f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
+                span=pattern.span,
+            )
+        if subj_type.variants[pattern.name]:
+            raise AglTypeError(
+                f"'{pattern.name}' is a variant of enum '{subj_type.name}' that has "
+                f"fields, so a bare name cannot match it. Write '{pattern.name}(...)' "
+                f"(or '{pattern.name}(_)') to match and ignore the payload, or "
+                f"destructure the fields explicitly.",
+                span=pattern.span,
+            )
+
     def _warn_non_exhaustive(
         self, subj_type: Type, patterns: list[Pattern], span: SourceSpan
     ) -> None:
@@ -3013,8 +3091,13 @@ class _Checker:
             return
         covered: set[str] = set()
         for pattern in patterns:
-            if isinstance(pattern, (WildcardPattern, VarPattern)):
+            if isinstance(pattern, WildcardPattern):
                 return
+            if isinstance(pattern, VarPattern):
+                if pattern.node_id not in self._resolved.bare_variant_patterns:
+                    return  # a genuine binder is a catch-all
+                covered.add(pattern.name)
+                continue
             assert isinstance(pattern, ConstructorPattern), (
                 f"unexpected pattern kind on enum scrutinee: {type(pattern).__name__}"
             )

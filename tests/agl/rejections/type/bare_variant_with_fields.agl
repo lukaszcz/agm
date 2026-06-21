@@ -1,0 +1,8 @@
+enum Box
+  | Empty
+  | Full(item: int)
+
+let b: Box = Full(item: 1)
+case b of
+  | Empty => print "empty"
+  | Full => print "full"

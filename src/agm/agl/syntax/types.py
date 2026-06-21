@@ -148,12 +148,13 @@ class FuncT:
 
 @dataclass(frozen=True, slots=True)
 class AppliedT:
-    """A type application ``Name[args]`` (user generic type or alias)."""
+    """A type application ``Name[args]`` or ``module::Name[args]``."""
 
     name: str
     args: tuple[TypeExpr, ...]
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
+    module_qualifier: Qualifier | None = None
 
 
 # Closed union of all type-expression nodes.

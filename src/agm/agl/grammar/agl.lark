@@ -245,6 +245,7 @@ type_ann: COLON type_expr
 // ---------------------------------------------------------------------------
 
 type_expr: LPAR type_list? RPAR THIN_ARROW type_expr       -> func_type
+         | qual_prefix name type_lsqb type_arg_list RSQB   -> qual_applied_type
          | name type_lsqb type_arg_list RSQB               -> applied_type
          | qual_prefix name                                 -> qual_named_type
          | name                                             -> prim_or_name
@@ -458,19 +459,21 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 ?postfix: postfix LPAR arg_list? RPAR  -> call
         | postfix DOT field_name       -> field_access
         | postfix INDEX_LSQB expr RSQB -> index_access
+        | postfix DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> typed_postfix_call
         | atom
 
 // ---------------------------------------------------------------------------
 // Typed call (explicit type-argument syntax)
 //
-// Two forms are supported:
+// Examples of supported callee forms:
 //
 //   bare:      ``callee::[Type](args)``          — bare NAME callee (e.g. ask-request)
-//   qualified: ``qual_prefix name::[Type](args)`` — module-qualified callee
+//   module:    ``qual_prefix name::[Type](args)`` — module-qualified callee
+//   enum:      ``Option.some::[Type](args)``      — type-qualified enum constructor
 //
 // Both forms use ``::`` immediately before the type-argument brackets for
-// consistency: the ``::`` is unambiguous because DCOLON never appears in
-// FOLLOW(var_ref) or FOLLOW(qual_var_ref), eliminating any LALR(1) conflict.
+// consistency. The typed-call suffix applies after the normal postfix chain,
+// allowing enum qualification without introducing a field-access grammar conflict.
 //
 // Square brackets delimit the type argument (not angle brackets) because the
 // AgL lexer treats ``<`` and ``>`` as identifier-continuation characters, so
@@ -478,9 +481,6 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 // stop characters and delimit cleanly.  ``type_expr`` uses ``[]`` only for
 // generics (``list[T]``), so nested brackets stay balanced.
 // ---------------------------------------------------------------------------
-
-typed_call_atom    : name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
-qual_typed_call    : qual_prefix name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
 
 // ---------------------------------------------------------------------------
 // Atom: primary non-operator expressions (transparent)
@@ -497,8 +497,6 @@ qual_typed_call    : qual_prefix name DCOLON LSQB type_arg_list RSQB LPAR arg_li
      | lit_dict
      | var_ref
      | qual_var_ref
-     | typed_call_atom
-     | qual_typed_call
      | paren_expr_or_unit
 
 // Parenthesized expression or unit literal.

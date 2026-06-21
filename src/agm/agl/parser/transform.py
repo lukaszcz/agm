@@ -570,6 +570,31 @@ class AstBuilder(Transformer):
             raise syntax_error_from_meta(meta, "dict[] takes exactly two type arguments")
         return AppliedT(name=name, args=type_args, span=span, node_id=nid)
 
+    def qual_applied_type(self, meta: Meta, args: _Args) -> AppliedT:
+        """qual_prefix name type_lsqb type_arg_list RSQB — qualified application."""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        type_args = cast(
+            tuple[TypeExpr, ...],
+            next(
+                (
+                    a
+                    for a in args
+                    if isinstance(a, tuple)
+                    and len(a) > 0
+                    and isinstance(a[0], _ALL_TYPE_EXPRS)
+                ),
+                (),
+            ),
+        )
+        return AppliedT(
+            name=str(name_tok),
+            args=type_args,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+        )
+
     def agent_type(self, meta: Meta, args: _Args) -> AgentT:
         """AGENT terminal in type position → AgentT."""
         return AgentT(span=self._span_from_meta(meta), node_id=self._next_id())
@@ -840,83 +865,29 @@ class AstBuilder(Transformer):
         index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
         return ("index", index_expr)
 
-    # ------------------------------------------------------------------
-    # Typed call (callee::[Type](args))
-    # ------------------------------------------------------------------
-
-    def typed_call_atom(self, meta: Meta, args: _Args) -> syntax.Call:
-        """typed_call_atom: name DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR
-
-        Builds a ``Call`` whose callee is a bare ``VarRef`` and whose
-        ``type_args`` carries the static type arguments.  The resolver /
-        checker / interpreter treat the callee name as a built-in (currently
-        only ``ask-request``); any other name is a scope error.
-        """
-        name_tok = next(
-            a for a in args if isinstance(a, Token) and a.type == "NAME"
-        )
-        type_args_val: tuple[TypeExpr, ...] = cast(
+    def typed_postfix_call(self, meta: Meta, args: _Args) -> syntax.Call:
+        """Apply explicit type arguments to any postfix callee expression."""
+        callee = cast(syntax.Expr, args[0])
+        type_args_val = cast(
             tuple[TypeExpr, ...],
             next(
-                (a for a in args if isinstance(a, tuple) and len(a) > 0
-                 and isinstance(a[0], _ALL_TYPE_EXPRS)),
+                (
+                    arg
+                    for arg in args
+                    if isinstance(arg, tuple)
+                    and len(arg) > 0
+                    and isinstance(arg[0], _ALL_TYPE_EXPRS)
+                ),
                 (),
             ),
         )
-
         pos_args: list[syntax.Expr] = []
         named_args: list[syntax.NamedArg] = []
-        for a in args:
-            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
-                pa, na = cast(tuple[list[syntax.Expr], list[syntax.NamedArg]], a)
-                pos_args = pa
-                named_args = na
-
-        callee = syntax.VarRef(
-            name=str(name_tok),
-            span=self._span_from_token(name_tok),
-            node_id=self._next_id(),
-        )
-        return syntax.Call(
-            callee=callee,
-            args=tuple(pos_args),
-            named_args=tuple(named_args),
-            type_args=type_args_val,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def qual_typed_call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """qual_typed_call: qual_prefix name LSQB type_arg_list RSQB LPAR arg_list? RPAR
-
-        Module-qualified typed call: ``lib::Point[int](x: 1)`` or ``::MyType[T](f: v)``.
-        Builds a ``Call`` whose callee is a module-qualified ``VarRef``.
-        """
-        qual = next(a for a in args if isinstance(a, Qualifier))
-        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
-        type_args_val: tuple[TypeExpr, ...] = cast(
-            tuple[TypeExpr, ...],
-            next(
-                (a for a in args if isinstance(a, tuple) and len(a) > 0
-                 and isinstance(a[0], _ALL_TYPE_EXPRS)),
-                (),
-            ),
-        )
-
-        pos_args: list[syntax.Expr] = []
-        named_args: list[syntax.NamedArg] = []
-        for a in args:
-            if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
-                pa, na = cast(tuple[list[syntax.Expr], list[syntax.NamedArg]], a)
-                pos_args = pa
-                named_args = na
-
-        callee = syntax.VarRef(
-            name=str(name_tok),
-            span=self._span_from_token(name_tok),
-            node_id=self._next_id(),
-            module_qualifier=qual,
-        )
+        for arg in args:
+            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
+                pos_args, named_args = cast(
+                    tuple[list[syntax.Expr], list[syntax.NamedArg]], arg
+                )
         return syntax.Call(
             callee=callee,
             args=tuple(pos_args),

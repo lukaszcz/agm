@@ -2295,6 +2295,93 @@ def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path
     _check_graph(tmp_path, modules)
 
 
+def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "entry": "import lib\nlet x: Box[int] = Box(value: 1)\nx",
+    }
+    _check_graph(tmp_path, modules)
+
+
+def test_qualified_generic_type_in_annotation(tmp_path: Path) -> None:
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "entry": "import lib qualified\nlet x: lib::Box[int] = lib::Box(value: 1)\nx",
+    }
+    _check_graph(tmp_path, modules)
+
+
+def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
+    modules = {
+        "a": "record Box[T]\n  value: T",
+        "b": "record Box[T]\n  value: T",
+        "entry": "import a\nimport b\nlet x: Box[int] = null\nx",
+    }
+    with pytest.raises(AglTypeError, match="Ambiguous type 'Box'"):
+        _check_graph(tmp_path, modules)
+
+
+def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> None:
+    modules = {
+        "lib": "record Point\n  value: int",
+        "entry": "import lib\nlet x: Point[int] = null\nx",
+    }
+    with pytest.raises(AglTypeError, match="does not take type arguments"):
+        _check_graph(tmp_path, modules)
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        (
+            "import lib qualified\nlet x: missing::Box[int] = null\nx",
+            "Unknown module qualifier",
+        ),
+        (
+            "import lib qualified using helper\nlet x: lib::Box[int] = null\nx",
+            "not accessible",
+        ),
+        ("import lib qualified\nlet x: lib::Point[int] = null\nx", "does not take"),
+        (
+            "import lib qualified\nlet x: lib::helper[int] = null\nx",
+            "does not name a type",
+        ),
+    ],
+)
+def test_qualified_type_application_errors(
+    tmp_path: Path, entry: str, message: str
+) -> None:
+    modules = {
+        "lib": (
+            "record Box[T]\n"
+            "  value: T\n"
+            "record Point\n"
+            "  value: int\n"
+            "def helper(x: int) -> int = x"
+        ),
+        "entry": entry,
+    }
+    with pytest.raises(AglTypeError, match=message):
+        _check_graph(tmp_path, modules)
+
+
+def test_unknown_applied_type_with_import_environment_rejected(tmp_path: Path) -> None:
+    modules = {
+        "lib": "def helper(x: int) -> int = x",
+        "entry": "import lib\nlet x: Missing[int] = null\nx",
+    }
+    with pytest.raises(AglTypeError, match="Unknown type 'Missing'"):
+        _check_graph(tmp_path, modules)
+
+
+def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) -> None:
+    modules = {
+        "lib": "enum Option[T]\n  | none\n  | some(value: T)",
+        "entry": "import lib qualified\nlib::Option.some::[int](value: 1)",
+    }
+    _check_graph(tmp_path, modules)
+
+
 def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path) -> None:
     """Coverage: checker.py _check_cross_module_constructor_call — non-generic with type args."""
     modules = {

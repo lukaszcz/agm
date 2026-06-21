@@ -3863,6 +3863,51 @@ class TestFunctionSignatureTypeParams:
 
 
 class TestResolveTypeExprTypeVars:
+    def test_qualified_applied_type_requires_graph_context(self) -> None:
+        from agm.agl.syntax.types import AppliedT, Qualifier
+
+        sp = mk_span()
+        expr = AppliedT(
+            name="Box",
+            args=(IntT(span=sp, node_id=1),),
+            span=sp,
+            node_id=2,
+            module_qualifier=Qualifier(segments=("lib",), span=sp, node_id=3),
+        )
+        with pytest.raises(AglTypeError, match="outside of a module graph"):
+            TypeEnvironment().resolve_type_expr(expr)
+
+    def test_self_qualified_unknown_applied_type_rejected(self) -> None:
+        err = reject_type("let x: ::Missing[int] = null\nx")
+        assert "Unknown type 'Missing'" in str(err)
+
+    def test_open_imported_generic_lookup_edge_cases(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.scope.imports import ImportEnv
+        from agm.agl.typecheck.env import GenericTypeDef
+        from agm.agl.typecheck.types import TypeVarType
+
+        lib_a = ModuleId.from_dotted("a")
+        lib_b = ModuleId.from_dotted("b")
+        gdef = GenericTypeDef(
+            kind="record",
+            type_params=("T",),
+            template=RecordType("Box", {"value": TypeVarType("T")}),
+        )
+        assert TypeEnvironment().get_open_imported_generic_type("Box") is None
+        env = TypeEnvironment(
+            import_env=ImportEnv(
+                unqualified={
+                    "Point": frozenset({(lib_a, "Point")}),
+                    "Box": frozenset({(lib_a, "Box"), (lib_b, "Box")}),
+                },
+                qualified={},
+            ),
+            graph_generic_table={(lib_a, "Box"): gdef, (lib_b, "Box"): gdef},
+        )
+        assert env.get_open_imported_generic_type("Point") is None
+        assert env.get_open_imported_generic_type("Box") is None
+
     def test_name_in_type_vars_resolves_to_typevar(self) -> None:
         from agm.agl.syntax.types import NameT
         env = TypeEnvironment()
@@ -4693,6 +4738,15 @@ class TestGenericConstructorExplicit:
             "  | none\n"
             "  | some(value: T)\n"
             "some::[int](value: 1)"
+        )
+        assert r.resolved.program is not None
+
+    def test_qualified_enum_variant_explicit_type_arg(self) -> None:
+        r = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "Option.some::[int](value: 1)"
         )
         assert r.resolved.program is not None
 

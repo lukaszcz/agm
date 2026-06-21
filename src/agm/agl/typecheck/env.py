@@ -635,6 +635,11 @@ class TypeEnvironment:
                 )
                 for a in type_expr.args
             )
+            qualifier = type_expr.module_qualifier
+            if qualifier is not None and qualifier.segments:
+                return self._resolve_qualified_applied_type(
+                    qualifier, name, resolved_args, span=eff_span
+                )
             gdef = self._generic_types.get(name)
             if gdef is not None:
                 return self.instantiate_nominal(name, resolved_args, span=eff_span)
@@ -664,12 +669,101 @@ class TypeEnvironment:
                     f"Type '{name}' does not take type arguments.",
                     span=eff_span,
                 )
+            if qualifier is None:
+                imported = self._resolve_open_imported_applied_type(
+                    name, resolved_args, span=eff_span
+                )
+                if imported is not None:
+                    return imported
             raise AglTypeError(
                 f"Unknown type '{name}'.",
                 span=eff_span,
             )
         raise AglTypeError(
             f"Unknown type expression: {type_expr!r}",
+            span=span,
+        )
+
+    def _resolve_open_imported_applied_type(
+        self,
+        name: str,
+        args: tuple[Type, ...],
+        *,
+        span: SourceSpan | None,
+    ) -> Type | None:
+        """Resolve an unqualified generic application through open imports."""
+        if self._import_env is None or self._graph_generic_table is None:
+            return None
+        candidates = self._import_env.unqualified.get(name, frozenset())
+        type_candidates = [
+            qname
+            for qname in candidates
+            if (qname[0], qname[1]) in self._graph_generic_table
+            or (
+                self._graph_type_table is not None
+                and (qname[0], qname[1]) in self._graph_type_table
+            )
+        ]
+        if len(type_candidates) > 1:
+            labels = sorted(f"{qname[0].dotted()}::{qname[1]}" for qname in type_candidates)
+            raise AglTypeError(
+                f"Ambiguous type '{name}': it is exported by multiple modules "
+                f"({', '.join(labels)}). Use a qualified reference to disambiguate.",
+                span=span,
+            )
+        if not type_candidates:
+            return None
+        module_id, source_name = type_candidates[0]
+        gdef = self._graph_generic_table.get((module_id, source_name))
+        if gdef is None:
+            raise AglTypeError(
+                f"Type '{name}' does not take type arguments.",
+                span=span,
+            )
+        return self.instantiate_from_gdef(source_name, gdef, args, span=span)
+
+    def _resolve_qualified_applied_type(
+        self,
+        qualifier: object,
+        name: str,
+        args: tuple[Type, ...],
+        *,
+        span: SourceSpan | None,
+    ) -> Type:
+        """Resolve ``module::Name[args]`` through the module import environment."""
+        from agm.agl.syntax.types import Qualifier
+
+        assert isinstance(qualifier, Qualifier)
+        if self._import_env is None or self._graph_generic_table is None:
+            raise AglTypeError(
+                f"Module qualifier '{'.'.join(qualifier.segments)}::' cannot be resolved "
+                "outside of a module graph.",
+                span=span,
+            )
+        handle_map = self._import_env.qualified.get(qualifier.segments)
+        if handle_map is None:
+            raise AglTypeError(
+                f"Unknown module qualifier '{'.'.join(qualifier.segments)}::'. "
+                "The module has not been imported or the qualifier is not in scope.",
+                span=span,
+            )
+        qname = handle_map.get(name)
+        if qname is None:
+            raise AglTypeError(
+                f"Type '{name}' is not accessible via qualifier "
+                f"'{'.'.join(qualifier.segments)}::'.",
+                span=span,
+            )
+        gdef = self._graph_generic_table.get((qname[0], qname[1]))
+        if gdef is not None:
+            return self.instantiate_from_gdef(qname[1], gdef, args, span=span)
+        if self._graph_type_table is not None and (qname[0], qname[1]) in self._graph_type_table:
+            raise AglTypeError(
+                f"Type '{'.'.join(qualifier.segments)}::{name}' does not take type arguments.",
+                span=span,
+            )
+        raise AglTypeError(
+            f"'{'.'.join(qualifier.segments)}::{name}' does not name a type.",
             span=span,
         )
 
@@ -853,6 +947,23 @@ class TypeEnvironment:
         if self._graph_generic_table is None:
             return None
         return self._graph_generic_table.get((module_id, name))
+
+    def get_open_imported_generic_type(
+        self, exposed_name: str
+    ) -> tuple[ModuleId, str, GenericTypeDef] | None:
+        """Return the unique generic type exposed by an open-imported name."""
+        if self._import_env is None or self._graph_generic_table is None:
+            return None
+        matches = []
+        for module_id, source_name in self._import_env.unqualified.get(
+            exposed_name, frozenset()
+        ):
+            gdef = self._graph_generic_table.get((module_id, source_name))
+            if gdef is not None:
+                matches.append((module_id, source_name, gdef))
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def get_ctor_sig_from_module(
         self, module_id: ModuleId, owner_name: str, variant: str | None

@@ -370,6 +370,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.result, callback)
 
     elif isinstance(node, AppliedT):
+        if node.module_qualifier is not None:
+            walk(node.module_qualifier, callback)
         for arg in node.args:
             walk(arg, callback)
 

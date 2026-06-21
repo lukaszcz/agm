@@ -262,12 +262,12 @@ def _collect_type_expr_deps(
     Only ``NameT`` (named type references) create dependencies.  Container types
     (``ListT``, ``DictT``, ``FuncT``) recurse structurally.
     """
-    from agm.agl.syntax.types import DictT, FuncT, ListT, NameT
+    from agm.agl.syntax.types import AppliedT, DictT, FuncT, ListT, NameT
 
     deps: list[tuple[ModuleId, str]] = []
 
     def _walk(te: object) -> None:
-        if isinstance(te, NameT):
+        if isinstance(te, (NameT, AppliedT)):
             if te.module_qualifier is not None:
                 # Qualified: resolve through import env.
                 qualifier = te.module_qualifier
@@ -296,6 +296,9 @@ def _collect_type_expr_deps(
                         key = (qn[0], qn[1])
                         if key in all_type_keys:
                             deps.append(key)
+            if isinstance(te, AppliedT):
+                for arg in te.args:
+                    _walk(arg)
         elif isinstance(te, (ListT, DictT)):
             inner = te.elem if isinstance(te, ListT) else te.value
             _walk(inner)

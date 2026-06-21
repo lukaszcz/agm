@@ -889,10 +889,12 @@ class TestTypedCalls:
         assert call.callee.name == "print"
         assert isinstance(call.args[0], ListLit)
 
-    def test_typed_call_callee_must_be_name(self) -> None:
-        # ``f.g::[T]`` is a parse error (``::`` only follows a bare VAR_NAME).
-        with pytest.raises(AglSyntaxError):
-            parse("f.g::[T](x)")
+    def test_typed_call_accepts_field_access_callee(self) -> None:
+        prog = parse("f.g::[T](x)")
+        call = first(prog)
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, FieldAccess)
+        assert len(call.type_args) == 1
 
     def test_dcolon_without_type_brackets_is_not_a_call(self) -> None:
         # ``ask-request::`` with no ``[...]`` is rejected.
@@ -2579,6 +2581,23 @@ class TestQualifiedTypeRefs:
         assert decl.type_ann.name == "MyType"
         assert decl.type_ann.module_qualifier is not None
         assert decl.type_ann.module_qualifier.segments == ("m",)
+
+    def test_qual_applied_type_in_annotation(self) -> None:
+        prog = parse("let x: m::Box[int] = null")
+        (decl,) = items(prog)
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.type_ann, syntax.AppliedT)
+        assert decl.type_ann.name == "Box"
+        assert decl.type_ann.module_qualifier is not None
+        assert decl.type_ann.module_qualifier.segments == ("m",)
+
+    def test_qualified_enum_constructor_with_type_args(self) -> None:
+        prog = parse("Option.some::[int](value: 1)")
+        (call,) = items(prog)
+        assert isinstance(call, syntax.Call)
+        assert isinstance(call.callee, syntax.FieldAccess)
+        assert call.callee.field == "some"
+        assert len(call.type_args) == 1
 
     def test_qual_prim_type_in_annotation(self) -> None:
         prog = parse("let x: m::text = null")

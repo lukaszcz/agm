@@ -1799,6 +1799,16 @@ class TestVisitorWalk:
             "Qualifier node not visited when walking a qualified NameT"
         )
 
+    def test_walk_qual_applied_t_visits_qualifier(self) -> None:
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax.visitor import walk
+
+        prog = parse_program("let x: foo.bar::Box[int] = null")
+        visited: list[object] = []
+        walk(prog, visited.append)
+        assert any(isinstance(node, Qualifier) for node in visited)
+
     def test_walk_qual_constructor_pattern_visits_qualifier(self) -> None:
         """walk() on a ConstructorPattern with module_qualifier must visit the Qualifier."""
         from agm.agl.parser import parse_program

@@ -2616,11 +2616,24 @@ class _Checker:
         args: tuple[NamedArg, ...],
         span: SourceSpan,
         expected: Type | None = None,
+        type_args: tuple[object, ...] = (),
     ) -> Type:
         """Validate and dispatch a qualified constructor (EnumName.variant)."""
         # Check if this is a generic enum type.
-        gdef = self._env.get_generic_type(owner_name)
+        gdef = (
+            self._env.get_generic_type_from_module(owner_module_id, owner_name)
+            if owner_module_id is not None
+            else self._env.get_generic_type(owner_name)
+        )
         if gdef is not None:
+            sig = (
+                self._env.get_ctor_sig_from_module(owner_module_id, owner_name, variant)
+                if owner_module_id is not None
+                else self._env.get_constructor_signature(owner_name, variant)
+            )
+            assert sig is not None, (
+                f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
+            )
             ctor_ref = ConstructorRef(
                 owner_name=owner_name,
                 variant=variant,
@@ -2628,11 +2641,19 @@ class _Checker:
                 type_params=gdef.type_params,
             )
             return self._check_generic_constructor_call(
-                node_type_args=(),
+                node_type_args=type_args,
                 ctor_ref=ctor_ref,
                 named_args=args,
                 span=span,
                 expected=expected,
+                sig=sig,
+                gdef=gdef,
+            )
+        if type_args:
+            raise AglTypeError(
+                f"'{owner_name}.{variant}' is not a generic constructor and does not accept "
+                "type arguments.",
+                span=span,
             )
         enum_type = self._resolve_qualified_enum_owner(
             owner_name, variant, span, owner_module_id=owner_module_id
@@ -2713,12 +2734,22 @@ class _Checker:
             )
         if ctor_ref.type_params:
             # Generic constructor: route to generic call handler.
+            gdef = None
+            sig = None
+            imported = self._env.get_open_imported_generic_type(node.callee.name)
+            if imported is not None:
+                module_id, source_name, gdef = imported
+                sig = self._env.get_ctor_sig_from_module(
+                    module_id, source_name, ctor_ref.variant
+                )
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,
                 named_args=node.named_args,
                 span=node.span,
                 expected=expected,
+                sig=sig,
+                gdef=gdef,
             )
         if node.type_args:
             raise AglTypeError(
@@ -2750,14 +2781,9 @@ class _Checker:
                 "Constructor arguments must be named; positional arguments are not allowed.",
                 span=node.span,
             )
-        if node.type_args:
-            raise AglTypeError(
-                "Explicit type arguments on constructors are not supported yet.",
-                span=node.span,
-            )
         return self._resolve_qualified_constructor_and_call(
             owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
-            args=node.named_args, span=node.span, expected=expected,
+            args=node.named_args, span=node.span, expected=expected, type_args=node.type_args,
         )
 
     def _check_constructor_call(

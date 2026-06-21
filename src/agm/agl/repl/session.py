@@ -992,7 +992,7 @@ class ReplSession:
         """Execute a graph-mode entry; promote on success, discard on failure."""
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import AgentValue, Closure
+        from agm.agl.eval.values import Closure
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.repl.agents import AgentCancelled
         from agm.agl.repl.echo_interpreter import EchoInterpreter
@@ -1001,6 +1001,7 @@ class ReplSession:
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.syntax.nodes import AgentDecl, Binder, Declaration, FuncDef
         from agm.agl.typecheck.types import UnitType
+        from agm.agl.values import AgentValue
 
         typed_contracts: dict[int, OutputContract] = {
             nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)

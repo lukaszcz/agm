@@ -51,6 +51,7 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
+from agm.agl.eval.values import Value as BaseValue
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.schema import derive_schema
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
@@ -155,7 +156,7 @@ def normalize_integral_decimals(obj: object) -> object:
 # ---------------------------------------------------------------------------
 
 
-def json_to_value(obj: object, typ: Type) -> Value:
+def json_to_value(obj: object, typ: Type) -> BaseValue:
     """Convert a JSON-shaped Python object to the appropriate typed ``Value``.
 
     ``obj`` is the result of ``json.loads(parse_float=Decimal)`` — it may be
@@ -206,7 +207,7 @@ def json_to_value(obj: object, typ: Type) -> Value:
     if isinstance(typ, DictType):
         if not isinstance(obj, dict):
             raise ValueError(f"Expected object, got {type(obj).__name__}")
-        entries: dict[str, Value] = {}
+        entries: dict[str, BaseValue] = {}
         for k, v in obj.items():
             if not isinstance(k, str):
                 raise ValueError(f"Dict key must be string, got {type(k).__name__}")
@@ -216,7 +217,7 @@ def json_to_value(obj: object, typ: Type) -> Value:
     if isinstance(typ, RecordType):
         if not isinstance(obj, dict):
             raise ValueError(f"Expected object for record, got {type(obj).__name__}")
-        fields: dict[str, Value] = {}
+        fields: dict[str, BaseValue] = {}
         for field_name, field_type in typ.fields.items():
             if field_name not in obj:
                 raise ValueError(f"Missing field {field_name!r}")
@@ -235,7 +236,7 @@ def json_to_value(obj: object, typ: Type) -> Value:
                 f"Unknown enum variant {case_val!r} for {typ.name!r}. "
                 f"Valid variants: {list(typ.variants.keys())}"
             )
-        payload: dict[str, Value] = {}
+        payload: dict[str, BaseValue] = {}
         for field_name, field_type in variant_fields.items():
             if field_name not in obj:
                 raise ValueError(

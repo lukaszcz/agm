@@ -1484,13 +1484,6 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
     """
     import decimal as _decimal
 
-    from agm.agl.eval.values import (
-        BoolValue,
-        DecimalValue,
-        IntValue,
-        JsonValue,
-        TextValue,
-    )
     from agm.agl.typecheck.types import (
         BoolType,
         DecimalType,
@@ -1501,6 +1494,13 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
         ListType,
         RecordType,
         TextType,
+    )
+    from agm.agl.values import (
+        BoolValue,
+        DecimalValue,
+        IntValue,
+        JsonValue,
+        TextValue,
     )
 
     # Text: verbatim.

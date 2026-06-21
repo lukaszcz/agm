@@ -1,0 +1,110 @@
+"""AgL typeless execution IR — public surface.
+
+This package contains the immutable data model for the execution IR emitted
+by the lowering/linking phase (M2+) and consumed by the new evaluator (M2+).
+
+The IR carries no checker ``Type``, ``TypeEnvironment``, ``FunctionSignature``,
+``CastSpec``, type expression, or ``node_types``/``binding_types`` table.
+
+Imports: only stdlib and ``agm.agl.modules.ids``.  No eval, runtime, values,
+syntax, scope, or typecheck imports are permitted in this package.
+
+``__all__`` is sorted and complete (all public names re-exported here).
+"""
+
+from __future__ import annotations
+
+from agm.agl.ir.ids import (
+    ContractId,
+    FunctionId,
+    Location,
+    NominalId,
+    SourceId,
+    SymbolId,
+)
+from agm.agl.ir.nodes import (
+    IrAssign,
+    IrBind,
+    IrBlock,
+    IrCoerce,
+    IrConstBool,
+    IrConstDecimal,
+    IrConstInt,
+    IrConstJsonNull,
+    IrConstText,
+    IrConstUnit,
+    IrExpr,
+    IrIndexStep,
+    IrLoad,
+    IrMakeDict,
+    IrMakeList,
+    IrSequence,
+)
+from agm.agl.ir.operations import (
+    ArithOp,
+    CmpOp,
+    Coercion,
+    CompareKind,
+    ContainsKind,
+    IntToDecimal,
+    MapDictValues,
+    MapEnumFields,
+    MapList,
+    MapRecordFields,
+    NumericKind,
+    ToJson,
+)
+from agm.agl.ir.program import (
+    ExecutableModule,
+    ExecutableProgram,
+    NominalDescriptor,
+    NominalKind,
+    SourceFile,
+    SymbolDescriptor,
+)
+from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+__all__ = [
+    "ArithOp",
+    "CmpOp",
+    "Coercion",
+    "CompareKind",
+    "ContainsKind",
+    "ContractId",
+    "ExecutableModule",
+    "ExecutableProgram",
+    "FunctionId",
+    "IntToDecimal",
+    "InvalidIrError",
+    "IrAssign",
+    "IrBind",
+    "IrBlock",
+    "IrCoerce",
+    "IrConstBool",
+    "IrConstDecimal",
+    "IrConstInt",
+    "IrConstJsonNull",
+    "IrConstText",
+    "IrConstUnit",
+    "IrExpr",
+    "IrIndexStep",
+    "IrLoad",
+    "IrMakeDict",
+    "IrMakeList",
+    "IrSequence",
+    "Location",
+    "MapDictValues",
+    "MapEnumFields",
+    "MapList",
+    "MapRecordFields",
+    "NominalDescriptor",
+    "NominalId",
+    "NominalKind",
+    "NumericKind",
+    "SourceFile",
+    "SourceId",
+    "SymbolDescriptor",
+    "SymbolId",
+    "ToJson",
+    "validate_ir",
+]

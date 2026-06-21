@@ -2,8 +2,17 @@
   "scenarios": [
     {
       "name": "all_instantiations",
+      "params": {"val": 5},
       "expect": {
         "stdout": "5\nhi\n1\ncore\n7\n9\nvia value\n11\nsolo\nbeta\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "different_int_value",
+      "params": {"val": 100},
+      "expect": {
+        "stdout": "100\nhi\n1\ncore\n7\n9\nvia value\n11\nsolo\nbeta\n",
         "calls": {}
       }
     }

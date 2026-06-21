@@ -1,0 +1,2 @@
+def show[T](x: T) -> unit = print(x)
+show(42)

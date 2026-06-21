@@ -377,7 +377,12 @@ class TypeEnvironment:
         """Return the ``GenericTypeDef`` for *name*, or ``None`` if unknown."""
         return self._generic_types.get(name)
 
-    def instantiate_nominal(self, name: str, args: tuple[Type, ...]) -> RecordType | EnumType:
+    def instantiate_nominal(
+        self,
+        name: str,
+        args: tuple[Type, ...],
+        span: SourceSpan | None = None,
+    ) -> RecordType | EnumType:
         """Instantiate a generic type named *name* with *args*.
 
         Substitutes the type parameters in the template with *args* and
@@ -385,14 +390,19 @@ class TypeEnvironment:
         set to the supplied arguments.
 
         Raises ``AglTypeError`` for unknown names or arity mismatches.
+        The optional *span* is forwarded to the error for source-location reporting.
         """
         gdef = self._generic_types.get(name)
         if gdef is None:
-            raise AglTypeError(f"Unknown generic type '{name}'.")
-        return self.instantiate_from_gdef(name, gdef, args)
+            raise AglTypeError(f"Unknown generic type '{name}'.", span=span)
+        return self.instantiate_from_gdef(name, gdef, args, span=span)
 
     def instantiate_from_gdef(
-        self, name: str, gdef: GenericTypeDef, args: tuple[Type, ...]
+        self,
+        name: str,
+        gdef: GenericTypeDef,
+        args: tuple[Type, ...],
+        span: SourceSpan | None = None,
     ) -> RecordType | EnumType:
         """Instantiate a :class:`GenericTypeDef` with *args*, substituting type parameters.
 
@@ -400,25 +410,31 @@ class TypeEnvironment:
         ``GenericTypeDef`` directly, so callers that already have the definition
         (e.g. cross-module generic constructor checks) do not need to register it
         in the own-module ``_generic_types`` table.
+        The optional *span* is forwarded to any ``AglTypeError`` raised.
         """
         from agm.agl.typecheck.types import substitute as _subst
 
         if len(args) != len(gdef.type_params):
             raise AglTypeError(
                 f"Type '{name}' requires {len(gdef.type_params)} type argument(s), "
-                f"got {len(args)}."
+                f"got {len(args)}.",
+                span=span,
             )
         subst = dict(zip(gdef.type_params, args))
         template = gdef.template
         if isinstance(template, RecordType):
             new_fields = {k: _subst(v, subst) for k, v in template.fields.items()}
-            return RecordType(name=name, fields=new_fields, type_args=args)
+            return RecordType(
+                name=name, fields=new_fields, type_args=args, module_id=template.module_id
+            )
         # EnumType: substitute into each variant's field types.
         new_variants = {
             vname: {k: _subst(v, subst) for k, v in vfields.items()}
             for vname, vfields in template.variants.items()
         }
-        return EnumType(name=name, variants=new_variants, type_args=args)
+        return EnumType(
+            name=name, variants=new_variants, type_args=args, module_id=template.module_id
+        )
 
     # --- Constructor signature registry (M2) ---
 
@@ -621,7 +637,7 @@ class TypeEnvironment:
             )
             gdef = self._generic_types.get(name)
             if gdef is not None:
-                return self.instantiate_nominal(name, resolved_args)
+                return self.instantiate_nominal(name, resolved_args, span=eff_span)
             alias_expr = self._alias_targets.get(name)
             if alias_expr is not None:
                 if name in _resolving:

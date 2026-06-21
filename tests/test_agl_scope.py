@@ -2208,6 +2208,89 @@ class TestConstructorBindings:
         # Should suggest qualification like 'Option.some'
         assert "." in msg or "qualify" in msg.lower()
 
+    # --- D7 regression: payload / type-args / context do NOT disambiguate ---
+
+    def test_ambiguous_payload_variant_still_raises(self) -> None:
+        """A payload does NOT disambiguate two enums sharing the same variant name.
+
+        D7 guarantees ambiguity is raised by the scope pass regardless of whether
+        a matching payload is supplied.  Both candidate enums must be named in the
+        error message.
+        """
+        err = reject_scope(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "enum Other[T]\n"
+            "  | nope\n"
+            "  | some(value: T)\n"
+            "some(value: 1)\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "ambiguous" in msg.lower()
+        assert "Option" in msg
+        assert "Other" in msg
+
+    def test_ambiguous_explicit_type_args_still_raises(self) -> None:
+        """Explicit type arguments do NOT disambiguate two enums sharing a variant name.
+
+        D7 guarantees that ``some::[int](value: 1)`` is still ambiguous when both
+        ``Option`` and ``Other`` declare a ``some`` variant.  Both candidate enums
+        must be named in the error message.
+        """
+        err = reject_scope(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "enum Other[T]\n"
+            "  | nope\n"
+            "  | some(value: T)\n"
+            "some::[int](value: 1)\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "ambiguous" in msg.lower()
+        assert "Option" in msg
+        assert "Other" in msg
+
+    def test_ambiguous_contextual_type_still_raises(self) -> None:
+        """A contextual expected type does NOT disambiguate an ambiguous variant.
+
+        D7 guarantees that ``let x: Option[int] = some(value: 1)`` is still
+        ambiguous when both ``Option`` and ``Other`` declare a ``some`` variant.
+        Both candidate enums must be named in the error message.
+        """
+        err = reject_scope(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "enum Other[T]\n"
+            "  | nope\n"
+            "  | some(value: T)\n"
+            "let x: Option[int] = some(value: 1)\n"
+            "x\n"
+        )
+        msg = err.to_diagnostic().message
+        assert "ambiguous" in msg.lower()
+        assert "Option" in msg
+        assert "Other" in msg
+
+    def test_qualified_payload_variant_resolves_without_error(self) -> None:
+        """Qualification is the only valid disambiguation for shared variant names.
+
+        D7 requires that ``Option.some(value: 1)`` resolves without error even
+        when ``Other`` also declares a ``some`` variant.
+        """
+        r = parse_and_resolve(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "enum Other[T]\n"
+            "  | nope\n"
+            "  | some(value: T)\n"
+            "Option.some(value: 1)\n"
+        )
+        assert r.program is not None
+
     # --- Qualified constructor access ---
 
     def test_qualified_constructor_recorded(self) -> None:

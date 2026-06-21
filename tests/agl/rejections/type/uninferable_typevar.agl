@@ -1,0 +1,3 @@
+def empty[T]() -> list[T] = []
+let xs = empty()
+xs

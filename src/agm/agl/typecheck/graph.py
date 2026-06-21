@@ -644,10 +644,11 @@ def _build_graph_func_sig_table(
             if item.name in _BUILTIN_TYPE_NAMES or item.name in _BUILTIN_FUNC_NAMES:
                 continue
 
+            type_vars: frozenset[str] = frozenset(item.type_params)
             params: list[tuple[str, Type, bool]] = []
             seen_required = True
             for p in item.params:
-                pt = env.resolve_type_expr(p.type_expr, span=p.span)
+                pt = env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
                 has_default = p.default is not None
                 if seen_required and has_default:
                     seen_required = False
@@ -660,8 +661,12 @@ def _build_graph_func_sig_table(
                     )
                 params.append((p.name, pt, has_default))
 
-            result_type = env.resolve_type_expr(item.return_type, span=item.span)
-            sig = FunctionSignature(params=tuple(params), result=result_type)
+            result_type = env.resolve_type_expr(
+                item.return_type, span=item.span, type_vars=type_vars
+            )
+            sig = FunctionSignature(
+                params=tuple(params), result=result_type, type_params=item.type_params
+            )
             func_type = FunctionType(
                 params=tuple(pt for _, pt, _ in params),
                 result=result_type,

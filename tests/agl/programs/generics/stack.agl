@@ -2,7 +2,9 @@
 # `enum Option[T]`, generic functions over them (`peek` returns `Option[T]`,
 # `top_or` maps an Option through a default), a generic higher-order `map_top`,
 # and `case` destructuring — exercised at `int`, `text`, and a record element
-# type. Combines generics + records + enums + lists + HOFs + `case`.
+# type. Combines generics + records + enums + lists + HOFs + `case`. A host
+# param drives the top-of-stack int so two scenarios exercise the same generic
+# body with different runtime values (demonstrating erasure).
 record Item
   label: text
   qty: int
@@ -23,8 +25,10 @@ def map_top[A, B](s: Stack[A], f: (A) -> B) -> Option[B] =
     | none() => none::[B]()
     | some(value) => some(value: f(value))
 
-# Int stack: peek the top.
-let ints: Stack[int] = Stack(items: [10, 20, 30], size: 3)
+param top: int
+
+# Int stack: peek the top — driven by the host param.
+let ints: Stack[int] = Stack(items: [top, 20, 30], size: 3)
 case peek(ints) of
   | none() => print "ints: empty"
   | some(value) => print "ints top: ${value}"

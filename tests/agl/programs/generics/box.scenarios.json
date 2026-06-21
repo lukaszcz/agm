@@ -2,8 +2,17 @@
   "scenarios": [
     {
       "name": "two_instantiations_and_value_constructor",
+      "params": {"n": 5},
       "expect": {
-        "stdout": "5\nhi\n99\n7\n42\n",
+        "stdout": "5\nhi\n99\n7\n5\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "different_int_payload",
+      "params": {"n": 42},
+      "expect": {
+        "stdout": "42\nhi\n99\n7\n42\n",
         "calls": {}
       }
     }

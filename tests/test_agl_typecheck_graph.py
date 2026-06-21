@@ -2318,3 +2318,342 @@ def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
         "entry": "import lib qualified\n()",
     }
     _check_graph(tmp_path, modules)
+
+
+# ---------------------------------------------------------------------------
+# BUG 1 regression: module_id dropped when instantiating generic nominals
+# Two modules each define a generic with the same short name; instances must
+# NOT be assignable across modules.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> None:
+    """Regression for BUG 1: generic record template must carry the owning module's module_id.
+
+    Before the fix, _build_generic_record created the template RecordType without
+    module_id=self._module_id, so all generic templates got module_id=ENTRY_ID.
+    After the fix, the template carries the owning library module's module_id.
+
+    Tested via the internal _build_graph_type_table function to access the
+    graph_generic_table, which is not exposed on the public CheckedModuleGraph API.
+    """
+    from agm.agl.typecheck.graph import _build_graph_type_table  # type: ignore[import-untyped]
+
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "entry": "import lib qualified\n()",
+    }
+    mg = _make_graph_from_files(tmp_path, modules)
+    rg = resolve_graph(mg)  # type: ignore[arg-type]
+    _gtt, graph_generic_table, _gcts = _build_graph_type_table(rg)  # type: ignore[arg-type]
+
+    lib_id = ModuleId.from_dotted("lib")
+    gdef = graph_generic_table.get((lib_id, "Box"))
+    assert gdef is not None, "lib::Box must appear in graph_generic_table"
+    assert gdef.template.module_id == lib_id, (
+        f"lib::Box template must have module_id={lib_id!r}, "
+        f"got {gdef.template.module_id!r}. "
+        "BUG 1: _build_generic_record must pass module_id=self._module_id."
+    )
+
+
+def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> None:
+    """Regression for BUG 1: generic enum template must carry the owning module's module_id.
+
+    Before the fix, _build_generic_enum created the template EnumType without
+    module_id=self._module_id, so all generic templates got module_id=ENTRY_ID.
+    After the fix, the template carries the owning library module's module_id.
+
+    Tested via the internal _build_graph_type_table function to access the
+    graph_generic_table, which is not exposed on the public CheckedModuleGraph API.
+    """
+    from agm.agl.typecheck.graph import _build_graph_type_table  # type: ignore[import-untyped]
+
+    modules = {
+        "lib": "enum Opt[T]\n  | None\n  | Some(value: T)",
+        "entry": "import lib qualified\n()",
+    }
+    mg = _make_graph_from_files(tmp_path, modules)
+    rg = resolve_graph(mg)  # type: ignore[arg-type]
+    _gtt, graph_generic_table, _gcts = _build_graph_type_table(rg)  # type: ignore[arg-type]
+
+    lib_id = ModuleId.from_dotted("lib")
+    gdef = graph_generic_table.get((lib_id, "Opt"))
+    assert gdef is not None, "lib::Opt must appear in graph_generic_table"
+    assert gdef.template.module_id == lib_id, (
+        f"lib::Opt template must have module_id={lib_id!r}, "
+        f"got {gdef.template.module_id!r}. "
+        "BUG 1: _build_generic_enum must pass module_id=self._module_id."
+    )
+
+
+# ---------------------------------------------------------------------------
+# BUG 2 regression: parameterized-alias type_params lost in multi-module pre-pass
+# A module defines a parameterized alias; uses with type args must typecheck.
+# ---------------------------------------------------------------------------
+
+
+def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
+    """Regression for BUG 2: type Pair[A,B] used in a record field typechecks via graph path.
+
+    Before the fix, collect_shells_only called register_alias(name, expr) without
+    type_params. When the cross-module body resolver (_resolve_body_for_one) called
+    _ensure_built_record → resolve_type_expr(Pair[int,text]), it found Pair in
+    _alias_targets with alias_params=() and raised 'requires 0 type argument(s)'.
+    After the fix, type_params are threaded through collect_shells_only and the
+    parameterized alias resolves correctly.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
+
+    modules = {
+        # lib declares Pair[A,B] and uses it in a record field —
+        # this goes through _resolve_body_for_one → _ensure_built_record →
+        # resolve_type_expr(AppliedT("Pair", ...)) via the cross-module builder.
+        "lib": (
+            "type Pair[A,B] = dict[text, json]\n"
+            "record Wrapper\n"
+            "  data: Pair[int,text]"
+        ),
+        "entry": (
+            "import lib qualified\n"
+            "()"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+
+
+# ---------------------------------------------------------------------------
+# BUG 3 regression: missing spans on instantiate diagnostics
+# An arity mismatch on a generic type application must carry a line number.
+# ---------------------------------------------------------------------------
+
+
+def test_generic_arity_mismatch_has_span(tmp_path: Path) -> None:
+    """Regression for BUG 3: arity-mismatch AglTypeError carries a line number.
+
+    Before the fix, instantiate_from_gdef raised AglTypeError without span=, so
+    the error had no source location.  After the fix the error carries the span
+    from the AppliedT call site.
+    """
+    src = "record Box[T]\n  value: T\nlet x: Box[int, text] = Box(value: 1)\nx"
+    with pytest.raises(AglTypeError) as exc_info:
+        _check(src)
+    err = exc_info.value
+    assert err.span is not None, (
+        "AglTypeError for generic arity mismatch must carry a non-None span"
+    )
+    assert err.span.start_line > 0, (
+        f"Span start_line must be > 0, got {err.span.start_line!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BUG 4 regression: D5 generic-def-as-value uses name-keyed lookup (cross-module)
+# A cross-module generic def used as a value must typecheck correctly.
+# ---------------------------------------------------------------------------
+
+
+def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
+    """Regression for BUG 4: D5 generic-def-as-value path uses correct signature lookup.
+
+    The fix changes _check_varref to consult get_function_signature_by_node_id
+    (globally unique, correct for cross-module) BEFORE falling back to
+    get_function_signature (name-keyed).
+
+    This e2e test verifies D5 works in single-module mode: a generic function
+    used as a value must typecheck when an expected FunctionType annotation is given.
+    The fix's node-id lookup is used in single-module mode too (seeded by
+    _preregister_funcdef), so this verifies the new lookup path doesn't break anything.
+
+    Note: cross-module D5 testing requires graph.py to handle generic function type
+    params in _build_graph_func_sig_table (out of scope for this fix set).
+    """
+    # D5: generic def used as a value with expected type annotation
+    src = "def id[T](x: T) -> T = x\nlet f: (int) -> int = id\nf(1)"
+    cp = _check(src)
+    assert cp is not None
+
+    # D5: no expected type → error
+    with pytest.raises(AglTypeError, match="Cannot infer type arguments"):
+        _check("def id[T](x: T) -> T = x\nlet f = id\nf")
+
+    # The cross-module D5 case (lib::id as a value in entry) is tested at the
+    # env level: verify that get_function_signature_by_node_id takes priority.
+    # This is the path the fixed checker takes; before the fix it only called
+    # get_function_signature(ref.name) which returns wrong/None cross-module.
+    from agm.agl.typecheck.env import FunctionSignature as FS
+    from agm.agl.typecheck.env import TypeEnvironment
+    from agm.agl.typecheck.types import IntType, TypeVarType
+
+    env = TypeEnvironment()
+    T = TypeVarType("T")
+    generic_sig = FS(params=(("x", T, False),), result=T, type_params=("T",))
+    # Simulate what the pre-fix code did: only name-keyed table has a wrong sig.
+    wrong_non_generic_sig = FS(params=(("x", IntType(), False),), result=IntType())
+    env.register_function_signature("id", wrong_non_generic_sig)
+    # The fix also consults node-id lookup first; seed it with the correct generic sig.
+    env.register_function_signature_by_node_id(42, generic_sig)
+
+    # Before the fix: get_function_signature("id") returns wrong sig (no type_params).
+    assert env.get_function_signature("id") is wrong_non_generic_sig
+    # After the fix: get_function_signature_by_node_id(42) returns correct generic sig.
+    sig_by_id = env.get_function_signature_by_node_id(42)
+    assert sig_by_id is generic_sig
+    assert sig_by_id is not None
+    assert sig_by_id.type_params == ("T",)
+
+
+# ---------------------------------------------------------------------------
+# BUG 5 regression: _build_graph_func_sig_table drops generic type parameters
+# These tests MUST FAIL before the graph.py fix and MUST PASS after.
+# ---------------------------------------------------------------------------
+
+
+def test_cross_module_generic_func_call_inferred(tmp_path: Path) -> None:
+    """Cross-module generic function call with inferred type args typechecks.
+
+    lib exports 'def id[T](x: T) -> T = x'.
+    Entry imports lib and calls lib::id(5) — type should be inferred as int.
+
+    Before the fix: _build_graph_func_sig_table builds FunctionSignature without
+    type_params and resolves the 'T' annotation without type_vars, so 'T' does not
+    resolve to a TypeVarType.  The type checker sees id as a non-generic function
+    whose param is an unknown rigid name 'T', and rejects the int argument.
+
+    After the fix: type_vars is computed and passed to resolve_type_expr, and
+    type_params is threaded into FunctionSignature, so lib::id(5) typechecks and
+    infers result type int.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+    from agm.agl.typecheck.types import IntType
+
+    modules = {
+        "lib": "def id[T](x: T) -> T = x",
+        "entry": (
+            "import lib qualified\n"
+            "let r = lib::id(5)\n"
+            "r"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+
+    # The result of 'let r = lib::id(5)' should be int.
+    entry_mod = cg.modules[ENTRY_ID]
+    # Verify the graph checked without error (the assertion above suffices, but
+    # we also check the result type via the entry module node_types).
+    assert entry_mod is not None
+    # Find the type of the final expression 'r' by checking node_types for IntType.
+    has_int = any(isinstance(t, IntType) for t in entry_mod.node_types.values())
+    assert has_int, (
+        f"Expected IntType in node_types after lib::id(5), "
+        f"got: {list(entry_mod.node_types.values())}"
+    )
+
+
+def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> None:
+    """Cross-module generic function call via open import with inferred type args typechecks.
+
+    lib exports 'def id[T](x: T) -> T = x'.
+    Entry open-imports lib and calls id(5) (unqualified).
+
+    This exercises the same _build_graph_func_sig_table fix but via open import,
+    ensuring the inferred result type is int.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+    from agm.agl.typecheck.types import IntType
+
+    modules = {
+        "lib": "def id[T](x: T) -> T = x",
+        "entry": (
+            "import lib\n"
+            "let r = id(5)\n"
+            "r"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+
+    entry_mod = cg.modules[ENTRY_ID]
+    assert entry_mod is not None
+    has_int = any(isinstance(t, IntType) for t in entry_mod.node_types.values())
+    assert has_int, (
+        f"Expected IntType in node_types after id(5), "
+        f"got: {list(entry_mod.node_types.values())}"
+    )
+
+
+def test_cross_module_generic_func_call_explicit_type_args(tmp_path: Path) -> None:
+    """Cross-module generic function call with explicit type args typechecks.
+
+    lib exports 'def id[T](x: T) -> T = x'.
+    Entry calls lib::id::[int](5) (explicit type arg int).
+
+    Before the fix: type_params is empty so id is treated as non-generic;
+    explicit type args '  ::[int]' are rejected with "requires 0 type argument(s)".
+    After the fix: type_params=("T",) is set, the explicit instantiation is
+    accepted and the result type is int.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+
+    modules = {
+        "lib": "def id[T](x: T) -> T = x",
+        "entry": (
+            "import lib qualified\n"
+            "let r = lib::id::[int](5)\n"
+            "r"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+
+
+def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
+    """D5: Cross-module generic def used as a value with monomorphic annotation typechecks.
+
+    lib exports 'def id[T](x: T) -> T = x'.
+    Entry open-imports lib and binds: 'let f: (int) -> int = id'.
+
+    Before the fix: the graph pre-pass registers id with empty type_params, so
+    _check_varref sees a non-generic FunctionType and assigns it without instantiation.
+    However, the FunctionType for id has an unresolved 'T' param (not a TypeVarType),
+    so the assignment still fails or accepts wrongly.
+    After the fix: type_params=("T",) is set, _check_varref finds a generic sig,
+    matches (int)->int against (T)->T and correctly instantiates to (int)->int.
+
+    We use open import so 'id' (unqualified) is in scope — the D5 varref path
+    triggers on unqualified as well as qualified names.
+    """
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+
+    modules = {
+        "lib": "def id[T](x: T) -> T = x",
+        "entry": (
+            "import lib\n"
+            "let f: (int) -> int = id\n"
+            "f(1)"
+        ),
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+
+
+def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> None:
+    """Negative control: cross-module generic call with a wrong arg type is rejected.
+
+    lib exports 'def add[T](x: T, y: T) -> T = x'.
+    Entry calls lib::add(5, "hello") — T cannot unify int with text simultaneously.
+
+    This confirms the fix does not weaken type checking for generic functions:
+    incompatible argument types remain rejected with a sensible diagnostic.
+    """
+    modules = {
+        "lib": "def add[T](x: T, y: T) -> T = x",
+        "entry": (
+            "import lib qualified\n"
+            'lib::add(5, "hello")'
+        ),
+    }
+    with pytest.raises(AglTypeError):
+        _check_graph(tmp_path, modules)

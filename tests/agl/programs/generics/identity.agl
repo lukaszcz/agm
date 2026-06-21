@@ -4,7 +4,9 @@
 # type (D5) and then applied. Also exercises a `let` annotation inside a generic
 # def body that references the def's type variable to build a `list[T]`
 # (`singleton`), instantiated at int and text. Also exercises a parameterized
-# type alias (`Seq[A]`) instantiated at a concrete element type.
+# type alias (`Seq[A]`) instantiated at a concrete element type. A host param
+# drives the int passed to `id` so two scenarios prove the same generic body
+# serves different runtime values (erasure).
 def id[T](x: T) -> T = x
 
 # A generic def whose body uses a `let` annotation referencing the def's own
@@ -20,8 +22,10 @@ record Tag
   name: text
   weight: int
 
+param val: int
+
 # Inferred instantiations from the argument type.
-print(id(5))
+print(id(val))
 print(id("hi"))
 
 let xs = id([1, 2, 3])

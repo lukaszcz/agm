@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from agm.config.general import ReplConfig, load_repl_config, save_repl_theme
 class TestReplConfig:
     def test_frozen(self) -> None:
         cfg = ReplConfig(theme="dark")
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             cfg.theme = "light"  # type: ignore[misc]
 
     def test_fields(self) -> None:

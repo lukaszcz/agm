@@ -1,0 +1,2 @@
+def fetch[T](p: text) -> T = ask::[T](p)
+fetch::[text]("hello")

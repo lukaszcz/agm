@@ -5601,3 +5601,102 @@ class TestSelfRefTypeInSingleModule:
     def test_module_qualifier_in_single_module_rejected(self) -> None:
         """'mylib::Point' in single-module (no graph) mode → type error."""
         reject_type("def f() -> mylib::Point = 1\nf()")
+
+
+# ---------------------------------------------------------------------------
+# BUG 1 regression: module_id on generic nominal instances
+# instantiate_from_gdef must stamp the result with the template's module_id,
+# not with the default ENTRY_ID.
+# ---------------------------------------------------------------------------
+
+
+class TestGenericNominalModuleId:
+    """Regression tests for BUG 1: module_id dropped when instantiating generic nominals."""
+
+    def test_instantiate_from_gdef_preserves_record_module_id(self) -> None:
+        """instantiate_from_gdef stamps RecordType result with gdef.template.module_id.
+
+        Before the fix, the result always got module_id=ENTRY_ID regardless of
+        which module the template belonged to.  After the fix, the result's
+        module_id matches the template's module_id.
+        """
+        from agm.agl.modules.ids import ENTRY_ID, ModuleId
+        from agm.agl.typecheck.env import GenericTypeDef
+        from agm.agl.typecheck.types import TypeVarType
+
+        lib_id = ModuleId.from_dotted("mylib")
+        template = RecordType("Box", {"value": TypeVarType("T")}, module_id=lib_id)
+        gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
+        env = TypeEnvironment()
+        result = env.instantiate_from_gdef("Box", gdef, (IntType(),))
+        assert isinstance(result, RecordType)
+        assert result.module_id == lib_id, (
+            f"Expected module_id={lib_id!r}, got {result.module_id!r}. "
+            "instantiate_from_gdef must preserve the template's module_id."
+        )
+        assert result.module_id != ENTRY_ID
+
+    def test_instantiate_from_gdef_preserves_enum_module_id(self) -> None:
+        """instantiate_from_gdef stamps EnumType result with gdef.template.module_id."""
+        from agm.agl.modules.ids import ENTRY_ID, ModuleId
+        from agm.agl.typecheck.env import GenericTypeDef
+        from agm.agl.typecheck.types import TypeVarType
+
+        lib_id = ModuleId.from_dotted("mylib")
+        template = EnumType(
+            "Option",
+            {"Some": {"value": TypeVarType("T")}, "None": {}},
+            module_id=lib_id,
+        )
+        gdef = GenericTypeDef(kind="enum", type_params=("T",), template=template)
+        env = TypeEnvironment()
+        result = env.instantiate_from_gdef("Option", gdef, (IntType(),))
+        assert isinstance(result, EnumType)
+        assert result.module_id == lib_id, (
+            f"Expected module_id={lib_id!r}, got {result.module_id!r}. "
+            "instantiate_from_gdef must preserve the template's module_id."
+        )
+        assert result.module_id != ENTRY_ID
+
+    def test_same_name_generic_different_module_id_not_equal(self) -> None:
+        """Box[int] from two modules with different module_ids must NOT be equal.
+
+        This directly tests the invariant that nominal identity includes module_id.
+        """
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.typecheck.env import GenericTypeDef
+        from agm.agl.typecheck.types import TypeVarType
+
+        lib_a = ModuleId.from_dotted("libA")
+        lib_b = ModuleId.from_dotted("libB")
+        tmpl_a = RecordType("Box", {"value": TypeVarType("T")}, module_id=lib_a)
+        tmpl_b = RecordType("Box", {"value": TypeVarType("T")}, module_id=lib_b)
+        gdef_a = GenericTypeDef(kind="record", type_params=("T",), template=tmpl_a)
+        gdef_b = GenericTypeDef(kind="record", type_params=("T",), template=tmpl_b)
+        env = TypeEnvironment()
+        inst_a = env.instantiate_from_gdef("Box", gdef_a, (IntType(),))
+        inst_b = env.instantiate_from_gdef("Box", gdef_b, (IntType(),))
+        assert inst_a != inst_b, (
+            "Box[int] from libA and Box[int] from libB must be distinct types. "
+            "Both had module_id=ENTRY_ID before the fix."
+        )
+
+    def test_build_generic_record_stamps_module_id(self) -> None:
+        """_TypeBuilder._build_generic_record stamps the template with module_id.
+
+        The checker's _build_generic_record must pass module_id=self._module_id
+        when constructing the template RecordType.  Verify via parse+check.
+        """
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.typecheck.env import GenericTypeDef
+
+        # In single-module mode the module_id is ENTRY_ID; verify the template
+        # also has ENTRY_ID (consistency check: it's at least not wrong).
+        cp = parse_resolve_check("record Box[T]\n  value: T\nlet x: Box[int] = Box(value: 1)\nx")
+        gdef = cp.type_env.get_generic_type("Box")
+        assert gdef is not None
+        assert isinstance(gdef, GenericTypeDef)
+        assert gdef.template.module_id == ENTRY_ID, (
+            f"Template module_id must be ENTRY_ID in single-module mode, "
+            f"got {gdef.template.module_id!r}."
+        )

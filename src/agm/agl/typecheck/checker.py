@@ -280,7 +280,7 @@ class _TypeBuilder:
             elif isinstance(item, TypeAlias):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
-                self._env.register_alias(item.name, item.type_expr)
+                self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
 
     def ensure_built_record(self, name: str) -> None:
         """Public proxy for :meth:`_ensure_built_record`.
@@ -449,6 +449,7 @@ class _TypeBuilder:
             name=stmt.name,
             fields=fields,
             type_args=tuple(TypeVarType(p) for p in stmt.type_params),
+            module_id=self._module_id,
         )
         gdef = GenericTypeDef(kind="record", type_params=stmt.type_params, template=template)
         self._env.register_generic_type(stmt.name, gdef)
@@ -494,6 +495,7 @@ class _TypeBuilder:
             name=stmt.name,
             variants=variants,
             type_args=tuple(TypeVarType(p) for p in stmt.type_params),
+            module_id=self._module_id,
         )
         gdef = GenericTypeDef(kind="enum", type_params=stmt.type_params, template=template)
         self._env.register_generic_type(stmt.name, gdef)
@@ -885,8 +887,13 @@ class _Checker:
             )
         typ = self._require_binding_type(ref)
         # D5: generic def used as a value — must be instantiated from context.
+        # Use the node-id-keyed lookup (populated by the graph function-signature
+        # pre-pass and by _preregister_funcdef) to get the correct signature even
+        # when two modules define functions with the same name but different signatures.
+        # Both _preregister_funcdef (single-module) and the graph pre-pass seed the
+        # node-id table, so the name-keyed fallback is not needed.
         if ref.kind is BinderKind.function_binding:
-            sig = self._env.get_function_signature(ref.name)
+            sig = self._env.get_function_signature_by_node_id(ref.decl_node_id)
             if sig is not None and sig.type_params:
                 if not isinstance(expected, FunctionType):
                     raise AglTypeError(
@@ -1048,9 +1055,11 @@ class _Checker:
         # Instantiate the nominal type.
         concrete_args = tuple(subst[p] for p in type_params)
         if gdef is not None:
-            concrete_type = self._env.instantiate_from_gdef(owner_name, gdef, concrete_args)
+            concrete_type = self._env.instantiate_from_gdef(
+                owner_name, gdef, concrete_args, span=span
+            )
         else:
-            concrete_type = self._env.instantiate_nominal(owner_name, concrete_args)
+            concrete_type = self._env.instantiate_nominal(owner_name, concrete_args, span=span)
         # Validate the constructor call.
         return self._check_constructor_call(
             owner=concrete_type, variant=variant, args=named_args, span=span

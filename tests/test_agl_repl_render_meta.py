@@ -52,6 +52,7 @@ def _result(
     warnings: list[Diagnostic] | None = None,
     error: RunError | None = None,
     ok: bool = True,
+    installed: tuple[str, ...] = (),
 ) -> EntryResult:
     """Build an ``EntryResult`` with sensible defaults for one test axis."""
     return EntryResult(
@@ -63,6 +64,7 @@ def _result(
         warnings=warnings if warnings is not None else [],
         error=error,
         ok=ok,
+        installed=installed,
     )
 
 
@@ -169,6 +171,16 @@ class TestRenderEntryResult:
             diagnostics=[Diagnostic(message="boom", line=1, column=4)],
         )
         assert render_mod.render_entry_result(result, echo=True) == "1:4: error: boom"
+
+    def test_runtime_failure_reports_partially_installed_names(self) -> None:
+        result = _result(
+            ok=False,
+            diagnostics=[Diagnostic(message="boom", line=1)],
+            installed=("before", "Box"),
+        )
+        assert render_mod.render_entry_result(result, echo=True) == (
+            "1: error: boom\nInstalled before failure: before, Box"
+        )
 
     def test_runtime_error_with_location(self) -> None:
         result = _result(

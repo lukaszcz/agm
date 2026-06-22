@@ -2,7 +2,7 @@
 
 Drives ``ReplSession`` directly with source strings and fake agents.  Asserts
 user-visible behaviour: persistence across entries, redefinition/shadowing,
-expression/binding echo data, ``type_of`` purity, atomic-on-error promotion,
+expression/binding echo data, ``type_of`` purity, partial effects on failure,
 exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 ``dump_source``, surfaced warnings, and ``check_only`` (type-only) runs.
 """
@@ -18,7 +18,6 @@ from agm.agl.diagnostics import AglError
 from agm.agl.eval.values import IntValue
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.types import IntType, TextType
 
 # ---------------------------------------------------------------------------
@@ -203,7 +202,7 @@ class TestTypeOf:
 # ---------------------------------------------------------------------------
 
 
-class TestAtomicOnError:
+class TestFailureEffects:
     def test_type_error_leaves_bindings_unchanged(self) -> None:
         s = ReplSession()
         s.eval_entry("let a = 10")
@@ -214,19 +213,42 @@ class TestAtomicOnError:
         assert r.error is None
         assert _snapshot(s) == before
 
-    def test_runtime_raise_leaves_bindings_unchanged(self) -> None:
+    def test_runtime_raise_preserves_completed_binding(self) -> None:
         s = ReplSession()
         s.eval_entry("let a = 10")
-        before = _snapshot(s)
-        r = s.eval_entry("let z: decimal = 1 / 0")
+        r = s.eval_entry("let before = 20\nlet z: decimal = 1 / 0")
         assert not r.ok
         assert r.error is not None  # mapped RunError, not a pre-exec diagnostic
         assert r.diagnostics == []
-        assert _snapshot(s) == before
+        assert r.installed == ("before",)
+        use = s.eval_entry("before + a")
+        assert use.ok
+        assert use.value is not None and _int(use.value) == 30
 
-    def test_runtime_raise_rolls_back_assign_to_prior_var(self) -> None:
-        # A ``:=`` of a prior session ``var`` mutates the persistent value scope
-        # in place; a later raise in the SAME entry must roll that mutation back.
+    def test_runtime_raise_preserves_completed_param(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry("param p: int = 7\nlet z: decimal = 1 / 0")
+        assert not result.ok
+        assert [(name, _int(value)) for name, _type, value in s.declared_params()] == [
+            ("p", 7)
+        ]
+
+    def test_runtime_raise_does_not_install_failing_param_default(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry("param p: decimal = 1 / 0")
+        assert not result.ok
+        assert s.declared_params() == []
+
+    def test_runtime_raise_preserves_prior_type_but_not_later_binding(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry(
+            "record Box\n  value: int\nlet z: decimal = 1 / 0\nlet after = 9\nafter"
+        )
+        assert not result.ok
+        assert s.eval_entry("Box(value: 3)").ok
+        assert not s.eval_entry("after").ok
+
+    def test_runtime_raise_preserves_assign_to_prior_var(self) -> None:
         s = ReplSession()
         r1 = s.eval_entry("var v = 1")
         assert r1.ok
@@ -234,9 +256,9 @@ class TestAtomicOnError:
         assert not r2.ok
         assert r2.error is not None
         vals = {n: _int(v) for n, _t, v in s.bindings()}
-        assert vals["v"] == 1  # rolled back, NOT 99
+        assert vals["v"] == 99
 
-    def test_runtime_raise_rolls_back_indexed_assign_to_prior_var(self) -> None:
+    def test_runtime_raise_preserves_indexed_assign_to_prior_var(self) -> None:
         from agm.agl.eval.values import IntValue, ListValue
 
         s = ReplSession()
@@ -246,7 +268,7 @@ class TestAtomicOnError:
         assert not r2.ok
         assert r2.error is not None
         vals = {n: v for n, _t, v in s.bindings()}
-        assert vals["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
+        assert vals["xs"] == ListValue((IntValue(99), IntValue(2), IntValue(3)))
 
     def test_successful_assign_to_prior_var_persists(self) -> None:
         # The positive counterpart: a successful ``:=`` in a later entry DOES
@@ -792,7 +814,7 @@ class TestEntryResultShape:
 
 
 # ---------------------------------------------------------------------------
-# Agent-call cancellation (declined / interrupted) — atomic entry abort
+# Agent-call cancellation (declined / interrupted)
 # ---------------------------------------------------------------------------
 
 
@@ -837,7 +859,7 @@ class TestAgentCancellation:
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
-        # Atomic: the failed entry promoted nothing.
+        # The cancelled initializer did not complete, so it installs nothing.
         assert _snapshot(s) == before
         assert all(n != "g" for n, _t, _v in s.bindings())
 
@@ -850,15 +872,13 @@ class TestAgentCancellation:
         assert r.error is None
         assert _snapshot(s) == before
 
-    def test_cancellation_rolls_back_prior_assignment(self) -> None:
-        # A ``:=`` to a prior binding before a cancelled agent call must roll
-        # back — the entry is atomic.
+    def test_cancellation_preserves_prior_assignment(self) -> None:
         s = ReplSession(default_agent=_CancellingAgent())
         s.eval_entry("var v = 1")
-        r = s.eval_entry('do\n  v := 2\n  let g = ask """x"""')
+        r = s.eval_entry('v := 2\nlet g = ask """x"""')
         assert not r.ok
         vals = {n: _int(v) for n, _t, v in s.bindings()}
-        assert vals["v"] == 1  # the assignment was rolled back
+        assert vals["v"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -971,12 +991,7 @@ class TestParamRedeclaration:
 
 
 class TestSnapshotOptimisation:
-    def test_assign_to_prior_binding_in_raising_entry_rolls_back(self) -> None:
-        """A ``:=`` to a prior session binding that raises mid-entry rolls back.
-
-        This verifies the rollback invariant is intact even when the snapshot
-        optimisation narrows what is snapshotted.
-        """
+    def test_assign_to_prior_binding_in_raising_entry_persists(self) -> None:
         s = ReplSession()
         r1 = s.eval_entry("var counter = 0")
         assert r1.ok
@@ -984,9 +999,9 @@ class TestSnapshotOptimisation:
         r2 = s.eval_entry("counter := 99\nlet _z: decimal = 1 / 0")
         assert not r2.ok
         assert r2.error is not None
-        # The assignment must have been rolled back.
+        # Completed effects remain visible after a later initializer raises.
         vals = {n: _int(v) for n, _t, v in s.bindings()}
-        assert vals["counter"] == 0
+        assert vals["counter"] == 99
 
     def test_entry_without_assignment_does_not_corrupt_prior_bindings(self) -> None:
         """An entry with no ``:=`` statements leaves prior bindings untouched.
@@ -1114,62 +1129,6 @@ class TestIndexedAssignTargets:
         assert not r.ok
         vals = {n: v for n, _t, v in s.bindings()}
         assert vals["xs"].elements[0].elements[1] == IntValue(2)
-
-    def test_unknown_direct_assign_target_has_no_root_name(self) -> None:
-        from agm.agl.repl.session import _assign_targets_in_program
-        from agm.agl.syntax.nodes import (
-            AssignStmt,
-            Block,
-            IndexAccess,
-            IndexTarget,
-            IntLit,
-            Program,
-            UnitLit,
-            VarRef,
-            assign_target_root_name,
-        )
-
-        span = SourceSpan(
-            start_line=1,
-            start_col=1,
-            end_line=1,
-            end_col=2,
-            start_offset=0,
-            end_offset=1,
-        )
-        target = UnitLit(span=span, node_id=9001)
-        assert assign_target_root_name(target) is None
-        nested_target = IndexTarget(
-            obj=IndexAccess(
-                obj=VarRef(name="xs", span=span, node_id=9005),
-                index=IntLit(value=0, span=span, node_id=9006),
-                span=span,
-                node_id=9007,
-            ),
-            index=IntLit(value=1, span=span, node_id=9008),
-            span=span,
-            node_id=9009,
-        )
-        assert assign_target_root_name(nested_target) == "xs"
-        bad_nested_target = IndexTarget(
-            obj=IndexAccess(
-                obj=target,
-                index=IntLit(value=0, span=span, node_id=9010),
-                span=span,
-                node_id=9011,
-            ),
-            index=IntLit(value=1, span=span, node_id=9012),
-            span=span,
-            node_id=9013,
-        )
-        assert assign_target_root_name(bad_nested_target) is None
-        stmt = AssignStmt(target=target, value=target, span=span, node_id=9002)
-        program = Program(
-            body=Block(items=(stmt,), span=span, node_id=9003),
-            span=span,
-            node_id=9004,
-        )
-        assert _assign_targets_in_program(program) == frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -1401,8 +1360,7 @@ class TestImports:
         assert r.ok, r.diagnostics
         s.reset()
         assert not s._loaded_lib_modules
-        assert not s._lib_module_frames
-        assert not s._lib_module_sigs
+        assert not s._accumulated_imports
 
     def test_scope_error_in_graph_mode(self, tmp_path: Path) -> None:
         # Declaring a reserved built-in name as an agent in graph mode
@@ -1736,10 +1694,10 @@ class TestFunctionAgentValueEcho:
         assert r.kind == "expression"
         assert r.value is not None
         # The value is a Closure; render_value must not raise.
-        from agm.agl.eval.values import Closure
+        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
 
-        assert isinstance(r.value, Closure)
+        assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
         assert rendered == "<function/1 -> int>"
 
@@ -1752,10 +1710,10 @@ class TestFunctionAgentValueEcho:
         assert r.ok
         assert r.kind == "expression"
         assert r.value is not None
-        from agm.agl.eval.values import Closure
+        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
 
-        assert isinstance(r.value, Closure)
+        assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
         assert rendered == "<function/1 -> int>"
 
@@ -1782,10 +1740,10 @@ class TestFunctionAgentValueEcho:
         s.eval_entry("def dbl(x: int) -> int = x * 2")
         # bindings() returns Closure values; the meta-command renders them.
         binds = s.bindings()
-        from agm.agl.eval.values import Closure
+        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
 
-        assert any(isinstance(v, Closure) for _n, _t, v in binds)
+        assert any(isinstance(v, IrClosureValue) for _n, _t, v in binds)
         # render_value on each must not raise.
         for _n, _t, v in binds:
             render_value(v)  # must not raise TypeError

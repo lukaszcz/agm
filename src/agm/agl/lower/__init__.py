@@ -14,5 +14,19 @@ Public API
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.graph import lower_graph
 from agm.agl.lower.lowerer import lower_program
+from agm.agl.lower.repl import (
+    LinkImage,
+    LoweredReplEntry,
+    lower_repl_entry,
+    lower_repl_graph,
+)
 
-__all__ = ["compile_coercion", "lower_graph", "lower_program"]
+__all__ = [
+    "LinkImage",
+    "LoweredReplEntry",
+    "compile_coercion",
+    "lower_graph",
+    "lower_program",
+    "lower_repl_entry",
+    "lower_repl_graph",
+]

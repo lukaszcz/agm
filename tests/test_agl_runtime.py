@@ -2462,6 +2462,7 @@ class TestSerializeV2OpaqueValues:
         from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import Closure
         from agm.agl.parser import parse_program
+        from agm.agl.runtime.render import render_value
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.typecheck.types import UnitType
 
@@ -2469,6 +2470,7 @@ class TestSerializeV2OpaqueValues:
         closure = Closure(
             env=Scope(parent=None), params=(), body=body, return_type=UnitType()
         )
+        assert render_value(closure) == "<function/0 -> unit>"
         with pytest.raises(TypeError, match="Closure"):
             value_to_json_obj(closure)
 

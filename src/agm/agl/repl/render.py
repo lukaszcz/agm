@@ -67,6 +67,8 @@ def render_entry_result(
 
     if not result.ok:
         lines.extend(_render_failure(result))
+        if result.installed:
+            lines.append(f"Installed before failure: {', '.join(result.installed)}")
         return "\n".join(lines) if lines else None
 
     if echo:

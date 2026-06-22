@@ -261,9 +261,12 @@ class IrInterpreter:
         strict_json: bool = False,
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
+        base_frame: Frame | None = None,
     ) -> None:
         self._program = program
-        self._frames: list[Frame] = [{}]
+        self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
+        self.initializer_values: list[Value] = []
+        self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._loop_limit: int = loop_limit
@@ -558,9 +561,12 @@ class IrInterpreter:
                     )
 
             for mod in self._program.modules.values():
+                module_values = self.module_initializer_values.setdefault(mod.module_id, [])
                 for node in mod.initializers:
                     try:
-                        self._eval(node)
+                        value = self._eval(node)
+                        self.initializer_values.append(value)
+                        module_values.append(value)
                     except AglRaise as exc:
                         if exc.span is None:
                             exc.span = node.location

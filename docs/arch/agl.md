@@ -366,22 +366,26 @@ so native and JSON output agree on field order.
 ## Incremental REPL session
 
 `agm.agl.repl.session.ReplSession` is a UI-free incremental driver that runs the
-same `parse → resolve → check → host-prep → eval` pipeline **one entry at a
-time** against a *persistent* environment (session scope, type env, value scope,
-declared params, source log). It reuses the firewalled passes' seam parameters:
+same `parse → resolve → check → lower → IR eval` pipeline **one entry at a
+time** against two persistent images: the static session environment and the
+linked IR/runtime image. It reuses the firewalled passes' seam parameters:
 `parse_program_seeded` (globally-unique node ids across entries),
 `resolve(..., parent_scope=...)` (refs fall through to session bindings; new
 decls shadow), and `check(..., seed_env=...)` (seed with prior decls/binding
-types). Each entry executes **only its own expressions** in a child value scope,
-so agent calls fire exactly once and a later entry reads stored `Value`s rather
-than re-invoking. Promotion into the session is **atomic** — a runtime raise
-(`AglRaise`) OR an agent-call cancellation (`AgentCancelled` / `KeyboardInterrupt`
-from the confirming wrapper) discards ALL of the entry's in-session effects via a
-shared `_rollback` helper: new `let`/`var` bindings (held in the child scope) AND
-any `:=` mutation of a prior session binding (rolled back from a value snapshot
-taken before eval, since `:=` only updates an existing binding's value and never
-changes the value scope's key set). Only genuinely external effects already issued
-during evaluation (agent calls, `exec` shell commands) are irreversible.
+types). `LinkImage` retains monotonically allocated symbol, function, source, and
+contract IDs plus every linked descriptor needed by retained closures. Each entry
+adds a delta of initializers and executes it against one persistent IR base frame,
+so earlier initializers and host calls are never replayed. Lowering records the
+trailing-expression initializer explicitly; the session echoes that initializer's
+single execution result.
+
+Runtime failure is deliberately **non-transactional**. Initializers completed
+before an `AglRaise` or host cancellation remain installed, including mutations
+of prior vars and new bindings. The static environment advances only for symbols
+present in the runtime frame, keeping later name resolution aligned with the
+partially advanced runtime image. Unreached initializers do not run.
+Failed `EntryResult`s list the names installed before failure, and the console
+prints that list after the error.
 
 **param / program:** `param` declarations are **executable**: `Interpreter._exec_param`
 resolves each one in declaration order at evaluation time (no deferred "unset"
@@ -409,21 +413,19 @@ is through per-param options and config.
 declarations resolve eagerly at evaluation time — same precedence as above. A
 `program NAME` decl is session-global: re-entering the same name is a no-op, a
 different name rejects. Config values are converted via `convert_param_value` in a
-pre-eval check; a conversion failure rejects the entry cleanly. Atomic rollback
-covers `program` + `param` promotions: a failing entry restores the prior program
-name and config table. A `params_config_loader: Callable[[str], dict[str, object]]`
+pre-eval check; a conversion failure rejects the entry cleanly. A
+`params_config_loader: Callable[[str], dict[str, object]]`
 is injected at construction (the `agm repl` command supplies a closure over the
-config context; tests supply fakes). `EchoInterpreter` inherits the base
-`_exec_param` implementation which uses the pre-converted `param_values` dict
-passed via constructor.
+config context; tests supply fakes). IR param descriptors map those pre-converted
+values to their persistent `SymbolId`s before execution.
 
 The session shares the host-environment assembly, param conversion, and
 exception→`RunError` mapping with `WorkflowRuntime` via public helpers in
 `agm.agl.runtime.runtime` (`assemble_host_environment`/`HostEnvironment`,
 `convert_param_value`, `exception_value_to_run_error`); registration is delegated to an
 internal `WorkflowRuntime` so reserved-name/duplicate validation is not
-duplicated. `EchoInterpreter` (a thin `Interpreter` subclass) captures a trailing
-bare-expression's value for echoing without re-evaluating it.
+duplicated. The differential oracle retains the legacy tree interpreter;
+production REPL entries execute through `IrInterpreter`.
 
 Agent calls are gated by `agm.agl.repl.agents.ConfirmingAgent`, a wrapper
 `AgentFn` holding a shared mutable `AgentMode` (`confirm`/`auto`, also mutated by
@@ -489,8 +491,10 @@ are cached library modules from a prior entry, `eval_entry` dispatches to
 `_eval_entry_graph_mode` which runs the full multi-module graph pipeline:
 `build_repl_graph` (builds a `ModuleGraph` from the already-parsed entry program,
 loading only new library modules not in the cache), `resolve_graph`, `check_graph`,
-and `execute_with_frames`.  Library modules loaded on success are cached across
-entries in `_loaded_lib_modules`/`_lib_module_frames`/`_lib_module_sigs`.
+then incrementally links the checked graph into the persistent `LinkImage` and
+executes its new module/entry initializers with `IrInterpreter`. Library source
+loads are cached in `_loaded_lib_modules`; linked descriptors and initialized
+module values remain in the IR image/base frame.
 
 **Open-import persistence:** When an entry's `import foo` uses open-import
 semantics (no `qualified` keyword), `foo`'s exported names enter the entry's

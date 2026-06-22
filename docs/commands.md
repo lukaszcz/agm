@@ -628,8 +628,8 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 | `:theme [dark\|light\|auto]` | Show or switch the syntax-highlighting theme; saves to `~/.agm/config.toml` |
 
 Press Ctrl-C to cancel the current entry without exiting. During a live agent
-call, Ctrl-C interrupts the call and aborts the current entry (the entry's
-bindings roll back atomically) but keeps the REPL running.
+call, Ctrl-C interrupts the call and stops the current entry. Effects completed
+before cancellation remain visible; unreached operations do not run.
 
 Agent-call confirmation:
 

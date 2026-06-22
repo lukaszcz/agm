@@ -6,15 +6,10 @@ session state (symbols, types, declarations, runtime values).  Agent calls fire
 exactly once and are never replayed, because each entry executes ONLY its own
 statements — references to earlier bindings read stored runtime ``Value``s.
 
-The driver reproduces ``WorkflowRuntime.run``'s pipeline incrementally, reusing
-the shared host-environment assembly, param conversion, and exception-mapping
-helpers from :mod:`agm.agl.runtime.runtime` (no duplication).  Promotion into
-the session is **atomic**: a runtime raise discards ALL of the entry's in-session
-effects — both new ``let``/``var`` bindings and any ``:=`` mutation of a PRIOR
-session binding is rolled back (the prior binding's value is snapshotted before
-evaluation and restored on error).  The only effects that survive a failed entry
-are genuinely EXTERNAL ones already issued during evaluation (an agent call or an
-``exec`` shell command), which are inherently irreversible.
+The driver reproduces ``WorkflowRuntime.run``'s IR pipeline incrementally. A
+persistent link image and base frame retain IDs, metadata, closures, values, and
+cells across entries. Runtime failure is non-transactional: every initializer
+completed before the failure remains visible, while unreached initializers do not.
 
 This module is intentionally UI-free — it returns plain ``EntryResult`` data;
 rendering, meta-commands, and the prompt_toolkit console are later milestones.
@@ -31,19 +26,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
-    from agm.agl.eval.scope import Scope
+    from agm.agl.eval.frames import Frame
     from agm.agl.eval.values import Value
+    from agm.agl.ir.ids import Location
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.runtime import HostEnvironment, RunError
-    from agm.agl.runtime.trace import TraceStore
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.syntax.nodes import ImportDecl, Program
     from agm.agl.syntax.spans import SourceSpan
-    from agm.agl.typecheck.env import CheckedProgram, FunctionSignature, TypeEnvironment
+    from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph
     from agm.agl.typecheck.types import Type
 
@@ -52,55 +47,6 @@ EntryKind = Literal["expression", "binding", "declaration", "statement"]
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
-
-
-def _assign_targets_in_program(program: "Program") -> frozenset[str]:
-    """Return the set of variable names targeted by ``:=`` statements in *program*.
-
-    Recursively walks all items in the program block, including nested bodies
-    inside ``do``/``if``/``case``/``try`` blocks.  Used by
-    ``_evaluate_and_promote`` to determine which session bindings need to be
-    snapshotted before evaluation (only those names can be mutated in-place by
-    a ``:=``).
-    """
-    from agm.agl.syntax.nodes import (
-        AssignStmt,
-        Block,
-        Case,
-        Do,
-        If,
-        Item,
-        Try,
-        assign_target_root_name,
-    )
-
-    targets: set[str] = set()
-
-    def _walk_item(item: Item) -> None:
-        if isinstance(item, AssignStmt):
-            target_name = assign_target_root_name(item.target)
-            if target_name is not None:
-                targets.add(target_name)
-        elif isinstance(item, Block):
-            for sub in item.items:
-                _walk_item(sub)
-        elif isinstance(item, Do):
-            _walk_item(item.body)
-            _walk_item(item.condition)
-        elif isinstance(item, If):
-            for if_branch in item.branches:
-                _walk_item(if_branch.body)
-        elif isinstance(item, Case):
-            for case_branch in item.branches:
-                _walk_item(case_branch.body)
-        elif isinstance(item, Try):
-            _walk_item(item.body)
-            for handler in item.handlers:
-                _walk_item(handler.body)
-
-    for item in program.body.items:
-        _walk_item(item)
-    return frozenset(targets)
 
 
 def has_runnable_statements(text: str) -> bool:
@@ -165,6 +111,9 @@ class EntryResult:
         Path of the JSONL trace file the entry's records were appended to, or
         ``None`` when tracing is disabled (no ``--log-file``) or for a
         ``check_only`` (dry-run) entry, which writes no trace.
+    ``installed``
+        Names installed before a failed entry stopped. Empty for pre-execution
+        failures and successful entries.
     """
 
     kind: EntryKind
@@ -176,6 +125,7 @@ class EntryResult:
     error: "RunError | None"
     ok: bool
     trace_path: "Path | None" = None
+    installed: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -191,11 +141,8 @@ class ReplSession:
     delegated to an internal ``WorkflowRuntime`` so the reserved-name / duplicate
     validation and host-environment assembly are shared rather than duplicated.
 
-    Each entry is promoted into the session **atomically**: if evaluation raises,
-    the entry has NO in-session effect — new ``let``/``var`` bindings are discarded
-    AND any ``:=`` mutation of a prior session binding is rolled back to its
-    pre-entry value.  Only external side effects already issued during evaluation
-    (agent calls, ``exec`` shell commands) are irreversible.
+    Each entry is incrementally linked and executed against a persistent IR base
+    frame. Completed effects survive a later runtime failure in the same entry.
     """
 
     def __init__(
@@ -212,7 +159,7 @@ class ReplSession:
         configured_roots: "Iterable[tuple[str, Path]]" = (),
         extra_cli_roots: "Iterable[str]" = (),
     ) -> None:
-        from agm.agl.eval.scope import Scope
+        from agm.agl.lower import LinkImage
         from agm.agl.runtime.runtime import WorkflowRuntime
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment
@@ -246,7 +193,8 @@ class ReplSession:
         # as call callees or in expressions.  This is seeded into every entry's
         # fresh TypeEnvironment via seed_from, so it is always available.
         self._type_env.set_binding_type(-1, self._make_agent_type())
-        self._value_scope: Scope = Scope(parent=None)
+        self._link_image = LinkImage()
+        self._ir_base_frame: Frame = {}
         self._next_node_id: int = 0
         self._program_name: str | None = None
         self._active_config: dict[str, object] = {}
@@ -278,8 +226,6 @@ class ReplSession:
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL graph-mode entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
-        self._lib_module_frames: dict[ModuleId, Scope] = {}
-        self._lib_module_sigs: dict[ModuleId, dict[str, FunctionSignature]] = {}
         # Accumulated import declarations from prior promoted graph-mode entries.
         # These are prepended to each new entry's program in graph mode so that
         # open imports (e.g. ``import util``) persist across entries.
@@ -333,9 +279,9 @@ class ReplSession:
     def eval_entry(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Parse → resolve → check → (eval) one entry against the session.
 
-        Promotes the entry's new bindings/declarations into the session ONLY on
-        full success (atomic).  ``check_only`` runs the full static pipeline but
-        never evaluates, never promotes, and never advances the node-id counter.
+        Completed runtime initializers are promoted even when a later initializer
+        fails. ``check_only`` runs the static pipeline without linking, executing,
+        promoting, or advancing the node-id counter.
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
@@ -455,7 +401,7 @@ class ReplSession:
         if contract_errors:
             return self._fail(contract_errors, warnings)
 
-        # [7] Evaluate ONLY this entry's statements in a fresh child value scope.
+        # [7] Incrementally link and execute only this entry's IR initializers.
         return self._evaluate_and_promote(
             text=text,
             orig_program=orig_program,
@@ -675,7 +621,7 @@ class ReplSession:
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
     ) -> EntryResult:
-        """Execute the entry in a child scope; promote on success, discard on error.
+        """Lower and execute an entry against the persistent IR runtime image.
 
         ``orig_program`` is the program as the user typed it (before any
         trailing-binder synthesis); ``checked.resolved.program`` is the pipeline
@@ -684,42 +630,27 @@ class ReplSession:
         is accurate.
         """
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.scope import Scope
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.lower import lower_repl_entry
         from agm.agl.repl.agents import AgentCancelled
-        from agm.agl.repl.echo_interpreter import EchoInterpreter
-        from agm.agl.runtime.contract import OutputContract
         from agm.agl.runtime.runtime import exception_value_to_run_error
         from agm.agl.runtime.trace import TraceStore
-        from agm.agl.syntax.nodes import Binder, Declaration
 
-        typed_contracts: dict[int, OutputContract] = {
-            nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
+        lowered = lower_repl_entry(
+            checked,
+            image=self._link_image,
+            source_text=text,
+            source_label=f"<repl:{len(self._source_log) + 1}>",
+            validate=True,
+        )
+        ir_param_values = {
+            param.symbol: param_values[param.public_name]
+            for param in lowered.program.params
+            if param.public_name in param_values
         }
+        from agm.agl.runtime.runtime import _materialize_ir_contracts
 
-        # Fresh child scope: prior session values resolve via the parent chain,
-        # new bindings land in the child and are promoted only on success.
-        child_scope = Scope(parent=self._value_scope)
-
-        # Atomicity snapshot: a ``:=`` to a PRIOR session binding mutates that
-        # binding's ``.value`` in place in the persistent value scope (the child
-        # only holds NEW let/var bindings).  New keys never land here and ``:=``
-        # never adds/removes keys (it only updates an existing binding via
-        # ``Scope.assign_value``), so a shallow value snapshot of ONLY the binding
-        # names targeted by ``:=`` statements in this entry is a complete,
-        # correct rollback point — Value objects are immutable, so storing the
-        # reference suffices.  On a runtime raise we restore each binding's
-        # ``.value`` from this snapshot.
-        #
-        # Optimisation: entries with no ``:=`` targeting a prior session binding
-        # need no snapshot at all (new let/var bindings live in the child scope
-        # and are simply discarded on abort).  We collect targeted names
-        # statically from the original program before evaluation.
-        assign_targets = _assign_targets_in_program(orig_program)
-        value_snapshot: dict[str, Value] = {
-            name: binding.value
-            for name, binding in self._value_scope.bindings.items()
-            if name in assign_targets
-        }
+        host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
 
         # One trace run per entry: a fresh ``TraceStore`` (own ``run_id``)
         # appends to the shared file, bracketed by ``run_start``/``run_end``.
@@ -727,37 +658,22 @@ class ReplSession:
         trace = TraceStore(path=self._trace_path)
         trace.run_start()
 
-        # The pipeline program (checked.resolved.program) may have a synthetic
-        # UnitLit appended for trailing-binder entries; the interpreter runs on
-        # that.  Echo capture uses the pipeline program's last item — for a bare
-        # expression entry both the original and pipeline programs agree on the
-        # last item; for a trailing-binder entry the pipeline's last item is the
-        # synthetic UnitLit, but since _classify uses orig_program and returns
-        # "binding", _echo_data ignores captured and reads from the value scope.
-        pipeline_items = checked.resolved.program.body.items
-        interp = EchoInterpreter(
-            checked=checked,
+        base_frame = self._ir_base_frame
+        assert isinstance(base_frame, dict)
+        interp = IrInterpreter(
+            lowered.program,
             registry=host_env.registry,
-            contracts=typed_contracts,
-            type_env=checked.type_env,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
-            source=text,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
-            param_values=param_values,
+            param_values=ir_param_values,
+            host_contracts=host_contracts,
+            base_frame=base_frame,
         )
-        # Echo the value of a trailing bare expression (captured during exec).
-        # In v2, a bare Expr (not a Binder or Declaration) is the trailing item.
-        last_pipeline_item = pipeline_items[-1] if pipeline_items else None
-        if last_pipeline_item is not None and not isinstance(
-            last_pipeline_item, (Binder, Declaration)
-        ):
-            # It's an Expr — set the echo node id to capture it during execution.
-            interp.echo_node_id = last_pipeline_item.node_id
 
         try:
-            interp.execute(child_scope)
+            interp.run()
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
             trace.exception(
@@ -766,37 +682,76 @@ class ReplSession:
                 trace_id=str(error.fields.get("trace_id", "")),
                 span=exc.span,
             )
-            return self._abort(orig_program, warnings, trace, value_snapshot, error=error)
+            trace.run_end(ok=False)
+            installed = self._promote_ir_state(
+                text=text,
+                program=orig_program,
+                checked=checked,
+                next_start_id=next_start_id,
+                entry_program_name=entry_program_name,
+                entry_active_config=entry_active_config,
+                partial=True,
+                failure_span=exc.span,
+            )
+            kind, name = self._classify(orig_program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
+                diagnostics=[],
+                warnings=warnings,
+                error=error,
+                ok=False,
+                trace_path=self._trace_path,
+                installed=installed,
+            )
         except (AgentCancelled, KeyboardInterrupt):
-            # A declined confirmation or a Ctrl-C during a live agent call aborts
-            # the entry atomically.  The cancellation is a host signal, not an
-            # in-language raise, so it surfaces as a diagnostic rather than a
-            # mapped AgL exception.
-            return self._abort(
-                orig_program,
-                warnings,
-                trace,
-                value_snapshot,
+            trace.run_end(ok=False)
+            installed = self._promote_ir_state(
+                text=text,
+                program=orig_program,
+                checked=checked,
+                next_start_id=next_start_id,
+                entry_program_name=entry_program_name,
+                entry_active_config=entry_active_config,
+                partial=True,
+                failure_span=None,
+            )
+            kind, name = self._classify(orig_program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
                 diagnostics=[
                     Diagnostic(message="Agent call cancelled — entry aborted.", line=1)
                 ],
+                warnings=warnings,
+                error=None,
+                ok=False,
+                trace_path=self._trace_path,
+                installed=installed,
             )
 
         trace.run_end(ok=True)
-        captured: Value | None = interp.captured
-
-        # Success — promote atomically, then compute the echo data.
-        self._promote(
+        self._promote_ir_state(
             text=text,
             program=orig_program,
             checked=checked,
-            child_scope=child_scope,
             next_start_id=next_start_id,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
+            partial=False,
+            failure_span=None,
         )
         kind, name = self._classify(orig_program)
-        value, value_type = self._echo_data(orig_program, checked, captured)
+        captured = (
+            interp.initializer_values[lowered.trailing_expression]
+            if lowered.trailing_expression is not None
+            else None
+        )
+        value, value_type = self._echo_data_ir(orig_program, checked, captured)
         return EntryResult(
             kind=kind,
             name=name,
@@ -808,6 +763,123 @@ class ReplSession:
             ok=True,
             trace_path=self._trace_path,
         )
+
+    def _promote_ir_state(
+        self,
+        *,
+        text: str,
+        program: "Program",
+        checked: "CheckedProgram",
+        next_start_id: int,
+        entry_program_name: str | None,
+        entry_active_config: dict[str, object],
+        partial: bool,
+        failure_span: "SourceSpan | Location | None",
+    ) -> tuple[str, ...]:
+        """Advance static state in lockstep with installed IR frame symbols."""
+        from agm.agl.syntax.nodes import (
+            AgentDecl,
+            EnumDef,
+            FuncDef,
+            LetDecl,
+            ParamDecl,
+            ProgramDecl,
+            RecordDef,
+            TypeAlias,
+            VarDecl,
+        )
+
+        entry_root = checked.resolved.root_scope
+        named_declarations = (
+            AgentDecl,
+            EnumDef,
+            FuncDef,
+            LetDecl,
+            ParamDecl,
+            ProgramDecl,
+            RecordDef,
+            TypeAlias,
+            VarDecl,
+        )
+        entry_names = {
+            item.name for item in program.body.items if isinstance(item, named_declarations)
+        }
+        for item in program.body.items:
+            if isinstance(item, EnumDef):
+                entry_names.update(variant.name for variant in item.variants)
+        installed: list[str] = []
+        for name, ref in entry_root.bindings.items():
+            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
+            declared_before_failure = (
+                failure_span is not None
+                and ref.decl_span.end_offset <= failure_span.start_offset
+            )
+            installed_before_failure = symbol in self._ir_base_frame and (
+                failure_span is None
+                or ref.decl_span.start_offset <= failure_span.start_offset
+            )
+            if not partial or installed_before_failure or declared_before_failure:
+                self._session_scope.bindings[name] = ref
+                if partial and name in entry_names:
+                    installed.append(name)
+        self._type_env.seed_from(checked.type_env)
+        promoted_type_names = {
+            item.name
+            for item in program.body.items
+            if isinstance(item, (RecordDef, EnumDef, TypeAlias))
+            and (
+                not partial
+                or failure_span is not None
+                and item.span.end_offset <= failure_span.start_offset
+            )
+        }
+        promoted_agents = {
+            item.name
+            for item in program.body.items
+            if isinstance(item, AgentDecl)
+            and (
+                not partial
+                or failure_span is not None
+                and item.span.end_offset <= failure_span.start_offset
+            )
+        }
+        self._declared_agents.update(promoted_agents)
+        if promoted_type_names:
+            for cname, crefs in checked.resolved.constructor_candidates.items():
+                crefs = tuple(ref for ref in crefs if ref.owner_name in promoted_type_names)
+                if crefs:
+                    self._ambient_constructor_candidates[cname] = crefs
+            self._ambient_type_names |= promoted_type_names
+        for item in program.body.items:
+            if isinstance(item, ParamDecl):
+                symbol = self._link_image.symbol_for_decl(item.node_id)
+                if not partial or symbol in self._ir_base_frame:
+                    typ = checked.type_env.get_binding_type(item.node_id)
+                    assert typ is not None
+                    self._declared_params[item.name] = typ
+        if entry_program_name is not None and not partial:
+            self._program_name = entry_program_name
+            self._active_config = entry_active_config
+        if not partial:
+            self._source_log.append(text)
+        self._next_node_id = next_start_id
+        return tuple(installed)
+
+    def _echo_data_ir(
+        self, program: "Program", checked: "CheckedProgram", captured: "Value | None"
+    ) -> tuple["Value | None", "Type | None"]:
+        from agm.agl.eval.frames import Cell
+        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
+
+        last = program.body.items[-1]
+        value_type = self._value_type_of_last(program, checked)
+        if not isinstance(last, (Binder, Declaration)):
+            return captured, value_type
+        if isinstance(last, (LetDecl, VarDecl)):
+            symbol = self._link_image.symbol_for_decl(last.node_id)
+            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
+            return (slot.value if isinstance(slot, Cell) else slot), value_type
+        return None, None
 
     def _inject_accumulated_imports(self, program: "Program") -> "Program":
         """Return a new program with accumulated session imports prepended.
@@ -956,7 +1028,7 @@ class ReplSession:
         if contract_errors:
             return self._fail(contract_errors, warnings)
 
-        return self._evaluate_and_promote_graph_mode(
+        return self._evaluate_ir_graph_mode(
             text=text,
             orig_program=orig_program,
             checked=checked,
@@ -972,7 +1044,7 @@ class ReplSession:
             entry_active_config=entry_active_config,
         )
 
-    def _evaluate_and_promote_graph_mode(
+    def _evaluate_ir_graph_mode(
         self,
         *,
         text: str,
@@ -989,161 +1061,133 @@ class ReplSession:
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
     ) -> EntryResult:
-        """Execute a graph-mode entry; promote on success, discard on failure."""
+        """Lower and execute one graph-mode entry in the persistent IR image."""
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import Closure
-        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.lower import lower_repl_graph
         from agm.agl.repl.agents import AgentCancelled
-        from agm.agl.repl.echo_interpreter import EchoInterpreter
-        from agm.agl.runtime.contract import OutputContract
-        from agm.agl.runtime.runtime import exception_value_to_run_error
+        from agm.agl.runtime.runtime import (
+            _materialize_ir_contracts,
+            exception_value_to_run_error,
+        )
         from agm.agl.runtime.trace import TraceStore
-        from agm.agl.syntax.nodes import AgentDecl, Binder, Declaration, FuncDef
-        from agm.agl.typecheck.types import UnitType
-        from agm.agl.values import AgentValue
+        from agm.agl.syntax.nodes import ImportDecl
 
-        typed_contracts: dict[int, OutputContract] = {
-            nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
+        del contracts
+        lowered = lower_repl_graph(
+            cgraph, image=self._link_image, source_text=text, validate=True
+        )
+        ir_params = {
+            param.symbol: param_values[param.public_name]
+            for param in lowered.program.params
+            if param.public_name in param_values
         }
-
-        # Atomicity snapshot: capture values of any prior binding targeted by :=
-        assign_targets = _assign_targets_in_program(orig_program)
-        value_snapshot: dict[str, Value] = {
-            name: binding.value
-            for name, binding in self._value_scope.bindings.items()
-            if name in assign_targets
-        }
-
-        # Entry scope is a child of the session value scope.
-        child_scope = Scope(parent=self._value_scope)
-
-        # Build per-module frames: existing lib modules reuse cached frames;
-        # new lib modules get fresh frames; entry uses child_scope.
-        module_frames: dict[ModuleId, Scope] = {}
-        for mid, frame in self._lib_module_frames.items():
-            module_frames[mid] = frame
-        new_lib_frames: dict[ModuleId, Scope] = {}
-        for mid in new_modules:
-            frame = Scope(parent=None)
-            module_frames[mid] = frame
-            new_lib_frames[mid] = frame
-        module_frames[ENTRY_ID] = child_scope
-
-        # Install closures for ALL modules (new lib modules + entry).
-        # Existing cached lib module frames already have closures from prior entries.
-        for mid, cm in cgraph.modules.items():
-            if mid in self._lib_module_frames and mid != ENTRY_ID:
-                # Already has closures installed from prior promotion.
-                continue
-            frame = module_frames[mid]
-            for item in cm.resolved.program.body.items:
-                if isinstance(item, FuncDef):
-                    sig = cm.function_signatures.get(item.name)
-                    ret_type: "Type" = sig.result if sig is not None else UnitType()
-                    params = tuple((p.name, p.default) for p in item.params)
-                    closure = Closure(
-                        env=frame,
-                        params=params,
-                        body=item.body,
-                        return_type=ret_type,
-                    )
-                    frame.define(item.name, closure, mutable=False, decl_span=item.span)
-
-        # Install AgentDecls in entry scope.
-        for item in entry_cm.resolved.program.body.items:
-            if isinstance(item, AgentDecl):
-                child_scope.define(
-                    item.name,
-                    AgentValue(name=item.name),
-                    mutable=False,
-                    decl_span=item.span,
-                )
-
-        # Build module_sigs from the checked graph.  All lib modules (including
-        # cached ones re-loaded via injected accumulated imports) are in cgraph.
-        module_sigs: dict[ModuleId, dict[str, FunctionSignature]] = {
-            mid: cm.function_signatures for mid, cm in cgraph.modules.items()
-        }
-
+        host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._trace_path)
         trace.run_start()
-
-        pipeline_items = checked.resolved.program.body.items
-        interp = EchoInterpreter(
-            checked=checked,
+        interp = IrInterpreter(
+            lowered.program,
             registry=host_env.registry,
-            contracts=typed_contracts,
-            type_env=checked.type_env,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
-            source=text,
-            sources={
-                cm.resolved.program.span.source: cm.source_text
-                for cm in cgraph.modules.values()
-            },
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
-            param_values=param_values,
+            param_values=ir_params,
+            host_contracts=host_contracts,
+            base_frame=self._ir_base_frame,
         )
-        last_pipeline_item = pipeline_items[-1] if pipeline_items else None
-        if last_pipeline_item is not None and not isinstance(
-            last_pipeline_item, (Binder, Declaration)
-        ):
-            interp.echo_node_id = last_pipeline_item.node_id
-
         try:
-            interp.execute_with_frames(child_scope, module_frames, module_sigs)
+            interp.run()
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
-            trace.exception(
-                type_name=error.type_name,
-                message=str(error.fields.get("message", "")),
-                trace_id=str(error.fields.get("trace_id", "")),
-                span=exc.span,
+            trace.run_end(ok=False)
+            installed = self._promote_ir_state(
+                text=text,
+                program=orig_program,
+                checked=checked,
+                next_start_id=new_next_id,
+                entry_program_name=entry_program_name,
+                entry_active_config=entry_active_config,
+                partial=True,
+                failure_span=exc.span,
             )
-            return self._abort(orig_program, warnings, trace, value_snapshot, error=error)
+            kind, name = self._classify(orig_program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
+                diagnostics=[],
+                warnings=warnings,
+                error=error,
+                ok=False,
+                trace_path=self._trace_path,
+                installed=installed,
+            )
         except (AgentCancelled, KeyboardInterrupt):
-            return self._abort(
-                orig_program,
-                warnings,
-                trace,
-                value_snapshot,
+            trace.run_end(ok=False)
+            installed = self._promote_ir_state(
+                text=text,
+                program=orig_program,
+                checked=checked,
+                next_start_id=new_next_id,
+                entry_program_name=entry_program_name,
+                entry_active_config=entry_active_config,
+                partial=True,
+                failure_span=None,
+            )
+            kind, name = self._classify(orig_program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
                 diagnostics=[
                     Diagnostic(message="Agent call cancelled — entry aborted.", line=1)
                 ],
+                warnings=warnings,
+                error=None,
+                ok=False,
+                trace_path=self._trace_path,
+                installed=installed,
             )
-
         trace.run_end(ok=True)
-        captured = interp.captured
-
-        # Success: promote entry bindings and merge new lib module state.
-        self._promote(
+        self._promote_ir_state(
             text=text,
             program=orig_program,
             checked=checked,
-            child_scope=child_scope,
             next_start_id=new_next_id,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
+            partial=False,
+            failure_span=None,
         )
-        # Collect import decls from the original entry (before import injection)
-        # for accumulation into the session.
-        from agm.agl.syntax.nodes import ImportDecl as _ImportDecl
-
-        entry_import_decls: tuple["ImportDecl", ...] = tuple(
-            item for item in orig_program.body.items if isinstance(item, _ImportDecl)
+        entry_imports = tuple(
+            item
+            for item in orig_program.body.items
+            if isinstance(item, ImportDecl)
         )
-        self._promote_graph_libs(
-            cgraph=cgraph,
-            new_modules=new_modules,
-            new_lib_frames=new_lib_frames,
-            module_sigs=module_sigs,
-            entry_imports=entry_import_decls,
+        self._loaded_lib_modules.update(new_modules)
+        import_indexes = {
+            (tuple(item.module_path), item.wildcard): index
+            for index, item in enumerate(self._accumulated_imports)
+        }
+        for item in entry_imports:
+            key = (tuple(item.module_path), item.wildcard)
+            index = import_indexes.get(key)
+            if index is None:
+                import_indexes[key] = len(self._accumulated_imports)
+                self._accumulated_imports.append(item)
+            else:
+                self._accumulated_imports[index] = item
+        marker = lowered.trailing_expression
+        captured = (
+            interp.module_initializer_values[lowered.program.entry_module][marker]
+            if marker is not None
+            else None
         )
-
         kind, name = self._classify(orig_program)
-        value, value_type = self._echo_data(orig_program, checked, captured)
+        value, value_type = self._echo_data_ir(orig_program, checked, captured)
         return EntryResult(
             kind=kind,
             name=name,
@@ -1155,143 +1199,6 @@ class ReplSession:
             ok=True,
             trace_path=self._trace_path,
         )
-
-    def _promote_graph_libs(
-        self,
-        *,
-        cgraph: "CheckedModuleGraph",
-        new_modules: "dict[ModuleId, LoadedModule]",
-        new_lib_frames: "dict[ModuleId, Scope]",
-        module_sigs: "dict[ModuleId, dict[str, FunctionSignature]]",
-        entry_imports: "tuple[ImportDecl, ...]",
-    ) -> None:
-        """Merge newly-loaded library module state into the session cache."""
-        for mid, loaded in new_modules.items():
-            self._loaded_lib_modules[mid] = loaded
-            # new_lib_frames and module_sigs always contain entries for every
-            # module in new_modules (built in _evaluate_and_promote_graph_mode).
-            self._lib_module_frames[mid] = new_lib_frames[mid]
-            self._lib_module_sigs[mid] = module_sigs[mid]
-
-        # Accumulate ImportDecl nodes for persistence across entries.
-        # Existing accumulated imports with the same (module_path, wildcard) key are
-        # overwritten (the new entry's import may have different using/hiding/as clauses).
-        existing_paths: dict[tuple[tuple[str, ...], bool], int] = {
-            (tuple(d.module_path), d.wildcard): i for i, d in enumerate(self._accumulated_imports)
-        }
-        for decl in entry_imports:
-            path_key = (tuple(decl.module_path), decl.wildcard)
-            if path_key in existing_paths:
-                self._accumulated_imports[existing_paths[path_key]] = decl
-            else:
-                self._accumulated_imports.append(decl)
-
-    def _abort(
-        self,
-        program: "Program",
-        warnings: list[Diagnostic],
-        trace: "TraceStore",
-        value_snapshot: dict[str, "Value"],
-        *,
-        error: "RunError | None" = None,
-        diagnostics: list[Diagnostic] | None = None,
-    ) -> EntryResult:
-        """End the trace, roll back, and build the failed result for an abort.
-
-        Shared by the ``AglRaise`` and cancellation arms of
-        ``_evaluate_and_promote``: both end the trace run, restore the value
-        scope, and return a failed result differing only in whether the failure
-        carries an ``error`` (a mapped AgL raise) or ``diagnostics`` (a
-        host-signalled cancellation).
-        """
-        trace.run_end(ok=False)
-        self._rollback(value_snapshot)
-        kind, name = self._classify(program)
-        return EntryResult(
-            kind=kind,
-            name=name,
-            value=None,
-            value_type=None,
-            diagnostics=diagnostics if diagnostics is not None else [],
-            warnings=warnings,
-            error=error,
-            ok=False,
-            trace_path=self._trace_path,
-        )
-
-    def _rollback(self, value_snapshot: dict[str, "Value"]) -> None:
-        """Roll the persistent value scope back to *value_snapshot* (atomic abort).
-
-        Shared by the ``AglRaise`` and cancellation paths.  Discarding the entry's
-        child scope drops new ``let``/``var`` bindings; restoring each session
-        binding's ``.value`` undoes any in-place ``:=`` mutation of a prior
-        binding.  The snapshot contains ONLY the names that could have been mutated
-        (those targeted by ``:=`` statements in the entry), and all of them must
-        still be present in the session frame (``:=`` only updates existing
-        bindings, never adds or removes keys).
-        """
-        assert value_snapshot.keys() <= self._value_scope.bindings.keys()
-        for bname, old_value in value_snapshot.items():
-            self._value_scope.bindings[bname].value = old_value
-
-    def _promote(
-        self,
-        *,
-        text: str,
-        program: "Program",
-        checked: "CheckedProgram",
-        child_scope: "Scope",
-        next_start_id: int,
-        entry_program_name: str | None,
-        entry_active_config: dict[str, object],
-    ) -> None:
-        """Merge the entry's new state into the persistent session (atomic)."""
-        from agm.agl.syntax.nodes import ParamDecl
-
-        # Symbols: merge the entry root scope's bindings (overwrite/shadow).
-        entry_root = checked.resolved.root_scope
-        for bname, ref in entry_root.bindings.items():
-            self._session_scope.bindings[bname] = ref
-
-        # Agent declarations: a source ``agent X`` in this entry becomes ambient
-        # for later entries (merged only on this successful promotion, so a
-        # rolled-back entry's declarations never persist).
-        self._declared_agents.update(checked.resolved.declared_agents)
-
-        # Types + binding types: union the entry's checked env into the session.
-        self._type_env.seed_from(checked.type_env)
-
-        # Runtime values: copy the child scope's top frame into the session scope.
-        # This includes closures (FuncDef) and AgentValues installed by the
-        # interpreter's pre-pass in the child scope.
-        for vname, binding in child_scope.bindings.items():
-            self._value_scope.bindings[vname] = binding
-
-        # Declared params: register successful ParamDecl entries.
-        for item in program.body.items:
-            if isinstance(item, ParamDecl):
-                param_type = checked.type_env.get_binding_type(item.node_id)
-                assert param_type is not None
-                self._declared_params[item.name] = param_type
-
-        # Persist constructor candidates so subsequent entries can reference
-        # constructors from types declared in this entry.
-        for cname, crefs in checked.resolved.constructor_candidates.items():
-            existing = list(self._ambient_constructor_candidates.get(cname, ()))
-            # Merge: skip duplicates by owner_name.
-            for cref in crefs:
-                if not any(e.owner_name == cref.owner_name for e in existing):
-                    existing.append(cref)
-            self._ambient_constructor_candidates[cname] = tuple(existing)
-        # Persist type names for qualified constructor access.
-        self._ambient_type_names = self._ambient_type_names | checked.resolved.declared_type_names
-
-        if entry_program_name is not None:
-            self._program_name = entry_program_name
-            self._active_config = entry_active_config
-
-        self._source_log.append(text)
-        self._next_node_id = next_start_id
 
     def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
         """Classify the entry by its last item; return (kind, name)."""
@@ -1329,28 +1236,6 @@ class ReplSession:
         # Remaining Declaration kinds (ConfigPragma is rejected earlier, but handle
         # defensively).
         return "statement", None  # pragma: no cover
-
-    def _echo_data(
-        self, program: "Program", checked: "CheckedProgram", captured: "Value | None"
-    ) -> tuple["Value | None", "Type | None"]:
-        """Compute the echoed (value, value_type) from the promoted state.
-
-        *captured* is the value of a trailing bare expression recorded during
-        execution (``None`` when the last item is not a bare expression).
-        """
-        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
-
-        # A parsed program always has at least one item.
-        last = program.body.items[-1]
-        value_type = self._value_type_of_last(program, checked)
-        # Bare expression (not a binder or declaration) → echoed from captured
-        if not isinstance(last, (Binder, Declaration)):
-            return captured, value_type
-        if isinstance(last, (LetDecl, VarDecl)):
-            binding = self._value_scope.lookup(last.name)
-            value = binding.value if binding is not None else None
-            return value, value_type
-        return None, None
 
     def _value_type_of_last(
         self, program: "Program", checked: "CheckedProgram"
@@ -1425,18 +1310,21 @@ class ReplSession:
         Constructor bindings are excluded — they are type-system entities with no
         independent runtime value.
         """
+        from agm.agl.eval.frames import Cell
         from agm.agl.scope.symbols import BinderKind
 
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
             if ref.kind == BinderKind.constructor_binding:
                 continue
-            binding = self._value_scope.lookup(name)
-            assert binding is not None
             typ = self._type_env.get_binding_type(ref.decl_node_id)
             # Every promoted let/var/param binding has a recorded type.
             assert typ is not None
-            result.append((name, typ, binding.value))
+            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
+            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
+            assert slot is not None
+            value = slot.value if isinstance(slot, Cell) else slot
+            result.append((name, typ, value))
         return result
 
     def agents(self) -> list[str]:
@@ -1454,10 +1342,14 @@ class ReplSession:
     def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
         """Return declared params as (name, type, resolved value)."""
         result: list[tuple[str, Type, Value]] = []
+        from agm.agl.eval.frames import Cell
+
         for name, typ in self._declared_params.items():
-            binding = self._value_scope.lookup(name)
-            assert binding is not None
-            result.append((name, typ, binding.value))
+            ref = self._session_scope.bindings[name]
+            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
+            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
+            assert slot is not None
+            result.append((name, typ, slot.value if isinstance(slot, Cell) else slot))
         return result
 
     def program_name(self) -> str | None:
@@ -1483,7 +1375,7 @@ class ReplSession:
 
     def reset(self) -> None:
         """Clear ALL session state (symbols, types, values, params, source, ids)."""
-        from agm.agl.eval.scope import Scope
+        from agm.agl.lower import LinkImage
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment
 
@@ -1491,7 +1383,8 @@ class ReplSession:
         self._type_env = TypeEnvironment()
         # Re-seed the sentinel AgentType for ambient agents (see __init__).
         self._type_env.set_binding_type(-1, self._make_agent_type())
-        self._value_scope = Scope(parent=None)
+        self._link_image = LinkImage()
+        self._ir_base_frame = {}
         self._next_node_id = 0
         self._program_name = None
         self._active_config = {}
@@ -1503,8 +1396,6 @@ class ReplSession:
         # Clear module state (M6).
         self._roots = None
         self._loaded_lib_modules = {}
-        self._lib_module_frames = {}
-        self._lib_module_sigs = {}
         self._accumulated_imports = []
 
     def load_file(self, path: "Path") -> list[EntryResult]:

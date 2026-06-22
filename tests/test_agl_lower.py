@@ -44,9 +44,9 @@ from agm.agl.ir.operations import (
 )
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower import compile_coercion, lower_program
+from agm.agl.lower import LinkImage, compile_coercion, lower_program, lower_repl_entry
 from agm.agl.lower.lowerer import _Lowerer
-from agm.agl.parser import parse_program
+from agm.agl.parser import parse_program, parse_program_seeded
 from agm.agl.scope import resolve
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram
@@ -87,6 +87,34 @@ def _check(source: str) -> CheckedProgram:
     prog = parse_program(source)
     resolved = resolve(prog)
     return check(resolved, _caps())
+
+
+def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> None:
+    image = LinkImage()
+    first_program, next_id = parse_program_seeded("let x = 41\n()", start_id=0)
+    first_checked = check(resolve(first_program), _caps())
+
+    first = lower_repl_entry(
+        first_checked, image=image, source_text="let x = 41\n()", source_label="<repl:1>"
+    )
+    first_symbols = set(first.program.symbols)
+    first_sources = set(first.program.sources)
+
+    second_source = "let y = x + 1\ny"
+    second_program, _ = parse_program_seeded(second_source, start_id=next_id)
+    second_checked = check(
+        resolve(second_program, parent_scope=first_checked.resolved.root_scope),
+        _caps(),
+        seed_env=first_checked.type_env,
+    )
+    second = lower_repl_entry(
+        second_checked, image=image, source_text=second_source, source_label="<repl:2>"
+    )
+
+    assert first_symbols < set(second.program.symbols)
+    assert first_sources < set(second.program.sources)
+    assert second.trailing_expression is not None
+    assert second.program.modules[second.program.entry_module].initializers
 
 
 def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:

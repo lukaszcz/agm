@@ -13,8 +13,8 @@ a fake callback.
 Cancellation — a declined confirmation or a Ctrl-C during a live call — raises
 :class:`AgentCancelled`.  The registry (``AgentRegistry.dispatch``) only catches
 ``AgentCallHostError``, so :class:`AgentCancelled` propagates out of the wrapped
-callable, up through ``Interpreter.execute``, where the session converts it into a
-clean, atomic entry abort (the entry's bindings roll back; no promotion happens).
+callable into the session, which stops the current entry while preserving effects
+completed before cancellation.
 
 Ctrl-C handling: the runner subprocess runs in its own session/process group
 (``agm.agent.runner`` calls ``run_capture_result(..., isolate_process_group=True)``,

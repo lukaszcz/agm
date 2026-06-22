@@ -4,6 +4,7 @@
 into a single :class:`~agm.agl.ir.program.ExecutableProgram` with one shared
 symbol/function/nominal table and per-module initializer sequences.
 """
+
 from __future__ import annotations
 
 from agm.agl._text import normalize_newlines
@@ -32,6 +33,9 @@ def lower_graph(
     checked_graph: CheckedModuleGraph,
     *,
     validate: bool = False,
+    _link: _LinkState | None = None,
+    _already_linked: frozenset[ModuleId] = frozenset(),
+    _entry_source_text: str | None = None,
 ) -> ExecutableProgram:
     """Lower a whole-graph :class:`~agm.agl.typecheck.graph.CheckedModuleGraph` to an
     :class:`~agm.agl.ir.program.ExecutableProgram`.
@@ -40,15 +44,22 @@ def lower_graph(
     :param validate: when ``True``, run ``validate_ir(deep=True)`` before returning.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     """
-    link = _LinkState()
+    link = _link if _link is not None else _LinkState()
 
     # Step 1: Register a SourceFile for every module.
     module_source_ids: dict[ModuleId, SourceId] = {}
     for mid, cm in checked_graph.modules.items():
+        if mid in _already_linked:
+            continue
         source_id = SourceId(link.next_source)
         link.next_source += 1
         display_name = mid.dotted() if not mid.is_entry else "<entry>"
-        normalized = normalize_newlines(cm.source_text)
+        module_source_text = (
+            _entry_source_text
+            if mid.is_entry and _entry_source_text is not None
+            else cm.source_text
+        )
+        normalized = normalize_newlines(module_source_text)
         link.sources[source_id] = SourceFile(
             display_name=display_name,
             normalized_text=normalized,
@@ -136,8 +147,18 @@ def lower_graph(
     # across ALL modules before any body is lowered (enables cross-module calls).
     module_lowerers: dict[ModuleId, _Lowerer] = {}
     for mid, cm in checked_graph.modules.items():
+        if mid in _already_linked:
+            continue
         source_id = module_source_ids[mid]
-        lowerer = _Lowerer(cm, link, mid, source_id, cm.source_text)
+        lowerer = _Lowerer(
+            cm,
+            link,
+            mid,
+            source_id,
+            _entry_source_text
+            if mid.is_entry and _entry_source_text is not None
+            else cm.source_text,
+        )
         module_lowerers[mid] = lowerer
         body = cm.resolved.program.body
         for item in body.items:
@@ -156,9 +177,12 @@ def lower_graph(
     # Library modules first, entry last, so the insertion order of
     # executable_modules matches dependency order (Python dicts preserve order).
     ordered_mids = [mid for mid in checked_graph.modules if not mid.is_entry]
+    ordered_mids = [mid for mid in ordered_mids if mid not in _already_linked]
     ordered_mids.append(checked_graph.entry_id)
 
-    executable_modules: dict[ModuleId, ExecutableModule] = {}
+    executable_modules: dict[ModuleId, ExecutableModule] = {
+        mid: ExecutableModule(module_id=mid, initializers=()) for mid in _already_linked
+    }
     for mid in ordered_mids:
         cm = checked_graph.modules[mid]
         lowerer = module_lowerers[mid]
@@ -170,9 +194,7 @@ def lower_graph(
                 ir = lowerer.lower_item(item, top_level=mid.is_entry)
                 if ir is not None:
                     target = (
-                        function_initializers
-                        if isinstance(item, FuncDef)
-                        else other_initializers
+                        function_initializers if isinstance(item, FuncDef) else other_initializers
                     )
                     target.append(ir)
         executable_modules[mid] = ExecutableModule(

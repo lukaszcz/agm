@@ -471,8 +471,8 @@ class Interpreter:
             frame = self._module_frames.get(ref.module_id)
             if frame is not None:  # pragma: no branch
                 binding = frame.bindings.get(ref.name)
-                if binding is not None:
-                    return binding.value
+                assert binding is not None
+                return binding.value
         # Fall back to lexical lookup for local/param/let/var/pattern/catch bindings
         binding = scope.lookup(expr.name)
         if binding is None:  # pragma: no cover

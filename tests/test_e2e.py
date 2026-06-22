@@ -7932,6 +7932,27 @@ class TestReplCommand:
         assert "21" in result.stdout
         assert "42" in result.stdout
 
+    def test_repl_persistent_ir_supports_mutation_and_functions(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        result = run_agm(
+            ["repl"],
+            env=env,
+            cwd=str(work),
+            input=(
+                "var n = 1\n"
+                "n := 5\n"
+                "def double(x: int) -> int = x * 2\n"
+                "double(n)\n"
+                ":quit\n"
+            ),
+        )
+
+        assert result.returncode == 0
+        assert "10" in result.stdout
+
     def test_repl_with_configured_lib_root(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

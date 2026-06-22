@@ -46,6 +46,12 @@ from agm.agl.eval.arith import (
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
+from agm.agl.eval.matching import (
+    _describe_value as _shared_describe_value,
+)
+from agm.agl.eval.matching import (
+    make_match_error as _make_match_error_shared,
+)
 from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
     UNIT_VALUE,
@@ -62,7 +68,6 @@ from agm.agl.eval.values import (
     ListValue,
     RecordValue,
     TextValue,
-    UnitValue,
     Value,
 )
 from agm.agl.ir.ids import NominalId
@@ -163,16 +168,12 @@ class _IndexedAssignmentTarget:
 
 
 def _make_match_error(subject: Value, *, trace_id: str = "") -> ExceptionValue:
-    """Create a ``MatchError`` ``ExceptionValue`` for a non-matching *subject*."""
-    scrutinee_type = _describe_value(subject)
-    scrutinee_json = value_to_json_obj(subject)
-    return _make_exc_value(
-        "MatchError",
-        f"Non-exhaustive case: no pattern matched value of type {scrutinee_type!r}",
-        trace_id=trace_id,
-        scrutinee_type=TextValue(scrutinee_type),
-        scrutinee=JsonValue(scrutinee_json),
-    )
+    """Create a ``MatchError`` ``ExceptionValue`` for a non-matching *subject*.
+
+    Delegates to ``agm.agl.eval.matching.make_match_error`` so the field
+    shapes are byte-identical between the legacy interpreter and the IR evaluator.
+    """
+    return _make_match_error_shared(subject, trace_id=trace_id)
 
 
 class Interpreter:
@@ -1938,37 +1939,12 @@ def _match_pattern(
 
 
 def _describe_value(value: Value) -> str:
-    """Return the AgL type-name of *value* (design §8.1 ``scrutinee_type``)."""
-    if isinstance(value, EnumValue):
-        return value.display_name
-    if isinstance(value, RecordValue):
-        return value.display_name
-    if isinstance(value, ExceptionValue):
-        return value.display_name
-    if isinstance(value, TextValue):
-        return "text"
-    if isinstance(value, IntValue):
-        return "int"
-    if isinstance(value, DecimalValue):
-        return "decimal"
-    if isinstance(value, BoolValue):
-        return "bool"
-    if isinstance(value, JsonValue):
-        return "json"
-    if isinstance(value, ListValue):
-        return "list"
-    if isinstance(value, DictValue):
-        return "dict"
-    if isinstance(value, UnitValue):
-        return "unit"
-    if isinstance(value, AgentValue):
-        return "agent"
-    if isinstance(value, ConstructorValue):
-        # A first-class constructor's static type is a FunctionType.
-        return "function"
-    # Closure is the only remaining Value member.
-    assert isinstance(value, Closure), f"unexpected value kind: {type(value).__name__}"
-    return "function"
+    """Return the AgL type-name of *value* (design §8.1 ``scrutinee_type``).
+
+    Delegates to ``agm.agl.eval.matching._describe_value`` so both evaluators
+    share the same implementation (parity-by-construction).
+    """
+    return _shared_describe_value(value)
 
 
 # ---------------------------------------------------------------------------

@@ -38,7 +38,10 @@ from agm.agl.ir.nodes import (
     IrArith,
     IrAssign,
     IrBind,
+    IrBindPlan,
     IrBlock,
+    IrCase,
+    IrCaseArm,
     IrCatchHandler,
     IrCoerce,
     IrCompare,
@@ -46,6 +49,7 @@ from agm.agl.ir.nodes import (
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
+    IrConstructorPlan,
     IrConstText,
     IrConstUnit,
     IrContains,
@@ -56,6 +60,7 @@ from agm.agl.ir.nodes import (
     IrIfBranch,
     IrIndex,
     IrIndexStep,
+    IrLiteralPlan,
     IrLoad,
     IrMakeConstructor,
     IrMakeDict,
@@ -63,6 +68,7 @@ from agm.agl.ir.nodes import (
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
+    IrMatchPlan,
     IrOr,
     IrRaise,
     IrRenderTemplate,
@@ -72,6 +78,8 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrVariantIs,
+    IrVariantPlan,
+    IrWildcardPlan,
 )
 from agm.agl.ir.operations import (
     ArithKind,
@@ -106,9 +114,11 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     Call,
     Case,
+    CaseBranch,
     Cast,
     CatchClause,
     ConfigPragma,
+    ConstructorPattern,
     DecimalLit,
     DictLit,
     Do,
@@ -128,10 +138,12 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
+    LiteralPattern,
     NamedArg,
     NameTarget,
     NullLit,
     ParamDecl,
+    Pattern,
     ProgramDecl,
     Raise,
     RecordDef,
@@ -144,7 +156,9 @@ from agm.agl.syntax.nodes import (
     UnaryNot,
     UnitLit,
     VarDecl,
+    VarPattern,
     VarRef,
+    WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import CheckedProgram
@@ -526,11 +540,16 @@ class _Lowerer:
                 return self._lower_try(body_expr, handlers, span)
 
             # ----------------------------------------------------------
+            # Case expression — M3f-B
+            # ----------------------------------------------------------
+            case Case(subject=subject_expr, branches=branches, span=span):
+                return self._lower_case(subject_expr, branches, span)
+
+            # ----------------------------------------------------------
             # Unsupported M4+ nodes — deferred
             # ----------------------------------------------------------
             case (
                 Lambda()
-                | Case()
                 | Do()
             ):
                 raise NotImplementedError(
@@ -981,6 +1000,64 @@ class _Lowerer:
             symbol=sym,
             body=self.lower_expr(clause.body),
         )
+
+    # ------------------------------------------------------------------
+    # Case expression helpers (M3f-B)
+    # ------------------------------------------------------------------
+
+    def _lower_case(
+        self,
+        subject_expr: "Expr",
+        branches: "tuple[CaseBranch, ...]",
+        span: "SourceSpan",
+    ) -> IrCase:
+        """Lower a ``Case`` AST node to ``IrCase`` with compiled match plans."""
+        ir_arms = tuple(
+            IrCaseArm(
+                plan=self._compile_plan(branch.pattern),
+                body=self.lower_expr(branch.body),
+            )
+            for branch in branches
+        )
+        return IrCase(
+            location=self._loc(span),
+            subject=self.lower_expr(subject_expr),
+            arms=ir_arms,
+        )
+
+    def _compile_plan(self, pattern: Pattern) -> IrMatchPlan:
+        """Compile a ``Pattern`` to a closed ``IrMatchPlan``.
+
+        Closed ``match``/``assert_never`` dispatch over the ``Pattern`` union
+        (D4) — mypy exhaustiveness makes a missing case a compile-time error.
+        """
+        match pattern:
+            case WildcardPattern():
+                return IrWildcardPlan()
+
+            case VarPattern(name=name, node_id=nid):
+                if nid in self._checked.resolved.bare_variant_patterns:
+                    # Nullary constructor pattern — match by variant name, no binding.
+                    return IrVariantPlan(variant=name)
+                # Binder pattern — allocate a fresh SymbolId (private, public=False).
+                sym = self._alloc_sym(nid, name=name, mutable=False, public=False)
+                return IrBindPlan(symbol=sym)
+
+            case LiteralPattern(literal=lit):
+                # Lower the literal to its IrConst* node (re-use lower_expr).
+                return IrLiteralPlan(value=self.lower_expr(lit))
+
+            case ConstructorPattern(name=variant_name, fields=fields):
+                field_plans: list[tuple[str, IrMatchPlan]] = [
+                    (pf.name, self._compile_plan(pf.pattern)) for pf in fields
+                ]
+                return IrConstructorPlan(
+                    variant=variant_name,
+                    fields=tuple(field_plans),
+                )
+
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
     # ------------------------------------------------------------------
     # Item lowering

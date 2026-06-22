@@ -71,7 +71,10 @@ __all__ = [
     "IrArith",
     "IrAssign",
     "IrBind",
+    "IrBindPlan",
     "IrBlock",
+    "IrCase",
+    "IrCaseArm",
     "IrCatchHandler",
     "IrCoerce",
     "IrCompare",
@@ -81,6 +84,7 @@ __all__ = [
     "IrConstJsonNull",
     "IrConstText",
     "IrConstUnit",
+    "IrConstructorPlan",
     "IrContains",
     "IrConvert",
     "IrExpr",
@@ -89,6 +93,7 @@ __all__ = [
     "IrIfBranch",
     "IrIndex",
     "IrIndexStep",
+    "IrLiteralPlan",
     "IrLoad",
     "IrMakeConstructor",
     "IrMakeDict",
@@ -96,6 +101,7 @@ __all__ = [
     "IrMakeException",
     "IrMakeList",
     "IrMakeRecord",
+    "IrMatchPlan",
     "IrOr",
     "IrRaise",
     "IrRenderTemplate",
@@ -106,6 +112,8 @@ __all__ = [
     "IrTry",
     "IrUnary",
     "IrVariantIs",
+    "IrVariantPlan",
+    "IrWildcardPlan",
 ]
 
 
@@ -648,6 +656,88 @@ class IrTry:
 
 
 # ---------------------------------------------------------------------------
+# Match plan nodes (M3f-B) — closed tagged-data union for case patterns
+# ---------------------------------------------------------------------------
+# These are NOT members of IrExpr; they appear only as IrCaseArm.plan.
+# Dispatch over IrMatchPlan uses a closed match/assert_never (D4).
+
+
+@dataclass(frozen=True, slots=True)
+class IrWildcardPlan:
+    """Match-plan for the ``_`` wildcard pattern — always matches, no binding."""
+
+
+@dataclass(frozen=True, slots=True)
+class IrBindPlan:
+    """Match-plan for a ``VarPattern`` binder — always matches, binds ``symbol``."""
+
+    symbol: SymbolId
+
+
+@dataclass(frozen=True, slots=True)
+class IrLiteralPlan:
+    """Match-plan for a ``LiteralPattern`` — matches when ``value_eq(subject, value)``."""
+
+    value: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrVariantPlan:
+    """Match-plan for a nullary bare-variant ``VarPattern`` — matches ``EnumValue.variant``."""
+
+    variant: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrConstructorPlan:
+    """Match-plan for a ``ConstructorPattern`` — checks variant then recurses over fields."""
+
+    variant: str
+    fields: "tuple[tuple[str, IrMatchPlan], ...]"
+
+
+#: Closed union of all match-plan node types.
+#: Dispatch with a structural ``match`` / ``assert_never`` (D4).
+IrMatchPlan = IrWildcardPlan | IrBindPlan | IrLiteralPlan | IrVariantPlan | IrConstructorPlan
+
+
+# ---------------------------------------------------------------------------
+# Case expression helper and node (M3f-B)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrCaseArm:
+    """A single arm in an ``IrCase`` node — NOT a member of ``IrExpr``.
+
+    ``plan`` is the closed ``IrMatchPlan`` compiled from the source pattern.
+    ``body`` is evaluated when the plan matches the subject.
+    """
+
+    plan: "IrMatchPlan"
+    body: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrCase:
+    """IR case expression: eval ``subject`` once; try each arm in order.
+
+    The value of an ``IrCase`` is the body of the first arm whose plan
+    matches the subject.  If no arm matches, raises ``AglRaise`` with a
+    ``MatchError`` exception (built via ``make_match_error`` from
+    ``agm.agl.eval.matching``).
+
+    Semantics mirror legacy ``_eval_case`` first-match ordering exactly.
+    Pattern binders (``IrBindPlan``) write their bindings into the current
+    frame (D5) before the arm body is evaluated.
+    """
+
+    location: Location
+    subject: "IrExpr"
+    arms: "tuple[IrCaseArm, ...]"
+
+
+# ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
 
@@ -690,4 +780,5 @@ IrExpr = (
     | IrIf
     | IrRaise
     | IrTry
+    | IrCase
 )

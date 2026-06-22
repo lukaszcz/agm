@@ -50,7 +50,9 @@ from agm.agl.ir.nodes import (
     IrArith,
     IrAssign,
     IrBind,
+    IrBindPlan,
     IrBlock,
+    IrCase,
     IrCatchHandler,
     IrCoerce,
     IrCompare,
@@ -58,6 +60,7 @@ from agm.agl.ir.nodes import (
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
+    IrConstructorPlan,
     IrConstText,
     IrConstUnit,
     IrContains,
@@ -67,6 +70,7 @@ from agm.agl.ir.nodes import (
     IrIf,
     IrIndex,
     IrIndexStep,
+    IrLiteralPlan,
     IrLoad,
     IrMakeConstructor,
     IrMakeDict,
@@ -74,6 +78,7 @@ from agm.agl.ir.nodes import (
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
+    IrMatchPlan,
     IrOr,
     IrRaise,
     IrRenderTemplate,
@@ -83,6 +88,8 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrVariantIs,
+    IrVariantPlan,
+    IrWildcardPlan,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
 from agm.agl.ir.program import ExecutableProgram, NominalKind, SourceFile
@@ -275,6 +282,43 @@ def _validate_catch_handler(handler: IrCatchHandler, ctx: _Context) -> None:
                     " which is not in program.symbols"
                 )
     _validate_expr(handler.body, ctx)
+
+
+# ---------------------------------------------------------------------------
+# IrMatchPlan validator (closed union, D4)
+# ---------------------------------------------------------------------------
+
+
+def _validate_match_plan(plan: IrMatchPlan, ctx: _Context) -> None:
+    """Validate a closed ``IrMatchPlan`` node recursively.
+
+    The final ``assert_never`` arm (D4) ensures mypy reports a type error when
+    a new ``IrMatchPlan`` variant is added without a corresponding arm here.
+    """
+    match plan:
+        case IrWildcardPlan():
+            pass
+
+        case IrBindPlan(symbol=sym):
+            if ctx.deep:
+                if sym not in ctx.program.symbols:
+                    raise InvalidIrError(
+                        f"IrBindPlan references symbol_id={sym.value!r}"
+                        " which is not in program.symbols"
+                    )
+
+        case IrLiteralPlan(value=val_expr):
+            _validate_expr(val_expr, ctx)
+
+        case IrVariantPlan():
+            pass
+
+        case IrConstructorPlan(fields=fields):
+            for _fname, subplan in fields:
+                _validate_match_plan(subplan, ctx)
+
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +558,13 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(body, ctx)
             for handler in handlers:
                 _validate_catch_handler(handler, ctx)
+
+        case IrCase(subject=subject, arms=arms):
+            _validate_location(node.location, ctx)
+            _validate_expr(subject, ctx)
+            for arm in arms:
+                _validate_match_plan(arm.plan, ctx)
+                _validate_expr(arm.body, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

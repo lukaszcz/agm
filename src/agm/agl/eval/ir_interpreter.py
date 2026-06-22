@@ -38,6 +38,7 @@ from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.eval.frames import Cell, Frame
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
+from agm.agl.eval.matching import make_match_error as _make_match_error
 from agm.agl.eval.values import (
     BoolValue,
     ConstructorValue,
@@ -54,19 +55,23 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.ir.contracts import ConversionFailureMode
+from agm.agl.ir.ids import SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAnd,
     IrArith,
     IrAssign,
     IrBind,
+    IrBindPlan,
     IrBlock,
+    IrCase,
     IrCoerce,
     IrCompare,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
+    IrConstructorPlan,
     IrConstText,
     IrConstUnit,
     IrContains,
@@ -75,6 +80,7 @@ from agm.agl.ir.nodes import (
     IrField,
     IrIf,
     IrIndex,
+    IrLiteralPlan,
     IrLoad,
     IrMakeConstructor,
     IrMakeDict,
@@ -82,6 +88,7 @@ from agm.agl.ir.nodes import (
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
+    IrMatchPlan,
     IrOr,
     IrRaise,
     IrRenderTemplate,
@@ -91,6 +98,8 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrVariantIs,
+    IrVariantPlan,
+    IrWildcardPlan,
 )
 from agm.agl.ir.operations import (
     ArithOp,
@@ -647,6 +656,73 @@ class IrInterpreter:
                                 self._frame[handler.symbol] = exc.exc
                             return self._eval(handler.body)
                     raise
+
+            case IrCase(subject=subject_expr, arms=arms):
+                subject_val = self._eval(subject_expr)
+                for arm in arms:
+                    bindings = self._try_match(arm.plan, subject_val)
+                    if bindings is not None:
+                        self._frame.update(bindings)
+                        return self._eval(arm.body)
+                raise AglRaise(
+                    _make_match_error(subject_val, trace_id=self._trace.new_event_id())
+                )
+
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+
+    # ------------------------------------------------------------------
+    # Pattern matching helper (M3f-B)
+    # ------------------------------------------------------------------
+
+    def _try_match(
+        self, plan: IrMatchPlan, value: Value
+    ) -> dict[SymbolId, Value] | None:
+        """Try to match *value* against *plan*.
+
+        Returns a dict of ``{SymbolId: Value}`` bindings on success, or
+        ``None`` on mismatch.  Mirrors ``_match_pattern`` from the legacy
+        interpreter — closed ``match``/``assert_never`` dispatch (D4).
+
+        Defensive: ``IrVariantPlan`` and ``IrConstructorPlan`` raise
+        ``InvalidIrError`` when applied to a non-``EnumValue`` (cannot occur
+        in well-lowered IR).
+        """
+        match plan:
+            case IrWildcardPlan():
+                return {}
+
+            case IrBindPlan(symbol=sym):
+                return {sym: value}
+
+            case IrLiteralPlan(value=val_expr):
+                pat_val = self._eval(val_expr)
+                return {} if value_eq(value, pat_val) else None
+
+            case IrVariantPlan(variant=variant):
+                if not isinstance(value, EnumValue):
+                    raise InvalidIrError(
+                        f"IrVariantPlan: value is not EnumValue,"
+                        f" got {type(value).__name__}"
+                    )
+                return {} if value.variant == variant else None
+
+            case IrConstructorPlan(variant=variant, fields=fields):
+                if not isinstance(value, EnumValue):
+                    raise InvalidIrError(
+                        f"IrConstructorPlan: value is not EnumValue,"
+                        f" got {type(value).__name__}"
+                    )
+                if value.variant != variant:
+                    return None
+                merged: dict[SymbolId, Value] = {}
+                for fname, subplan in fields:
+                    field_val = value.fields[fname]
+                    sub_bindings = self._try_match(subplan, field_val)
+                    if sub_bindings is None:
+                        return None
+                    merged.update(sub_bindings)
+                return merged
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

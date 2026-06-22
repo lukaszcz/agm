@@ -98,6 +98,7 @@ __all__ = [
     "IrTemplateText",
     "IrTemplateValue",
     "IrUnary",
+    "IrVariantIs",
 ]
 
 
@@ -515,6 +516,25 @@ class IrMakeConstructor:
     variant: "str | None"
 
 
+@dataclass(frozen=True, slots=True)
+class IrVariantIs:
+    """IR enum-variant membership test (``is`` / ``is not``).
+
+    Evaluates ``value`` (always an ``EnumValue`` in well-lowered IR) and yields
+    ``BoolValue((value.variant == variant) != negated)``.  The boolean depends
+    only on the variant string and ``negated`` — matching the legacy
+    interpreter, which does not compare the nominal (the checker guarantees the
+    operand's enum type).  ``nominal`` records the tested enum (D2) for
+    completeness and validation.
+    """
+
+    location: Location
+    nominal: NominalId
+    variant: str
+    value: "IrExpr"
+    negated: bool
+
+
 # ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
@@ -553,4 +573,5 @@ IrExpr = (
     | IrMakeEnum
     | IrMakeException
     | IrMakeConstructor
+    | IrVariantIs
 )

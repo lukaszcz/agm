@@ -84,6 +84,7 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrUnary,
+    IrVariantIs,
 )
 from agm.agl.ir.operations import (
     ArithOp,
@@ -556,6 +557,14 @@ class IrInterpreter:
                     display_name=display_name,
                     variant=variant,
                 )
+
+            case IrVariantIs(variant=variant, value=val_expr, negated=negated):
+                value = self._eval(val_expr)
+                if not isinstance(value, EnumValue):
+                    raise InvalidIrError(
+                        f"IrVariantIs: value is not EnumValue, got {type(value).__name__}"
+                    )
+                return BoolValue((value.variant == variant) != negated)
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

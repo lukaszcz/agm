@@ -63,6 +63,7 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrUnary,
+    IrVariantIs,
 )
 from agm.agl.ir.operations import (
     ArithKind,
@@ -438,6 +439,21 @@ class _Lowerer:
             case Call(node_id=nid, span=span) as call_node:
                 return self._lower_call(call_node, nid, span)
 
+            case IsTest(expr=operand, variant=variant, negated=negated, span=span):
+                # The checker guarantees the operand is enum-typed (see
+                # _check_is_test); build the nominal from its checked EnumType.
+                operand_type = self._node_type(operand.node_id)
+                assert isinstance(operand_type, EnumType), (
+                    "is-test operand must be enum-typed (checker guarantees this)"
+                )
+                return IrVariantIs(
+                    location=self._loc(span),
+                    nominal=NominalId(operand_type.module_id, operand_type.name),
+                    variant=variant,
+                    value=self.lower_expr(operand),
+                    negated=negated,
+                )
+
             # ----------------------------------------------------------
             # Unsupported M4+ nodes — deferred
             # ----------------------------------------------------------
@@ -449,7 +465,6 @@ class _Lowerer:
                 | Try()
                 | Raise()
                 | Cast()
-                | IsTest()
             ):
                 raise NotImplementedError(
                     f"Lowering of {type(node).__name__!r} is not yet implemented "

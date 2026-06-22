@@ -980,6 +980,24 @@ class TestDefensiveErrors:
         with pytest.raises(InvalidIrError, match="IrUnary NEG: expected numeric"):
             IrInterpreter(prog).run()
 
+    def test_ir_variant_is_on_non_enum_raises(self) -> None:
+        """IrVariantIs on a non-enum value raises InvalidIrError (defensive)."""
+        from agm.agl.ir import IrVariantIs, NominalId
+
+        prog = _make_program(
+            (
+                IrVariantIs(
+                    _LOC,
+                    nominal=NominalId(ENTRY_ID, "Color"),
+                    variant="Red",
+                    value=IrConstInt(_LOC, 1),
+                    negated=False,
+                ),
+            ),
+        )
+        with pytest.raises(InvalidIrError, match="IrVariantIs"):
+            IrInterpreter(prog).run()
+
 
 # ---------------------------------------------------------------------------
 # IrField — field read on RecordValue / ExceptionValue

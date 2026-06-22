@@ -56,6 +56,7 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrUnary,
+    IrVariantIs,
 )
 from agm.agl.ir.operations import (
     ArithKind,
@@ -132,6 +133,7 @@ __all__ = [
     "IrTemplateText",
     "IrTemplateValue",
     "IrUnary",
+    "IrVariantIs",
     "Location",
     "MapDictValues",
     "MapEnumFields",

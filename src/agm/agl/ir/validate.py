@@ -68,6 +68,7 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrUnary,
+    IrVariantIs,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
 from agm.agl.ir.program import ExecutableProgram, NominalKind, SourceFile
@@ -400,6 +401,13 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                 _check_nominal_in_table(nominal, ctx)
                 if variant is not None:
                     _check_enum_variant(nominal, variant, ctx)
+
+        case IrVariantIs(nominal=nominal, variant=variant, value=val):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                _check_nominal_in_table(nominal, ctx)
+                _check_enum_variant(nominal, variant, ctx)
+            _validate_expr(val, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

@@ -84,6 +84,8 @@ from agm.agl.ir.nodes import (
     IrMakeRecord,
     IrMatchPlan,
     IrOr,
+    IrParseJson,
+    IrPrint,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
@@ -97,7 +99,7 @@ from agm.agl.ir.nodes import (
     UseDefault,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
-from agm.agl.ir.program import ExecutableProgram, NominalKind, SourceFile
+from agm.agl.ir.program import ExecutableProgram, IrParam, NominalKind, SourceFile
 from agm.agl.modules.ids import ModuleId
 
 __all__ = ["InvalidIrError", "validate_ir"]
@@ -632,6 +634,14 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             for arg in arguments:
                 _validate_expr(arg, ctx)
 
+        case IrPrint(value=val):
+            _validate_location(node.location, ctx)
+            _validate_expr(val, ctx)
+
+        case IrParseJson(value=val):
+            _validate_location(node.location, ctx)
+            _validate_expr(val, ctx)
+
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -717,8 +727,26 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
                 _validate_expr(param.default, fn_ctx)
         _validate_expr(fn_desc.body, fn_ctx)
 
+    # 5. params table — each IrParam must reference a registered symbol, and
+    #    the default expression (if present) must be structurally valid.
+    for ir_param in program.params:
+        _validate_ir_param(ir_param, fn_ctx)
+
     # (Sources table has no key/id consistency invariant beyond being keyed by
     # SourceId; key consistency is structural to dict construction.)
+
+
+def _validate_ir_param(param: IrParam, ctx: _Context) -> None:
+    """Validate a single ``IrParam`` descriptor (deep tier)."""
+    _validate_location(param.location, ctx)
+    if ctx.deep:
+        if param.symbol not in ctx.program.symbols:
+            raise InvalidIrError(
+                f"IrParam public_name={param.public_name!r} references"
+                f" symbol_id={param.symbol.value!r} which is not in program.symbols"
+            )
+    if param.default is not None:
+        _validate_expr(param.default, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -743,3 +771,8 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
     for _module_id, em in program.modules.items():
         for node in em.initializers:
             _validate_expr(node, ctx)
+
+    # Cheap-tier param validation (location checks only — deep is in _validate_program_tables).
+    if not deep:
+        for ir_param in program.params:
+            _validate_ir_param(ir_param, ctx)

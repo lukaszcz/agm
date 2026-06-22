@@ -22,14 +22,15 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 
-from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.modules.ids import ModuleId
 
 __all__ = [
     "ExecutableModule",
-    "FunctionDescriptor",
     "ExecutableProgram",
+    "FunctionDescriptor",
+    "IrParam",
     "NominalDescriptor",
     "NominalKind",
     "SourceFile",
@@ -164,6 +165,36 @@ class ExecutableModule:
 
 
 # ---------------------------------------------------------------------------
+# Entry param descriptor (M6a)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrParam:
+    """Descriptor for an entry-module ``param`` declaration (M6a).
+
+    ``symbol``      — the linker-allocated ``SymbolId`` for this param binding.
+    ``public_name`` — the user-facing param name (used as the key in the
+                      ``param_values`` dict passed by the host).
+    ``required``    — ``True`` when the param has no default (host must supply
+                      a value; reaching ``run()`` without one is a host bug).
+    ``default``     — an ``IrExpr`` to evaluate when the host supplies no value
+                      (``None`` when ``required`` is ``True``).
+    ``location``    — source location of the ``param`` declaration.
+
+    ``IrParam`` is metadata — it is NOT a member of ``IrExpr``.  The IR
+    evaluator reads ``program.params`` in ``run()`` and installs each param's
+    value into the base frame BEFORE running any module initializer.
+    """
+
+    symbol: SymbolId
+    public_name: str
+    required: bool
+    default: "IrExpr | None"
+    location: Location
+
+
+# ---------------------------------------------------------------------------
 # Program root
 # ---------------------------------------------------------------------------
 
@@ -197,3 +228,4 @@ class ExecutableProgram:
     nominals: dict[NominalId, NominalDescriptor]
     sources: dict[SourceId, SourceFile]
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
+    params: tuple[IrParam, ...] = ()

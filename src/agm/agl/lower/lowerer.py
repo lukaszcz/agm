@@ -78,6 +78,8 @@ from agm.agl.ir.nodes import (
     IrMakeRecord,
     IrMatchPlan,
     IrOr,
+    IrParseJson,
+    IrPrint,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
@@ -104,6 +106,7 @@ from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
     FunctionDescriptor,
+    IrParam,
     NominalDescriptor,
     NominalKind,
     SourceFile,
@@ -114,7 +117,7 @@ from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
-from agm.agl.scope.symbols import BinderKind, BindingRef
+from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
@@ -229,6 +232,7 @@ class _Lowerer:
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
+        self._params: list[IrParam] = []
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -1102,6 +1106,39 @@ class _Lowerer:
         typ = self._checked.node_types.get(ref_node_id)
         return self._lower_constructor_from_type(typ, owner_name, variant, {}, span)
 
+    def _lower_builtin_call(
+        self,
+        kind: BuiltinKind,
+        call_node: "Call",
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Lower a builtin call node by dispatching on ``BuiltinKind`` (D4).
+
+        M6a builtins (``PRINT``, ``PARSE_JSON``) are lowered here.
+        M6b builtins (``ASK``, ``ASK_REQUEST``) raise ``NotImplementedError("M6b")``.
+        M6c builtins (``EXEC``) raise ``NotImplementedError("M6c")``.
+        """
+        loc = self._loc(span)
+        match kind:
+            case BuiltinKind.PRINT:
+                # print(expr) — lower the single positional argument.
+                arg_ir = self.lower_expr(call_node.args[0])
+                return IrPrint(location=loc, value=arg_ir)
+
+            case BuiltinKind.PARSE_JSON:
+                # parse_json(text) — arg is statically text; lower without coercion.
+                arg_ir = self.lower_expr(call_node.args[0])
+                return IrParseJson(location=loc, value=arg_ir)
+
+            case BuiltinKind.ASK | BuiltinKind.ASK_REQUEST:
+                raise NotImplementedError("M6b")  # agents/ask: deferred to M6b
+
+            case BuiltinKind.EXEC:
+                raise NotImplementedError("M6c")  # exec/dry-run: deferred to M6c
+
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+
     def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
         """Lower a Call node.
 
@@ -1115,9 +1152,7 @@ class _Lowerer:
         # Check for builtin calls first
         builtin_kind = self._checked.resolved.builtin_calls.get(nid)
         if builtin_kind is not None:
-            raise NotImplementedError(
-                "Lowering of builtin calls is not yet implemented (deferred to M6)"
-            )
+            return self._lower_builtin_call(builtin_kind, call_node, span)
 
         # (a) VarRef callee in constructor_refs
         if isinstance(callee, VarRef):
@@ -1523,12 +1558,18 @@ class _Lowerer:
             case FuncDef() as funcdef:
                 return self._lower_funcdef(funcdef)
 
+            case ParamDecl() as param_decl:
+                # Param declarations are only lowered for the entry module.
+                # graph.py guards ensure this branch is only called for entry items,
+                # so _lower_param_decl is always applicable here.
+                self._lower_param_decl(param_decl)
+                return None
+
             case (
                 AgentDecl()
                 | RecordDef()
                 | EnumDef()
                 | TypeAlias()
-                | ParamDecl()
                 | ProgramDecl()
                 | ConfigPragma()
                 | ImportDecl()
@@ -1541,6 +1582,35 @@ class _Lowerer:
             case _:
                 # Anything else must be an expression.
                 return self.lower_expr(item)
+
+    def _lower_param_decl(self, param: "ParamDecl") -> None:
+        """Lower an entry-module ``ParamDecl`` to an ``IrParam`` descriptor.
+
+        Allocates a PUBLIC ``SymbolId`` for the param (owner = entry module) and
+        appends an ``IrParam`` to ``self._params``.  Does NOT emit an initializer
+        into ``ir_items`` — params are installed by the evaluator's ``run()``
+        from ``program.params + param_values`` BEFORE any module initializer runs.
+        """
+        sym = self._alloc_sym(
+            param.node_id,
+            name=param.name,
+            mutable=False,
+            public=True,
+            owner=self._module_id,
+        )
+        binding_type = self._binding_type_for(param.node_id)
+        if param.default is not None:
+            default_ir: IrExpr | None = self.lower_coerced(param.default, binding_type)
+        else:
+            default_ir = None
+        ir_param = IrParam(
+            symbol=sym,
+            public_name=param.name,
+            required=(param.default is None),
+            default=default_ir,
+            location=self._loc(param.span),
+        )
+        self._params.append(ir_param)
 
     def _lower_assign(
         self,
@@ -1716,6 +1786,7 @@ class _Lowerer:
             nominals=dict(self._link.nominals),
             sources=dict(self._link.sources),
             functions=dict(self._link.functions),
+            params=tuple(self._params),
         )
 
 

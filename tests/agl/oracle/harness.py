@@ -1,4 +1,4 @@
-"""Differential oracle harness for M2/M3.
+"""Differential oracle harness for M2/M3/M6a.
 
 Runs both the legacy AST interpreter and the new IR pipeline
 (lower_program → IrInterpreter) on the same AgL source and asserts
@@ -12,12 +12,17 @@ Design notes (extensibility for M7)
   showing legacy-only / ir-only names.
 - Error comparison is supported via ``assert_oracle_raises`` which checks
   that both pipelines raise ``AglRaise`` with structurally equivalent exceptions.
-- Trace event sequences and external call sequences are not yet compared (M7).
-  The harness asserts they are empty on both sides for the M2 node subset.
+- stdout capture: M6a adds stdout capture (via ``contextlib.redirect_stdout``)
+  and includes the captured output in the oracle agreement assertion.  Programs
+  that produce no output yield empty strings and still pass.
+- param_values: M6a harness helpers accept ``param_values: dict[str, Value]``
+  (keyed by param public name) and route them to both evaluators.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 from pathlib import Path
 
@@ -37,6 +42,8 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
+from agm.agl.ir.ids import SymbolId
+from agm.agl.ir.program import ExecutableProgram
 from agm.agl.lower import lower_program
 from agm.agl.lower.graph import lower_graph
 from agm.agl.modules.ids import ModuleId
@@ -83,10 +90,13 @@ def _m2_codecs() -> dict[str, OutputCodec]:
 # ---------------------------------------------------------------------------
 
 
-def _run_legacy(source: str) -> dict[str, Value]:
+def _run_legacy(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+) -> tuple[dict[str, Value], str]:
     """Run *source* through the legacy AST interpreter.
 
-    Returns the root-scope snapshot ``{name: Value}``.
+    Returns ``(root-scope snapshot, captured stdout)``.
     Raises ``AglRaise`` for AgL-level errors.
     """
     program = parse_program(source)
@@ -108,9 +118,12 @@ def _run_legacy(source: str) -> dict[str, Value]:
         loop_limit=100,
         strict_json=False,
         source=source,
+        param_values=param_values,
     )
-    interp.execute(root_scope)
-    return root_scope.snapshot()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        interp.execute(root_scope)
+    return root_scope.snapshot(), buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +131,32 @@ def _run_legacy(source: str) -> dict[str, Value]:
 # ---------------------------------------------------------------------------
 
 
-def _run_ir(source: str) -> dict[str, Value]:
+def _build_ir_param_values(
+    executable: ExecutableProgram,
+    param_values: dict[str, Value],
+) -> dict[SymbolId, Value]:
+    """Map public-name-keyed param values to SymbolId-keyed for the IR evaluator."""
+    name_to_sym: dict[str, SymbolId] = {
+        p.public_name: p.symbol for p in executable.params
+    }
+    result: dict[SymbolId, Value] = {}
+    for name, val in param_values.items():
+        sym = name_to_sym.get(name)
+        assert sym is not None, (
+            f"param value for {name!r} does not match any declared param"
+            f" (declared: {sorted(name_to_sym)})"
+        )
+        result[sym] = val
+    return result
+
+
+def _run_ir(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+) -> tuple[dict[str, Value], str]:
     """Run *source* through the new IR pipeline.
 
-    Returns ``{public_name: Value}`` for all top-level bindings.
+    Returns ``({public_name: Value}, captured stdout)``.
     Raises ``AglRaise`` for AgL-level errors.
     """
     program = parse_program(source)
@@ -134,7 +169,13 @@ def _run_ir(source: str) -> dict[str, Value]:
         source_label="<oracle>",
         validate=True,
     )
-    return IrInterpreter(executable).run()
+    ir_param_values: dict[SymbolId, Value] | None = None
+    if param_values:
+        ir_param_values = _build_ir_param_values(executable, param_values)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        result = IrInterpreter(executable, param_values=ir_param_values).run()
+    return result, buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -144,12 +185,23 @@ def _run_ir(source: str) -> dict[str, Value]:
 
 def assert_oracle_agrees(
     source: str,
+    param_values: dict[str, Value] | None = None,
 ) -> tuple[dict[str, Value], dict[str, Value]]:
     """Assert that the legacy and IR evaluators agree on *source*.
 
     Runs both pipelines, first asserts that both snapshots have exactly the
     same set of binding names (legacy-only / ir-only differences are reported),
-    then compares values for every name.
+    then compares values for every name.  Also asserts that both evaluators
+    produce identical stdout output (M6a: print parity).
+
+    Parameters
+    ----------
+    source:
+        The AgL source program to evaluate.
+    param_values:
+        Optional ``{public_name: Value}`` dict for entry-module ``param``
+        declarations.  Passed to both evaluators (the legacy interpreter
+        receives it by name; the IR evaluator receives it keyed by SymbolId).
 
     Returns
     -------
@@ -159,16 +211,11 @@ def assert_oracle_agrees(
     Raises
     ------
     ``AssertionError``
-        When the name sets differ or when the two snapshots disagree on any
-        compared binding value.
-
-    Note
-    ----
-    Runtime-error comparison (kind + message + source excerpt) will be added
-    in M3 when in-subset runtime errors exist.
+        When the name sets differ, when the two snapshots disagree on any
+        compared binding value, or when the captured stdout differs.
     """
-    legacy = _run_legacy(source)
-    ir = _run_ir(source)
+    legacy, legacy_stdout = _run_legacy(source, param_values)
+    ir, ir_stdout = _run_ir(source, param_values)
 
     legacy_names = set(legacy.keys())
     ir_names = set(ir.keys())
@@ -192,9 +239,13 @@ def assert_oracle_agrees(
 
     assert not mismatches, "Oracle value disagreement:\n" + "\n".join(mismatches)
 
-    # M2 note: trace event sequences and external call sequences are trivially
-    # empty for the M2 node subset (no agents, no shell exec).  Full comparison
-    # of traces and external calls is wired in M7.
+    assert legacy_stdout == ir_stdout, (
+        f"Oracle stdout disagreement:\n"
+        f"  legacy: {legacy_stdout!r}\n"
+        f"  ir:     {ir_stdout!r}"
+    )
+
+    # Note: trace event sequences and external call sequences are compared in M7.
 
     return legacy, ir
 
@@ -270,7 +321,10 @@ def _normalize_exception(exc: ExceptionValue) -> ExceptionValue:
     )
 
 
-def assert_oracle_raises(source: str) -> tuple[ExceptionValue, ExceptionValue]:
+def assert_oracle_raises(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+) -> tuple[ExceptionValue, ExceptionValue]:
     """Assert that both pipelines raise AglRaise with equivalent exceptions.
 
     Runs both pipelines, catches AglRaise from both sides, normalizes
@@ -287,12 +341,12 @@ def assert_oracle_raises(source: str) -> tuple[ExceptionValue, ExceptionValue]:
     ir_exc: ExceptionValue | None = None
 
     try:
-        _run_legacy(source)
+        _run_legacy(source, param_values)
     except AglRaise as e:
         legacy_exc = e.exc
 
     try:
-        _run_ir(source)
+        _run_ir(source, param_values)
     except AglRaise as e:
         ir_exc = e.exc
 
@@ -352,11 +406,15 @@ def assert_graph_oracle_agrees(
         for node_id, spec in cm.contract_specs.items():
             contracts[node_id] = materialize_contract(spec, codecs)
     registry = AgentRegistry(named={}, default_agent=None)
-    legacy = execute_graph(cg, registry, contracts, loop_limit=100, strict_json=False)
+    legacy_buf = io.StringIO()
+    with contextlib.redirect_stdout(legacy_buf):
+        legacy = execute_graph(cg, registry, contracts, loop_limit=100, strict_json=False)
 
     # IR path
     executable = lower_graph(cg, validate=True)
-    ir = IrInterpreter(executable).run()
+    ir_buf = io.StringIO()
+    with contextlib.redirect_stdout(ir_buf):
+        ir = IrInterpreter(executable).run()
 
     # Compare
     legacy_names = set(legacy.keys())
@@ -378,6 +436,12 @@ def assert_graph_oracle_agrees(
         if legacy_val != ir_val:
             mismatches.append(f"  {name!r}: legacy={legacy_val!r}, ir={ir_val!r}")
     assert not mismatches, "Oracle value disagreement:\n" + "\n".join(mismatches)
+
+    assert legacy_buf.getvalue() == ir_buf.getvalue(), (
+        f"Oracle graph stdout disagreement:\n"
+        f"  legacy: {legacy_buf.getvalue()!r}\n"
+        f"  ir:     {ir_buf.getvalue()!r}"
+    )
 
     return legacy, ir
 
@@ -412,13 +476,15 @@ def assert_graph_oracle_raises(
     ir_exc: ExceptionValue | None = None
 
     try:
-        execute_graph(cg, registry, contracts, loop_limit=100, strict_json=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            execute_graph(cg, registry, contracts, loop_limit=100, strict_json=False)
     except AglRaise as e:
         legacy_exc = e.exc
 
     try:
         executable = lower_graph(cg, validate=True)
-        IrInterpreter(executable).run()
+        with contextlib.redirect_stdout(io.StringIO()):
+            IrInterpreter(executable).run()
     except AglRaise as e:
         ir_exc = e.exc
 

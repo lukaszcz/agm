@@ -18,6 +18,7 @@ NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 from __future__ import annotations
 
 import decimal
+from collections.abc import Mapping
 from typing import assert_never
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
@@ -95,6 +96,8 @@ from agm.agl.ir.nodes import (
     IrMakeRecord,
     IrMatchPlan,
     IrOr,
+    IrParseJson,
+    IrPrint,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
@@ -123,6 +126,8 @@ from agm.agl.ir.operations import (
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
+from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
+from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
 
@@ -238,6 +243,7 @@ class IrInterpreter:
         trace: TraceStore | None = None,
         loop_limit: int = DEFAULT_LOOP_LIMIT,
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
+        param_values: Mapping[SymbolId, Value] | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [{}]
@@ -245,6 +251,9 @@ class IrInterpreter:
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._loop_limit: int = loop_limit
         self._max_call_depth: int = max_call_depth
+        self._param_values: Mapping[SymbolId, Value] = (
+            param_values if param_values is not None else {}
+        )
 
     @property
     def _frame(self) -> Frame:
@@ -457,13 +466,28 @@ class IrInterpreter:
     def run(self) -> dict[str, Value]:
         """Execute all modules in order and return the entry module's public bindings.
 
-        Iterates over all modules in insertion order (library modules first, entry
-        last — the order guaranteed by :func:`~agm.agl.lower.graph.lower_graph`),
-        executing each module's initializers.  All evaluation runs under the pinned
-        AgL decimal context so results are independent of the host's ambient
-        ``decimal`` context (F7).
+        Installs entry-module params into the base frame BEFORE any module
+        initializer runs, then iterates over all modules in insertion order
+        (library modules first, entry last) executing each module's initializers.
+        All evaluation runs under the pinned AgL decimal context.
         """
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            # Install entry params into the base frame before any initializer.
+            for ir_param in self._program.params:
+                if ir_param.symbol in self._param_values:
+                    # Host-provided value takes priority.
+                    self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
+                elif ir_param.default is not None:
+                    # Evaluate the default expression in the base frame.
+                    value = self._eval(ir_param.default)
+                    self._frames[0][ir_param.symbol] = value
+                else:
+                    # Required param without a value — host-prep bug.
+                    raise InvalidIrError(
+                        f"Required param {ir_param.public_name!r} has no value;"
+                        " the host must supply a value for required params before calling run()"
+                    )
+
             for mod in self._program.modules.values():
                 for node in mod.initializers:
                     self._eval(node)
@@ -714,7 +738,6 @@ class IrInterpreter:
                     raise self._index_failure(e)
 
             case IrRenderTemplate(segments=segs):
-                from agm.agl.runtime.render import render_value
                 parts: list[str] = []
                 for seg in segs:
                     match seg:
@@ -893,6 +916,30 @@ class IrInterpreter:
 
             case IrIndirectCall(callee=callee_expr, arguments=arguments):
                 return self._execute_indirect_call(callee_expr, arguments, node.location)
+
+            case IrPrint(value=val_expr):
+                val = self._eval(val_expr)
+                print(render_value(val))
+                return UnitValue()
+
+            case IrParseJson(value=val_expr):
+                val = self._eval(val_expr)
+                if not isinstance(val, TextValue):
+                    raise InvalidIrError(
+                        f"IrParseJson: expected TextValue, got {type(val).__name__}"
+                    )
+                try:
+                    obj = parse_json_strict(val.value)
+                except StrictJsonParseError as exc:
+                    raise AglRaise(
+                        _make_exc_value(
+                            "JsonParseError",
+                            exc.message,
+                            trace_id=self._trace.new_event_id(),
+                            raw=TextValue(val.value),
+                        )
+                    ) from exc
+                return JsonValue(obj)
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

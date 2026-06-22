@@ -85,11 +85,10 @@ __all__ = [
     "IrConstJsonNull",
     "IrConstText",
     "IrConstUnit",
-    "IrDirectCall",
-    "IrIndirectCall",
     "IrConstructorPlan",
     "IrContains",
     "IrConvert",
+    "IrDirectCall",
     "IrExpr",
     "IrField",
     "IrFunctionParam",
@@ -97,6 +96,7 @@ __all__ = [
     "IrIfBranch",
     "IrIndex",
     "IrIndexStep",
+    "IrIndirectCall",
     "IrLiteralPlan",
     "IrLoad",
     "IrLoop",
@@ -109,6 +109,8 @@ __all__ = [
     "IrMakeRecord",
     "IrMatchPlan",
     "IrOr",
+    "IrParseJson",
+    "IrPrint",
     "IrRaise",
     "IrRenderTemplate",
     "IrSequence",
@@ -846,6 +848,38 @@ class IrIndirectCall:
 
 
 # ---------------------------------------------------------------------------
+# Host operation nodes (M6a)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrPrint:
+    """IR host-op: ``print(value)`` — render *value* and write a line to stdout.
+
+    Evaluates ``value``, calls :func:`~agm.agl.runtime.render.render_value` on
+    the result, then prints the rendered string.  Returns ``UnitValue()``.
+    Mirrors ``_eval_print_call`` in the legacy interpreter (M6a).
+    """
+
+    location: Location
+    value: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrParseJson:
+    """IR host-op: ``parse_json(text)`` — parse a JSON text value strictly.
+
+    Evaluates ``value`` (always a ``TextValue`` in well-lowered IR), then calls
+    ``parse_json_strict``.  On success returns ``JsonValue(obj)``; on
+    ``StrictJsonParseError`` raises ``AglRaise`` with a ``JsonParseError``
+    exception whose fields mirror the legacy interpreter exactly (M6a).
+    """
+
+    location: Location
+    value: "IrExpr"
+
+
+# ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
 
@@ -893,4 +927,6 @@ IrExpr = (
     | IrMakeClosure
     | IrDirectCall
     | IrIndirectCall
+    | IrPrint
+    | IrParseJson
 )

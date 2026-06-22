@@ -982,16 +982,24 @@ class TestM4aLowerFunctions:
         prog = _lower(source)
         assert len(prog.functions) == 1
 
-    def test_builtin_call_in_function_body_raises_not_implemented(self) -> None:
-        """print() inside a function body triggers builtin-call NotImplementedError."""
+    def test_builtin_print_in_function_body_lowers_to_ir_print(self) -> None:
+        """print() inside a function body lowers to IrPrint (M6a implemented)."""
+        from agm.agl.ir.nodes import IrPrint
+
         source = (
             "def f(x: int) -> int =\n"
             "  print(x)\n"
             "  x + 1\n"
             "let result = f(5)\n()"
         )
-        with pytest.raises(NotImplementedError, match="builtin"):
-            _lower(source)
+        prog = _lower(source)
+        # Find the function descriptor and verify its body contains IrPrint
+        assert len(prog.functions) == 1
+        fn_desc = next(iter(prog.functions.values()))
+        # The function body is a block: [IrPrint(...), IrArith(x + 1)]
+        from agm.agl.ir.nodes import IrBlock
+        assert isinstance(fn_desc.body, IrBlock)
+        assert any(isinstance(item, IrPrint) for item in fn_desc.body.items)
 
     def test_indirect_call_via_let_binding_lowers_to_indirect_call(self) -> None:
         """Calling a let-bound function reference lowers to IrIndirectCall (M4b)."""
@@ -1587,4 +1595,98 @@ class TestLowerGraph:
         # validate=False (the default) skips validate_ir — covers the branch at graph.py:144
         prog = lower_graph(cg)
         assert len(prog.modules) == 2
+
+
+# ---------------------------------------------------------------------------
+# M6a golden lowering: print, parse_json, param declarations
+# ---------------------------------------------------------------------------
+
+
+class TestM6aLowering:
+    """Golden lowering tests for M6a host operations."""
+
+    def test_print_lowers_to_ir_print(self) -> None:
+        """print(x) lowers to IrPrint wrapping the argument expression."""
+        from agm.agl.ir.nodes import IrPrint
+
+        source = "let x = 42\nprint(x)\n()"
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        # initializers are [IrBind(x=42), IrPrint(IrLoad(x)), IrConstUnit]
+        ir_print = next(
+            (node for node in entry.initializers if isinstance(node, IrPrint)), None
+        )
+        assert ir_print is not None, "Expected IrPrint in entry initializers"
+        assert isinstance(ir_print, IrPrint)
+
+    def test_parse_json_lowers_to_ir_parse_json(self) -> None:
+        """parse_json(s) lowers to IrParseJson wrapping the argument expression."""
+        from agm.agl.ir.nodes import IrBind, IrParseJson
+
+        source = "let j = parse_json('null')\n()"
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        # The binding `let j = parse_json(...)` lowers to IrBind(value=IrParseJson(...))
+        ir_bind = next(
+            (node for node in entry.initializers if isinstance(node, IrBind)), None
+        )
+        assert ir_bind is not None, "Expected IrBind in entry initializers"
+        assert isinstance(ir_bind, IrBind)
+        assert isinstance(ir_bind.value, IrParseJson), (
+            f"Expected IrBind.value to be IrParseJson, got {type(ir_bind.value).__name__}"
+        )
+
+    def test_param_required_lowers_to_ir_param(self) -> None:
+        """A required param (no default) produces an IrParam with required=True and no default."""
+        from agm.agl.ir.program import IrParam
+
+        source = "param n: int\nlet result = n + 1\n()"
+        prog = _lower(source)
+        assert len(prog.params) == 1
+        p = prog.params[0]
+        assert isinstance(p, IrParam)
+        assert p.public_name == "n"
+        assert p.required is True
+        assert p.default is None
+
+    def test_param_with_default_lowers_to_ir_param(self) -> None:
+        """A param with a default produces an IrParam with required=False and a default expr."""
+        from agm.agl.ir.nodes import IrConstInt
+        from agm.agl.ir.program import IrParam
+
+        source = "param n: int = 7\nlet result = n + 1\n()"
+        prog = _lower(source)
+        assert len(prog.params) == 1
+        p = prog.params[0]
+        assert isinstance(p, IrParam)
+        assert p.public_name == "n"
+        assert p.required is False
+        assert isinstance(p.default, IrConstInt), (
+            f"Expected IrConstInt default, got {type(p.default).__name__}"
+        )
+        assert p.default.value == 7
+
+    def test_multiple_params_all_in_program_params(self) -> None:
+        """Multiple param declarations each produce an IrParam in program.params."""
+        source = "param x: int\nparam y: int = 5\nlet sum = x + y\n()"
+        prog = _lower(source)
+        assert len(prog.params) == 2
+        public_names = {p.public_name for p in prog.params}
+        assert public_names == {"x", "y"}
+        required_map = {p.public_name: p.required for p in prog.params}
+        assert required_map["x"] is True
+        assert required_map["y"] is False
+
+    def test_ask_raises_not_implemented_m6b(self) -> None:
+        """ask() lowers to NotImplementedError('M6b') — deferred to milestone M6b."""
+        source = "agent impl\nlet r: text = ask(\"prompt\")\n()"
+        with pytest.raises(NotImplementedError, match="M6b"):
+            _lower(source)
+
+    def test_exec_raises_not_implemented_m6c(self) -> None:
+        """exec() lowers to NotImplementedError('M6c') — deferred to milestone M6c."""
+        source = "exec(\"ls -la\")\n()"
+        with pytest.raises(NotImplementedError, match="M6c"):
+            _lower(source)
+
 

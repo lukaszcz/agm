@@ -1221,3 +1221,213 @@ class TestM4bIrIndirectCall:
         call = _make_indirect_call(args=())
         prog = _make_program(initializers=(call,))
         validate_ir(prog, deep=False)  # no exception
+
+
+# ===========================================================================
+# M6a: IrPrint / IrParseJson validation
+# ===========================================================================
+
+
+class TestM6aPrintParseJsonValidation:
+    """Negative validate tests for IrPrint and IrParseJson nodes."""
+
+    def test_ir_print_valid(self) -> None:
+        """IrPrint with valid location and inner expr passes validation."""
+        from agm.agl.ir import IrPrint
+
+        node = IrPrint(location=LOC, value=IrConstInt(location=LOC, value=42))
+        prog = _make_program(initializers=(node,))
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_print_bad_location_raises(self) -> None:
+        """IrPrint with invalid own location raises InvalidIrError."""
+        from agm.agl.ir import IrPrint
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad: start > end
+            start_line=1,
+            start_col=0,
+        )
+        node = IrPrint(location=bad_loc, value=IrConstInt(location=LOC, value=1))
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_ir_print_bad_inner_location_raises(self) -> None:
+        """IrPrint validator recurses into the inner value expression."""
+        from agm.agl.ir import IrPrint
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad
+            start_line=1,
+            start_col=0,
+        )
+        inner = IrConstInt(location=bad_loc, value=1)
+        node = IrPrint(location=LOC, value=inner)
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_ir_parse_json_valid(self) -> None:
+        """IrParseJson with valid location and inner expr passes validation."""
+        from agm.agl.ir import IrParseJson
+
+        node = IrParseJson(
+            location=LOC, value=IrConstText(location=LOC, value="null")
+        )
+        prog = _make_program(initializers=(node,))
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_parse_json_bad_location_raises(self) -> None:
+        """IrParseJson with invalid own location raises InvalidIrError."""
+        from agm.agl.ir import IrParseJson
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad: start > end
+            start_line=1,
+            start_col=0,
+        )
+        node = IrParseJson(
+            location=bad_loc, value=IrConstText(location=LOC, value="null")
+        )
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_ir_parse_json_bad_inner_location_raises(self) -> None:
+        """IrParseJson validator recurses into the inner value expression."""
+        from agm.agl.ir import IrParseJson
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad
+            start_line=1,
+            start_col=0,
+        )
+        inner = IrConstText(location=bad_loc, value="null")
+        node = IrParseJson(location=LOC, value=inner)
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+
+# ===========================================================================
+# M6a: IrParam validation
+# ===========================================================================
+
+
+class TestM6aIrParamValidation:
+    """Negative validate tests for IrParam in program.params."""
+
+    def _make_program_with_params(
+        self, params: "tuple", symbols: "dict | None" = None
+    ) -> ExecutableProgram:
+        """Build a valid base program augmented with the given params tuple."""
+        from agm.agl.ir.program import ExecutableProgram
+
+        base = _make_program(symbols=symbols)
+        return ExecutableProgram(
+            entry_module=base.entry_module,
+            modules=base.modules,
+            symbols=base.symbols,
+            nominals=base.nominals,
+            sources=base.sources,
+            functions=base.functions,
+            params=params,
+        )
+
+    def test_valid_required_param_passes(self) -> None:
+        """A required IrParam with a known symbol and no default passes validation."""
+        from agm.agl.ir.program import IrParam
+
+        p = IrParam(
+            symbol=SYM0,
+            public_name="n",
+            required=True,
+            default=None,
+            location=LOC,
+        )
+        prog = self._make_program_with_params((p,))
+        validate_ir(prog, deep=True)  # no exception
+
+    def test_valid_optional_param_with_default_passes(self) -> None:
+        """An optional IrParam with a default expr and a known symbol passes validation."""
+        from agm.agl.ir.program import IrParam
+
+        p = IrParam(
+            symbol=SYM0,
+            public_name="n",
+            required=False,
+            default=IrConstInt(location=LOC, value=7),
+            location=LOC,
+        )
+        prog = self._make_program_with_params((p,))
+        validate_ir(prog, deep=True)  # no exception
+
+    def test_ir_param_unknown_symbol_raises_deep(self) -> None:
+        """IrParam referencing an unknown SymbolId raises InvalidIrError in deep mode."""
+        from agm.agl.ir.program import IrParam
+
+        bad_sym = SymbolId(value=8888)
+        p = IrParam(
+            symbol=bad_sym,
+            public_name="n",
+            required=True,
+            default=None,
+            location=LOC,
+        )
+        prog = self._make_program_with_params((p,))
+        with pytest.raises(InvalidIrError, match="8888"):
+            validate_ir(prog, deep=True)
+
+    def test_ir_param_bad_location_raises_cheap(self) -> None:
+        """IrParam with an invalid location raises InvalidIrError in cheap mode."""
+        from agm.agl.ir.program import IrParam
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad
+            start_line=1,
+            start_col=0,
+        )
+        p = IrParam(
+            symbol=SYM0,
+            public_name="n",
+            required=True,
+            default=None,
+            location=bad_loc,
+        )
+        prog = self._make_program_with_params((p,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_ir_param_bad_default_expr_raises(self) -> None:
+        """IrParam with a default expr containing a bad location raises InvalidIrError."""
+        from agm.agl.ir.program import IrParam
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad
+            start_line=1,
+            start_col=0,
+        )
+        bad_default = IrConstInt(location=bad_loc, value=0)
+        p = IrParam(
+            symbol=SYM0,
+            public_name="n",
+            required=False,
+            default=bad_default,
+            location=LOC,
+        )
+        prog = self._make_program_with_params((p,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)

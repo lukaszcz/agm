@@ -141,6 +141,8 @@ def lower_graph(
             initializers=tuple(ir_items),
         )
 
+    # Collect entry-module params (only the entry module contributes params).
+    entry_lowerer = module_lowerers[checked_graph.entry_id]
     program = ExecutableProgram(
         entry_module=checked_graph.entry_id,
         modules=executable_modules,
@@ -148,6 +150,7 @@ def lower_graph(
         nominals=dict(link.nominals),
         sources=dict(link.sources),
         functions=dict(link.functions),
+        params=tuple(entry_lowerer._params),
     )
     if validate:
         validate_ir(program, deep=True)

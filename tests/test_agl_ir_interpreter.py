@@ -1666,3 +1666,52 @@ class TestM4bInterpreterDefensivePaths:
         )
         with pytest.raises(InvalidIrError, match="missing argument"):
             IrInterpreter(prog).run()
+
+
+# ===========================================================================
+# M6a: IrPrint / IrParseJson / IrParam evaluator tests
+# ===========================================================================
+
+
+class TestM6aPrintParseJsonParam:
+    """Unit tests for M6a host operations in the IrInterpreter."""
+
+    def test_required_param_without_value_raises_invalid_ir_error(self) -> None:
+        """run() raises InvalidIrError when a required param has no value supplied."""
+        from agm.agl.ir.program import IrParam
+
+        sym, desc = _let_sym(0, "n")
+        p = IrParam(
+            symbol=sym,
+            public_name="n",
+            required=True,
+            default=None,
+            location=_LOC,
+        )
+        prog = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+            symbols={sym: desc},
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="n")},
+            functions={},
+            params=(p,),
+        )
+        # No param_values provided — the required param has no value
+        with pytest.raises(InvalidIrError, match="n"):
+            IrInterpreter(prog).run()
+
+    def test_ir_parse_json_non_text_value_raises_invalid_ir_error(self) -> None:
+        """IrParseJson with a non-TextValue argument raises InvalidIrError (bad IR)."""
+        from agm.agl.ir.nodes import IrParseJson
+
+        # Construct a program where parse_json is called on a bool (bad IR)
+        sym, desc = _let_sym(0, "r")
+        node = IrBind(
+            _LOC,
+            sym,
+            IrParseJson(_LOC, IrConstBool(_LOC, True)),  # bool is not TextValue
+        )
+        prog = _make_program(initializers=(node,), symbols={sym: desc})
+        with pytest.raises(InvalidIrError, match="IrParseJson"):
+            IrInterpreter(prog).run()

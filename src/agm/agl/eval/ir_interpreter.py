@@ -82,6 +82,7 @@ from agm.agl.ir.nodes import (
     IrField,
     IrIf,
     IrIndex,
+    IrIndirectCall,
     IrLiteralPlan,
     IrLoad,
     IrLoop,
@@ -119,7 +120,7 @@ from agm.agl.ir.operations import (
     ToJson,
     UnaryOp,
 )
-from agm.agl.ir.program import ExecutableProgram
+from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.serialize import value_to_json_obj
@@ -325,13 +326,44 @@ class IrInterpreter:
             )
         return val
 
+    def _bind_and_invoke(
+        self,
+        desc: "FunctionDescriptor",
+        closure_val: IrClosureValue,
+        bound_values: list[Value],
+    ) -> Value:
+        """Build a call frame, push it, evaluate the function body, pop the frame, return result.
+
+        Shared by ``_execute_direct_call`` and ``_execute_indirect_call``.
+
+        Function parameters are immutable in AgL (they can never be the target of an
+        assignment), so they are bound by value — never boxed in a Cell.
+        """
+        call_frame: Frame = dict(closure_val.captures)
+        for param, val in zip(desc.params, bound_values, strict=True):
+            call_frame[param.symbol] = val
+
+        self._frames.append(call_frame)
+        self._call_depth += 1
+        try:
+            result = self._eval(desc.body)
+        finally:
+            self._call_depth -= 1
+            self._frames.pop()
+
+        return result
+
     def _execute_direct_call(
         self,
         fn_id: FunctionId,
         arguments: "tuple[IrExpr | UseDefault, ...]",
         location: Location,
     ) -> Value:
-        """Execute a direct call to a user function."""
+        """Execute a direct call to a named user function.
+
+        Depth check → evaluate arguments (UseDefault uses a captures frame) →
+        ``_bind_and_invoke``.
+        """
         if self._call_depth >= self._max_call_depth:
             raise AglRaise(
                 _make_exc_value(
@@ -360,21 +392,63 @@ class IrInterpreter:
                 val = self._eval(arg)
             bound_values.append(val)
 
-        # Function parameters are immutable in AgL (they can never be the target
-        # of an assignment), so they are bound by value — never boxed in a Cell.
-        call_frame: Frame = dict(captures_dict)
-        for param, val in zip(desc.params, bound_values, strict=True):
-            call_frame[param.symbol] = val
+        return self._bind_and_invoke(desc, closure_val, bound_values)
 
-        self._frames.append(call_frame)
-        self._call_depth += 1
-        try:
-            result = self._eval(desc.body)
-        finally:
-            self._call_depth -= 1
-            self._frames.pop()
+    def _execute_indirect_call(
+        self,
+        callee_expr: IrExpr,
+        arguments: "tuple[IrExpr, ...]",
+        location: Location,
+    ) -> Value:
+        """Execute an indirect (value) call.
 
-        return result
+        Evaluation order (mirrors ``_apply_closure``):
+        1. Evaluate the callee in the current frame.
+        2. Depth-limit check (AFTER callee eval, BEFORE arg binding).
+        3. Evaluate each positional arg in the caller frame, NO coercion.
+        4. Defensive: use ``desc.params[i].default`` for omitted trailing params
+           (evaluated in a captures frame).
+        5. ``_bind_and_invoke``.
+        """
+        callee_val = self._eval(callee_expr)
+        if not isinstance(callee_val, IrClosureValue):
+            raise InvalidIrError(
+                f"IrIndirectCall: callee evaluated to {type(callee_val).__name__},"
+                " expected IrClosureValue"
+            )
+        desc = self._program.functions[callee_val.function_id]
+
+        if self._call_depth >= self._max_call_depth:
+            raise AglRaise(
+                _make_exc_value(
+                    "RecursionError",
+                    f"Maximum call depth ({self._max_call_depth}) exceeded",
+                    trace_id=self._trace.new_event_id(),
+                    limit=IntValue(self._max_call_depth),
+                )
+            )
+
+        # Evaluate each positional argument in the CALLER frame (no coercion).
+        bound_values: list[Value] = []
+        for i, param in enumerate(desc.params):
+            if i < len(arguments):
+                val = self._eval(arguments[i])
+            elif param.default is not None:
+                # Defensive: evaluate default in a captures frame.
+                captures_frame: Frame = dict(callee_val.captures)
+                self._frames.append(captures_frame)
+                try:
+                    val = self._eval(param.default)
+                finally:
+                    self._frames.pop()
+            else:
+                raise InvalidIrError(
+                    f"IrIndirectCall: missing argument for parameter {i!r}"
+                    " and no default available (lowerer bug)"
+                )
+            bound_values.append(val)
+
+        return self._bind_and_invoke(desc, callee_val, bound_values)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -439,6 +513,12 @@ class IrInterpreter:
 
             case IrLoad(symbol=sym):
                 slot = self._frame.get(sym)
+                if slot is None and self._frames[0] is not self._frame:
+                    # Module-level bindings (let, var, function symbols) live in the base
+                    # frame (frames[0]) and are always accessible — even from inside a
+                    # function call frame that did not explicitly capture them.  This
+                    # mirrors the legacy interpreter's scope-chain parent traversal.
+                    slot = self._frames[0].get(sym)
                 if slot is None:
                     raise InvalidIrError(
                         f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"
@@ -807,6 +887,9 @@ class IrInterpreter:
 
             case IrDirectCall(function_id=fn_id, arguments=arguments):
                 return self._execute_direct_call(fn_id, arguments, node.location)
+
+            case IrIndirectCall(callee=callee_expr, arguments=arguments):
+                return self._execute_indirect_call(callee_expr, arguments, node.location)
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

@@ -64,6 +64,7 @@ from agm.agl.ir.nodes import (
     IrIfBranch,
     IrIndex,
     IrIndexStep,
+    IrIndirectCall,
     IrLiteralPlan,
     IrLoad,
     IrLoop,
@@ -152,6 +153,7 @@ from agm.agl.syntax.nodes import (
     NamedArg,
     NameTarget,
     NullLit,
+    Param,
     ParamDecl,
     Pattern,
     ProgramDecl,
@@ -301,7 +303,8 @@ class _Lowerer:
 
     # Binder kinds whose values live in evaluation frames and can therefore be
     # captured by a closure (D5).  function_binding is resolved through the function
-    # table; agent_binding/constructor_binding are not frame values in the M4 IR
+    # table (via the base frame, which always contains all module-level bindings);
+    # agent_binding/constructor_binding are not frame values in the M4 IR
     # (host prep / constructors are handled elsewhere) so they are not captures here.
     _CAPTURABLE_KINDS = frozenset({
         BinderKind.let_binding,
@@ -421,15 +424,25 @@ class _Lowerer:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
-    def _compute_captures(
-        self, funcdef: "FuncDef", param_decl_ids: "set[int]"
+    def _compute_captures_for(
+        self,
+        body: Expr,
+        params: "tuple[Param, ...]",
+        self_node_id: int,
+        param_decl_ids: set[int],
     ) -> "tuple[IrCapture, ...]":
-        """Compute the captures for a FuncDef body using the single boundary-aware pass."""
+        """Compute the captures for a function body (FuncDef or Lambda).
+
+        Scans *body* and each *params[i].default* for free-variable references
+        that resolve to capturable bindings outside *param_decl_ids*.
+        *self_node_id* is added to local_ids to prevent the function/lambda itself
+        from being treated as a capture of itself.
+        """
         local_ids: set[int] = set(param_decl_ids)
-        local_ids.add(funcdef.node_id)
+        local_ids.add(self_node_id)
         captured: dict[int, BindingRef] = {}
-        self._scan_captures(funcdef.body, local_ids, captured)
-        for param in funcdef.params:
+        self._scan_captures(body, local_ids, captured)
+        for param in params:
             if param.default is not None:
                 self._scan_captures(param.default, local_ids, captured)
         captures: list[IrCapture] = []
@@ -441,6 +454,14 @@ class _Lowerer:
             )
             captures.append(IrCapture(symbol=sym, by_cell=ref.mutable))
         return tuple(captures)
+
+    def _compute_captures(
+        self, funcdef: "FuncDef", param_decl_ids: "set[int]"
+    ) -> "tuple[IrCapture, ...]":
+        """Compute the captures for a FuncDef body using the single boundary-aware pass."""
+        return self._compute_captures_for(
+            funcdef.body, funcdef.params, funcdef.node_id, param_decl_ids
+        )
 
     def _lower_funcdef(self, funcdef: "FuncDef") -> IrExpr:
         """Lower a FuncDef to IrBind(sym, IrMakeClosure(fn_id, captures)).
@@ -501,6 +522,93 @@ class _Lowerer:
         loc = self._loc(funcdef.span)
         closure_ir = IrMakeClosure(location=loc, function_id=fn_id, captures=captures)
         return IrBind(location=loc, symbol=fn_sym, value=closure_ir)
+
+    def _lower_lambda(
+        self,
+        params: "tuple[Param, ...]",
+        body_expr: Expr,
+        span: "SourceSpan",
+        node_id: int,
+    ) -> IrMakeClosure:
+        """Lower a Lambda expression to IrMakeClosure with a fresh FunctionDescriptor.
+
+        Unlike a FuncDef, a lambda is an expression: the IrMakeClosure itself is the
+        value; it is NOT wrapped in IrBind.  A fresh private function_symbol is
+        allocated to satisfy the FunctionDescriptor + validator.
+
+        Captures are computed relative to the lambda's own params (which become local
+        to the lambda's frame) and body.  Capture-through (a lambda inside a def that
+        captures the def's params) works automatically because IrMakeClosure is
+        evaluated in the ENCLOSING frame (the def's call_frame at the time of the
+        IrMakeClosure eval).
+        """
+        fn_id = self._alloc_fn()
+
+        # Allocate a private symbol for the lambda's function_symbol entry.
+        # This symbol is never loaded by name; it exists only to satisfy the
+        # FunctionDescriptor.function_symbol field and the validator.
+        fn_sym_node_id = node_id  # use the lambda node_id as the key
+        fn_sym = self._alloc_sym(
+            fn_sym_node_id,
+            name=f"<lambda@{node_id}>",
+            mutable=False,
+            public=False,
+            owner=fn_id,
+        )
+
+        # Allocate param SymbolIds.
+        param_decl_ids: set[int] = set()
+        param_syms: list[SymbolId] = []
+        for param in params:
+            param_decl_ids.add(param.node_id)
+            psym = self._alloc_sym(
+                param.node_id,
+                name=param.name,
+                mutable=False,
+                public=False,
+                owner=fn_id,
+            )
+            param_syms.append(psym)
+
+        captures = self._compute_captures_for(body_expr, params, node_id, param_decl_ids)
+
+        # Get the full FunctionType (checker records it on the lambda's node_id).
+        fn_type = self._node_type(node_id)
+        assert isinstance(fn_type, FunctionType), (
+            f"compiler bug: Lambda node {node_id!r} has non-FunctionType node_type {fn_type!r}"
+        )
+
+        # Build IR params; lower param defaults.
+        #
+        # Unlike funcdef params, lambda param defaults are NOT type-checked
+        # by the checker (``_check_lambda`` skips defaults), so their
+        # ``node_type`` entries are absent.  Use ``lower_expr`` directly to
+        # avoid an AssertionError from ``_node_type``.  The default expression
+        # is still required to be type-compatible (guaranteed by the checker
+        # when the funcdef path is taken; for lambdas the type annotation on
+        # the param already pins the type).
+        ir_params: list[IrFunctionParam] = []
+        for param, psym in zip(params, param_syms):
+            if param.default is not None:
+                default_ir: IrExpr | None = self.lower_expr(param.default)
+            else:
+                default_ir = None
+            ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
+
+        # Lower the body coerced to the declared return type (bakes result coercion in).
+        body_ir = self.lower_coerced(body_expr, fn_type.result)
+
+        desc = FunctionDescriptor(
+            function_id=fn_id,
+            function_symbol=fn_sym,
+            module_id=ENTRY_ID,
+            params=tuple(ir_params),
+            body=body_ir,
+        )
+        self._functions[fn_id] = desc
+
+        loc = self._loc(span)
+        return IrMakeClosure(location=loc, function_id=fn_id, captures=captures)
 
     # ------------------------------------------------------------------
     # Location helpers
@@ -813,13 +921,10 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Unsupported M4+ nodes — deferred
+            # Lambda expression — M4b
             # ----------------------------------------------------------
-            case Lambda():
-                raise NotImplementedError(
-                    f"Lowering of {type(node).__name__!r} is not yet implemented "
-                    "(deferred to a later milestone)"
-                )
+            case Lambda(params=params, body=body_expr, span=span, node_id=nid):
+                return self._lower_lambda(params, body_expr, span, nid)
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
@@ -1094,10 +1199,10 @@ class _Lowerer:
                     nid, owner_name, variant_name, call_node.named_args, span
                 )
 
-        # Lambda/indirect/value call — deferred to M4b
-        raise NotImplementedError(
-            "Lowering of indirect/value calls is not yet implemented (deferred to M4b)"
-        )
+        # Indirect/value call (M4b): callee is an arbitrary expression (lambda, let-bound
+        # closure, function-value param, etc.).  Named args are rejected by the checker at
+        # value-call sites, so only positional args exist here.
+        return self._lower_indirect_call(call_node, nid, span)
 
     def _lower_direct_call(
         self,
@@ -1142,6 +1247,46 @@ class _Lowerer:
             location=self._loc(span),
             function_id=fn_id,
             arguments=tuple(ir_args),
+        )
+
+    def _lower_indirect_call(
+        self,
+        call_node: "Call",
+        result_node_id: int,
+        span: "SourceSpan",
+    ) -> IrIndirectCall:
+        """Lower an indirect (value) call to IrIndirectCall.
+
+        The callee is an arbitrary expression.  Arguments are positional-only (the
+        checker rejects named args at value-call sites).
+
+        Arguments are lowered with ``lower_coerced`` using the callee's FunctionType
+        param types.  This preserves the IR invariant that every runtime value matches
+        its statically-declared type — without which the static coercion-elision on the
+        function body (``lower_coerced(body, return_type)``) is unsound.  The legacy
+        interpreter achieves the same observable outcome via a runtime result-coercion in
+        ``_apply_closure``; coercing arguments at the call site is equivalent and lets the
+        IR remain statically coercion-free inside the closure body.
+        """
+        callee_ir = self.lower_expr(call_node.callee)
+        # Named args are impossible at value-call sites (the checker rejects them).
+        assert not call_node.named_args, (
+            "compiler bug: named args at indirect call site (checker should have rejected)"
+        )
+        # Obtain the callee's FunctionType to drive per-arg coercions.
+        callee_fn_type = self._node_type(call_node.callee.node_id)
+        assert isinstance(callee_fn_type, FunctionType), (
+            f"compiler bug: indirect call callee has non-FunctionType node_type"
+            f" {callee_fn_type!r}"
+        )
+        arg_irs: list[IrExpr] = [
+            self.lower_coerced(arg, callee_fn_type.params[i])
+            for i, arg in enumerate(call_node.args)
+        ]
+        return IrIndirectCall(
+            location=self._loc(span),
+            callee=callee_ir,
+            arguments=tuple(arg_irs),
         )
 
     def _lower_named_constructor_call(

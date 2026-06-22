@@ -71,6 +71,7 @@ from agm.agl.ir.nodes import (
     IrIf,
     IrIndex,
     IrIndexStep,
+    IrIndirectCall,
     IrLiteralPlan,
     IrLoad,
     IrLoop,
@@ -624,6 +625,12 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             for arg in arguments:
                 if not isinstance(arg, UseDefault):
                     _validate_expr(arg, ctx)
+
+        case IrIndirectCall(callee=callee, arguments=arguments):
+            _validate_location(node.location, ctx)
+            _validate_expr(callee, ctx)
+            for arg in arguments:
+                _validate_expr(arg, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

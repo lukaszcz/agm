@@ -64,6 +64,7 @@ from agm.agl.ir import (
     IrField,
     IrFunctionParam,
     IrIndexStep,
+    IrIndirectCall,
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
@@ -1523,4 +1524,145 @@ class TestM4aInterpreterDefensivePaths:
             functions={_FN_ID: fn_desc},
         )
         with pytest.raises(InvalidIrError, match="not Cell"):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# M4b: IrIndirectCall evaluation + defensive error paths
+# ---------------------------------------------------------------------------
+
+
+class TestM4bInterpreterDefensivePaths:
+    """Defensive error paths in IrIndirectCall evaluation."""
+
+    def test_indirect_call_non_closure_callee_raises(self) -> None:
+        """IrIndirectCall raises InvalidIrError when callee evaluates to a non-closure."""
+        # Build: let val_sym = 42; let result_sym = IrIndirectCall(IrLoad(val_sym), ())
+        val_sym = SymbolId(300)
+        result_sym = SymbolId(301)
+        body = IrConstInt(_LOC, 0)
+        fn_desc = _make_fn_descriptor(body)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            val_sym: SymbolDescriptor(
+                symbol_id=val_sym, mutable=False, public_name="val", owner=ENTRY_ID
+            ),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, val_sym, IrConstInt(_LOC, 42)),
+                # Try to call an int as a function — callee is not IrClosureValue
+                IrBind(_LOC, result_sym, IrIndirectCall(_LOC, IrLoad(_LOC, val_sym), ())),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="expected IrClosureValue"):
+            IrInterpreter(prog).run()
+
+    def test_indirect_call_depth_limit_raises(self) -> None:
+        """IrIndirectCall with max_call_depth=1 raises AglRaise(RecursionError) on reentry."""
+        from agm.agl.eval.exceptions import AglRaise
+
+        # Build: def f() = f(); let result = f()
+        # f() calls itself via IrIndirectCall to test the depth guard.
+        fn2_id = FunctionId(1)
+        fn2_sid = SymbolId(400)
+        fn2_param_sym = SymbolId(401)
+        result_sym = SymbolId(402)
+
+        # Body: call fn2 indirectly — IrLoad(fn2_sid) gives the closure, then call it
+        body = IrIndirectCall(_LOC, IrLoad(_LOC, fn2_sid), ())
+        fn2_desc = FunctionDescriptor(
+            function_id=fn2_id,
+            function_symbol=fn2_sid,
+            module_id=ENTRY_ID,
+            params=(),
+            body=body,
+        )
+        symbols = {
+            fn2_sid: SymbolDescriptor(
+                symbol_id=fn2_sid, mutable=False, public_name="f2", owner=ENTRY_ID
+            ),
+            fn2_param_sym: SymbolDescriptor(
+                symbol_id=fn2_param_sym, mutable=False, public_name="p2", owner=fn2_id
+            ),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="result2", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, fn2_sid, IrMakeClosure(_LOC, fn2_id, ())),
+                IrBind(_LOC, result_sym, IrIndirectCall(_LOC, IrLoad(_LOC, fn2_sid), ())),
+            ),
+            symbols=symbols,
+            functions={fn2_id: fn2_desc},
+        )
+        with pytest.raises(AglRaise):
+            IrInterpreter(prog, max_call_depth=1).run()
+
+    def test_indirect_call_uses_param_default_when_arg_omitted(self) -> None:
+        """IrIndirectCall falls back to param.default when fewer args than params."""
+        # Build a function with a param that has a default; call it with zero args.
+        param = IrFunctionParam(symbol=_PARAM_SID, default=IrConstInt(_LOC, 77))
+        body = IrLoad(_LOC, _PARAM_SID)
+        fn_desc = _make_fn_descriptor(body, params=(param,))
+        result_sym = SymbolId(500)
+        fn_closure_sym = SymbolId(501)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            _PARAM_SID: _param_sym_desc(),
+            fn_closure_sym: SymbolDescriptor(
+                symbol_id=fn_closure_sym, mutable=False, public_name="fn_ref", owner=ENTRY_ID
+            ),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="r", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
+                # fn_closure_sym holds the closure value; call it via indirect call with 0 args
+                IrBind(_LOC, fn_closure_sym, IrLoad(_LOC, _FN_SID)),
+                IrBind(_LOC, result_sym, IrIndirectCall(_LOC, IrLoad(_LOC, fn_closure_sym), ())),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        result = IrInterpreter(prog).run()
+        assert result["r"] == IntValue(77)
+
+    def test_indirect_call_missing_arg_no_default_raises(self) -> None:
+        """IrIndirectCall raises InvalidIrError when arg is missing and no default exists."""
+        # Function has a required param (no default); call it with zero args.
+        param = IrFunctionParam(symbol=_PARAM_SID, default=None)
+        body = IrLoad(_LOC, _PARAM_SID)
+        fn_desc = _make_fn_descriptor(body, params=(param,))
+        result_sym = SymbolId(600)
+        fn_closure_sym = SymbolId(601)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            _PARAM_SID: _param_sym_desc(),
+            fn_closure_sym: SymbolDescriptor(
+                symbol_id=fn_closure_sym, mutable=False, public_name="fn_ref2", owner=ENTRY_ID
+            ),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="r2", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
+                IrBind(_LOC, fn_closure_sym, IrLoad(_LOC, _FN_SID)),
+                # Call with 0 args but fn expects 1 required param — should raise
+                IrBind(_LOC, result_sym, IrIndirectCall(_LOC, IrLoad(_LOC, fn_closure_sym), ())),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="missing argument"):
             IrInterpreter(prog).run()

@@ -86,6 +86,7 @@ __all__ = [
     "IrConstText",
     "IrConstUnit",
     "IrDirectCall",
+    "IrIndirectCall",
     "IrConstructorPlan",
     "IrContains",
     "IrConvert",
@@ -825,6 +826,25 @@ class IrDirectCall:
     arguments: "tuple[IrExpr | UseDefault, ...]"
 
 
+@dataclass(frozen=True, slots=True)
+class IrIndirectCall:
+    """IR indirect call to a function value (closure/lambda/first-class function).
+
+    Used when the callee is an arbitrary expression (not a bare VarRef resolving to a
+    function_binding).  Arguments are positional-only and are NOT coerced (the caller
+    passes the raw evaluated argument; coercion at the call site is the direct-call
+    responsibility only).  The result IS coerced by the FunctionDescriptor body
+    (lower_coerced bakes the coercion into the body at lowering time).
+
+    Depth-limit check happens AFTER the callee is evaluated, BEFORE arguments are
+    bound — matching the legacy ``_apply_closure`` order.
+    """
+
+    location: Location
+    callee: "IrExpr"
+    arguments: "tuple[IrExpr, ...]"
+
+
 # ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
@@ -872,4 +892,5 @@ IrExpr = (
     | IrLoop
     | IrMakeClosure
     | IrDirectCall
+    | IrIndirectCall
 )

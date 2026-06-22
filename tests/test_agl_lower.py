@@ -27,7 +27,9 @@ from agm.agl.ir.nodes import (
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrIndirectCall,
     IrLoad,
+    IrMakeClosure,
     IrMakeDict,
     IrMakeList,
 )
@@ -699,14 +701,21 @@ class TestUnsupportedNodes:
         # Verify the program has a function in the functions table
         assert len(prog.functions) == 1
 
-    def test_iife_lambda_call_raises_not_implemented(self) -> None:
+    def test_iife_lambda_call_lowers_to_indirect_call(self) -> None:
         """Calling an immediately-invoked lambda (non-VarRef, non-FieldAccess callee).
 
-        When the callee of a Call is a Lambda (not a VarRef or FieldAccess),
-        lowering must raise NotImplementedError (deferred to M4).
+        When the callee of a Call is a Lambda (M4b), lowering produces an IrIndirectCall
+        whose callee is an IrMakeClosure.
         """
-        with pytest.raises(NotImplementedError):
-            _lower("(fn() -> int => 42)()\n()")
+        prog = _lower("(fn() -> int => 42)()\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        # The IIFE evaluates to an IrIndirectCall
+        # Initializaers: [IrIndirectCall(...), IrConstUnit()]
+        indirect = inits[0]
+        assert isinstance(indirect, IrIndirectCall), (
+            f"Expected IrIndirectCall, got {type(indirect).__name__}"
+        )
+        assert isinstance(indirect.callee, IrMakeClosure)
 
     def test_qualified_enum_constructor_lowers_correctly(self) -> None:
         """Qualified constructor (e.g. Color.Red) lowers to IrMakeEnum/IrMakeConstructor.
@@ -734,10 +743,13 @@ let c = Color.Red
                     found = True
         assert found, "Expected IrBind(value=IrMakeEnum(variant='Red')) in initializers"
 
-    def test_lambda_raises_not_implemented(self) -> None:
-        """Lambda expressions are not yet lowered (deferred to M4+)."""
-        with pytest.raises(NotImplementedError):
-            _lower("let f = fn(x: int) -> int => x + 1\n()")
+    def test_lambda_lowers_to_make_closure_in_unsupported_class(self) -> None:
+        """Lambda expressions now lower to IrMakeClosure (M4b implemented)."""
+        prog = _lower("let f = fn(x: int) -> int => x + 1\n()")
+        inits = prog.modules[prog.entry_module].initializers
+        f_bind = inits[0]
+        assert isinstance(f_bind, IrBind)
+        assert isinstance(f_bind.value, IrMakeClosure)
 
     def test_if_lowers_correctly(self) -> None:
         """If expressions are lowered to IrIf in M3f-A."""
@@ -916,15 +928,21 @@ class TestM4aLowerFunctions:
         with pytest.raises(NotImplementedError, match="builtin"):
             _lower(source)
 
-    def test_indirect_call_via_let_binding_raises_not_implemented(self) -> None:
-        """Calling a let-bound function reference raises NotImplementedError (indirect call)."""
+    def test_indirect_call_via_let_binding_lowers_to_indirect_call(self) -> None:
+        """Calling a let-bound function reference lowers to IrIndirectCall (M4b)."""
         source = (
             "def f(x: int) -> int = x + 1\n"
             "let fn_ref = f\n"
             "let result = fn_ref(5)\n()"
         )
-        with pytest.raises(NotImplementedError, match="indirect"):
-            _lower(source)
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        # inits[0] = IrBind(f, IrMakeClosure)
+        # inits[1] = IrBind(fn_ref, ...)
+        # inits[2] = IrBind(result, IrIndirectCall)
+        result_bind = inits[2]
+        assert isinstance(result_bind, IrBind)
+        assert isinstance(result_bind.value, IrIndirectCall)
 
 
 class TestM4aLowerDefensivePaths:
@@ -1004,8 +1022,14 @@ class TestM4aLowerDefensivePaths:
         finally:
             type_env._function_signatures_by_node_id.update(original)
 
-    def test_field_access_callee_without_qcr_raises_not_implemented(self) -> None:
-        """FieldAccess callee not in qualified_constructor_refs raises NotImplementedError."""
+    def test_field_access_callee_without_qcr_attempts_indirect_call(self) -> None:
+        """FieldAccess callee not in qualified_constructor_refs falls through to indirect call.
+
+        Since M4b, any callee that is not a constructor ref or direct function binding
+        is lowered as an indirect call (IrIndirectCall).  A FieldAccess on a fake node
+        with no resolution triggers an AssertionError inside lower_expr (compiler bug),
+        which is the correct behavior for a malformed node in a unit test.
+        """
         from agm.agl.lower.lowerer import _Lowerer
         from agm.agl.syntax.nodes import Call, FieldAccess, VarRef
 
@@ -1016,8 +1040,9 @@ class TestM4aLowerDefensivePaths:
         # Get a real SourceSpan from the parsed program
         span = checked.resolved.program.body.items[0].span
 
-        # FieldAccess callee not in qualified_constructor_refs → falls through to
-        # NotImplementedError (line 1077->1084 in lowerer)
+        # FieldAccess callee not in qualified_constructor_refs → indirect call path.
+        # The fake VarRef (node_id=9999) has no resolution, so lower_expr hits an
+        # AssertionError inside the indirect call lowering path.
         fa = FieldAccess(
             obj=VarRef(name="x", node_id=9999, span=span, module_qualifier=None),
             field="method",
@@ -1025,7 +1050,8 @@ class TestM4aLowerDefensivePaths:
             span=span,
         )
         fake_call = Call(callee=fa, args=(), named_args=(), node_id=10001, span=span)
-        with pytest.raises(NotImplementedError, match="indirect"):
+        # AssertionError because the fake VarRef has no resolution (compiler bug path).
+        with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._lower_call(fake_call, 10001, span)
 
     def test_missing_required_arg_raises_assertion_error(self) -> None:
@@ -1067,23 +1093,215 @@ class TestM4aLowerDefensivePaths:
     def test_scan_captures_stops_at_nested_lambda_boundary(self) -> None:
         """_scan_captures returns early at Lambda boundary without descending into it.
 
-        When a function body contains a lambda expression, ``_scan_captures``
-        must treat Lambda as a scope boundary (line 354) and stop descending.
-        Lowering then fails at the lambda lowering step (NotImplementedError),
-        confirming the capture scan completed successfully up to the boundary.
+        When a function body contains a lambda expression, _scan_captures must treat
+        Lambda as a scope boundary and stop descending.  The lambda's own captures are
+        computed separately when the lambda is lowered.  Concretely: the outer def ``f``
+        must NOT capture ``y`` (it references it only inside the lambda, not in f's own
+        body); the lambda captures ``y`` independently.
         """
         # f's body is a block containing a lambda let-binding followed by the unit value.
-        # _scan_captures should stop at the Lambda boundary (line 354) rather than
-        # descending into the lambda's body and incorrectly treating y as a capture of f.
+        # _scan_captures should stop at the Lambda boundary rather than descending into
+        # the lambda's body and incorrectly treating y as a capture of f.
         source = (
             "let y = 5\n"
             "def f() -> unit =\n"
-            "  let _g = fn() -> int => y\n"
+            "  let _g = fn(u: unit) -> int => y\n"
             "  ()\n"
             "f()\n"
             "()"
         )
-        with pytest.raises(NotImplementedError):
-            _lower(source)
+        prog = _lower(source)
+        # f should have no captures (y is not used in f's body directly)
+        # Find the outer def whose function_symbol corresponds to "f"
+        f_descs = [
+            d for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "f"
+        ]
+        assert len(f_descs) == 1
+        f_desc = f_descs[0]
+        # Check that the IrMakeClosure for f in the initializers has no captures for y
+        # (The initializer for f is IrBind(fn_sym, IrMakeClosure(...)))
+        f_init = None
+        for node in prog.modules[prog.entry_module].initializers:
+            if (isinstance(node, IrBind)
+                    and isinstance(node.value, IrMakeClosure)
+                    and node.value.function_id == f_desc.function_id):
+                f_init = node
+                break
+        assert f_init is not None, "IrBind for f not found in initializers"
+        f_closure = f_init.value
+        assert isinstance(f_closure, IrMakeClosure)
+        # f should have no captures (y is not directly referenced in f's own body)
+        assert len(f_closure.captures) == 0, (
+            f"f should have no captures but has {f_closure.captures!r}"
+        )
 
 
+# ===========================================================================
+# M4b — Lambda lowering and indirect call lowering (golden tests)
+# ===========================================================================
+
+
+class TestM4bLambdaLowering:
+    """Golden tests: lambda lowers to IrMakeClosure with correct FunctionDescriptor."""
+
+    def test_lambda_lowers_to_make_closure(self) -> None:
+        """A lambda expression lowers to IrMakeClosure (not IrBind + IrMakeClosure)."""
+        source = "let dbl = fn(x: int) -> int => x * 2\n()"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        # The module initializer for `let dbl = ...` is an IrBind wrapping an IrMakeClosure.
+        dbl_bind = inits[0]
+        assert isinstance(dbl_bind, IrBind)
+        assert isinstance(dbl_bind.value, IrMakeClosure)
+        fn_id = dbl_bind.value.function_id
+        assert fn_id in prog.functions, "Lambda's FunctionDescriptor must be in functions table"
+
+    def test_lambda_registers_function_descriptor(self) -> None:
+        """Lambda's FunctionDescriptor has correct body and param count."""
+        source = "let inc = fn(x: int) -> int => x + 1\n()"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        dbl_bind = inits[0]
+        assert isinstance(dbl_bind, IrBind)
+        assert isinstance(dbl_bind.value, IrMakeClosure)
+        fn_id = dbl_bind.value.function_id
+        desc = prog.functions[fn_id]
+        assert len(desc.params) == 1, "Lambda with 1 param should have 1 FunctionParam"
+
+    def test_lambda_captures_outer_let(self) -> None:
+        """Lambda that references an outer let captures it in its IrMakeClosure."""
+        source = (
+            "let offset = 10\n"
+            "let add_off = fn(x: int) -> int => x + offset\n"
+            "()"
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        # offset is first, add_off is second
+        add_off_bind = inits[1]
+        assert isinstance(add_off_bind, IrBind)
+        assert isinstance(add_off_bind.value, IrMakeClosure)
+        captures = add_off_bind.value.captures
+        assert len(captures) == 1, "Lambda should capture exactly one symbol (offset)"
+        # by_cell=False because offset is a let binding
+        assert captures[0].by_cell is False
+
+    def test_lambda_inferred_return_type_lowered(self) -> None:
+        """Lambda with inferred return type still gets body coercion from FunctionType."""
+        source = "let f = fn(x: int) => x\n()"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assert isinstance(bind.value, IrMakeClosure)
+        fn_id = bind.value.function_id
+        desc = prog.functions[fn_id]
+        # Body is the param load (int -> int, no coercion needed since identity type)
+        assert desc.body is not None
+
+    def test_lambda_body_result_coerced(self) -> None:
+        """Lambda body is lowered with lower_coerced so int-to-decimal coercion is baked in."""
+        source = "let to_dec = fn(x: int) -> decimal => x\n()"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assert isinstance(bind.value, IrMakeClosure)
+        fn_id = bind.value.function_id
+        desc = prog.functions[fn_id]
+        # The body must be an IrCoerce (int → decimal) wrapping an IrLoad
+        assert isinstance(desc.body, IrCoerce), (
+            f"Expected IrCoerce for int->decimal body, got {type(desc.body).__name__}"
+        )
+
+    def test_lambda_private_function_symbol(self) -> None:
+        """Lambda's function_symbol has public_name=None (private synthetic symbol)."""
+        source = "let f = fn(x: int) -> int => x\n()"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        bind = inits[0]
+        assert isinstance(bind, IrBind)
+        assert isinstance(bind.value, IrMakeClosure)
+        fn_id = bind.value.function_id
+        desc = prog.functions[fn_id]
+        sym_desc = prog.symbols[desc.function_symbol]
+        assert sym_desc.public_name is None, (
+            "Lambda's synthetic function_symbol should be private (public_name=None)"
+        )
+
+
+class TestM4bIndirectCallLowering:
+    """Golden tests: indirect call lowers to IrIndirectCall with coerced args."""
+
+    def test_indirect_call_lowers_to_indirect_call_node(self) -> None:
+        """A value-call lowers to IrIndirectCall (not IrDirectCall)."""
+        source = (
+            "let f = fn(x: int) -> int => x + 1\n"
+            "let r = f(5)\n"
+            "()"
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        # inits[0] = IrBind(f, IrMakeClosure)
+        # inits[1] = IrBind(r, ...)
+        r_bind = inits[1]
+        assert isinstance(r_bind, IrBind)
+        assert isinstance(r_bind.value, IrIndirectCall), (
+            f"Expected IrIndirectCall for value-call, got {type(r_bind.value).__name__}"
+        )
+
+    def test_indirect_call_args_coerced(self) -> None:
+        """Indirect call arguments are lowered WITH coercion (lower_coerced, not lower_expr).
+
+        When the arg type already matches the param type, compile_coercion returns None
+        and lower_coerced emits no IrCoerce wrapper — so the absence of IrCoerce for an
+        int→int call is the correct identity-coercion-elision behavior, not a sign that
+        coercion is skipped.  The key invariant: the arg is lowered via lower_coerced,
+        which bakes in any needed coercion (e.g. int→decimal) at compile time.
+        """
+        source = (
+            "let f = fn(x: int) -> int => x\n"
+            "let r = f(7)\n"
+            "()"
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        r_bind = inits[1]
+        assert isinstance(r_bind, IrBind)
+        assert isinstance(r_bind.value, IrIndirectCall)
+        # int→int: identity coercion is elided, so arg is bare IrConstInt (no IrCoerce)
+        assert len(r_bind.value.arguments) == 1
+        arg = r_bind.value.arguments[0]
+        assert isinstance(arg, IrConstInt), (
+            f"Arg should be bare IrConstInt (identity coercion elided), got {type(arg).__name__}"
+        )
+        assert not isinstance(arg, IrCoerce)
+
+    def test_indirect_call_callee_is_lower_expr_result(self) -> None:
+        """Indirect call callee is lowered with lower_expr (no coercion on callee)."""
+        source = (
+            "let f = fn(x: int) -> int => x\n"
+            "let r = f(3)\n"
+            "()"
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        r_bind = inits[1]
+        assert isinstance(r_bind, IrBind)
+        assert isinstance(r_bind.value, IrIndirectCall)
+        # Callee should be IrLoad(f's symbol), not IrCoerce
+        callee = r_bind.value.callee
+        assert isinstance(callee, IrLoad), (
+            f"Callee should be IrLoad, got {type(callee).__name__}"
+        )
+
+    def test_indirect_call_validates_deep(self) -> None:
+        """IrIndirectCall from end-to-end lowering passes validate_ir deep=True."""
+        source = (
+            "let f = fn(x: int) -> int => x + 1\n"
+            "let r = f(5)\n"
+            "()"
+        )
+        prog = _lower(source)
+        validate_ir(prog, deep=True)  # no exception

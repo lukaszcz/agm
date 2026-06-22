@@ -44,6 +44,7 @@ from agm.agl.ir import (
     IrFunctionParam,
     IrIndex,
     IrIndexStep,
+    IrIndirectCall,
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
@@ -1127,3 +1128,96 @@ class TestM4aIrDirectCall:
         prog = _make_program(functions={FN0: fn_desc})
         with pytest.raises(InvalidIrError, match="9999"):
             validate_ir(prog)
+
+
+# ===========================================================================
+# M4b — IrIndirectCall validation invariants
+# ===========================================================================
+
+
+def _make_indirect_call(
+    callee: "IrConstInt | IrLoad | IrMakeClosure | None" = None,
+    args: "tuple" = (),
+) -> IrIndirectCall:
+    """Build an IrIndirectCall with a default callee (IrConstInt as placeholder)."""
+    _callee = callee if callee is not None else IrConstInt(location=LOC, value=42)
+    return IrIndirectCall(location=LOC, callee=_callee, arguments=args)
+
+
+class TestM4bIrIndirectCall:
+    """IrIndirectCall validation invariants."""
+
+    def test_valid_indirect_call_passes(self) -> None:
+        """IrIndirectCall with valid callee and positional args passes (cheap tier)."""
+        callee = IrLoad(location=LOC, symbol=SYM0)
+        arg = IrConstInt(location=LOC, value=5)
+        call = IrIndirectCall(location=LOC, callee=callee, arguments=(arg,))
+        prog = _make_program(initializers=(call,))
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_indirect_call_validates_callee(self) -> None:
+        """IrIndirectCall validator recurses into the callee expression."""
+        # A callee with an invalid location (start_offset > end_offset) must raise.
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=5,  # bad: start > end
+            start_line=1,
+            start_col=0,
+        )
+        bad_callee = IrConstInt(location=bad_loc, value=1)
+        call = IrIndirectCall(location=LOC, callee=bad_callee, arguments=())
+        prog = _make_program(initializers=(call,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_indirect_call_validates_args(self) -> None:
+        """IrIndirectCall validator recurses into each argument expression."""
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=5,  # bad: start > end
+            start_line=1,
+            start_col=0,
+        )
+        bad_arg = IrConstInt(location=bad_loc, value=7)
+        callee = IrConstInt(location=LOC, value=1)
+        call = IrIndirectCall(location=LOC, callee=callee, arguments=(bad_arg,))
+        prog = _make_program(initializers=(call,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_indirect_call_invalid_location_raises(self) -> None:
+        """IrIndirectCall with an invalid own location raises InvalidIrError."""
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad
+            start_line=1,
+            start_col=0,
+        )
+        call = IrIndirectCall(
+            location=bad_loc,
+            callee=IrConstInt(location=LOC, value=1),
+            arguments=(),
+        )
+        prog = _make_program(initializers=(call,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_indirect_call_deep_mode_validates_args_symbols(self) -> None:
+        """IrIndirectCall with deep=True validates arg symbol cross-references."""
+        # Arg loads a symbol not in program.symbols
+        bad_load = IrLoad(location=LOC, symbol=SymbolId(value=9999))
+        call = IrIndirectCall(
+            location=LOC, callee=IrConstInt(location=LOC, value=1), arguments=(bad_load,)
+        )
+        prog = _make_program(initializers=(call,))
+        with pytest.raises(InvalidIrError, match="9999"):
+            validate_ir(prog, deep=True)
+
+    def test_indirect_call_no_args_valid(self) -> None:
+        """IrIndirectCall with zero arguments passes validation."""
+        call = _make_indirect_call(args=())
+        prog = _make_program(initializers=(call,))
+        validate_ir(prog, deep=False)  # no exception

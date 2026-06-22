@@ -12,12 +12,118 @@ M2: contracts for JSON-typed targets carry a ``json_schema`` and
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    DecodeSchema,
+    DictDecode,
+    EnumDecode,
+    ListDecode,
+    RecordDecode,
+    ScalarDecode,
+    ScalarKind,
+)
 from agm.agl.runtime.codec import OutputCodec
 from agm.agl.typecheck.env import OutputContractSpec
-from agm.agl.typecheck.types import Type
+from agm.agl.typecheck.types import (
+    BoolType,
+    DecimalType,
+    DictType,
+    EnumType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+    UnitType,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TypelessOutputContract:
+    """Agent-facing contract materialized from typeless execution IR metadata."""
+
+    target_type: str
+    codec_name: str
+    strict_json: bool | None
+    format_instructions: str
+    json_schema: object
+    structured_exec: bool = False
+
+
+def _type_from_decode(schema: DecodeSchema) -> Type:
+    match schema:
+        case ScalarDecode(kind=ScalarKind.TEXT):
+            return TextType()
+        case ScalarDecode(kind=ScalarKind.INT):
+            return IntType()
+        case ScalarDecode(kind=ScalarKind.DECIMAL):
+            return DecimalType()
+        case ScalarDecode(kind=ScalarKind.BOOL):
+            return BoolType()
+        case ScalarDecode(kind=ScalarKind.JSON):
+            return JsonType()
+        case ListDecode(elem=elem):
+            return ListType(_type_from_decode(elem))
+        case DictDecode(value=value):
+            return DictType(_type_from_decode(value))
+        case RecordDecode(nominal=nominal, display_name=name, fields=fields):
+            return RecordType(
+                name=name,
+                fields={field: _type_from_decode(decoder) for field, decoder in fields},
+                module_id=nominal.module_id,
+            )
+        case EnumDecode(nominal=nominal, display_name=name, variants=variants):
+            return EnumType(
+                name=name,
+                variants={
+                    variant.name: {
+                        field: _type_from_decode(decoder)
+                        for field, decoder in variant.fields
+                    }
+                    for variant in variants
+                },
+                module_id=nominal.module_id,
+            )
+    raise AssertionError(f"Unknown decode schema: {schema!r}")
+
+
+def materialize_ir_contract(
+    request: ContractRequest, codecs: Mapping[str, OutputCodec]
+) -> OutputContract | None:
+    """Materialize host codec behavior from a typeless IR contract descriptor."""
+    if request.is_unit:
+        return None
+    codec = codecs.get(request.codec_name)
+    if codec is None:
+        raise ValueError(
+            f"No codec registered for codec_name={request.codec_name!r}. "
+            "This is a host-configuration error."
+        )
+    target_type = (
+        TextType()
+        if request.decode is None and request.target_type_label == "text"
+        else UnitType() if request.decode is None else _type_from_decode(request.decode)
+    )
+    base = codec.make_contract(target_type)
+    schema: object = (
+        base.json_schema
+        if request.json_schema is None
+        else cast(object, json.loads(request.json_schema))
+    )
+    return OutputContract(
+        target_type=target_type,
+        codec=codec,
+        strict_json=request.strict_json,
+        format_instructions=base.format_instructions,
+        json_schema=schema,
+        structured_exec=request.structured_exec,
+    )
 
 
 @dataclass(slots=True)

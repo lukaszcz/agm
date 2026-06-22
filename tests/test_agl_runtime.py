@@ -21,11 +21,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from agm.agl import AglError, SourceSpan, WorkflowRuntime
-from agm.agl.diagnostics import format_diagnostic, format_diagnostic_location
+from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.runtime import AgentRequest
-from agm.agl.runtime.runtime import Diagnostic, RunResult
+from agm.agl.runtime.runtime import RunResult
 from agm.agl.typecheck.types import Type
 
 if TYPE_CHECKING:
@@ -1100,26 +1100,26 @@ class TestRenderValue:
 
     def test_closure_renders_as_function_surface_form(self) -> None:
         """Closure renders as ``<function/N -> T>``."""
-        from agm.agl.eval.values import Closure
+        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
 
         rt = WorkflowRuntime()
         result = rt.run("let f = fn(x: int, y: int) -> int => x + y\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
-        assert isinstance(closure, Closure)
+        assert isinstance(closure, IrClosureValue)
         assert render_value(closure) == "<function/2 -> int>"
 
     def test_closure_zero_arity_renders_correctly(self) -> None:
         """A zero-parameter closure renders as ``<function/0 -> T>``."""
-        from agm.agl.eval.values import Closure
+        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
 
         rt = WorkflowRuntime()
         result = rt.run("let thunk = fn() -> int => 42\nthunk\n")
         assert result.ok is True
         closure = result.bindings["thunk"]
-        assert isinstance(closure, Closure)
+        assert isinstance(closure, IrClosureValue)
         assert render_value(closure) == "<function/0 -> int>"
 
     # ------------------------------------------------------------------
@@ -1642,12 +1642,16 @@ class TestRuntimeErrorPaths:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Contract materialization error → ok=False with contract error diagnostic."""
-        import agm.agl.runtime.contract as contract_mod
+        import agm.agl.runtime.runtime as runtime_mod
 
-        def bad_materialize(spec: object, codecs: object) -> object:
-            raise ValueError("bad contract")
-
-        monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
+        monkeypatch.setattr(
+            runtime_mod,
+            "_materialize_ir_contracts",
+            lambda executable, codecs: (
+                {},
+                [Diagnostic(message="Contract error: bad contract", line=1)],
+            ),
+        )
         rt = WorkflowRuntime(default_agent=lambda req: "ok")
         result = rt.run('ask "hi"')
         assert result.ok is False
@@ -1747,12 +1751,12 @@ class TestRuntimeErrorPaths:
         A Python-level bug must crash loudly rather than masquerade as a
         user-facing pre-execution diagnostic.
         """
-        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.eval.ir_interpreter import IrInterpreter
 
-        def bad_execute(self: Interpreter, root_scope: object) -> None:
+        def bad_execute(self: IrInterpreter) -> dict[str, object]:
             raise RuntimeError("internal crash")
 
-        monkeypatch.setattr(Interpreter, "execute", bad_execute)
+        monkeypatch.setattr(IrInterpreter, "run", bad_execute)
 
         rt = WorkflowRuntime()
         with pytest.raises(RuntimeError, match="internal crash"):
@@ -1846,10 +1850,10 @@ class TestRuntimeErrorPaths:
     ) -> None:
         """An AglRaise from the interpreter → RunResult.error (not None)."""
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
+        from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.eval.values import ExceptionValue, TextValue
 
-        def bad_execute(self: Interpreter, root_scope: object) -> None:
+        def bad_execute(self: IrInterpreter) -> dict[str, object]:
             exc_val = ExceptionValue(
                 nominal=NominalId(ENTRY_ID, "Abort"),
                 display_name="Abort",
@@ -1857,7 +1861,7 @@ class TestRuntimeErrorPaths:
             )
             raise AglRaise(exc_val)
 
-        monkeypatch.setattr(Interpreter, "execute", bad_execute)
+        monkeypatch.setattr(IrInterpreter, "run", bad_execute)
 
         rt = WorkflowRuntime()
         result = rt.run("let x = 1\nx")
@@ -2442,15 +2446,16 @@ class TestSerializeV2OpaqueValues:
             value_to_json_obj(AgentValue(name="myagent"))
 
     def test_closure_raises(self) -> None:
+        from agm.agl.eval.scope import Scope
         from agm.agl.eval.values import Closure
+        from agm.agl.parser import parse_program
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.typecheck.types import UnitType
 
-        # Retrieve a real Closure from an AgL program (fn expression bound to let).
-        rt = WorkflowRuntime()
-        result = rt.run("let f = fn(x: int) -> int => x + 1\nf\n")
-        assert result.ok is True
-        closure = result.bindings["f"]
-        assert isinstance(closure, Closure)
+        body = parse_program("()").body.items[0]
+        closure = Closure(
+            env=Scope(parent=None), params=(), body=body, return_type=UnitType()
+        )
         with pytest.raises(TypeError, match="Closure"):
             value_to_json_obj(closure)
 
@@ -2468,6 +2473,61 @@ class TestSerializeV2OpaqueValues:
 # ---------------------------------------------------------------------------
 # Coverage: runtime.py — uncovered branches and new v2 properties
 # ---------------------------------------------------------------------------
+
+
+class TestIrHostMetadataCoverage:
+    def test_invalid_external_param_shapes_are_diagnostics(self) -> None:
+        text_result = WorkflowRuntime().run(
+            "param value: text\nprint value", param_values={"value": 3}
+        )
+        assert not text_result.ok
+        assert "text value" in text_result.diagnostics[0].message
+
+        json_result = WorkflowRuntime().run(
+            "param value: int\nprint value", param_values={"value": {1, 2}}
+        )
+        assert not json_result.ok
+        assert "JSON-compatible" in json_result.diagnostics[0].message
+
+    def test_missing_ir_codec_materialization_is_diagnostic(self) -> None:
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.program import ExecutableProgram
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.runtime import _materialize_ir_contracts
+
+        request = ContractRequest(
+            codec_name="missing",
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+        )
+        executable = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={},
+            symbols={},
+            nominals={},
+            sources={},
+            contracts={ContractId(0): request},
+        )
+        contracts, errors = _materialize_ir_contracts(executable, {})
+        assert contracts == {}
+        assert "missing" in errors[0].message
+
+    def test_decode_schema_defensive_and_integral_decimal_paths(self) -> None:
+        from decimal import Decimal
+
+        from agm.agl.eval.conversions import decode_value
+        from agm.agl.eval.values import IntValue
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.contract import _type_from_decode
+
+        assert decode_value(ScalarDecode(ScalarKind.INT), Decimal("2.0")) == IntValue(2)
+        with pytest.raises(AssertionError, match="Unknown decode schema"):
+            _type_from_decode(object())
 
 
 class TestRunErrorToMessage:
@@ -3179,7 +3239,7 @@ class TestRunPreparedDefensivePaths:
         assert any("tc fail" in d.message for d in result.diagnostics)
 
     def test_run_prepared_graph_contract_error(self, tmp_path: pathlib.Path) -> None:
-        """run_prepared_graph exits early when a contract spec materializes badly."""
+        """run_prepared_graph exits early when an IR contract is invalid."""
         from unittest.mock import patch
 
         from agm.agl.modules.roots import RootSet
@@ -3191,22 +3251,20 @@ class TestRunPreparedDefensivePaths:
         )
         rt = WorkflowRuntime(default_agent=lambda req: "ok")  # type: ignore[arg-type]
         with patch(
-            "agm.agl.runtime.contract.materialize_contract",
-            side_effect=ValueError("bad contract"),
+            "agm.agl.runtime.runtime._materialize_ir_contracts",
+            return_value=(
+                {},
+                [Diagnostic(message="Contract error: bad contract", line=1)],
+            ),
         ):
             result = rt.run_prepared_graph(prepared)
         # A contract error yields a RunResult with ok=False and a contract diagnostic.
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
-
-
-    def test_run_prepared_graph_param_binding_invariant_violation(
+    def test_run_prepared_graph_with_prechecked_graph_decodes_param_from_ir(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """run_prepared_graph raises AssertionError when checker invariant is violated."""
-        from unittest.mock import MagicMock, patch
-
-        from agm.agl.modules.ids import ENTRY_ID
+        """A prechecked graph executes supplied params through IR metadata."""
         from agm.agl.modules.roots import RootSet
         from agm.agl.typecheck.graph import check_graph as real_check_graph
 
@@ -3216,41 +3274,8 @@ class TestRunPreparedDefensivePaths:
         )
         rt = WorkflowRuntime()
         env = rt.host_environment()
-        real_cg = real_check_graph(prepared.resolved_graph, env.capabilities)  # type: ignore[arg-type]
-
-        def fake_check_graph(rg: object, caps: object) -> object:
-            # Return a modified graph where type_env.get_binding_type returns None.
-            fake_graph = MagicMock()
-            real_entry = real_cg.modules[ENTRY_ID]
-            fake_entry = MagicMock()
-            fake_entry.resolved = real_entry.resolved
-            fake_entry.node_types = real_entry.node_types
-            fake_entry.contract_specs = {}
-            fake_entry.call_sites = ()
-            fake_entry.warnings = ()
-            fake_entry.type_env = MagicMock()
-            # get_binding_type returns None → triggers AssertionError.
-            fake_entry.type_env.get_binding_type.return_value = None
-            fake_entry.function_signatures = real_entry.function_signatures
-            fake_entry.cast_specs = {}
-            fake_graph.modules = {ENTRY_ID: fake_entry}
-            fake_graph.warnings = ()
-            return fake_graph
-
-        with patch("agm.agl.typecheck.graph.check_graph", side_effect=fake_check_graph):
-            with pytest.raises(AssertionError, match="checker invariant violated"):
-                rt.run_prepared_graph(prepared, param_values={"n": 7})
-
-
-class TestBuildCallInventoryEdgeCases:
-    """Coverage for _build_call_inventory_from_call_sites skipping non-CallSiteRecord items."""
-
-    def test_non_call_site_record_is_skipped(self, tmp_path: pathlib.Path) -> None:
-        """_build_call_inventory_from_call_sites skips non-CallSiteRecord items."""
-        from agm.agl.runtime.runtime import (
-            _build_call_inventory_from_call_sites,  # type: ignore[attr-defined]
+        checked_graph = real_check_graph(prepared.resolved_graph, env.capabilities)  # type: ignore[arg-type]
+        result = rt.run_prepared_graph(
+            prepared, param_values={"n": 7}, checked_graph=checked_graph
         )
-
-        # Passing a non-CallSiteRecord in the call_sites tuple should produce no entries.
-        inventory = _build_call_inventory_from_call_sites(("not-a-record",), {})  # type: ignore[arg-type]
-        assert inventory == []
+        assert result.ok

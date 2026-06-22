@@ -43,6 +43,7 @@ from agm.agl.eval.values import (
     EnumValue,
     ExceptionValue,
     IntValue,
+    IrClosureValue,
     JsonValue,
     ListValue,
     RecordValue,
@@ -158,6 +159,9 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
 
     if isinstance(value, Closure):
         return _closure_surface(value)
+
+    if isinstance(value, IrClosureValue):
+        return f"<function/{value.arity} -> {value.result_label}>"
 
     if isinstance(value, JsonValue):
         if top_level:

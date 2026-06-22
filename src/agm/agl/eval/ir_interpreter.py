@@ -20,10 +20,10 @@ from __future__ import annotations
 import decimal
 import json
 from collections.abc import Mapping
-from typing import assert_never, cast
+from typing import TYPE_CHECKING, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
-from agm.agl.eval.agent_parse import parse_agent_output
+from agm.agl.eval.agent_parse import AgentParseResult, parse_agent_output
 from agm.agl.eval.arith import (
     AglDivisionByZero,
     add,
@@ -139,6 +139,10 @@ from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
+
+if TYPE_CHECKING:
+    from agm.agl.runtime.codec import ParseResult
+    from agm.agl.runtime.contract import OutputContract
 
 __all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
 
@@ -256,6 +260,7 @@ class IrInterpreter:
         registry: AgentRegistry | None = None,
         strict_json: bool = False,
         shell_exec_timeout: float | None = None,
+        host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [{}]
@@ -271,6 +276,26 @@ class IrInterpreter:
         )
         self._strict_json: bool = strict_json
         self._shell_exec_timeout: float | None = shell_exec_timeout
+        self._host_contracts = host_contracts if host_contracts is not None else {}
+
+    def _parse_host_output(
+        self, raw: str, contract_id: ContractId, *, effective_strict: bool
+    ) -> "AgentParseResult | ParseResult":
+        contract = self._program.contracts[contract_id]
+        host_contract = self._host_contracts.get(contract_id)
+        if host_contract is None or contract.codec_name in {"text", "json"}:
+            return parse_agent_output(raw, contract, effective_strict=effective_strict)
+        schema = (
+            host_contract.json_schema
+            if isinstance(host_contract.json_schema, dict)
+            else None
+        )
+        return host_contract.codec.parse(
+            raw,
+            host_contract.target_type,
+            strict_json=effective_strict,
+            schema=schema,
+        )
 
     @property
     def _frame(self) -> Frame:
@@ -437,6 +462,33 @@ class IrInterpreter:
         5. ``_bind_and_invoke``.
         """
         callee_val = self._eval(callee_expr)
+        if isinstance(callee_val, ConstructorValue):
+            constructor_desc = self._program.nominals[callee_val.nominal]
+            field_names = (
+                constructor_desc.fields
+                if callee_val.variant is None
+                else next(
+                    v.fields
+                    for v in constructor_desc.variants
+                    if v.name == callee_val.variant
+                )
+            )
+            fields = {
+                name: self._eval(argument)
+                for name, argument in zip(field_names, arguments, strict=True)
+            }
+            if callee_val.variant is None:
+                return RecordValue(
+                    nominal=callee_val.nominal,
+                    display_name=callee_val.display_name,
+                    fields=fields,
+                )
+            return EnumValue(
+                nominal=callee_val.nominal,
+                display_name=callee_val.display_name,
+                variant=callee_val.variant,
+                fields=fields,
+            )
         if not isinstance(callee_val, IrClosureValue):
             raise InvalidIrError(
                 f"IrIndirectCall: callee evaluated to {type(callee_val).__name__},"
@@ -507,7 +559,12 @@ class IrInterpreter:
 
             for mod in self._program.modules.values():
                 for node in mod.initializers:
-                    self._eval(node)
+                    try:
+                        self._eval(node)
+                    except AglRaise as exc:
+                        if exc.span is None:
+                            exc.span = node.location
+                        raise
         return self._collect_results()
 
     # ------------------------------------------------------------------
@@ -582,6 +639,10 @@ class IrInterpreter:
 
             case IrAssign(symbol=sym, path=path, value=val_expr):
                 slot = self._frame.get(sym)
+                if slot is None and self._frames[0] is not self._frame:
+                    # Module vars live in the base frame and are intentionally
+                    # not closure captures.
+                    slot = self._frames[0].get(sym)
                 if not isinstance(slot, Cell):
                     desc = self._program.symbols.get(sym)
                     if desc is None:
@@ -597,6 +658,12 @@ class IrInterpreter:
                     # (parity with the legacy interpreter); the mutation is the
                     # side effect.
                     slot.value = self._eval(val_expr)
+                    mutation_desc = self._program.symbols[sym]
+                    self._trace.mutation(
+                        name=mutation_desc.public_name or f"symbol#{sym.value}",
+                        value=slot.value,
+                        span=node.location,
+                    )
                     return UnitValue()
                 # Indexed assignment with non-empty path
                 root = slot.value
@@ -625,6 +692,12 @@ class IrInterpreter:
                 for container, idx_val, kind in reversed(containers):
                     updated = index_set(kind, container, idx_val, updated)
                 slot.value = updated
+                mutation_desc = self._program.symbols[sym]
+                self._trace.mutation(
+                    name=mutation_desc.public_name or f"symbol#{sym.value}",
+                    value=slot.value,
+                    span=node.location,
+                )
                 # An assignment statement yields unit (parity with legacy).
                 return UnitValue()
 
@@ -926,7 +999,13 @@ class IrInterpreter:
                     else:
                         val = slot.value if isinstance(slot, Cell) else slot
                         cap_slots.append((cap.symbol, val))
-                return IrClosureValue(function_id=fn_id, captures=tuple(cap_slots))
+                function_desc = self._program.functions[fn_id]
+                return IrClosureValue(
+                    function_id=fn_id,
+                    captures=tuple(cap_slots),
+                    arity=len(function_desc.params),
+                    result_label=function_desc.result_label,
+                )
 
             case IrDirectCall(function_id=fn_id, arguments=arguments):
                 return self._execute_direct_call(fn_id, arguments, node.location)
@@ -936,7 +1015,9 @@ class IrInterpreter:
 
             case IrPrint(value=val_expr):
                 val = self._eval(val_expr)
-                print(render_value(val))
+                rendered = render_value(val)
+                print(rendered)
+                self._trace.print_stmt(rendered=rendered, span=node.location)
                 return UnitValue()
 
             case IrParseJson(value=val_expr):
@@ -1022,6 +1103,23 @@ class IrInterpreter:
             contract.strict_json if contract.strict_json is not None else self._strict_json
         )
 
+        from agm.agl.runtime.contract import TypelessOutputContract
+
+        output_contract: OutputContract | TypelessOutputContract = self._host_contracts.get(
+            contract_id
+        ) or TypelessOutputContract(
+            target_type=contract.target_type_label,
+            codec_name=contract.codec_name,
+            strict_json=contract.strict_json,
+            format_instructions=contract.format_instructions,
+            json_schema=(
+                None
+                if contract.json_schema is None
+                else cast(object, json.loads(contract.json_schema))
+            ),
+            structured_exec=contract.structured_exec,
+        )
+
         last_raw: str | None = None
         last_normalized: str | None = None
         last_errors: tuple[ReqValidationError, ...] = ()
@@ -1031,7 +1129,7 @@ class IrInterpreter:
                 agent=agent_name,
                 attempt=attempt,
                 prompt=prompt_text,
-                span=None,
+                span=_node.location,
             )
             request = AgentRequest(
                 agent=agent_name,
@@ -1039,12 +1137,22 @@ class IrInterpreter:
                 attempt=attempt,
                 previous_invalid_output=last_raw,
                 validation_errors=list(last_errors),
-                output_contract=None,
+                output_contract=output_contract,
             )
             response = self._registry.dispatch(agent_name, request)
             raw = response.content
 
-            result = parse_agent_output(raw, contract, effective_strict=effective_strict)
+            result = self._parse_host_output(
+                raw, contract_id, effective_strict=effective_strict
+            )
+            self._trace.parse_result(
+                ok=result.ok,
+                raw=raw,
+                normalized_raw=result.normalized_raw or raw,
+                error_summary=result.error_msg
+                or "; ".join(error.message for error in result.errors),
+                span=_node.location,
+            )
 
             if result.ok and result.value is not None:
                 return result.value
@@ -1161,7 +1269,9 @@ class IrInterpreter:
     # Exec call helper (M6c)
     # ------------------------------------------------------------------
 
-    def _run_exec_shell(self, cmd: str) -> tuple[str, str, int | None]:
+    def _run_exec_shell(
+        self, cmd: str, location: Location
+    ) -> tuple[str, str, int | None]:
         """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
 
         Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT
@@ -1190,6 +1300,15 @@ class IrInterpreter:
             )
         if result.timed_out:
             exit_code = result.returncode if result.returncode is not None else -1
+            self._trace.exec_command(
+                command=cmd,
+                exit_code=exit_code,
+                duration=result.elapsed,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                timed_out=True,
+                span=location,
+            )
             raise AglRaise(
                 _make_exc_value(
                     "ExecError",
@@ -1202,6 +1321,15 @@ class IrInterpreter:
                     timed_out=BoolValue(True),
                 )
             )
+        self._trace.exec_command(
+            command=cmd,
+            exit_code=result.returncode if result.returncode is not None else 0,
+            duration=result.elapsed,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            timed_out=False,
+            span=location,
+        )
         return result.stdout, result.stderr, result.returncode
 
     def _eval_ir_exec(
@@ -1224,7 +1352,7 @@ class IrInterpreter:
         contract = self._program.contracts[contract_id]
 
         # 2. Run shell once (raises on spawn error or timeout)
-        stdout, stderr, returncode = self._run_exec_shell(cmd)
+        stdout, stderr, returncode = self._run_exec_shell(cmd, _node.location)
 
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
@@ -1272,7 +1400,7 @@ class IrInterpreter:
         for attempt in range(max_attempts):
             if attempt > 0:
                 # Re-run shell on retry (raises on spawn error / timeout / non-zero exit)
-                stdout2, stderr2, rc2 = self._run_exec_shell(cmd)
+                stdout2, stderr2, rc2 = self._run_exec_shell(cmd, _node.location)
                 if rc2 is not None and rc2 != 0:
                     raise AglRaise(
                         _make_exc_value(
@@ -1288,7 +1416,17 @@ class IrInterpreter:
                     )
                 last_raw = stdout2.rstrip("\n")
 
-            result = parse_agent_output(last_raw or "", contract, effective_strict=effective_strict)
+            result = self._parse_host_output(
+                last_raw or "", contract_id, effective_strict=effective_strict
+            )
+            self._trace.parse_result(
+                ok=result.ok,
+                raw=last_raw or "",
+                normalized_raw=result.normalized_raw or (last_raw or ""),
+                error_summary=result.error_msg
+                or "; ".join(error.message for error in result.errors),
+                span=_node.location,
+            )
 
             if result.ok and result.value is not None:
                 return result.value

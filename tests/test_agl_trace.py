@@ -958,9 +958,11 @@ class TestUnparseableFeedback:
             return AgentResponse(content="42")
 
         rt.register_agent("impl", agent)
-        # Patch JsonCodec.parse to return a failure with no details at all.
+        # Patch the IR output parser to return a failure with no details at all.
         bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
-        with patch("agm.agl.runtime.codec.JsonCodec.parse", return_value=bare_fail):
+        with patch(
+            "agm.agl.eval.ir_interpreter.parse_agent_output", return_value=bare_fail
+        ):
             result = rt.run(
                 'agent impl\nlet x: int = ask("q", agent: impl, on_parse_error: Abort())\nx'
             )

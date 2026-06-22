@@ -255,6 +255,8 @@ class IrClosureValue:
 
     function_id: FunctionId
     captures: "tuple[tuple[SymbolId, Slot], ...]"
+    arity: int = 0
+    result_label: str = "?"
 
     def __eq__(self, other: object) -> bool:
         return self is other

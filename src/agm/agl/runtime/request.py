@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from agm.agl.runtime.contract import OutputContract
+    from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 
 
 # The documented validation-error categories (design §7.5, extended for F4):
@@ -107,7 +107,7 @@ class AgentRequest:
     previous_invalid_output: str | None = None
     validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
-    output_contract: "OutputContract | None" = None
+    output_contract: "OutputContract | TypelessOutputContract | None" = None
 
 
 @dataclass(slots=True)

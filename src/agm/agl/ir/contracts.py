@@ -28,6 +28,7 @@ __all__ = [
     "DictDecode",
     "EnumDecode",
     "ListDecode",
+    "ParamDecoder",
     "RecordDecode",
     "ScalarDecode",
     "ScalarKind",
@@ -102,6 +103,16 @@ class EnumDecode:
 #: Closed union of decode-schema nodes.  Dispatch with a structural ``match``
 #: whose final arm is ``assert_never`` (D4).
 DecodeSchema = ScalarDecode | ListDecode | DictDecode | RecordDecode | EnumDecode
+
+
+@dataclass(frozen=True, slots=True)
+class ParamDecoder:
+    """Typeless decoder for one host-supplied entry parameter."""
+
+    target_type_label: str
+    json_schema: str
+    decode: DecodeSchema
+    text_verbatim: bool = False
 
 
 # ---------------------------------------------------------------------------

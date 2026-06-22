@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import assert_never
 
 from agm.agl._text import normalize_newlines
-from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
+from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -463,6 +463,15 @@ class _Lowerer:
                 f"compiler bug: captured binding {ref.name!r} (decl_node_id={decl_id})"
                 " has no allocated symbol"
             )
+            # Module-owned bindings are resolved dynamically through frames[0].
+            # Capturing them would snapshot module lets and require module vars to
+            # exist before a top-level function closure can be hoisted.
+            symbol_desc = self._link.symbols[sym]
+            if (
+                isinstance(symbol_desc.owner, ModuleId)
+                and symbol_desc.public_name is not None
+            ):
+                continue
             captures.append(IrCapture(symbol=sym, by_cell=ref.mutable))
         return tuple(captures)
 
@@ -527,6 +536,7 @@ class _Lowerer:
             module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
+            result_label=repr(sig.result),
         )
         self._link.functions[fn_id] = desc
 
@@ -615,6 +625,7 @@ class _Lowerer:
             module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
+            result_label=repr(fn_type.result),
         )
         self._link.functions[fn_id] = desc
 
@@ -725,7 +736,11 @@ class _Lowerer:
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
                         # Constructor with fields used as a value → IrMakeConstructor.
-                        nominal, display = self._nominal_for_cref_owner(cref.owner_name)
+                        binding = self._checked.resolved.resolution.get(nid)
+                        owner_module = binding.module_id if binding is not None else None
+                        nominal, display = self._nominal_for_cref_owner(
+                            cref.owner_name, owner_module
+                        )
                         return IrMakeConstructor(
                             location=self._loc(span),
                             nominal=nominal,
@@ -783,11 +798,11 @@ class _Lowerer:
                 qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
                 if qcr is not None:
                     # qcr is (owner_name, member, owner_module_id | None)
-                    owner_name, variant_name, _qcr_mid = qcr
+                    owner_name, variant_name, qcr_mid = qcr
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
                         # With-fields variant used as value → IrMakeConstructor.
-                        nominal, display = self._nominal_for_cref_owner(owner_name)
+                        nominal, display = self._nominal_for_cref_owner(owner_name, qcr_mid)
                         return IrMakeConstructor(
                             location=self._loc(span),
                             nominal=nominal,
@@ -883,8 +898,8 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Control flow — M3f-A: if, raise, try
             # ----------------------------------------------------------
-            case If(branches=branches, span=span):
-                return self._lower_if(branches, span)
+            case If(branches=branches, span=span, node_id=nid):
+                return self._lower_if(branches, span, self._node_type(nid))
 
             case Raise(exc=exc_expr, span=span):
                 return IrRaise(
@@ -898,8 +913,10 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Case expression — M3f-B
             # ----------------------------------------------------------
-            case Case(subject=subject_expr, branches=branches, span=span):
-                return self._lower_case(subject_expr, branches, span)
+            case Case(subject=subject_expr, branches=branches, span=span, node_id=nid):
+                return self._lower_case(
+                    subject_expr, branches, span, self._node_type(nid)
+                )
 
             # ----------------------------------------------------------
             # do…until loop → IrLoop (M3f-C)
@@ -1090,13 +1107,19 @@ class _Lowerer:
     # Constructor lowering helpers (M3d)
     # ------------------------------------------------------------------
 
-    def _nominal_for_cref_owner(self, owner_name: str) -> tuple[NominalId, str]:
+    def _nominal_for_cref_owner(
+        self, owner_name: str, owner_module: ModuleId | None = None
+    ) -> tuple[NominalId, str]:
         """Return (NominalId, display_name) for a constructor owner by name.
 
         For exceptions the nominal uses PRELUDE_ID; for records/enums it uses
         the type's own module_id (which equals ENTRY_ID for single-module programs).
         """
-        typ = self._checked.type_env.get_type(owner_name)
+        typ = (
+            self._checked.type_env.resolve_type_by_module_id(owner_module, owner_name)
+            if owner_module is not None and not owner_module.is_entry
+            else self._checked.type_env.get_type(owner_name)
+        )
         if isinstance(typ, RecordType):
             return NominalId(typ.module_id, typ.name), typ.name
         if isinstance(typ, EnumType):
@@ -1105,7 +1128,17 @@ class _Lowerer:
             # Exception constructors as first-class values are rejected by the checker.
             return NominalId(PRELUDE_ID, typ.name), typ.name
         # Fallback for generic types: get from GenericTypeDef template.  # pragma: no cover
-        gdef = self._checked.type_env.get_generic_type(owner_name)  # pragma: no cover
+        gdef = (
+            self._checked.type_env.get_generic_type_from_module(owner_module, owner_name)
+            if owner_module is not None and not owner_module.is_entry
+            else self._checked.type_env.get_generic_type(owner_name)
+        )
+        if gdef is None:
+            imported = self._checked.type_env.get_open_imported_generic_type(owner_name)
+            if imported is not None:
+                imported_module, imported_name, gdef = imported
+                owner_module = imported_module
+                owner_name = imported_name
         if gdef is not None:  # pragma: no cover
             tmpl = gdef.template  # pragma: no cover
             if isinstance(tmpl, RecordType):  # pragma: no cover
@@ -1409,6 +1442,7 @@ class _Lowerer:
         self,
         branches: "tuple[IfBranch, ...]",
         span: "SourceSpan",
+        result_type: Type,
     ) -> IrIf:
         """Lower an ``If`` AST node to ``IrIf``."""
         has_else = any(isinstance(br.cond, ElseSentinel) for br in branches)
@@ -1416,13 +1450,13 @@ class _Lowerer:
         for branch in branches:
             if isinstance(branch.cond, ElseSentinel):
                 ir_branches.append(
-                    IrIfBranch(cond=None, body=self.lower_expr(branch.body))
+                    IrIfBranch(cond=None, body=self.lower_coerced(branch.body, result_type))
                 )
             else:
                 ir_branches.append(
                     IrIfBranch(
                         cond=self.lower_expr(branch.cond),
-                        body=self.lower_expr(branch.body),
+                        body=self.lower_coerced(branch.body, result_type),
                     )
                 )
         return IrIf(
@@ -1482,12 +1516,13 @@ class _Lowerer:
         subject_expr: "Expr",
         branches: "tuple[CaseBranch, ...]",
         span: "SourceSpan",
+        result_type: Type,
     ) -> IrCase:
         """Lower a ``Case`` AST node to ``IrCase`` with compiled match plans."""
         ir_arms = tuple(
             IrCaseArm(
                 plan=self._compile_plan(branch.pattern),
-                body=self.lower_expr(branch.body),
+                body=self.lower_coerced(branch.body, result_type),
             )
             for branch in branches
         )
@@ -1582,7 +1617,7 @@ class _Lowerer:
             # Build format_instructions and json_schema from the spec.
             if spec.codec_name == "json":
                 schema_dict = derive_schema(spec.target_type)
-                json_schema_str: str | None = json.dumps(schema_dict, sort_keys=True)
+                json_schema_str: str | None = json.dumps(schema_dict)
                 fmt_instr = _build_format_instructions(schema_dict)
                 decode_schema = build_decode_schema(spec.target_type)
             else:
@@ -1654,7 +1689,7 @@ class _Lowerer:
             structured_exec = spec.structured_exec
             if spec.codec_name == "json":
                 schema_dict = derive_schema(spec.target_type)
-                json_schema_str: str | None = json.dumps(schema_dict, sort_keys=True)
+                json_schema_str: str | None = json.dumps(schema_dict)
                 fmt_instr = _build_format_instructions(schema_dict)
                 decode_schema = build_decode_schema(spec.target_type)
             else:
@@ -1813,6 +1848,12 @@ class _Lowerer:
             required=(param.default is None),
             default=default_ir,
             location=self._loc(param.span),
+            external_decoder=ParamDecoder(
+                target_type_label=repr(binding_type),
+                json_schema=json.dumps(derive_schema(binding_type), sort_keys=True),
+                decode=build_decode_schema(binding_type),
+                text_verbatim=isinstance(binding_type, TextType),
+            ),
         )
         self._params.append(ir_param)
 
@@ -1948,6 +1989,30 @@ class _Lowerer:
                     variants=(),
                 )
 
+        # Generic definitions are stored separately from the ordinary type
+        # namespace. Runtime nominal identity erases type arguments, so one
+        # descriptor per generic declaration is sufficient for every instance.
+        for name, generic in self._checked.type_env.all_generic_types().items():
+            typ = generic.template
+            nominal = NominalId(typ.module_id, name)
+            if isinstance(typ, RecordType):
+                self._link.nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    display_name=name,
+                    kind=NominalKind.RECORD,
+                    fields=tuple(typ.fields),
+                )
+            else:
+                self._link.nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    display_name=name,
+                    kind=NominalKind.ENUM,
+                    variants=tuple(
+                        VariantDescriptor(vname, tuple(vfields))
+                        for vname, vfields in typ.variants.items()
+                    ),
+                )
+
         # Built-in exceptions: always keyed by NominalId(PRELUDE_ID, name).
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             nominal = NominalId(PRELUDE_ID, exc_name)
@@ -1981,15 +2046,17 @@ class _Lowerer:
                 )
 
         # Phase 2: lower all items
-        ir_items: list[IrExpr] = []
+        function_initializers: list[IrExpr] = []
+        other_initializers: list[IrExpr] = []
         for item in body.items:
             ir = self.lower_item(item, top_level=True)
             if ir is not None:
-                ir_items.append(ir)
+                target = function_initializers if isinstance(item, FuncDef) else other_initializers
+                target.append(ir)
 
         entry_mod = ExecutableModule(
             module_id=self._module_id,
-            initializers=tuple(ir_items),
+            initializers=tuple((*function_initializers, *other_initializers)),
         )
 
         dry_run_inventory = tuple(

@@ -31,6 +31,34 @@ from tests.agl.oracle.harness import assert_oracle_agrees, assert_oracle_raises,
 pytestmark = pytest.mark.oracle
 
 
+def test_top_level_call_can_reference_later_function() -> None:
+    source = """
+let answer = first(20)
+
+def first(n: int) -> int =
+  second(n) + 1
+
+def second(n: int) -> int =
+  n * 2
+"""
+    legacy, ir = assert_oracle_agrees(source)
+    assert legacy["answer"] == ir["answer"] == IntValue(41)
+
+
+def test_function_mutates_module_var_without_capture() -> None:
+    source = """
+var count = 0
+
+def increment() -> unit =
+  count := count + 1
+
+increment()
+increment()
+"""
+    legacy, ir = assert_oracle_agrees(source)
+    assert legacy["count"] == ir["count"] == IntValue(2)
+
+
 # ---------------------------------------------------------------------------
 # 1. Lambda with explicit return type bound to let, then called
 # ---------------------------------------------------------------------------

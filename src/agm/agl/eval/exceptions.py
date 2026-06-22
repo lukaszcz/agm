@@ -27,6 +27,7 @@ from agm.agl.modules.ids import PRELUDE_ID
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import Value
+    from agm.agl.ir.ids import Location
     from agm.agl.syntax.spans import SourceSpan
 
 
@@ -65,7 +66,9 @@ class AglRaise(Exception):
     available (e.g. binary-op arithmetic errors).
     """
 
-    def __init__(self, exc: ExceptionValue, *, span: "SourceSpan | None" = None) -> None:
+    def __init__(
+        self, exc: ExceptionValue, *, span: "SourceSpan | Location | None" = None
+    ) -> None:
         super().__init__(exc.display_name)
         self.exc = exc
-        self.span: SourceSpan | None = span
+        self.span: SourceSpan | Location | None = span

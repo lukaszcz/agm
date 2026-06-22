@@ -1251,9 +1251,7 @@ class TestM4bLambdaLowering:
         assert isinstance(add_off_bind, IrBind)
         assert isinstance(add_off_bind.value, IrMakeClosure)
         captures = add_off_bind.value.captures
-        assert len(captures) == 1, "Lambda should capture exactly one symbol (offset)"
-        # by_cell=False because offset is a let binding
-        assert captures[0].by_cell is False
+        assert captures == (), "Module bindings resolve through the base frame"
 
     def test_lambda_inferred_return_type_lowered(self) -> None:
         """Lambda with inferred return type still gets body coercion from FunctionType."""

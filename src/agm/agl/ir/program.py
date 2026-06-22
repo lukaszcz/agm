@@ -22,7 +22,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 
-from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.contracts import ContractRequest, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.modules.ids import ModuleId
@@ -143,6 +143,7 @@ class FunctionDescriptor:
     module_id: ModuleId
     params: "tuple[IrFunctionParam, ...]"
     body: IrExpr
+    result_label: str = "?"
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +197,7 @@ class IrParam:
     required: bool
     default: "IrExpr | None"
     location: Location
+    external_decoder: ParamDecoder | None = None
 
 
 # ---------------------------------------------------------------------------

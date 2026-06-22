@@ -32,6 +32,7 @@ from agm.core.log import append_jsonl
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import Value
+    from agm.agl.ir.ids import Location
     from agm.agl.syntax.spans import SourceSpan
 
 
@@ -126,7 +127,7 @@ class TraceStore:
         agent: str,
         attempt: int,
         prompt: str,
-        span: "SourceSpan | None" = None,
+        span: "SourceSpan | Location | None" = None,
     ) -> str:
         """Record one agent-call attempt; return the event's ``trace_id``.
 
@@ -154,7 +155,7 @@ class TraceStore:
         raw: str,
         normalized_raw: str,
         error_summary: str,
-        span: "SourceSpan | None" = None,
+        span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record the outcome of a codec parse attempt."""
         if self._path is None:
@@ -175,7 +176,7 @@ class TraceStore:
         *,
         name: str,
         value: "Value",
-        span: "SourceSpan | None" = None,
+        span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record a ``:=`` mutation of a mutable binding."""
         if self._path is None:
@@ -196,7 +197,7 @@ class TraceStore:
         self,
         *,
         rendered: str,
-        span: "SourceSpan | None" = None,
+        span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record a ``print`` statement output."""
         if self._path is None:
@@ -216,7 +217,7 @@ class TraceStore:
         stdout: str,
         stderr: str,
         timed_out: bool,
-        span: "SourceSpan | None" = None,
+        span: "SourceSpan | Location | None" = None,
     ) -> str:
         """Record a completed ``exec`` shell command; return the event ``trace_id``.
 
@@ -248,7 +249,7 @@ class TraceStore:
         type_name: str,
         message: str,
         trace_id: str,
-        span: "SourceSpan | None" = None,
+        span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record an uncaught AgL exception that escapes the program.
 

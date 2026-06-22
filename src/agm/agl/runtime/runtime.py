@@ -1,6 +1,6 @@
 """WorkflowRuntime — the public façade for the AgL host runtime.
 
-Drives the full ``parse → scope → typecheck → host-prep → eval`` pipeline:
+Drives the full ``parse → scope → typecheck → lower/link → IR eval`` pipeline:
 registers agents/codecs, validates host params, materializes output
 contracts, and executes the program (or stops after static checking for
 ``agm exec --dry-run``).  Structured outputs use the JSON codec with
@@ -12,9 +12,9 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.runtime.agents import AgentFn
 
 if TYPE_CHECKING:
@@ -22,9 +22,12 @@ if TYPE_CHECKING:
 
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.eval.values import ExceptionValue, Value
+    from agm.agl.ir.ids import ContractId, SymbolId
+    from agm.agl.ir.program import ExecutableProgram
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
+    from agm.agl.runtime.contract import OutputContract
     from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
@@ -716,87 +719,26 @@ class WorkflowRuntime:
         # Collect warnings from typecheck.
         warnings.extend(checked.warnings)
 
-        # ----------------------------------------------------------------
-        # [4] Validate required params and collect declared param types.
-        # ----------------------------------------------------------------
-        from agm.agl.syntax.nodes import ParamDecl
+        from agm.agl.lower import lower_program
 
-        declared_params: dict[str, AglType] = {}
-        param_errors: list[Diagnostic] = []
-        for item in program.body.items:
-            if isinstance(item, ParamDecl):
-                param_type = checked.type_env.get_binding_type(item.node_id)
-                if param_type is None:
-                    raise AssertionError(
-                        f"Param {item.name!r} has no recorded binding type; "
-                        "checker invariant violated."
-                    )
-                declared_params[item.name] = param_type
-                if item.default is None and item.name not in param_values:
-                    param_errors.append(
-                        diagnostic_from_span(
-                            f"Missing required param: {item.name!r}",
-                            item.span,
-                        )
-                    )
+        executable = lower_program(
+            checked,
+            source_text=source,
+            source_label="<entry>",
+            validate=True,
+        )
 
+        ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
         if param_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=param_errors,
-                error=None,
-                warnings=list(warnings),
-            )
+            return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
 
-        # ----------------------------------------------------------------
-        # [5] Materialize output contracts (text codec only in M1)
-        # ----------------------------------------------------------------
-        from agm.agl.runtime.contract import materialize_contract
-
-        # Reuse the merged codec map built for HostCapabilities above.
-        codecs = host_env.codecs
-        contracts: dict[int, object] = {}
-        contract_errors: list[Diagnostic] = []
-
-        for node_id, spec in checked.contract_specs.items():
-            try:
-                contracts[node_id] = materialize_contract(spec, codecs)
-            except ValueError as exc:
-                contract_errors.append(
-                    Diagnostic(message=f"Contract error: {exc}", line=1)
-                )
-
+        host_contracts, contract_errors = _materialize_ir_contracts(
+            executable, host_env.codecs
+        )
         if contract_errors:
             return RunResult(
                 ok=False,
                 diagnostics=contract_errors,
-                error=None,
-                warnings=list(warnings),
-            )
-
-        # ----------------------------------------------------------------
-        # [6] Convert supplied external param values.
-        # ----------------------------------------------------------------
-        converted_params: dict[str, Value] = {}
-        param_bind_errors: list[Diagnostic] = []
-
-        for item in program.body.items:
-            if isinstance(item, ParamDecl) and item.name in param_values:
-                raw_val = param_values[item.name]
-                param_type_obj = declared_params[item.name]
-                try:
-                    typed_val = convert_param_value(item.name, raw_val, param_type_obj)
-                except ValueError as exc:
-                    param_bind_errors.append(
-                        diagnostic_from_span(str(exc), item.span)
-                    )
-                    continue
-                converted_params[item.name] = typed_val
-
-        if param_bind_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=param_bind_errors,
                 error=None,
                 warnings=list(warnings),
             )
@@ -809,7 +751,7 @@ class WorkflowRuntime:
         # Dry-run is side-effect-free: no trace is written (plan §10.1).
         # ----------------------------------------------------------------
         if check_only:
-            inventory = _build_call_inventory(checked, contracts)
+            inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
             return RunResult(
                 ok=True,
                 diagnostics=[],
@@ -824,9 +766,7 @@ class WorkflowRuntime:
         # [7] Build and run the interpreter
         # ----------------------------------------------------------------
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.eval.scope import Scope
-        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.runtime.trace import TraceStore
 
         # Create the trace store for this run.  When log_file is None the
@@ -838,27 +778,20 @@ class WorkflowRuntime:
             mkdir(log_file.parent, parents=True, exist_ok=True)
         trace.run_start()
 
-        typed_contracts: dict[int, OutputContract] = {
-            nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
-        }
-
-        root_scope = Scope(parent=None)
-        interp = Interpreter(
-            checked=checked,
+        interp = IrInterpreter(
+            executable,
             registry=registry,
-            contracts=typed_contracts,
-            type_env=checked.type_env,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
-            source=source,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
             max_call_depth=self._default_call_depth_limit,
-            param_values=converted_params,
+            param_values=ir_param_values,
+            host_contracts=host_contracts,
         )
 
         try:
-            interp.execute(root_scope)
+            root_bindings = interp.run()
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).
             # ONLY the AgL exception carrier is caught here: an unexpected Python
@@ -884,8 +817,6 @@ class WorkflowRuntime:
                 trace_path=log_file,
             )
 
-        # Successful run: snapshot root bindings.
-        root_bindings = root_scope.snapshot()
         trace.run_end(ok=True)
 
         return RunResult(
@@ -1089,8 +1020,8 @@ class WorkflowRuntime:
         """Execute an already loaded + scoped module graph (no re-loading).
 
         Graph-mode analogue of :meth:`run_prepared`.  Resumes the pipeline at
-        type checking: ``check_graph`` → validate params → materialize contracts
-        → ``execute_graph``.  Agents are entry-program-owned.
+        type checking: ``check_graph`` → ``lower_graph`` → ``IrInterpreter``.
+        Agents are entry-program-owned.
 
         When *prepared* carries a load/scope failure (``resolved_graph is
         None``), its diagnostics are surfaced unchanged and nothing executes.
@@ -1101,8 +1032,6 @@ class WorkflowRuntime:
             second redundant ``check_graph`` call.  ``None`` (the default)
             runs type checking here as before.
         """
-        from agm.agl.modules.ids import ENTRY_ID
-
         if param_values is None:
             param_values = {}
 
@@ -1147,60 +1076,17 @@ class WorkflowRuntime:
 
         warnings.extend(checked_graph.warnings)
 
-        entry_cm = checked_graph.modules[ENTRY_ID]
+        from agm.agl.lower import lower_graph
 
-        # Validate required params from the entry module.
-        from agm.agl.syntax.nodes import ParamDecl
+        executable = lower_graph(checked_graph, validate=True)
 
-        declared_params: dict[str, "AglType"] = {}
-        param_errors: list[Diagnostic] = []
-        for item in entry_cm.resolved.program.body.items:
-            if isinstance(item, ParamDecl):
-                param_type = entry_cm.type_env.get_binding_type(item.node_id)
-                if param_type is None:
-                    raise AssertionError(
-                        f"Param {item.name!r} has no recorded binding type; "
-                        "checker invariant violated."
-                    )
-                declared_params[item.name] = param_type
-                if item.default is None and item.name not in param_values:
-                    param_errors.append(
-                        diagnostic_from_span(
-                            f"Missing required param: {item.name!r}",
-                            item.span,
-                        )
-                    )
-
+        ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
         if param_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=param_errors,
-                error=None,
-                warnings=list(warnings),
-            )
+            return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
 
-        # Materialize output contracts — merge contract_specs from all modules.
-        from agm.agl.runtime.contract import materialize_contract
-
-        codecs = host_env.codecs
-        contracts: dict[int, object] = {}
-        contract_errors: list[Diagnostic] = []
-
-        # Merge contract_specs from all modules (entry + library).
-        from agm.agl.typecheck.env import OutputContractSpec
-
-        merged_contract_specs: dict[int, OutputContractSpec] = {}
-        for cm in checked_graph.modules.values():
-            merged_contract_specs.update(cm.contract_specs)
-
-        for node_id, spec in merged_contract_specs.items():
-            try:
-                contracts[node_id] = materialize_contract(spec, codecs)
-            except ValueError as exc:
-                contract_errors.append(
-                    Diagnostic(message=f"Contract error: {exc}", line=1)
-                )
-
+        host_contracts, contract_errors = _materialize_ir_contracts(
+            executable, host_env.codecs
+        )
         if contract_errors:
             return RunResult(
                 ok=False,
@@ -1209,43 +1095,9 @@ class WorkflowRuntime:
                 warnings=list(warnings),
             )
 
-        # Convert supplied param values.
-        converted_params: dict[str, "Value"] = {}
-        param_bind_errors: list[Diagnostic] = []
-
-        for item in entry_cm.resolved.program.body.items:
-            if isinstance(item, ParamDecl) and item.name in param_values:
-                raw_val = param_values[item.name]
-                param_type_obj = declared_params[item.name]
-                try:
-                    typed_val = convert_param_value(item.name, raw_val, param_type_obj)
-                except ValueError as exc:
-                    param_bind_errors.append(
-                        diagnostic_from_span(str(exc), item.span)
-                    )
-                    continue
-                converted_params[item.name] = typed_val
-
-        if param_bind_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=param_bind_errors,
-                error=None,
-                warnings=list(warnings),
-            )
-
         # Dry-run stop: build call-site inventory from entry module only.
         if check_only:
-            from agm.agl.runtime.contract import OutputContract
-
-            entry_contracts = {
-                nid: c
-                for nid, c in contracts.items()
-                if nid in {rec.node_id for rec in entry_cm.call_sites}
-            }
-            inventory = _build_call_inventory_from_call_sites(
-                entry_cm.call_sites, entry_contracts
-            )
+            inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
             return RunResult(
                 ok=True,
                 diagnostics=[],
@@ -1258,8 +1110,7 @@ class WorkflowRuntime:
 
         # Execute the graph.
         from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.interpreter import execute_graph
-        from agm.agl.runtime.contract import OutputContract
+        from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.runtime.trace import TraceStore
 
         trace = TraceStore(path=log_file)
@@ -1269,23 +1120,18 @@ class WorkflowRuntime:
             mkdir(log_file.parent, parents=True, exist_ok=True)
         trace.run_start()
 
-        typed_contracts: dict[int, OutputContract] = {
-            nid: c for nid, c in contracts.items() if isinstance(c, OutputContract)
-        }
-
         try:
-            root_bindings = execute_graph(
-                checked_graph,
-                registry,
-                typed_contracts,
+            root_bindings = IrInterpreter(
+                executable,
+                registry=registry,
                 loop_limit=self._default_loop_limit,
                 strict_json=self._default_strict_json,
-                source=prepared.source,
                 shell_exec_timeout=self._shell_exec_timeout,
                 trace=trace,
                 max_call_depth=self._default_call_depth_limit,
-                param_values=converted_params,
-            )
+                param_values=ir_param_values,
+                host_contracts=host_contracts,
+            ).run()
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
             trace_id = str(error.fields.get("trace_id", ""))
@@ -1472,6 +1318,87 @@ def assemble_host_environment(
     )
 
 
+def _prepare_ir_params(
+    executable: "ExecutableProgram", param_values: Mapping[str, object]
+) -> tuple[dict["SymbolId", "Value"], list[Diagnostic]]:
+    """Validate and typelessly decode external params from IR metadata."""
+    from jsonschema import Draft202012Validator
+
+    from agm.agl.eval.conversions import decode_value
+    from agm.agl.runtime.convert import (
+        StrictJsonParseError,
+        normalize_integral_decimals,
+        parse_json_strict,
+    )
+
+    decoded: dict[SymbolId, Value] = {}
+    errors: list[Diagnostic] = []
+    for param in executable.params:
+        if param.public_name not in param_values:
+            if param.required:
+                errors.append(
+                    Diagnostic(
+                        message=f"Missing required param: {param.public_name!r}",
+                        line=param.location.start_line,
+                        column=param.location.start_col,
+                    )
+                )
+            continue
+        decoder = param.external_decoder
+        assert decoder is not None, "lowerer must provide an external param decoder"
+        raw = param_values[param.public_name]
+        try:
+            if decoder.text_verbatim:
+                if not isinstance(raw, str):
+                    raise ValueError(
+                        f"expected a text value (str), got {type(raw).__name__}"
+                    )
+                obj: object = raw
+            elif isinstance(raw, str):
+                obj = parse_json_strict(raw)
+            elif _is_json_shaped(raw):
+                obj = raw
+            else:
+                raise ValueError(f"expected a JSON-compatible value, got {type(raw).__name__}")
+            normalized = normalize_integral_decimals(obj)
+            schema = cast(object, json.loads(decoder.json_schema))
+            validation_errors = list(Draft202012Validator(schema).iter_errors(normalized))
+            if validation_errors:
+                raise ValueError(validation_errors[0].message)
+            decoded[param.symbol] = decode_value(decoder.decode, obj)
+        except (StrictJsonParseError, ValueError) as exc:
+            errors.append(
+                Diagnostic(
+                    message=(
+                        f"Param {param.public_name!r}: could not parse as "
+                        f"{decoder.target_type_label}: {exc}"
+                    ),
+                    line=param.location.start_line,
+                    column=param.location.start_col,
+                )
+            )
+    return decoded, errors
+
+
+def _materialize_ir_contracts(
+    executable: "ExecutableProgram", codecs: Mapping[str, "OutputCodec"]
+) -> tuple[dict["ContractId", "OutputContract"], list[Diagnostic]]:
+    """Materialize host codec contracts exclusively from linked IR metadata."""
+    from agm.agl.runtime.contract import materialize_ir_contract
+
+    materialized: dict[ContractId, OutputContract] = {}
+    errors: list[Diagnostic] = []
+    for contract_id, request in executable.contracts.items():
+        try:
+            contract = materialize_ir_contract(request, codecs)
+        except ValueError as exc:
+            errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
+            continue
+        if contract is not None:
+            materialized[contract_id] = contract
+    return materialized, errors
+
+
 def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
     """Convert a raw host param value to the declared AgL type.
 
@@ -1631,6 +1558,7 @@ def exception_value_to_run_error(
     populated from it so the CLI can include the source location in its
     exit-2 error output.
     """
+    from agm.agl.ir.ids import Location
     from agm.agl.runtime.serialize import value_to_json_obj
     from agm.agl.syntax.spans import SourceSpan
 
@@ -1639,83 +1567,26 @@ def exception_value_to_run_error(
     }
     line: int | None = None
     col: int | None = None
-    if isinstance(span, SourceSpan):
+    if isinstance(span, (SourceSpan, Location)):
         line = span.start_line
         col = span.start_col
     return RunError(type_name=exc.display_name, fields=fields, line=line, col=col)
 
 
-def _build_call_inventory_from_call_sites(
-    call_sites: "tuple[object, ...]",
-    contracts: dict[int, object],
-) -> list[CallSiteInfo]:
-    """Build call-site inventory from a tuple of ``CallSiteRecord`` objects.
+def _build_call_inventory_from_ir(entries: "tuple[object, ...]") -> list[CallSiteInfo]:
+    """Convert lowering-owned dry-run metadata to the public runtime shape."""
+    from agm.agl.ir.program import DryRunEntry
 
-    Used by :meth:`WorkflowRuntime.run_prepared_graph` for ``check_only`` mode
-    to build the inventory from the entry module's call_sites directly, without
-    a full ``CheckedProgram``.
-    """
-    from agm.agl.runtime.contract import OutputContract
-    from agm.agl.typecheck.env import CallSiteRecord
-
-    inventory: list[CallSiteInfo] = []
-
-    for record in call_sites:
-        if not isinstance(record, CallSiteRecord):
-            continue
-        contract = contracts.get(record.node_id)
-        has_schema = (
-            isinstance(contract, OutputContract) and contract.json_schema is not None
+    return [
+        CallSiteInfo(
+            callee=entry.callee,
+            target_type=entry.target_type_label,
+            codec_name=entry.codec_name,
+            has_schema=entry.has_schema,
+            parse_policy=entry.parse_policy,
+            line=entry.line,
+            col=entry.col,
         )
-        inventory.append(
-            CallSiteInfo(
-                callee=record.callee,
-                target_type=repr(record.target_type),
-                codec_name=record.codec_name,
-                has_schema=has_schema,
-                parse_policy=record.parse_policy,
-                line=record.line,
-                col=record.col,
-            )
-        )
-
-    return inventory
-
-
-def _build_call_inventory(
-    checked: CheckedProgramType,
-    contracts: dict[int, object],
-) -> list[CallSiteInfo]:
-    """Build the §10.1 static call-site inventory from the checked program.
-
-    The inventory is derived entirely from the checker's work: each
-    ``CallSiteRecord`` (recorded in source order while type-checking) supplies the
-    callee, target type, codec, parse policy, and span; the materialized
-    ``contracts`` table supplies schema presence. No second AST walk is
-    performed.
-
-    Returns one ``CallSiteInfo`` per agent-call/exec site, in source order.
-    """
-    from agm.agl.runtime.contract import OutputContract
-
-    inventory: list[CallSiteInfo] = []
-
-    for record in checked.call_sites:
-        contract = contracts.get(record.node_id)
-        has_schema = (
-            isinstance(contract, OutputContract) and contract.json_schema is not None
-        )
-
-        inventory.append(
-            CallSiteInfo(
-                callee=record.callee,
-                target_type=repr(record.target_type),
-                codec_name=record.codec_name,
-                has_schema=has_schema,
-                parse_policy=record.parse_policy,
-                line=record.line,
-                col=record.col,
-            )
-        )
-
-    return inventory
+        for entry in entries
+        if isinstance(entry, DryRunEntry)
+    ]

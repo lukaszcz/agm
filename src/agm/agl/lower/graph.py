@@ -21,7 +21,7 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
 from agm.agl.modules.ids import PRELUDE_ID, ModuleId
-from agm.agl.syntax.nodes import FuncDef
+from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.agl.typecheck.graph import CheckedModuleGraph
 from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, EnumType, ExceptionType, RecordType
 
@@ -108,6 +108,30 @@ def lower_graph(
             variants=(),
         )
 
+    # Generic declarations live outside graph_type_table. Runtime nominal
+    # identity erases type arguments, so register each generic template once.
+    for cm in checked_graph.modules.values():
+        for name, generic in cm.type_env.all_generic_types().items():
+            typ = generic.template
+            nominal = NominalId(typ.module_id, name)
+            if isinstance(typ, RecordType):
+                link.nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    display_name=name,
+                    kind=NominalKind.RECORD,
+                    fields=tuple(typ.fields),
+                )
+            else:
+                link.nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    display_name=name,
+                    kind=NominalKind.ENUM,
+                    variants=tuple(
+                        VariantDescriptor(vname, tuple(vfields))
+                        for vname, vfields in typ.variants.items()
+                    ),
+                )
+
     # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every FuncDef
     # across ALL modules before any body is lowered (enables cross-module calls).
     module_lowerers: dict[ModuleId, _Lowerer] = {}
@@ -119,6 +143,14 @@ def lower_graph(
         for item in body.items:
             if isinstance(item, FuncDef):
                 lowerer._prealloc_funcdef(item)
+            elif isinstance(item, AgentDecl):
+                lowerer._alloc_sym(
+                    item.node_id,
+                    name=item.name,
+                    mutable=False,
+                    public=mid.is_entry,
+                    owner=mid,
+                )
 
     # Step 4: Phase 2 — lower bodies.
     # Library modules first, entry last, so the insertion order of
@@ -131,15 +163,21 @@ def lower_graph(
         cm = checked_graph.modules[mid]
         lowerer = module_lowerers[mid]
         body = cm.resolved.program.body
-        ir_items: list[IrExpr] = []
+        function_initializers: list[IrExpr] = []
+        other_initializers: list[IrExpr] = []
         for item in body.items:
             if mid.is_entry or isinstance(item, FuncDef):
                 ir = lowerer.lower_item(item, top_level=mid.is_entry)
                 if ir is not None:
-                    ir_items.append(ir)
+                    target = (
+                        function_initializers
+                        if isinstance(item, FuncDef)
+                        else other_initializers
+                    )
+                    target.append(ir)
         executable_modules[mid] = ExecutableModule(
             module_id=mid,
-            initializers=tuple(ir_items),
+            initializers=tuple((*function_initializers, *other_initializers)),
         )
 
     # Collect entry-module params (only the entry module contributes params).

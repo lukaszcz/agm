@@ -1,6 +1,6 @@
 # AgL implementation architecture
 
-## Six-component pipeline
+## Production pipeline
 
 ```
 source (.agl)
@@ -9,13 +9,15 @@ source (.agl)
   → [2] Lark LALR parser  (grammar in grammar/agl.lark)
   → [3] AST  (pure dataclasses, NO Lark types)   ◄── stable contract / firewall
   → [4] scope / name resolution  (full static pass)
-  → [5] type checking  (full static pass; selects output contract specs)
-  → host preparation  (materializes output contracts; no program execution)
-  → [6a] evaluator  (tree-walking interpreter)  ← current default
-        ↘ host runtime: agents, codecs, trace store
-  → [6b] lowerer (typeless IR; agm.agl.lower) + IrInterpreter (agm.agl.eval.ir_interpreter)
-         ← migration-in-progress alternative (oracle tested against [6a])
+  → [5] type checking  (full static pass; selects concrete operations/contracts)
+  → [6] lowering + linking  (closed, typeless ExecutableProgram)
+  → [7] IR evaluation  (IrInterpreter)
+        ↘ host runtime: agents, shell execution, codecs, trace store
 ```
+
+`WorkflowRuntime` always executes this pipeline. The legacy AST interpreter remains
+importable only for the differential oracle and the separately scheduled REPL migration;
+production whole-program and module-graph execution do not call it.
 
 ## Firewall rule
 
@@ -224,13 +226,55 @@ or agent value is a static error.
 
 ## Decimal arithmetic context
 
-AgL semantics must not depend on the host's ambient `decimal` context. The
-evaluator (`agm.agl.eval.interpreter`) runs every program under a pinned
-`decimal.Context` (`_AGL_DECIMAL_CONTEXT`: 28-digit precision, `ROUND_HALF_EVEN`)
-via `decimal.localcontext` in `Interpreter.execute`. A host that lowered
+AgL semantics must not depend on the host's ambient `decimal` context. Both
+evaluators run every program under a pinned `decimal.Context` (28-digit
+precision, `ROUND_HALF_EVEN`) via `decimal.localcontext`. A host that lowered
 `getcontext().prec` would otherwise change results such as `1 / 3`.
 
-## Evaluator
+## Execution IR and evaluator
+
+`agm.agl.lower` consumes checked AST graphs and emits one linked
+`ExecutableProgram`. `lowerer.py` performs expected-type-directed expression
+lowering; `graph.py` allocates shared identities and links modules in dependency
+order. Top-level function closures are initialized before ordinary module
+initializers, matching declaration hoisting and enabling forward references.
+
+`agm.agl.ir` is the runtime-neutral data model:
+
+- `ids.py` defines program-local symbol, function, contract, source, and nominal
+  identities plus source locations.
+- `nodes.py` defines the closed expression families: constants and construction,
+  binding/load/assignment, arithmetic and comparison, control flow and matching,
+  closures/calls, conversion, and host operations.
+- `program.py` holds modules, symbols, functions, parameters, sources, nominals,
+  contracts, and dry-run inventory.
+- `contracts.py` holds typeless `ContractRequest`, `ParamDecoder`, decode-schema,
+  and conversion descriptors compiled while checker types are available.
+- `validate.py` checks identity references and structural IR invariants before
+  production execution.
+
+`agm.agl.eval.ir_interpreter.IrInterpreter` executes only those closed descriptors.
+Its frame stack uses values for immutable bindings and shared `Cell`s for mutable
+bindings. The base frame is module scope: module-owned lets, vars, params, functions,
+and agents are resolved there rather than captured. Function frames contain
+parameters and captures of function-owned lexical bindings; assignment falls back
+to the base frame for module vars. Generic type arguments are erased, while nominal
+identity remains module-qualified.
+
+Host calls are keyed by `ContractId`. `ContractRequest` carries codec selection,
+format instructions, canonical JSON schema, and a typeless decode walk; it is also
+converted to the agent-facing contract carrier so model-backed agents receive
+format/schema metadata. `IrParam.external_decoder` performs host parameter decoding
+without consulting checker binding types. Dry-run output is copied from the linked
+program's inventory rather than reconstructed from checker call-site tables.
+
+The legacy tree-walking evaluator in `agm.agl.eval.interpreter` is retained as a
+transition oracle. Oracle tests independently execute checked programs through the
+legacy AST path and the linked IR path, comparing public values, exception values
+(with nondeterministic trace ids normalized), stdout, and host-call behavior. It is
+not a production execution fallback.
+
+## Legacy evaluator model
 
 `agm.agl.eval` introduces three new value kinds in `agm.agl.eval.values`:
 
@@ -283,7 +327,7 @@ Agent-value dispatch: `_eval_ask_call` extracts the `AgentValue` from the
 `agent:` named argument (or uses the default agent when absent) and issues the
 call via the host runtime, exactly as the former `AgentCall` node did.
 
-Module-graph execution merges node-id-keyed checker dispatch tables into a
+The legacy module-graph oracle path merges node-id-keyed checker dispatch tables into a
 single interpreter view. Binding types from every checked module are copied
 into a fresh execution environment, so imported function bodies retain their
 implicit coercions without mutating a module's checker state. Each checked
@@ -762,89 +806,6 @@ sections from the layered config files and returns a `ModuleRootsConfig` with
 
 Multi-file e2e tests live in `tests/test_agl_multifile.py`; static fixture
 modules used by those tests are in `tests/agl/multi_file/`.
-
-
-## Execution IR (migration in progress)
-
-`agm.agl.ir` defines a **typeless intermediate representation** used during the
-migration from the tree-walking evaluator to an IR-based execution model.  The IR
-is a closed expression union (`IrExpr`) + a set of table types (`ExecutableProgram`).
-
-### IR node categories
-
-- **Constants** — `IrConstInt`, `IrConstDecimal`, `IrConstBool`, `IrConstText`,
-  `IrConstUnit`, `IrConstJsonNull`.
-- **Bindings / load** — `IrBind` (let/var declaration), `IrLoad` (read a symbol),
-  `IrAssign` (mutate a var cell through an optional index path).
-- **Coercions** — `IrCoerce(value, operation)` applies a compiled conversion
-  (from `agm.agl.ir.operations`).
-- **Containers** — `IrMakeList`, `IrMakeDict`.
-- **Field / index access** — `IrField`, `IrIndex`.
-- **Control flow** — `IrIf`, `IrCase`, `IrLoop`, `IrTry`, `IrRaise`.
-- **Template rendering** — `IrRenderTemplate`.
-- **Comparisons** — `IrCompare`.
-- **Nominal construction** — `IrMakeRecord`, `IrMakeEnum`, `IrMakeConstructor`,
-  `IrCast`, `IrIsTest`.
-- **Functions** (M4a) — `IrMakeClosure` (bind a function's closure), `IrDirectCall`
-  (call a top-level user-defined function by `FunctionId`).
-- **Sequences / blocks** — `IrSequence`, `IrBlock`.
-
-### Key tables in `ExecutableProgram`
-
-- `symbols: dict[SymbolId, SymbolDescriptor]` — all declared symbols with owner
-  and mutability.
-- `nominals: dict[NominalId, NominalDescriptor]` — record/enum/exception definitions.
-- `functions: dict[FunctionId, FunctionDescriptor]` — per-function body, params,
-  and captures (added in M4a).
-- `modules: dict[ModuleId, ExecutableModule]` — per-module initializer sequences.
-- `sources: dict[SourceId, SourceFile]` — source text for runtime diagnostics.
-
-### Lowering (`agm.agl.lower`)
-
-`lower_program(checked, ...)` lowers a `CheckedProgram` to an `ExecutableProgram`
-in two phases for top-level `FuncDef` nodes (enabling mutual recursion):
-
-1. **Phase 1** — `_prealloc_funcdef` pre-allocates `FunctionId` and `SymbolId`
-   for every root-level `FuncDef`.
-2. **Phase 2** — `lower_item` lowers each item; `_lower_funcdef` computes
-   captures (by walking the body for free variables), builds `FunctionDescriptor`
-   entries, and emits `IrBind(sym, IrMakeClosure(fn_id, captures))`.
-
-The `validate=True` option calls `validate_ir` after lowering for structural
-consistency checks.
-
-### IrInterpreter (`agm.agl.eval.ir_interpreter`)
-
-A stack-based interpreter over `ExecutableProgram`.  Key design points:
-
-- **Frame stack** — `_frames: list[Frame]` with one base frame (module-level
-  bindings) and per-call frames pushed/popped in `_execute_direct_call`.
-- **Mutable symbols** — represented as `Cell` wrappers; `IrAssign` writes through
-  the cell.
-- **Function calls** — `IrDirectCall` evaluates args, constructs a call frame from
-  the closure captures + evaluated params, pushes it onto the frame stack, evaluates
-  the body, and pops.
-- **Call-depth guard** — configurable `max_call_depth` (default 256); exceeding it
-  raises `AglRaise(RecursionError)`.
-- **Capture handling** — `IrMakeClosure` reads each capture from the current frame,
-  storing by-value for immutable captures and the `Cell` itself for mutable ones.
-
-### Oracle testing
-
-A differential oracle (`tests/agl/oracle/harness.py`) runs both the legacy AST
-interpreter and the IR pipeline on the same source and asserts they produce
-identical outputs.  `IrClosureValue` and `Closure` are normalized to a sentinel
-before comparison (closures are identity-valued, not equality-valued).
-
-### Test files
-
-| File | Coverage area |
-|------|--------------|
-| `tests/test_agl_ir_nodes.py` | IR node frozen-dataclass invariants |
-| `tests/test_agl_ir_validate.py` | structural IR validator (M1+M4a invariants) |
-| `tests/test_agl_ir_interpreter.py` | hand-built IR program evaluation |
-| `tests/test_agl_lower.py` | lowering pipeline |
-| `tests/test_agl_oracle_m2.py` .. `test_agl_oracle_m4a_functions.py` | oracle differential tests |
 
 
 ## Package layout and test locations

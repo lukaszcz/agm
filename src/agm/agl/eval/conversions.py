@@ -58,7 +58,7 @@ from agm.agl.runtime.convert import (
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 
-__all__ = ["AglCastConversion", "run_recipe"]
+__all__ = ["AglCastConversion", "decode_value", "run_recipe"]
 
 
 class AglCastConversion(Exception):
@@ -157,7 +157,7 @@ def _decode_from_json(recipe: ConversionRecipe, obj: object, value: Value) -> Va
     if recipe.decode is None:  # pragma: no cover
         raise AssertionError("decode strategy requires a decode schema")
     try:
-        return _decode(recipe.decode, normalized)
+        return decode_value(recipe.decode, normalized)
     except ValueError as exc:
         raise AglCastConversion(
             f"Value conversion failed: {exc}",
@@ -167,7 +167,7 @@ def _decode_from_json(recipe: ConversionRecipe, obj: object, value: Value) -> Va
         ) from exc
 
 
-def _decode(schema: DecodeSchema, obj: object) -> Value:
+def decode_value(schema: DecodeSchema, obj: object) -> Value:
     """Construct a typed ``Value`` from JSON-shaped *obj* per *schema*.
 
     Mirrors ``runtime.convert.json_to_value`` (identical ``ValueError``
@@ -180,7 +180,7 @@ def _decode(schema: DecodeSchema, obj: object) -> Value:
         case ListDecode(elem=elem):
             if not isinstance(obj, list):
                 raise ValueError(f"Expected array, got {type(obj).__name__}")
-            return ListValue(tuple(_decode(elem, e) for e in obj))
+            return ListValue(tuple(decode_value(elem, e) for e in obj))
         case DictDecode(value=value_schema):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object, got {type(obj).__name__}")
@@ -188,7 +188,7 @@ def _decode(schema: DecodeSchema, obj: object) -> Value:
             for k, v in obj.items():
                 if not isinstance(k, str):
                     raise ValueError(f"Dict key must be string, got {type(k).__name__}")
-                entries[k] = _decode(value_schema, v)
+                entries[k] = decode_value(value_schema, v)
             return DictValue(entries=entries)
         case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
             if not isinstance(obj, dict):
@@ -197,7 +197,7 @@ def _decode(schema: DecodeSchema, obj: object) -> Value:
             for fname, fschema in fields:
                 if fname not in obj:
                     raise ValueError(f"Missing field {fname!r}")
-                record_fields[fname] = _decode(fschema, obj[fname])
+                record_fields[fname] = decode_value(fschema, obj[fname])
             return RecordValue(
                 nominal=nominal, display_name=display_name, fields=record_fields
             )
@@ -219,7 +219,7 @@ def _decode(schema: DecodeSchema, obj: object) -> Value:
                     raise ValueError(
                         f"Enum variant {case_val!r} is missing field {fname!r}"
                     )
-                payload[fname] = _decode(fschema, obj[fname])
+                payload[fname] = decode_value(fschema, obj[fname])
             return EnumValue(
                 nominal=nominal,
                 display_name=display_name,
@@ -228,6 +228,11 @@ def _decode(schema: DecodeSchema, obj: object) -> Value:
             )
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+# Transitional private name retained for the agent parser until M9 removes
+# migration-era module boundaries.
+_decode = decode_value
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
@@ -242,6 +247,8 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
                 raise ValueError("Expected integer, got bool")
             if isinstance(obj, int):
                 return IntValue(obj)
+            if isinstance(obj, Decimal) and obj == obj.to_integral_value():
+                return IntValue(int(obj))
             raise ValueError(f"Expected integer, got {type(obj).__name__} {obj!r}")
         case ScalarKind.DECIMAL:
             if isinstance(obj, bool):

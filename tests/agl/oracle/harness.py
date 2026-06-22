@@ -50,9 +50,10 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
-from agm.agl.runtime.agents import AgentRegistry
+from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import OutputCodec, TextCodec
 from agm.agl.runtime.contract import materialize_contract
+from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.typecheck import check
@@ -490,6 +491,292 @@ def assert_graph_oracle_raises(
 
     assert legacy_exc is not None, "Legacy pipeline did not raise AglRaise"
     assert ir_exc is not None, "IR pipeline did not raise AglRaise"
+
+    norm_legacy = _normalize_exception(legacy_exc)
+    norm_ir = _normalize_exception(ir_exc)
+    assert norm_legacy == norm_ir, (
+        f"Oracle exception disagreement:\n"
+        f"  legacy: {norm_legacy!r}\n"
+        f"  ir:     {norm_ir!r}"
+    )
+    return legacy_exc, ir_exc
+
+
+# ---------------------------------------------------------------------------
+# M6b — agent oracle helpers
+# ---------------------------------------------------------------------------
+
+
+def m6b_caps(agent_names: frozenset[str], *, has_default: bool = False) -> HostCapabilities:
+    """HostCapabilities for M6b agent tests."""
+    return HostCapabilities(
+        agent_names=agent_names,
+        has_default_agent=has_default,
+        supports_shell_exec=False,
+        codec_kinds={
+            "text": frozenset({"text"}),
+            "json": frozenset(
+                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+            ),
+        },
+    )
+
+
+def _m6b_codecs() -> dict[str, "OutputCodec"]:
+    """Codec map for M6b agent tests (text + json)."""
+    from agm.agl.runtime.codec import JsonCodec
+
+    return {"text": TextCodec(), "json": JsonCodec()}
+
+
+def _make_scripted_registry(
+    scripts: dict[str, list[str]],
+    *,
+    default_responses: list[str] | None = None,
+    call_log: list[tuple[str, str]] | None = None,
+) -> AgentRegistry:
+    """Build an ``AgentRegistry`` from scripted responses.
+
+    Parameters
+    ----------
+    scripts:
+        ``{agent_name: [response0, response1, ...]}``.  Responses are consumed
+        in order; the list must have enough entries for the test scenario (the
+        agent raises ``AssertionError`` if called more times than scripted).
+    default_responses:
+        Scripted responses for the built-in ``ask`` / default agent.
+    call_log:
+        Optional mutable list to which each dispatched call is appended as a
+        ``(agent_name, prompt)`` pair (in dispatch order).  When provided, the
+        registry records every call so the caller can compare sequences across
+        pipelines.
+    """
+
+    named: dict[str, AgentFn] = {}
+    for name, responses in scripts.items():
+        # Capture by value with default arg
+        def make_agent(resp_list: list[str], name_for_err: str) -> AgentFn:
+            count = [0]
+
+            def agent_fn(request: AgentRequest) -> AgentResponse:
+                idx = count[0]
+                assert idx < len(resp_list), (
+                    f"Agent {name_for_err!r} was called {idx + 1} time(s) but only "
+                    f"{len(resp_list)} response(s) were scripted."
+                )
+                count[0] += 1
+                if call_log is not None:
+                    call_log.append((name_for_err, request.prompt))
+                return AgentResponse(content=resp_list[idx])
+
+            return agent_fn
+
+        named[name] = make_agent(responses, name)
+
+    default_agent: AgentFn | None = None
+    if default_responses is not None:
+        default_count = [0]
+        default_resp_list = default_responses
+
+        def default_fn(request: AgentRequest) -> AgentResponse:
+            idx = default_count[0]
+            assert idx < len(default_resp_list), (
+                f"Default agent was called {idx + 1} time(s) but only "
+                f"{len(default_resp_list)} response(s) were scripted."
+            )
+            default_count[0] += 1
+            if call_log is not None:
+                call_log.append(("__default__", request.prompt))
+            return AgentResponse(content=default_resp_list[idx])
+
+        default_agent = default_fn
+
+    return AgentRegistry(named=named, default_agent=default_agent)
+
+
+def _run_legacy_agents(
+    source: str,
+    registry: AgentRegistry,
+    caps: HostCapabilities,
+) -> tuple[dict[str, Value], str]:
+    """Run *source* through the legacy AST interpreter with a scripted agent registry."""
+    from agm.agl.runtime.contract import materialize_contract
+
+    program = parse_program(source)
+    resolved = resolve(program)
+    checked = check(resolved, caps)
+    codecs = _m6b_codecs()
+    contracts = {
+        node_id: materialize_contract(spec, codecs)
+        for node_id, spec in checked.contract_specs.items()
+    }
+    root_scope = Scope(parent=None)
+    interp = Interpreter(
+        checked=checked,
+        registry=registry,
+        contracts=contracts,
+        type_env=checked.type_env,
+        loop_limit=100,
+        strict_json=False,
+        source=source,
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        interp.execute(root_scope)
+    return root_scope.snapshot(), buf.getvalue()
+
+
+def _run_ir_agents(
+    source: str,
+    registry: AgentRegistry,
+    caps: HostCapabilities,
+) -> tuple[dict[str, Value], str]:
+    """Run *source* through the IR pipeline with a scripted agent registry."""
+    program = parse_program(source)
+    resolved = resolve(program)
+    checked = check(resolved, caps)
+    executable = lower_program(
+        checked,
+        source_text=source,
+        source_label="<oracle>",
+        validate=True,
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        result = IrInterpreter(executable, registry=registry).run()
+    return result, buf.getvalue()
+
+
+def assert_oracle_agrees_with_agents(
+    source: str,
+    scripts: dict[str, list[str]],
+    *,
+    default_responses: list[str] | None = None,
+    agent_names: frozenset[str] | None = None,
+    has_default: bool = False,
+) -> tuple[dict[str, Value], dict[str, Value]]:
+    """Assert that legacy and IR evaluators agree when agents are scripted.
+
+    Parameters
+    ----------
+    source:
+        The AgL source program to evaluate.
+    scripts:
+        Scripted agent responses ``{agent_name: [resp0, resp1, ...]}``.
+    default_responses:
+        Scripted responses for the built-in default agent (``ask``).
+    agent_names:
+        Agent names to register in ``HostCapabilities``; defaults to
+        ``frozenset(scripts)``.
+    has_default:
+        Whether the default agent is enabled in capabilities.
+
+    The function additionally asserts that both pipelines dispatch the same
+    sequence of agent calls (agent name + prompt) in the same order.
+    """
+    if agent_names is None:
+        agent_names = frozenset(scripts)
+    caps = m6b_caps(agent_names, has_default=has_default)
+
+    # Each pipeline needs its own scripted registry (counters are independent).
+    # Fresh call-log list per evaluator so sequences are captured independently.
+    legacy_call_log: list[tuple[str, str]] = []
+    ir_call_log: list[tuple[str, str]] = []
+    legacy_registry = _make_scripted_registry(
+        scripts, default_responses=default_responses, call_log=legacy_call_log
+    )
+    ir_registry = _make_scripted_registry(
+        scripts, default_responses=default_responses, call_log=ir_call_log
+    )
+
+    legacy_snap, legacy_out = _run_legacy_agents(source, legacy_registry, caps)
+    ir_snap, ir_out = _run_ir_agents(source, ir_registry, caps)
+
+    assert legacy_out == ir_out, (
+        f"Oracle stdout disagreement:\n"
+        f"  legacy: {legacy_out!r}\n"
+        f"  ir:     {ir_out!r}"
+    )
+
+    assert legacy_call_log == ir_call_log, (
+        f"Oracle agent call-sequence disagreement:\n"
+        f"  legacy: {legacy_call_log!r}\n"
+        f"  ir:     {ir_call_log!r}"
+    )
+
+    legacy_names = set(legacy_snap)
+    ir_names = set(ir_snap)
+    only_legacy = legacy_names - ir_names
+    only_ir = ir_names - legacy_names
+    assert only_legacy == set(), f"Bindings in legacy only: {sorted(only_legacy)}"
+    assert only_ir == set(), f"Bindings in IR only: {sorted(only_ir)}"
+
+    for name in sorted(legacy_names):
+        lv = legacy_snap[name]
+        iv = ir_snap[name]
+        lv_n = _normalize_value(lv)
+        iv_n = _normalize_value(iv)
+        assert lv_n == iv_n, (
+            f"Oracle value disagreement for {name!r}:\n"
+            f"  legacy: {lv_n!r}\n"
+            f"  ir:     {iv_n!r}"
+        )
+
+    return legacy_snap, ir_snap
+
+
+def assert_oracle_raises_with_agents(
+    source: str,
+    scripts: dict[str, list[str]],
+    *,
+    default_responses: list[str] | None = None,
+    agent_names: frozenset[str] | None = None,
+    has_default: bool = False,
+) -> tuple[ExceptionValue, ExceptionValue]:
+    """Assert that both pipelines raise AglRaise with scripted agents.
+
+    The function additionally asserts that both pipelines dispatch the same
+    sequence of agent calls (agent name + prompt) in the same order before
+    the exception is raised.
+
+    Returns ``(legacy_exc, ir_exc)`` for additional structural assertions.
+    """
+    if agent_names is None:
+        agent_names = frozenset(scripts)
+    caps = m6b_caps(agent_names, has_default=has_default)
+
+    legacy_call_log: list[tuple[str, str]] = []
+    ir_call_log: list[tuple[str, str]] = []
+    legacy_registry = _make_scripted_registry(
+        scripts, default_responses=default_responses, call_log=legacy_call_log
+    )
+    ir_registry = _make_scripted_registry(
+        scripts, default_responses=default_responses, call_log=ir_call_log
+    )
+
+    legacy_exc: ExceptionValue | None = None
+    ir_exc: ExceptionValue | None = None
+
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_legacy_agents(source, legacy_registry, caps)
+    except AglRaise as e:
+        legacy_exc = e.exc
+
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            _run_ir_agents(source, ir_registry, caps)
+    except AglRaise as e:
+        ir_exc = e.exc
+
+    assert legacy_exc is not None, "Legacy pipeline did not raise AglRaise"
+    assert ir_exc is not None, "IR pipeline did not raise AglRaise"
+
+    assert legacy_call_log == ir_call_log, (
+        f"Oracle agent call-sequence disagreement:\n"
+        f"  legacy: {legacy_call_log!r}\n"
+        f"  ir:     {ir_call_log!r}"
+    )
 
     norm_legacy = _normalize_exception(legacy_exc)
     norm_ir = _normalize_exception(ir_exc)

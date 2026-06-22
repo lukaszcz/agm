@@ -18,10 +18,12 @@ NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 from __future__ import annotations
 
 import decimal
+import json
 from collections.abc import Mapping
-from typing import assert_never
+from typing import assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
+from agm.agl.eval.agent_parse import parse_agent_output
 from agm.agl.eval.arith import (
     AglDivisionByZero,
     add,
@@ -41,6 +43,7 @@ from agm.agl.eval.frames import Cell, Frame
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.eval.matching import make_match_error as _make_match_error
 from agm.agl.eval.values import (
+    AgentValue,
     BoolValue,
     ConstructorValue,
     DecimalValue,
@@ -57,11 +60,14 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.ir.contracts import ConversionFailureMode
-from agm.agl.ir.ids import FunctionId, Location, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
+    IrAgentHandle,
     IrAnd,
     IrArith,
+    IrAsk,
+    IrAskRequest,
     IrAssign,
     IrBind,
     IrBindPlan,
@@ -125,9 +131,11 @@ from agm.agl.ir.operations import (
 )
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.render import render_value
+from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
 
@@ -244,6 +252,8 @@ class IrInterpreter:
         loop_limit: int = DEFAULT_LOOP_LIMIT,
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
         param_values: Mapping[SymbolId, Value] | None = None,
+        registry: AgentRegistry | None = None,
+        strict_json: bool = False,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [{}]
@@ -254,6 +264,10 @@ class IrInterpreter:
         self._param_values: Mapping[SymbolId, Value] = (
             param_values if param_values is not None else {}
         )
+        self._registry: AgentRegistry = registry if registry is not None else AgentRegistry(
+            named={}, default_agent=None
+        )
+        self._strict_json: bool = strict_json
 
     @property
     def _frame(self) -> Frame:
@@ -941,8 +955,197 @@ class IrInterpreter:
                     ) from exc
                 return JsonValue(obj)
 
+            case IrAgentHandle(agent_name=agent_name):
+                return AgentValue(name=agent_name)
+
+            case IrAsk(
+                agent=agent_expr,
+                prompt=prompt_expr,
+                contract_id=contract_id,
+                max_attempts=max_attempts,
+            ):
+                return self._eval_ir_ask(node, agent_expr, prompt_expr, contract_id, max_attempts)
+
+            case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
+                return self._eval_ir_ask_request(node, agent_expr, prompt_expr, contract_id)
+
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    # ------------------------------------------------------------------
+    # Agent call helpers (M6b)
+    # ------------------------------------------------------------------
+
+    def _eval_ir_ask(
+        self,
+        _node: IrAsk,
+        agent_expr: IrExpr,
+        prompt_expr: IrExpr,
+        contract_id: ContractId,
+        max_attempts: int,
+    ) -> Value:
+        """Handle IrAsk: dispatch agent and parse output."""
+        from agm.agl.runtime.request import ValidationError as ReqValidationError
+
+        agent_val = self._eval(agent_expr)
+        agent_name = agent_val.name if isinstance(agent_val, AgentValue) else "ask"
+
+        prompt_val = self._eval(prompt_expr)
+        if not isinstance(prompt_val, TextValue):
+            prompt_text = render_value(prompt_val)
+        else:
+            prompt_text = prompt_val.value
+
+        contract = self._program.contracts[contract_id]
+
+        # Unit-typed ask: dispatch once, no output parsing.
+        if contract.is_unit:
+            request = AgentRequest(
+                agent=agent_name,
+                prompt=prompt_text,
+                output_contract=None,
+            )
+            self._registry.dispatch(agent_name, request)
+            return UnitValue()
+
+        effective_strict = (
+            contract.strict_json if contract.strict_json is not None else self._strict_json
+        )
+
+        last_raw: str | None = None
+        last_normalized: str | None = None
+        last_errors: tuple[ReqValidationError, ...] = ()
+
+        for attempt in range(max_attempts):
+            self._trace.agent_call_attempt(
+                agent=agent_name,
+                attempt=attempt,
+                prompt=prompt_text,
+                span=None,
+            )
+            request = AgentRequest(
+                agent=agent_name,
+                prompt=prompt_text,
+                attempt=attempt,
+                previous_invalid_output=last_raw,
+                validation_errors=list(last_errors),
+                output_contract=None,
+            )
+            response = self._registry.dispatch(agent_name, request)
+            raw = response.content
+
+            result = parse_agent_output(raw, contract, effective_strict=effective_strict)
+
+            if result.ok and result.value is not None:
+                return result.value
+
+            last_raw = raw
+            last_normalized = result.normalized_raw
+            if result.errors:
+                last_errors = result.errors
+            elif result.error_msg:
+                last_errors = (
+                    ReqValidationError(
+                        category="invalid_json",
+                        message=result.error_msg,
+                        path="$",
+                        field=None,
+                    ),
+                )
+            else:
+                last_errors = ()
+
+        errors_json: list[object] = [e.to_json_obj() for e in last_errors]
+        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
+        raise AglRaise(
+            _make_exc_value(
+                "AgentParseError",
+                (
+                    f"Agent {agent_name!r} failed to produce a valid "
+                    f"{contract.target_type_label} after {max_attempts} attempt(s). "
+                    f"Last output: {last_raw!r}"
+                ),
+                trace_id=self._trace.new_event_id(),
+                raw=TextValue(last_raw or ""),
+                normalized_raw=TextValue(normalized_text),
+                agent=TextValue(agent_name),
+                attempts=IntValue(max_attempts),
+                target_type=TextValue(contract.target_type_label),
+                expected_schema=JsonValue(
+                    None if contract.json_schema is None
+                    else cast(object, json.loads(contract.json_schema))
+                ),
+                validation_errors=JsonValue(errors_json),
+                metadata=JsonValue(None),
+            ),
+        )
+
+    def _eval_ir_ask_request(
+        self,
+        _node: IrAskRequest,
+        agent_expr: IrExpr,
+        prompt_expr: IrExpr,
+        contract_id: ContractId,
+    ) -> Value:
+        """Handle IrAskRequest: build AgentRequest record without dispatching."""
+        agent_val = self._eval(agent_expr)
+        agent_name = agent_val.name if isinstance(agent_val, AgentValue) else "ask"
+
+        prompt_val = self._eval(prompt_expr)
+        if not isinstance(prompt_val, TextValue):
+            prompt_text = render_value(prompt_val)
+        else:
+            prompt_text = prompt_val.value
+
+        contract = self._program.contracts[contract_id]
+
+        if contract.is_unit:
+            return RecordValue(
+                nominal=NominalId(PRELUDE_ID, "AgentRequest"),
+                display_name="AgentRequest",
+                fields={
+                    "agent": TextValue(agent_name),
+                    "prompt": TextValue(prompt_text),
+                    "attempt": IntValue(0),
+                    "output_contract": EnumValue(
+                        nominal=NominalId(PRELUDE_ID, "OutputContractOption"),
+                        display_name="OutputContractOption",
+                        variant="None",
+                        fields={},
+                    ),
+                },
+            )
+
+        output_contract_value = RecordValue(
+            nominal=NominalId(PRELUDE_ID, "OutputContract"),
+            display_name="OutputContract",
+            fields={
+                "target_type": TextValue(contract.target_type_label),
+                "codec_name": TextValue(contract.codec_name),
+                "strict_json": JsonValue(contract.strict_json),
+                "format_instructions": TextValue(contract.format_instructions),
+                "json_schema": JsonValue(
+                    None if contract.json_schema is None
+                    else cast(object, json.loads(contract.json_schema))
+                ),
+                "structured_exec": BoolValue(contract.structured_exec),
+            },
+        )
+        return RecordValue(
+            nominal=NominalId(PRELUDE_ID, "AgentRequest"),
+            display_name="AgentRequest",
+            fields={
+                "agent": TextValue(agent_name),
+                "prompt": TextValue(prompt_text),
+                "attempt": IntValue(0),
+                "output_contract": EnumValue(
+                    nominal=NominalId(PRELUDE_ID, "OutputContractOption"),
+                    display_name="OutputContractOption",
+                    variant="Some",
+                    fields={"value": output_contract_value},
+                ),
+            },
+        )
 
     # ------------------------------------------------------------------
     # Pattern matching helper (M3f-B)

@@ -22,11 +22,14 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 
-from agm.agl.ir.ids import FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.modules.ids import ModuleId
 
 __all__ = [
+    "ContractId",
+    "ContractRequest",
     "ExecutableModule",
     "ExecutableProgram",
     "FunctionDescriptor",
@@ -229,3 +232,4 @@ class ExecutableProgram:
     sources: dict[SourceId, SourceFile]
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     params: tuple[IrParam, ...] = ()
+    contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)

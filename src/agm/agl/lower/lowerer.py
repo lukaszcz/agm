@@ -28,16 +28,20 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm (D4).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import assert_never
 
 from agm.agl._text import normalize_newlines
-from agm.agl.ir.contracts import ConversionFailureMode
-from agm.agl.ir.ids import FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
+    IrAgentHandle,
     IrAnd,
     IrArith,
+    IrAsk,
+    IrAskRequest,
     IrAssign,
     IrBind,
     IrBindPlan,
@@ -115,8 +119,10 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
-from agm.agl.lower.conversions import compile_recipe
+from agm.agl.lower.conversions import build_decode_schema, compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.runtime.codec import _build_format_instructions
+from agm.agl.runtime.schema import derive_schema
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -192,6 +198,7 @@ from agm.agl.typecheck.types import (
     RecordType,
     TextType,
     Type,
+    UnitType,
 )
 
 __all__ = ["_LinkState", "lower_program"]
@@ -207,6 +214,7 @@ class _LinkState:
     next_sym: int = 0
     next_fn: int = 0
     next_source: int = 0
+    next_contract: int = 0
     decl_to_sym: dict[int, SymbolId] = field(default_factory=dict)
     fn_node_to_sym: dict[int, SymbolId] = field(default_factory=dict)
     fn_node_to_id: dict[int, FunctionId] = field(default_factory=dict)
@@ -214,6 +222,7 @@ class _LinkState:
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
+    contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
 
 
 class _Lowerer:
@@ -280,6 +289,13 @@ class _Lowerer:
         self._link.next_fn += 1
         return fn_id
 
+    def _alloc_contract(self, request: ContractRequest) -> ContractId:
+        """Allocate a fresh ContractId and register the ContractRequest."""
+        cid = ContractId(self._link.next_contract)
+        self._link.next_contract += 1
+        self._link.contracts[cid] = request
+        return cid
+
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
         """Pre-allocate SymbolId and FunctionId for a top-level FuncDef."""
         fn_id = self._alloc_fn()
@@ -304,6 +320,7 @@ class _Lowerer:
         BinderKind.param_binding,
         BinderKind.catch_binder,
         BinderKind.pattern_binding,
+        BinderKind.agent_binding,
     })
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
@@ -1130,8 +1147,11 @@ class _Lowerer:
                 arg_ir = self.lower_expr(call_node.args[0])
                 return IrParseJson(location=loc, value=arg_ir)
 
-            case BuiltinKind.ASK | BuiltinKind.ASK_REQUEST:
-                raise NotImplementedError("M6b")  # agents/ask: deferred to M6b
+            case BuiltinKind.ASK:
+                return self._lower_ask_call(call_node, span, structured_exec=False)
+
+            case BuiltinKind.ASK_REQUEST:
+                return self._lower_ask_call(call_node, span, structured_exec=False, is_request=True)
 
             case BuiltinKind.EXEC:
                 raise NotImplementedError("M6c")  # exec/dry-run: deferred to M6c
@@ -1509,6 +1529,117 @@ class _Lowerer:
                 assert_never(unreachable)
 
     # ------------------------------------------------------------------
+    # Ask/ask-request lowering (M6b)
+    # ------------------------------------------------------------------
+
+    def _lower_ask_call(
+        self,
+        call_node: "Call",
+        span: "SourceSpan",
+        *,
+        structured_exec: bool,
+        is_request: bool = False,
+    ) -> IrExpr:
+        """Lower an ask() or ask-request() builtin call to IrAsk/IrAskRequest."""
+        loc = self._loc(span)
+        named_map: dict[str, "NamedArg"] = {na.name: na for na in call_node.named_args}
+
+        # 1. Evaluate the prompt (first positional arg).
+        prompt_ir = self.lower_expr(call_node.args[0])
+
+        # 2. Evaluate the agent expression (named arg 'agent:', or default "ask").
+        if "agent" in named_map:
+            agent_ir: IrExpr = self.lower_expr(named_map["agent"].value)
+        else:
+            # No agent: named arg → the default agent name "ask" as a text constant.
+            # The evaluator will use this TextValue as the agent name.
+            agent_ir = IrConstText(location=loc, value="ask")
+
+        # 3. Determine max_attempts from the on_parse_error named arg.
+        max_attempts = self._extract_max_attempts(call_node)
+
+        # 4. Build ContractRequest from the checker's contract_spec (if any).
+        result_type = self._checked.node_types.get(call_node.node_id)
+        is_unit = isinstance(result_type, UnitType)
+
+        spec = self._checked.contract_specs.get(call_node.node_id)
+        if is_unit or spec is None:
+            # Unit-typed ask: dispatch without output parsing.
+            contract_req = ContractRequest(
+                codec_name="text",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label="unit" if is_unit else "text",
+                structured_exec=structured_exec,
+                format_instructions="",
+                is_unit=True,
+            )
+        else:
+            # Build format_instructions and json_schema from the spec.
+            if spec.codec_name == "json":
+                schema_dict = derive_schema(spec.target_type)
+                json_schema_str: str | None = json.dumps(schema_dict, sort_keys=True)
+                fmt_instr = _build_format_instructions(schema_dict)
+                decode_schema = build_decode_schema(spec.target_type)
+            else:
+                json_schema_str = None
+                fmt_instr = ""
+                decode_schema = None
+            contract_req = ContractRequest(
+                codec_name=spec.codec_name,
+                strict_json=spec.strict_json,
+                json_schema=json_schema_str,
+                decode=decode_schema,
+                target_type_label=repr(spec.target_type),
+                structured_exec=structured_exec,
+                format_instructions=fmt_instr,
+                is_unit=False,
+            )
+
+        contract_id = self._alloc_contract(contract_req)
+
+        if is_request:
+            return IrAskRequest(
+                location=loc,
+                agent=agent_ir,
+                prompt=prompt_ir,
+                contract_id=contract_id,
+                max_attempts=max_attempts,
+            )
+        return IrAsk(
+            location=loc,
+            agent=agent_ir,
+            prompt=prompt_ir,
+            contract_id=contract_id,
+            max_attempts=max_attempts,
+        )
+
+    def _extract_max_attempts(self, call_node: "Call") -> int:
+        """Extract max_attempts from the on_parse_error named arg at lowering time."""
+        named_map: dict[str, "NamedArg"] = {na.name: na for na in call_node.named_args}
+        if "on_parse_error" not in named_map:
+            return 1
+        policy_expr = named_map["on_parse_error"].value
+        if isinstance(policy_expr, Call):
+            callee = policy_expr.callee
+            if isinstance(callee, VarRef):
+                callee_name: str | None = callee.name
+            elif isinstance(callee, FieldAccess):
+                callee_name = callee.field
+            else:
+                callee_name = None
+            if callee_name == "Retry":
+                n_val = next(
+                    (arg.value.value for arg in policy_expr.named_args
+                     if arg.name == "n" and isinstance(arg.value, IntLit)),
+                    0,
+                )
+                return 1 + n_val
+        # Absent or Abort → single attempt
+        return 1
+
+    # ------------------------------------------------------------------
     # Item lowering
     # ------------------------------------------------------------------
 
@@ -1565,9 +1696,17 @@ class _Lowerer:
                 self._lower_param_decl(param_decl)
                 return None
 
+            case AgentDecl() as agent_decl:
+                sym = self._sym_for_decl(agent_decl.node_id)
+                loc = self._loc(agent_decl.span)
+                return IrBind(
+                    location=loc,
+                    symbol=sym,
+                    value=IrAgentHandle(location=loc, agent_name=agent_decl.name),
+                )
+
             case (
-                AgentDecl()
-                | RecordDef()
+                RecordDef()
                 | EnumDef()
                 | TypeAlias()
                 | ProgramDecl()
@@ -1762,10 +1901,19 @@ class _Lowerer:
 
         body = self._checked.resolved.program.body
 
-        # Phase 1: pre-allocate function symbols and IDs for mutual recursion
+        # Phase 1: pre-allocate function symbols and IDs for mutual recursion,
+        # and allocate agent symbols so they are resolvable in function bodies.
         for item in body.items:
             if isinstance(item, FuncDef):
                 self._prealloc_funcdef(item)
+            elif isinstance(item, AgentDecl):
+                self._alloc_sym(
+                    item.node_id,
+                    name=item.name,
+                    mutable=False,
+                    public=True,
+                    owner=self._module_id,
+                )
 
         # Phase 2: lower all items
         ir_items: list[IrExpr] = []
@@ -1787,6 +1935,7 @@ class _Lowerer:
             sources=dict(self._link.sources),
             functions=dict(self._link.functions),
             params=tuple(self._params),
+            contracts=dict(self._link.contracts),
         )
 
 

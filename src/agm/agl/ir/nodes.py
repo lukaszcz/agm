@@ -52,7 +52,7 @@ import decimal
 from dataclasses import dataclass
 
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
-from agm.agl.ir.ids import FunctionId, Location, NominalId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
     ArithKind,
     ArithOp,
@@ -67,8 +67,11 @@ from agm.agl.ir.operations import (
 
 __all__ = [
     "AutoTraceField",
+    "IrAgentHandle",
     "IrAnd",
     "IrArith",
+    "IrAsk",
+    "IrAskRequest",
     "IrAssign",
     "IrBind",
     "IrBindPlan",
@@ -879,6 +882,50 @@ class IrParseJson:
     value: "IrExpr"
 
 
+@dataclass(frozen=True, slots=True)
+class IrAgentHandle:
+    """IR host-op: evaluate to an AgentValue for the named agent.
+
+    Emitted for AgentDecl lowering (agents are entry-only, bound once).
+    Evaluates to ``AgentValue(name=agent_name)``.
+    """
+
+    location: Location
+    agent_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrAsk:
+    """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
+
+    Evaluates ``agent`` (an AgentValue), ``prompt`` (text), dispatches to the
+    registry, parses the response via the contract, and returns the typed Value.
+
+    ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
+    """
+
+    location: Location
+    agent: "IrExpr"
+    prompt: "IrExpr"
+    contract_id: "ContractId"
+    max_attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class IrAskRequest:
+    """IR host-op: ask-request(prompt, agent:) builtin call.
+
+    Builds the AgentRequest record value WITHOUT dispatching the agent.
+    Side-effect-free.
+    """
+
+    location: Location
+    agent: "IrExpr"
+    prompt: "IrExpr"
+    contract_id: "ContractId"
+    max_attempts: int
+
+
 # ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
@@ -929,4 +976,7 @@ IrExpr = (
     | IrIndirectCall
     | IrPrint
     | IrParseJson
+    | IrAgentHandle
+    | IrAsk
+    | IrAskRequest
 )

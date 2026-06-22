@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import assert_never
 
 from agm.agl.ir.contracts import (
+    ContractRequest,
     ConversionStrategy,
     DecodeSchema,
     DictDecode,
@@ -43,11 +44,14 @@ from agm.agl.ir.contracts import (
     RecordDecode,
     ScalarDecode,
 )
-from agm.agl.ir.ids import FunctionId, Location, NominalId, SourceId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId
 from agm.agl.ir.nodes import (
     AutoTraceField,
+    IrAgentHandle,
     IrAnd,
     IrArith,
+    IrAsk,
+    IrAskRequest,
     IrAssign,
     IrBind,
     IrBindPlan,
@@ -642,6 +646,39 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
 
+        case IrAgentHandle():
+            _validate_location(node.location, ctx)
+
+        case IrAsk(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
+            _validate_location(node.location, ctx)
+            _validate_expr(agent_expr, ctx)
+            _validate_expr(prompt_expr, ctx)
+            if ctx.deep:
+                if contract_id not in ctx.program.contracts:
+                    raise InvalidIrError(
+                        f"IrAsk references contract_id={contract_id!r}"
+                        " which is not in program.contracts"
+                    )
+                if node.max_attempts < 1:
+                    raise InvalidIrError(
+                        f"IrAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
+                    )
+
+        case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
+            _validate_location(node.location, ctx)
+            _validate_expr(agent_expr, ctx)
+            _validate_expr(prompt_expr, ctx)
+            if ctx.deep:
+                if contract_id not in ctx.program.contracts:
+                    raise InvalidIrError(
+                        f"IrAskRequest references contract_id={contract_id!r}"
+                        " which is not in program.contracts"
+                    )
+                if node.max_attempts < 1:
+                    raise InvalidIrError(
+                        f"IrAskRequest has max_attempts={node.max_attempts!r} (must be >= 1)"
+                    )
+
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -732,6 +769,10 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
     for ir_param in program.params:
         _validate_ir_param(ir_param, fn_ctx)
 
+    # 6. contracts table — each ContractRequest must be consistent.
+    for cid, contract_req in program.contracts.items():
+        _validate_contract_request(cid, contract_req, fn_ctx)
+
     # (Sources table has no key/id consistency invariant beyond being keyed by
     # SourceId; key consistency is structural to dict construction.)
 
@@ -747,6 +788,25 @@ def _validate_ir_param(param: IrParam, ctx: _Context) -> None:
             )
     if param.default is not None:
         _validate_expr(param.default, ctx)
+
+
+def _validate_contract_request(
+    cid: ContractId,
+    req: ContractRequest,
+    ctx: _Context,
+) -> None:
+    """Validate a ContractRequest entry (deep tier)."""
+    if req.codec_name == "json":
+        if req.json_schema is None and not req.is_unit:
+            raise InvalidIrError(
+                f"ContractRequest {cid!r} has codec_name='json' but json_schema is None"
+            )
+        if req.decode is None and not req.is_unit:
+            raise InvalidIrError(
+                f"ContractRequest {cid!r} has codec_name='json' but decode is None"
+            )
+        if req.decode is not None:
+            _check_decode_nominals(req.decode, ctx)
 
 
 # ---------------------------------------------------------------------------

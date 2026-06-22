@@ -1677,16 +1677,64 @@ class TestM6aLowering:
         assert required_map["x"] is True
         assert required_map["y"] is False
 
-    def test_ask_raises_not_implemented_m6b(self) -> None:
-        """ask() lowers to NotImplementedError('M6b') — deferred to milestone M6b."""
-        source = "agent impl\nlet r: text = ask(\"prompt\")\n()"
-        with pytest.raises(NotImplementedError, match="M6b"):
-            _lower(source)
+    def test_ask_lowers_to_ir_ask_m6b(self) -> None:
+        """ask() now lowers to IrAsk (M6b implemented)."""
+        from agm.agl.ir.nodes import IrAsk, IrBind
+
+        source = "agent impl\nlet r: text = ask(\"prompt\", agent: impl)\n()"
+        prog = _lower(source)
+        # The initializers contain IrBind(IrAgentHandle) for `impl` then IrBind(IrAsk) for `r`.
+        inits = prog.modules[prog.entry_module].initializers
+        ask_binds = [n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrAsk)]
+        assert len(ask_binds) == 1
+        assert len(prog.contracts) == 1
 
     def test_exec_raises_not_implemented_m6c(self) -> None:
         """exec() lowers to NotImplementedError('M6c') — deferred to milestone M6c."""
         source = "exec(\"ls -la\")\n()"
         with pytest.raises(NotImplementedError, match="M6c"):
             _lower(source)
+
+    def test_agent_decl_lowers_to_ir_agent_handle_bind(self) -> None:
+        """AgentDecl lowers to IrBind(symbol, IrAgentHandle(name)) (M6b golden lowering)."""
+        from agm.agl.ir.nodes import IrAgentHandle, IrBind
+
+        source = "agent my_agent\n()"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        # Expect an IrBind whose value is IrAgentHandle with the agent's name.
+        handle_binds = [
+            n for n in inits
+            if isinstance(n, IrBind) and isinstance(n.value, IrAgentHandle)
+        ]
+        assert len(handle_binds) == 1, (
+            f"Expected exactly 1 IrBind(IrAgentHandle), got {len(handle_binds)}"
+        )
+        assert handle_binds[0].value.agent_name == "my_agent"
+
+    def test_ask_request_lowers_to_ir_ask_request_with_contract(self) -> None:
+        """ask-request lowers to IrAskRequest + ContractRequest in program.contracts (M6b)."""
+        from agm.agl.ir.nodes import IrAskRequest, IrBind
+
+        source = "agent worker\nlet req = ask-request(\"my prompt\", agent: worker)\n()"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        # The ask-request binding lowers to IrBind(symbol, IrAskRequest(...)).
+        ask_req_binds = [
+            n for n in inits
+            if isinstance(n, IrBind) and isinstance(n.value, IrAskRequest)
+        ]
+        assert len(ask_req_binds) == 1, (
+            f"Expected exactly 1 IrBind(IrAskRequest), got {len(ask_req_binds)}"
+        )
+        ask_req = ask_req_binds[0].value
+        assert isinstance(ask_req, IrAskRequest)
+        # The contract_id must reference an entry in program.contracts.
+        assert ask_req.contract_id in prog.contracts, (
+            f"IrAskRequest.contract_id {ask_req.contract_id} not in program.contracts"
+        )
+        contract = prog.contracts[ask_req.contract_id]
+        # ask-request is always is_unit=False (result is always an AgentRequest record).
+        assert contract.is_unit is False
 
 

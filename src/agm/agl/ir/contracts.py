@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from agm.agl.ir.ids import NominalId
 
 __all__ = [
+    "ContractRequest",
     "ConversionFailureMode",
     "ConversionRecipe",
     "ConversionStrategy",
@@ -146,3 +147,46 @@ class ConversionRecipe:
     target_label: str
     json_schema: str | None = None
     decode: DecodeSchema | None = None
+
+
+# ---------------------------------------------------------------------------
+# Contract request — per-call ask/ask-request descriptor (M6b)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ContractRequest:
+    """Typeless contract descriptor for an ask/ask-request call site (M6b).
+
+    Built at lowering while checker types are available; evaluated WITHOUT any
+    checker ``Type``.  The evaluator parses agent output using only this descriptor.
+
+    ``codec_name``          — ``"text"`` or ``"json"`` (from ``OutputContractSpec``).
+    ``strict_json``         — per-call strict_json override; ``None`` → use the
+                              evaluator-level default.
+    ``json_schema``         — canonical JSON string of the derived schema
+                              (``json.dumps(..., sort_keys=True)``); ``None`` for
+                              the text codec.
+    ``decode``              — typeless ``DecodeSchema`` walk for the target type;
+                              ``None`` for the text codec.
+    ``target_type_label``   — ``repr(target_type)`` stored for ``AgentParseError``
+                              field text and failure-message formatting.
+    ``structured_exec``     — ``True`` for structured exec; ``False`` for ``ask``.
+    ``format_instructions`` — pre-computed format instructions string (empty for
+                              text codec and unit-typed asks).
+    ``is_unit``             — ``True`` when the target type is ``unit`` (unit
+                              target); the evaluator dispatches the agent call but
+                              skips output parsing and returns ``UnitValue``
+                              immediately.  For ``ask-request`` the result is always
+                              an ``AgentRequest`` record, never unit — ``is_unit``
+                              is always ``False`` for ``ask-request`` call sites.
+    """
+
+    codec_name: str
+    strict_json: bool | None
+    json_schema: str | None
+    decode: "DecodeSchema | None"
+    target_type_label: str
+    structured_exec: bool
+    format_instructions: str
+    is_unit: bool = False

@@ -102,6 +102,11 @@ is parsed from its JSON representation **strictly** (externally supplied
 values are not chatty agent output, so no lenient recovery applies) and
 validated against the declared type.
 
+The declared type must be JSON-wire-serializable, including for a param whose
+default is always used. Runtime-only values such as `unit`, agents, and
+functions are not valid program param types because the executable always
+includes external-decoder metadata for every declared param.
+
 ## Host-configurable defaults
 
 | Setting | Portable default | Used when |

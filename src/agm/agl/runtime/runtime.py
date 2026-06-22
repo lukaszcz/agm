@@ -1330,6 +1330,7 @@ def _prepare_ir_params(
         normalize_integral_decimals,
         parse_json_strict,
     )
+    from agm.agl.runtime.serialize import dumps_exact
 
     decoded: dict[SymbolId, Value] = {}
     errors: list[Diagnostic] = []
@@ -1357,7 +1358,10 @@ def _prepare_ir_params(
             elif isinstance(raw, str):
                 obj = parse_json_strict(raw)
             elif _is_json_shaped(raw):
-                obj = raw
+                # Native host values cross the same canonical JSON boundary as
+                # textual values. In particular, Python floats become Decimal
+                # through parse_float=Decimal before typed decoding.
+                obj = parse_json_strict(dumps_exact(raw, indent=None))
             else:
                 raise ValueError(f"expected a JSON-compatible value, got {type(raw).__name__}")
             normalized = normalize_integral_decimals(obj)

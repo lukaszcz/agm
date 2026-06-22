@@ -1924,6 +1924,19 @@ class TestRuntimeErrorPaths:
         assert "1.5" in out
         assert "2.25" in out
 
+    def test_float_native_in_decimal_list_end_to_end(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Native JSON-shaped floats are canonicalized before typed decoding."""
+        result = WorkflowRuntime().run(
+            "param xs: list[decimal]\nprint xs\n",
+            param_values={"xs": [1.5, 2.25]},
+        )
+
+        assert result.ok is True
+        assert result.diagnostics == []
+        assert capsys.readouterr().out == "[1.5, 2.25]\n"
+
     def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
         """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers
         the dict branch of _is_json_shaped, line 790).

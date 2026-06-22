@@ -163,6 +163,12 @@ whose external values fail conversion, are *host invocation errors* — not AgL
 exceptions and not catchable in-language. Extra external values are ignored by
 the runtime after CLI/config resolution.
 
+Every program param must have a JSON-wire-serializable type, even when it has a
+default and the host does not supply a value. Supported param types are `text`,
+`int`, `decimal`, `bool`, `json`, lists, dictionaries, records, and enums.
+Runtime-only types such as `unit`, `agent`, and function types cannot be used as
+program param types.
+
 ## `agent` — declared agents
 
 ```ebnf

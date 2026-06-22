@@ -95,6 +95,7 @@ __all__ = [
     "IrIndexStep",
     "IrLiteralPlan",
     "IrLoad",
+    "IrLoop",
     "IrMakeConstructor",
     "IrMakeDict",
     "IrMakeEnum",
@@ -737,6 +738,39 @@ class IrCase:
     arms: "tuple[IrCaseArm, ...]"
 
 
+@dataclass(frozen=True, slots=True)
+class IrLoop:
+    """IR do…until loop (M3f-C).
+
+    Evaluates ``body`` then ``condition`` up to ``limit`` times.  When
+    ``condition`` evaluates to ``BoolValue(True)`` the loop exits and yields
+    ``UnitValue``.  When ``limit`` iterations elapse without the condition
+    becoming ``True``, raises ``AglRaise`` with a ``MaxIterationsExceeded``
+    exception whose fields mirror the legacy interpreter exactly.
+
+    ``limit=None`` means "use the evaluator's configured default loop limit"
+    (mirrors ``Do.limit is None`` → ``self._loop_limit`` in the legacy
+    interpreter).  Do NOT bake the default into the IR — it is a runtime /
+    configuration concern.
+
+    ``condition_source`` is the pre-sliced source-text of the condition
+    expression (mirrors ``_source_slice(expr.condition.span)`` in the legacy
+    interpreter).  The IR evaluator has no AST spans, so the lowerer captures
+    this string and embeds it here for use in the ``MaxIterationsExceeded``
+    ``condition`` field.
+
+    Per D5 there are NO per-iteration frames: body bindings reuse the same
+    single frame slots across iterations, matching legacy observable behaviour
+    (only the ``until`` condition reads body-bound vars).
+    """
+
+    location: Location
+    limit: "int | None"
+    body: "IrExpr"
+    condition: "IrExpr"
+    condition_source: str
+
+
 # ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
@@ -781,4 +815,5 @@ IrExpr = (
     | IrRaise
     | IrTry
     | IrCase
+    | IrLoop
 )

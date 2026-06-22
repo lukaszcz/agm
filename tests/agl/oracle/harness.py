@@ -94,6 +94,7 @@ def _run_legacy(source: str) -> dict[str, Value]:
         type_env=checked.type_env,
         loop_limit=100,
         strict_json=False,
+        source=source,
     )
     interp.execute(root_scope)
     return root_scope.snapshot()

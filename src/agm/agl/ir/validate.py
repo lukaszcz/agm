@@ -72,6 +72,7 @@ from agm.agl.ir.nodes import (
     IrIndexStep,
     IrLiteralPlan,
     IrLoad,
+    IrLoop,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
@@ -565,6 +566,15 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             for arm in arms:
                 _validate_match_plan(arm.plan, ctx)
                 _validate_expr(arm.body, ctx)
+
+        case IrLoop(limit=limit, body=body, condition=condition):
+            _validate_location(node.location, ctx)
+            if limit is not None and limit < 0:
+                raise InvalidIrError(
+                    f"IrLoop has limit={limit!r} which is negative (must be >= 0 or None)"
+                )
+            _validate_expr(body, ctx)
+            _validate_expr(condition, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

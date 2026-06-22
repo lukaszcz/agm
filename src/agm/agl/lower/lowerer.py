@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from typing import assert_never
 
+from agm.agl._text import normalize_newlines
 from agm.agl.ir.contracts import ConversionFailureMode
 from agm.agl.ir.ids import Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -62,6 +63,7 @@ from agm.agl.ir.nodes import (
     IrIndexStep,
     IrLiteralPlan,
     IrLoad,
+    IrLoop,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
@@ -195,13 +197,18 @@ class _Lowerer:
         source_label: str,
     ) -> None:
         self._checked = checked
-        self._source_text = source_text
+        # Spans/offsets from the lexer are relative to the newline-normalized
+        # source (scanner normalizes with ``normalize_newlines``), and the
+        # legacy interpreter slices normalized text.  Normalize here so source
+        # slices, the stored SourceFile, and every Location offset are all
+        # consistent against the same string (idempotent if already normalized).
+        self._source_text = normalize_newlines(source_text)
 
         # Allocate the single source file entry.
         self._source_id = SourceId(0)
         self._source_file = SourceFile(
             display_name=source_label,
-            normalized_text=source_text,
+            normalized_text=self._source_text,
         )
 
         # Monotonic symbol counter; each declaration gets a fresh SymbolId.
@@ -268,6 +275,15 @@ class _Lowerer:
             start_line=span.start_line,
             start_col=span.start_col,
         )
+
+    def _source_slice(self, span: SourceSpan) -> str:
+        """Return the source-text covered by *span*.
+
+        Mirrors ``Interpreter._source_slice`` in the legacy evaluator; used to
+        capture the condition-expression source text for ``IrLoop.condition_source``
+        (the ``MaxIterationsExceeded`` ``condition`` field).
+        """
+        return self._source_text[span.start_offset : span.end_offset]
 
     # ------------------------------------------------------------------
     # Binding-type helpers (mirror legacy _binding_type_for)
@@ -546,12 +562,22 @@ class _Lowerer:
                 return self._lower_case(subject_expr, branches, span)
 
             # ----------------------------------------------------------
+            # do…until loop → IrLoop (M3f-C)
+            # ----------------------------------------------------------
+            case Do(limit=loop_limit, body=body_expr, condition=cond_expr, span=span):
+                condition_source = self._source_slice(cond_expr.span)
+                return IrLoop(
+                    location=self._loc(span),
+                    limit=loop_limit,
+                    body=self.lower_expr(body_expr),
+                    condition=self.lower_expr(cond_expr),
+                    condition_source=condition_source,
+                )
+
+            # ----------------------------------------------------------
             # Unsupported M4+ nodes — deferred
             # ----------------------------------------------------------
-            case (
-                Lambda()
-                | Do()
-            ):
+            case Lambda():
                 raise NotImplementedError(
                     f"Lowering of {type(node).__name__!r} is not yet implemented "
                     "(deferred to a later milestone)"

@@ -82,6 +82,7 @@ from agm.agl.ir.nodes import (
     IrIndex,
     IrLiteralPlan,
     IrLoad,
+    IrLoop,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
@@ -219,15 +220,21 @@ class IrInterpreter:
     ``public_name`` and is owned by the entry module.
     """
 
+    #: Default loop iteration limit — matches the legacy Interpreter default used
+    #: in the oracle harness (``loop_limit=100`` in ``tests/agl/oracle/harness.py``).
+    DEFAULT_LOOP_LIMIT: int = 100
+
     def __init__(
         self,
         program: ExecutableProgram,
         *,
         trace: TraceStore | None = None,
+        loop_limit: int = DEFAULT_LOOP_LIMIT,
     ) -> None:
         self._program = program
         self._frame: Frame = {}
         self._trace: TraceStore = trace if trace is not None else noop_trace()
+        self._loop_limit: int = loop_limit
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -666,6 +673,32 @@ class IrInterpreter:
                         return self._eval(arm.body)
                 raise AglRaise(
                     _make_match_error(subject_val, trace_id=self._trace.new_event_id())
+                )
+
+            case IrLoop(limit=loop_limit_opt, body=body_expr, condition=cond_expr):
+                limit = loop_limit_opt if loop_limit_opt is not None else self._loop_limit
+                last_cond = False
+                for _iteration in range(limit):
+                    self._eval(body_expr)
+                    cond_val = self._eval(cond_expr)
+                    if not isinstance(cond_val, BoolValue):
+                        raise InvalidIrError(
+                            f"IrLoop: condition evaluated to"
+                            f" {type(cond_val).__name__}, expected BoolValue"
+                        )
+                    last_cond = cond_val.value
+                    if last_cond:
+                        return UnitValue()
+                raise AglRaise(
+                    _make_exc_value(
+                        "MaxIterationsExceeded",
+                        f"Loop exhausted after {limit} iterations",
+                        trace_id=self._trace.new_event_id(),
+                        limit=IntValue(limit),
+                        condition=TextValue(node.condition_source),
+                        last_condition_value=BoolValue(last_cond),
+                        metadata=JsonValue(None),
+                    )
                 )
 
             case _ as unreachable:  # pragma: no cover

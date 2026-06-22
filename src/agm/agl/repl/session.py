@@ -706,7 +706,8 @@ class ReplSession:
                 trace_path=self._trace_path,
                 installed=installed,
             )
-        except (AgentCancelled, KeyboardInterrupt):
+        except (AgentCancelled, KeyboardInterrupt) as exc:
+            cancel_span = exc.span if isinstance(exc, AgentCancelled) else None
             trace.run_end(ok=False)
             installed = self._promote_ir_state(
                 text=text,
@@ -716,7 +717,7 @@ class ReplSession:
                 entry_program_name=entry_program_name,
                 entry_active_config=entry_active_config,
                 partial=True,
-                failure_span=None,
+                failure_span=cancel_span,
             )
             kind, name = self._classify(orig_program)
             return EntryResult(
@@ -853,7 +854,19 @@ class ReplSession:
         for item in program.body.items:
             if isinstance(item, ParamDecl):
                 symbol = self._link_image.symbol_for_decl(item.node_id)
-                if not partial or symbol in self._ir_base_frame:
+                # The IR interpreter installs every entry param into the base
+                # frame up front (before any initializer runs), so a bare
+                # ``symbol in self._ir_base_frame`` check would record a param
+                # declared after the failure even though the scope-promotion
+                # loop above excluded its binding by source position. Mirror
+                # that loop's ``installed_before_failure`` criterion so
+                # ``_declared_params`` stays aligned with ``_session_scope``
+                # (otherwise ``declared_params()`` raises ``KeyError``).
+                installed_before_failure = symbol in self._ir_base_frame and (
+                    failure_span is None
+                    or item.span.start_offset <= failure_span.start_offset
+                )
+                if not partial or installed_before_failure:
                     typ = checked.type_env.get_binding_type(item.node_id)
                     assert typ is not None
                     self._declared_params[item.name] = typ
@@ -1124,7 +1137,8 @@ class ReplSession:
                 trace_path=self._trace_path,
                 installed=installed,
             )
-        except (AgentCancelled, KeyboardInterrupt):
+        except (AgentCancelled, KeyboardInterrupt) as exc:
+            cancel_span = exc.span if isinstance(exc, AgentCancelled) else None
             trace.run_end(ok=False)
             installed = self._promote_ir_state(
                 text=text,
@@ -1134,7 +1148,7 @@ class ReplSession:
                 entry_program_name=entry_program_name,
                 entry_active_config=entry_active_config,
                 partial=True,
-                failure_span=None,
+                failure_span=cancel_span,
             )
             kind, name = self._classify(orig_program)
             return EntryResult(
@@ -1168,6 +1182,9 @@ class ReplSession:
             if isinstance(item, ImportDecl)
         )
         self._loaded_lib_modules.update(new_modules)
+        self._link_image.mark_linked(
+            mid for mid in cgraph.modules if not mid.is_entry
+        )
         import_indexes = {
             (tuple(item.module_path), item.wildcard): index
             for index, item in enumerate(self._accumulated_imports)

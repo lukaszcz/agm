@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from agm.agl._text import normalize_newlines
@@ -27,6 +28,16 @@ class LinkImage:
     def symbol_for_decl(self, decl_node_id: int) -> SymbolId | None:
         """Return the persistent symbol allocated for an AST declaration."""
         return self._state.decl_to_sym.get(decl_node_id)
+
+    def mark_linked(self, module_ids: "Iterable[ModuleId]") -> None:
+        """Record library modules as persistently linked.
+
+        Called by the REPL session only after an entry evaluates successfully,
+        so a runtime failure never leaves a module marked linked without a
+        matching cached ``LoadedModule`` (which would skip re-lowering on the
+        next import while the reloaded module carries fresh declaration IDs).
+        """
+        self._linked_modules.update(module_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +92,11 @@ def lower_repl_graph(
     """Incrementally link a checked module graph into a REPL image."""
     from agm.agl.lower.graph import lower_graph
 
+    # NOTE: ``image._linked_modules`` is intentionally NOT updated here. Linking
+    # a module allocates persistent IDs, but the entry may still fail at runtime;
+    # marking modules linked before the entry succeeds would desync the image
+    # from the session's cached ``LoadedModule`` set. The session calls
+    # ``LinkImage.mark_linked`` once the entry has evaluated successfully.
     program = lower_graph(
         checked_graph,
         validate=validate,
@@ -88,7 +104,6 @@ def lower_repl_graph(
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
     )
-    image._linked_modules.update(mid for mid in checked_graph.modules if not mid.is_entry)
     entry = checked_graph.modules[checked_graph.entry_id].resolved.program
     last = entry.body.items[-1]
     marker = (

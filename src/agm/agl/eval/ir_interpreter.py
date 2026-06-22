@@ -136,7 +136,7 @@ from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.request import AgentRequest
+from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
 
@@ -1073,6 +1073,31 @@ class IrInterpreter:
     # Agent call helpers (M6b)
     # ------------------------------------------------------------------
 
+    def _dispatch_agent(
+        self, agent_name: str, request: AgentRequest, node: IrAsk
+    ) -> "AgentResponse":
+        """Dispatch an agent call, annotating cancellation with the ask span.
+
+        ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
+        default agent) propagates out of ``AgentRegistry.dispatch`` without source
+        context. The REPL session needs the cancelled ``ask`` node's location to
+        apply partial-effects promotion by source position (just like ``AglRaise``
+        ), so we attach it here. A raw ``KeyboardInterrupt`` is normalized to
+        ``AgentCancelled(reason="interrupted")`` to match the
+        ``ConfirmingAgent`` conversion and give the session a uniform carrier.
+        """
+        from agm.agl.repl.agents import AgentCancelled
+
+        try:
+            return self._registry.dispatch(agent_name, request)
+        except AgentCancelled as exc:
+            exc.span = node.location
+            raise
+        except KeyboardInterrupt as exc:
+            raise AgentCancelled(
+                agent_name, "interrupted", span=node.location
+            ) from exc
+
     def _eval_ir_ask(
         self,
         _node: IrAsk,
@@ -1102,7 +1127,7 @@ class IrInterpreter:
                 prompt=prompt_text,
                 output_contract=None,
             )
-            self._registry.dispatch(agent_name, request)
+            self._dispatch_agent(agent_name, request, _node)
             return UnitValue()
 
         effective_strict = (
@@ -1145,7 +1170,7 @@ class IrInterpreter:
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
             )
-            response = self._registry.dispatch(agent_name, request)
+            response = self._dispatch_agent(agent_name, request, _node)
             raw = response.content
 
             result = self._parse_host_output(

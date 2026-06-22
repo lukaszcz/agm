@@ -233,6 +233,20 @@ class TestFailureEffects:
             ("p", 7)
         ]
 
+    def test_runtime_raise_excludes_param_declared_after_failure(self) -> None:
+        # Regression (M7 review, P2): a runtime failure that precedes a later
+        # ``param`` declaration must not record that param. The IR interpreter
+        # installs every param into the base frame up front, so a naive
+        # ``symbol in base frame`` check would record the later param even though
+        # the scope-promotion loop excluded its binding by source position —
+        # leaving ``declared_params()`` to raise ``KeyError``.
+        s = ReplSession()
+        result = s.eval_entry("let z: decimal = 1 / 0\nparam q: int = 5")
+        assert not result.ok
+        assert s.declared_params() == []
+        # The later param was excluded from the session scope too.
+        assert not s.eval_entry("q").ok
+
     def test_runtime_raise_does_not_install_failing_param_default(self) -> None:
         s = ReplSession()
         result = s.eval_entry("param p: decimal = 1 / 0")
@@ -880,6 +894,23 @@ class TestAgentCancellation:
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["v"] == 2
 
+    def test_cancellation_preserves_completed_record(self) -> None:
+        # Regression (M7 review, P3): a record (or enum / type alias) declared
+        # before a cancelled agent call must be promoted, mirroring the
+        # partial-effects behavior for runtime raises. Previously cancellation
+        # carried no failure span, so every type declaration was dropped.
+        s = ReplSession(default_agent=_CancellingAgent())
+        r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
+        assert not r.ok
+        assert s.eval_entry("Box(value: 3)").ok
+
+    def test_cancellation_excludes_record_declared_after_call(self) -> None:
+        # A type declared after the cancelled call is not promoted.
+        s = ReplSession(default_agent=_CancellingAgent())
+        r = s.eval_entry('let g = ask """x"""\nrecord After\n  value: int')
+        assert not r.ok
+        assert not s.eval_entry("After(value: 1)").ok
+
 
 # ---------------------------------------------------------------------------
 # Trace logging
@@ -1361,6 +1392,26 @@ class TestImports:
         s.reset()
         assert not s._loaded_lib_modules
         assert not s._accumulated_imports
+
+    def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
+        # Regression (M7 review, P1): when an entry imports a previously unseen
+        # module and then raises at runtime, the module must NOT be marked as
+        # persistently linked. Otherwise the next import reloads it with fresh
+        # declaration IDs but skips lowering it (already linked), crashing with
+        # ``no FunctionId for function decl_node_id``.
+        lib = tmp_path / 'boom.agl'
+        lib.write_text('def f() -> int = 42\n')
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry('import boom\nlet z: decimal = 1 / 0')
+        assert not r1.ok
+        # The failed entry cached neither the loaded module nor the link.
+        assert not s._loaded_lib_modules
+        assert not s._link_image._linked_modules
+        # Re-importing reloads and re-lowers boom (with fresh decl IDs) and
+        # evaluates successfully instead of hitting a stale-link assertion.
+        r2 = s.eval_entry('import boom\nf()')
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 42
 
     def test_scope_error_in_graph_mode(self, tmp_path: Path) -> None:
         # Declaring a reserved built-in name as an agent in graph mode

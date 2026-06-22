@@ -171,8 +171,8 @@ def assert_oracle_agrees(
 
     mismatches: list[str] = []
     for name in sorted(legacy_names):
-        legacy_val = legacy[name]
-        ir_val = ir[name]
+        legacy_val = _normalize_value(legacy[name])
+        ir_val = _normalize_value(ir[name])
         if legacy_val != ir_val:
             mismatches.append(f"  {name!r}: legacy={legacy_val!r}, ir={ir_val!r}")
 
@@ -224,16 +224,26 @@ def _normalize_value(val: Value) -> Value:
 
 
 def _normalize_exception(exc: ExceptionValue) -> ExceptionValue:
-    """Strip ``trace_id`` from an ``ExceptionValue`` at all depths.
+    """Strip nondeterministic trace values from an ``ExceptionValue`` at all depths.
 
-    Zeros every ``trace_id`` field in *exc* and recursively normalizes any
-    nested ``ExceptionValue`` (or ``ExceptionValue`` inside containers/records/
-    enums) found anywhere in the field tree.  All other fields are preserved
-    without modification.
+    Legacy fills EVERY declared field absent from the constructor args with the
+    SAME single auto-allocated trace-id value.  Normalisation rule: determine
+    the canonical auto-trace value (the value currently under the ``trace_id``
+    field), then zero EVERY field whose value equals that trace value — not only
+    the field literally named ``trace_id``.  This ensures that any other field
+    that received the same auto-injected trace value also compares equal across
+    both pipelines.  Non-trace fields and nested containers are recursively
+    normalised.
     """
+    # Identify the canonical auto-trace value (may be absent for hand-built nodes).
+    auto_trace: Value | None = exc.fields.get("trace_id")
+
     new_fields: dict[str, Value] = {}
     for key, field_val in exc.fields.items():
-        if key == "trace_id":
+        # Zero the field if it holds the auto-trace value (covers both the
+        # literal "trace_id" field and any other field auto-filled with the
+        # same single trace id per construction).
+        if auto_trace is not None and field_val == auto_trace:
             new_fields[key] = TextValue("")
         else:
             new_fields[key] = _normalize_value(field_val)

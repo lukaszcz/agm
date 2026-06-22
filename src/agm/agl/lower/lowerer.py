@@ -30,8 +30,9 @@ from __future__ import annotations
 
 from typing import assert_never
 
-from agm.agl.ir.ids import Location, SourceId, SymbolId
+from agm.agl.ir.ids import Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
+    AutoTraceField,
     IrAnd,
     IrArith,
     IrAssign,
@@ -51,8 +52,12 @@ from agm.agl.ir.nodes import (
     IrIndex,
     IrIndexStep,
     IrLoad,
+    IrMakeConstructor,
     IrMakeDict,
+    IrMakeEnum,
+    IrMakeException,
     IrMakeList,
+    IrMakeRecord,
     IrOr,
     IrRenderTemplate,
     IrTemplateText,
@@ -72,12 +77,15 @@ from agm.agl.ir.operations import (
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
+    NominalDescriptor,
+    NominalKind,
     SourceFile,
     SymbolDescriptor,
+    VariantDescriptor,
 )
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
@@ -107,6 +115,7 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
+    NamedArg,
     NameTarget,
     NullLit,
     ParamDecl,
@@ -126,7 +135,19 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import CheckedProgram
-from agm.agl.typecheck.types import DecimalType, DictType, IntType, ListType, TextType, Type
+from agm.agl.typecheck.types import (
+    BUILTIN_EXCEPTIONS,
+    DecimalType,
+    DictType,
+    EnumType,
+    ExceptionType,
+    FunctionType,
+    IntType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+)
 
 __all__ = ["lower_program"]
 
@@ -163,6 +184,9 @@ class _Lowerer:
 
         # Accumulated symbol descriptors.
         self._symbols: dict[SymbolId, SymbolDescriptor] = {}
+
+        # Accumulated nominal descriptors (populated in lower()).
+        self._nominals: dict[NominalId, NominalDescriptor] = {}
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -276,10 +300,49 @@ class _Lowerer:
                 return self._lower_dict_lit(dict_node)
 
             # ----------------------------------------------------------
-            # Variable reference → IrLoad
+            # Variable reference — constructor ref or IrLoad
             # ----------------------------------------------------------
             case VarRef(node_id=nid, span=span):
+                # Check for constructor reference FIRST (mirrors legacy _eval_var_ref).
+                cref = self._checked.resolved.constructor_refs.get(nid)
+                if cref is not None:
+                    node_typ = self._node_type(nid)
+                    if isinstance(node_typ, FunctionType):
+                        # Constructor with fields used as a value → IrMakeConstructor.
+                        nominal, display = self._nominal_for_cref_owner(cref.owner_name)
+                        return IrMakeConstructor(
+                            location=self._loc(span),
+                            nominal=nominal,
+                            display_name=display,
+                            variant=cref.variant,
+                        )
+                    # Nullary constructor used as a value → construct immediately.
+                    # AgL grammar requires ≥1 field in a record, so a nullary
+                    # record VarRef is impossible under the current grammar.
+                    return self._lower_nullary_constructor(  # pragma: no cover
+                        nid, cref.owner_name, cref.variant, span
+                    )
+
+                # Cross-module constructor via BinderKind.constructor_binding.
+                # Deferred to M5 (multi-module linking).
+                from agm.agl.scope.symbols import BinderKind
+
                 ref = self._checked.resolved.resolution.get(nid)
+                # pragma: no cover — cross-module constructor binding (deferred to M5).
+                if (  # pragma: no cover
+                    ref is not None and ref.kind is BinderKind.constructor_binding
+                ):
+                    node_typ = self._node_type(nid)
+                    if isinstance(node_typ, FunctionType):
+                        nominal, display = self._nominal_for_resolution_name(ref.name)
+                        return IrMakeConstructor(
+                            location=self._loc(span),
+                            nominal=nominal,
+                            display_name=display,
+                            variant=None,
+                        )
+                    return self._lower_nullary_constructor_by_name(nid, ref.name, None, span)
+
                 assert ref is not None, (
                     f"compiler bug: no resolution for VarRef node_id={nid!r}"
                 )
@@ -317,14 +380,25 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Field access → IrField (M3c)
+            # Field access — qualified constructor ref or IrField (M3c/M3d)
             # ----------------------------------------------------------
             case FieldAccess(obj=obj_expr, field=field_name, span=span, node_id=nid):
-                # Qualified constructor references (e.g. Mod.Variant) are deferred to M3d.
-                if nid in self._checked.resolved.qualified_constructor_refs:
-                    raise NotImplementedError(
-                        "Lowering of qualified constructor FieldAccess is not yet implemented"
-                    )
+                qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
+                if qcr is not None:
+                    # qcr is (owner_name, member, owner_module_id | None)
+                    owner_name, variant_name, _qcr_mid = qcr
+                    node_typ = self._node_type(nid)
+                    if isinstance(node_typ, FunctionType):
+                        # With-fields variant used as value → IrMakeConstructor.
+                        nominal, display = self._nominal_for_cref_owner(owner_name)
+                        return IrMakeConstructor(
+                            location=self._loc(span),
+                            nominal=nominal,
+                            display_name=display,
+                            variant=variant_name,
+                        )
+                    # Nullary variant used as value → construct immediately.
+                    return self._lower_nullary_constructor(nid, owner_name, variant_name, span)
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
@@ -359,11 +433,16 @@ class _Lowerer:
                 return IrRenderTemplate(location=self._loc(span), segments=tuple(ir_segs))
 
             # ----------------------------------------------------------
-            # Unsupported M3/M4 nodes — deferred
+            # Call — constructor calls lowered here; all other calls deferred (M4)
+            # ----------------------------------------------------------
+            case Call(node_id=nid, span=span) as call_node:
+                return self._lower_call(call_node, nid, span)
+
+            # ----------------------------------------------------------
+            # Unsupported M4+ nodes — deferred
             # ----------------------------------------------------------
             case (
-                Call()
-                | Lambda()
+                Lambda()
                 | If()
                 | Case()
                 | Do()
@@ -544,6 +623,190 @@ class _Lowerer:
         )
 
     # ------------------------------------------------------------------
+    # Constructor lowering helpers (M3d)
+    # ------------------------------------------------------------------
+
+    def _nominal_for_cref_owner(self, owner_name: str) -> tuple[NominalId, str]:
+        """Return (NominalId, display_name) for a constructor owner by name.
+
+        For exceptions the nominal uses PRELUDE_ID; for records/enums it uses
+        the type's own module_id (which equals ENTRY_ID for single-module programs).
+        """
+        typ = self._checked.type_env.get_type(owner_name)
+        if isinstance(typ, RecordType):
+            return NominalId(typ.module_id, typ.name), typ.name
+        if isinstance(typ, EnumType):
+            return NominalId(typ.module_id, typ.name), typ.name
+        if isinstance(typ, ExceptionType):  # pragma: no cover
+            # Exception constructors as first-class values are rejected by the checker.
+            return NominalId(PRELUDE_ID, typ.name), typ.name
+        # Fallback for generic types: get from GenericTypeDef template.  # pragma: no cover
+        gdef = self._checked.type_env.get_generic_type(owner_name)  # pragma: no cover
+        if gdef is not None:  # pragma: no cover
+            tmpl = gdef.template  # pragma: no cover
+            if isinstance(tmpl, RecordType):  # pragma: no cover
+                return NominalId(tmpl.module_id, owner_name), owner_name  # pragma: no cover
+            if isinstance(tmpl, EnumType):  # pragma: no cover
+                return NominalId(tmpl.module_id, owner_name), owner_name  # pragma: no cover
+        return NominalId(ENTRY_ID, owner_name), owner_name  # pragma: no cover
+
+    def _nominal_for_resolution_name(self, name: str) -> tuple[NominalId, str]:  # pragma: no cover
+        """Return (NominalId, display_name) for a constructor_binding resolution name.
+
+        Called only from the cross-module constructor_binding VarRef path (M5).
+        """
+        return self._nominal_for_cref_owner(name)  # pragma: no cover
+
+    def _lower_nullary_constructor(
+        self,
+        ref_node_id: int,
+        owner_name: str,
+        variant: str | None,
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Lower a nullary constructor reference (value position) to an IrMake* node."""
+        typ = self._checked.node_types.get(ref_node_id)
+        return self._lower_constructor_from_type(typ, owner_name, variant, {}, span)
+
+    def _lower_nullary_constructor_by_name(  # pragma: no cover
+        self,
+        ref_node_id: int,
+        name: str,
+        variant: str | None,
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Lower a nullary constructor by name (for constructor_binding VarRef).
+
+        Called only from the cross-module constructor_binding VarRef path (M5).
+        """
+        return self._lower_nullary_constructor(ref_node_id, name, variant, span)  # pragma: no cover
+
+    def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
+        """Lower a Call node.
+
+        Constructor calls (VarRef or FieldAccess callee resolving to a constructor)
+        are lowered to IrMakeRecord/IrMakeEnum/IrMakeException.  All other calls
+        (functions, host, indirect) still raise NotImplementedError (deferred M4).
+        """
+        from agm.agl.scope.symbols import BinderKind
+
+        callee = call_node.callee
+
+        # (a) VarRef callee in constructor_refs
+        if isinstance(callee, VarRef):
+            cref = self._checked.resolved.constructor_refs.get(callee.node_id)
+            if cref is not None:
+                return self._lower_named_constructor_call(
+                    nid, cref.owner_name, cref.variant, call_node.named_args, span
+                )
+            # (b) VarRef callee resolving via BinderKind.constructor_binding (M5).
+            callee_ref = self._checked.resolved.resolution.get(callee.node_id)
+            if (  # pragma: no cover
+                callee_ref is not None
+                and callee_ref.kind is BinderKind.constructor_binding
+            ):
+                return self._lower_named_constructor_call(  # pragma: no cover
+                    nid, callee.name, None, call_node.named_args, span
+                )
+
+        # (c) FieldAccess callee in qualified_constructor_refs (enum variant call).
+        # Any other callee type or non-constructor FieldAccess falls through to (d).
+        elif isinstance(callee, FieldAccess):  # pragma: no branch
+            qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
+            if qcr is not None:  # pragma: no branch — non-constructor FieldAccess call is M4+
+                owner_name, variant_name, _qcr_mid = qcr
+                return self._lower_named_constructor_call(
+                    nid, owner_name, variant_name, call_node.named_args, span
+                )
+
+        # (d) Calling a ConstructorValue (first-class) — deferred to M4.
+        # Non-constructor calls (functions/host/indirect) — deferred to M4.
+        raise NotImplementedError(
+            "Lowering of non-constructor Call is not yet implemented (deferred to M4)"
+        )
+
+    def _lower_named_constructor_call(
+        self,
+        result_node_id: int,
+        owner_name: str,
+        variant: str | None,
+        named_args: "tuple[NamedArg, ...]",
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Lower a constructor call with named arguments to an IrMake* node."""
+        arg_exprs: dict[str, "Expr"] = {arg.name: arg.value for arg in named_args}
+        typ = self._checked.node_types.get(result_node_id)
+        return self._lower_constructor_from_type(typ, owner_name, variant, arg_exprs, span)
+
+    def _lower_constructor_from_type(
+        self,
+        typ: "Type | None",
+        owner_name: str,
+        variant: str | None,
+        arg_exprs: "dict[str, Expr]",
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Build the IrMake* node for a constructor given its resolved checker type."""
+        loc = self._loc(span)
+
+        if isinstance(typ, RecordType):
+            nominal = NominalId(typ.module_id, typ.name)
+            # Build fields in declaration order from typ.fields.
+            ir_fields: list[tuple[str, IrExpr]] = []
+            for fname, ftype in typ.fields.items():
+                ir_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
+            return IrMakeRecord(
+                location=loc,
+                nominal=nominal,
+                display_name=typ.name,
+                fields=tuple(ir_fields),
+            )
+
+        if isinstance(typ, ExceptionType):
+            nominal = NominalId(PRELUDE_ID, typ.name)
+            # ONE trace id allocation sentinel per construction (auto-fill any
+            # declared field not present in arg_exprs).
+            exc_fields: list[tuple[str, IrExpr | AutoTraceField]] = []
+            for fname, ftype in typ.fields.items():
+                if fname in arg_exprs:
+                    exc_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
+                else:
+                    exc_fields.append((fname, AutoTraceField()))
+            return IrMakeException(
+                location=loc,
+                nominal=nominal,
+                display_name=typ.name,
+                fields=tuple(exc_fields),
+            )
+
+        if isinstance(typ, EnumType):
+            assert variant is not None, "compiler bug: enum constructor must have variant"
+            nominal = NominalId(typ.module_id, typ.name)
+            variant_fields = typ.variants.get(variant, {})
+            enum_fields: list[tuple[str, IrExpr]] = []
+            for fname, ftype in variant_fields.items():
+                # The checker enforces all variant fields are present in arg_exprs.
+                enum_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
+            return IrMakeEnum(
+                location=loc,
+                nominal=nominal,
+                display_name=typ.name,
+                variant=variant,
+                fields=tuple(enum_fields),
+            )
+
+        # Nullary constructor whose result type was not yet resolved (e.g. called
+        # via a TypeVar-erased path) — look up owner type directly.  # pragma: no cover
+        owner_typ = self._checked.type_env.get_type(owner_name)  # pragma: no cover
+        if owner_typ is not None:  # pragma: no cover
+            return self._lower_constructor_from_type(  # pragma: no cover
+                owner_typ, owner_name, variant, arg_exprs, span
+            )
+        raise AssertionError(  # pragma: no cover
+            f"compiler bug: cannot determine constructor type for {owner_name!r}"
+        )
+
+    # ------------------------------------------------------------------
     # Block helper
     # ------------------------------------------------------------------
 
@@ -699,8 +962,70 @@ class _Lowerer:
     # Top-level entry point
     # ------------------------------------------------------------------
 
+    def _build_nominals(self) -> None:
+        """Populate ``self._nominals`` with all user-declared and built-in nominals.
+
+        Adds:
+        - All user-declared record/enum nominals from the entry module's type env.
+          (Cross-module nominal aggregation is deferred to M5.)
+        - All built-in exception descriptors keyed by NominalId(PRELUDE_ID, name).
+
+        Out of scope: prelude record/enum descriptors (ExecResult, ParsePolicy, …)
+        — those are constructed only via host ops (M6) and are not added here.
+        """
+        # User-declared nominals (entry module only — M5 handles cross-module).
+        for name, typ in self._checked.type_env.non_builtin_type_items():
+            if isinstance(typ, RecordType):
+                nominal = NominalId(typ.module_id, name)
+                self._nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    display_name=name,
+                    kind=NominalKind.RECORD,
+                    fields=tuple(typ.fields.keys()),
+                    variants=(),
+                )
+            elif isinstance(typ, EnumType):
+                nominal = NominalId(typ.module_id, name)
+                variants = tuple(
+                    VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
+                    for vname, vfields in typ.variants.items()
+                )
+                self._nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    display_name=name,
+                    kind=NominalKind.ENUM,
+                    fields=(),
+                    variants=variants,
+                )
+            elif isinstance(typ, ExceptionType):  # pragma: no cover
+                # User-declared exceptions are not supported by the current grammar.
+                # Reserved for a future grammar extension.
+                nominal = NominalId(PRELUDE_ID, name)  # pragma: no cover
+                self._nominals[nominal] = NominalDescriptor(  # pragma: no cover
+                    nominal=nominal,
+                    display_name=name,
+                    kind=NominalKind.EXCEPTION,
+                    fields=tuple(typ.fields.keys()),
+                    variants=(),
+                )
+
+        # Built-in exceptions: always keyed by NominalId(PRELUDE_ID, name).
+        for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
+            nominal = NominalId(PRELUDE_ID, exc_name)
+            if nominal not in self._nominals:  # pragma: no cover — always true for builtins
+                self._nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    display_name=exc_name,
+                    kind=NominalKind.EXCEPTION,
+                    fields=tuple(exc_type.fields.keys()),
+                    variants=(),
+                )
+
     def lower(self) -> ExecutableProgram:
         """Lower the checked program to an ``ExecutableProgram``."""
+        # Populate nominals before lowering items so that validate can check them.
+        self._build_nominals()
+
         body = self._checked.resolved.program.body
         ir_items: list[IrExpr] = []
         for item in body.items:
@@ -717,7 +1042,7 @@ class _Lowerer:
             entry_module=ENTRY_ID,
             modules={ENTRY_ID: entry_mod},
             symbols=dict(self._symbols),
-            nominals={},
+            nominals=dict(self._nominals),
             sources={self._source_id: self._source_file},
         )
 

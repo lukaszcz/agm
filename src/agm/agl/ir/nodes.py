@@ -51,7 +51,7 @@ from __future__ import annotations
 import decimal
 from dataclasses import dataclass
 
-from agm.agl.ir.ids import Location, SymbolId
+from agm.agl.ir.ids import Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
     ArithKind,
     ArithOp,
@@ -65,6 +65,7 @@ from agm.agl.ir.operations import (
 )
 
 __all__ = [
+    "AutoTraceField",
     "IrAnd",
     "IrArith",
     "IrAssign",
@@ -84,8 +85,12 @@ __all__ = [
     "IrIndex",
     "IrIndexStep",
     "IrLoad",
+    "IrMakeConstructor",
     "IrMakeDict",
+    "IrMakeEnum",
+    "IrMakeException",
     "IrMakeList",
+    "IrMakeRecord",
     "IrOr",
     "IrRenderTemplate",
     "IrSequence",
@@ -422,11 +427,100 @@ class IrRenderTemplate:
 
 
 # ---------------------------------------------------------------------------
+# Constructor nodes (M3d)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class AutoTraceField:
+    """Sentinel marker for an auto-injected trace_id field in IrMakeException.
+
+    Each slot in ``IrMakeException.fields`` that was NOT provided by the caller
+    carries this sentinel rather than an ``IrExpr``.  The evaluator allocates
+    ONE ``TextValue(trace.new_event_id())`` per construction and substitutes it
+    for every ``AutoTraceField`` slot in that construction.
+
+    This is NOT an ``IrExpr`` member — it cannot appear in any other IR position.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class IrMakeRecord:
+    """IR record construction: ``RecordName(field: expr, ...)``.
+
+    ``nominal`` — the ``NominalId`` of the record type.
+    ``display_name`` — user-facing type name.
+    ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
+        each ``expr`` is already coerced to the declared field type by the
+        lowerer via ``lower_coerced``.
+    """
+
+    location: Location
+    nominal: NominalId
+    display_name: str
+    fields: "tuple[tuple[str, IrExpr], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class IrMakeEnum:
+    """IR enum-variant construction: ``EnumName.Variant(field: expr, ...)``.
+
+    ``nominal`` — the ``NominalId`` of the owning enum type.
+    ``display_name`` — user-facing enum type name.
+    ``variant`` — the variant name.
+    ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
+        each ``expr`` is already coerced by the lowerer.
+    """
+
+    location: Location
+    nominal: NominalId
+    display_name: str
+    variant: str
+    fields: "tuple[tuple[str, IrExpr], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class IrMakeException:
+    """IR exception construction: ``ExcName(field: expr, ...)``.
+
+    ``nominal`` — the ``NominalId`` of the exception type (uses PRELUDE_ID).
+    ``display_name`` — user-facing exception type name.
+    ``fields`` — declaration-order tuple of ``(field_name, slot)`` where
+        ``slot`` is either a coerced ``IrExpr`` (explicitly provided by the
+        caller) or an ``AutoTraceField`` sentinel (declared but not provided —
+        will receive the construction's freshly allocated trace id).
+    """
+
+    location: Location
+    nominal: NominalId
+    display_name: str
+    fields: "tuple[tuple[str, IrExpr | AutoTraceField], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class IrMakeConstructor:
+    """IR first-class constructor reference.
+
+    Evaluates to a ``ConstructorValue(nominal, display_name, variant)`` without
+    constructing the record/enum.  Used when a constructor is referenced as a
+    value (non-call position).
+
+    ``variant`` is ``None`` for a record constructor; non-``None`` for an enum
+    variant constructor.
+    """
+
+    location: Location
+    nominal: NominalId
+    display_name: str
+    variant: "str | None"
+
+
+# ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
 
-#: Closed union of all IR expression node types defined in this module (M1
-#: subset).  Grows in M3/M4 as additional families are wired in.
+#: Closed union of all IR expression node types defined in this module.
+#: Grows in M4 as function/call families are wired in.
 #:
 #: Dispatch with a structural ``match`` whose final arm is
 #: ``assert_never(node)`` (D4) so mypy exhaustiveness makes a missing case a
@@ -455,4 +549,8 @@ IrExpr = (
     | IrField
     | IrIndex
     | IrRenderTemplate
+    | IrMakeRecord
+    | IrMakeEnum
+    | IrMakeException
+    | IrMakeConstructor
 )

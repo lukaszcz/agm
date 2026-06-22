@@ -132,14 +132,12 @@ def test_index_set_dict_wrong_index() -> None:
 
 
 @pytest.mark.oracle
-@pytest.mark.skip(reason="Requires constructor call lowering (M4 — Call node deferred)")
 def test_record_field_access() -> None:
     """Record field access: p.x on a record.
 
-    This test requires Call lowering (M4). The IrField node is tested
-    directly in test_agl_ir_interpreter.py and the golden lowering
-    test (test_golden_field_access_lowers_to_ir_field) below verifies
-    FieldAccess lowers to IrField correctly.
+    Constructor call lowering (IrMakeRecord) was added in M3d, so this
+    test is now fully supported.  The IrField node is also tested directly
+    in test_agl_ir_interpreter.py::TestIrField.
     """
     source = """\
 record Point
@@ -240,11 +238,11 @@ let x: text = "n is ${n}"
 
 
 @pytest.mark.oracle
-@pytest.mark.skip(reason="Requires constructor call lowering (M4 — Call node deferred)")
 def test_template_with_record_interpolation() -> None:
     """Template with a record value interpolation.
 
-    This test requires Call lowering (M4).
+    Constructor call lowering (IrMakeRecord) was added in M3d, so this
+    test is now fully supported.
     """
     source = """\
 record Point
@@ -471,12 +469,12 @@ def _lower(source: str) -> "ExecutableProgram":
     )
 
 
-@pytest.mark.skip(reason="FieldAccess golden lowering requires constructor calls (M4 — deferred)")
 def test_golden_field_access_lowers_to_ir_field() -> None:
     """FieldAccess lowers to IrField with the correct field name.
 
-    Skipped: constructor call lowering (M4) is required to lower Point(x: 3, y: 4).
-    The IrField node is tested directly in test_agl_ir_interpreter.py::TestIrField.
+    Constructor call lowering (M3d) is available, so Point(x: 3, y: 4) lowers
+    to IrMakeRecord, and then p.x lowers to IrField.
+    The IrField node is also tested directly in test_agl_ir_interpreter.py::TestIrField.
     """
     from agm.agl.ir.nodes import IrBind, IrField
     source = """\

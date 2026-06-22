@@ -23,6 +23,7 @@ from agm.agl.ir.ids import (
     SymbolId,
 )
 from agm.agl.ir.nodes import (
+    AutoTraceField,
     IrAnd,
     IrArith,
     IrAssign,
@@ -42,8 +43,12 @@ from agm.agl.ir.nodes import (
     IrIndex,
     IrIndexStep,
     IrLoad,
+    IrMakeConstructor,
     IrMakeDict,
+    IrMakeEnum,
+    IrMakeException,
     IrMakeList,
+    IrMakeRecord,
     IrOr,
     IrRenderTemplate,
     IrSequence,
@@ -76,12 +81,14 @@ from agm.agl.ir.program import (
     NominalKind,
     SourceFile,
     SymbolDescriptor,
+    VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 
 __all__ = [
     "ArithKind",
     "ArithOp",
+    "AutoTraceField",
     "CmpOp",
     "Coercion",
     "CompareKind",
@@ -112,8 +119,12 @@ __all__ = [
     "IrIndex",
     "IrIndexStep",
     "IrLoad",
+    "IrMakeConstructor",
     "IrMakeDict",
+    "IrMakeEnum",
+    "IrMakeException",
     "IrMakeList",
+    "IrMakeRecord",
     "IrOr",
     "IrRenderTemplate",
     "IrSequence",
@@ -136,5 +147,6 @@ __all__ = [
     "SymbolId",
     "ToJson",
     "UnaryOp",
+    "VariantDescriptor",
     "validate_ir",
 ]

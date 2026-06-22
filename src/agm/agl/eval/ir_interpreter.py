@@ -39,6 +39,7 @@ from agm.agl.eval.frames import Cell, Frame
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.eval.values import (
     BoolValue,
+    ConstructorValue,
     DecimalValue,
     DictValue,
     EnumValue,
@@ -52,6 +53,7 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.ir.nodes import (
+    AutoTraceField,
     IrAnd,
     IrArith,
     IrAssign,
@@ -70,8 +72,12 @@ from agm.agl.ir.nodes import (
     IrField,
     IrIndex,
     IrLoad,
+    IrMakeConstructor,
     IrMakeDict,
+    IrMakeEnum,
+    IrMakeException,
     IrMakeList,
+    IrMakeRecord,
     IrOr,
     IrRenderTemplate,
     IrSequence,
@@ -201,15 +207,10 @@ class IrInterpreter:
         self,
         program: ExecutableProgram,
         *,
-        initial_frame: Frame | None = None,
-        # TEMPORARY test-only seam — remove in M3d once IrMakeRecord makes RecordValues
-        # constructible end-to-end (see _plan-context.md "Tracked deferred parity items").
-        # Until then, tests that exercise IrField success paths seed the frame with a
-        # pre-built RecordValue via this parameter rather than lowering a constructor call.
         trace: TraceStore | None = None,
     ) -> None:
         self._program = program
-        self._frame: Frame = dict(initial_frame) if initial_frame is not None else {}
+        self._frame: Frame = {}
         self._trace: TraceStore = trace if trace is not None else noop_trace()
 
     # ------------------------------------------------------------------
@@ -510,6 +511,51 @@ class IrInterpreter:
                         case _ as unreachable_seg:  # pragma: no cover
                             assert_never(unreachable_seg)
                 return TextValue("".join(parts))
+
+            case IrMakeRecord(nominal=nominal, display_name=display_name, fields=fields):
+                record_fields: dict[str, Value] = {
+                    fname: self._eval(fexpr) for fname, fexpr in fields
+                }
+                return RecordValue(
+                    nominal=nominal,
+                    display_name=display_name,
+                    fields=record_fields,
+                )
+
+            case IrMakeEnum(
+                nominal=nominal, display_name=display_name, variant=variant, fields=fields
+            ):
+                enum_fields: dict[str, Value] = {
+                    fname: self._eval(fexpr) for fname, fexpr in fields
+                }
+                return EnumValue(
+                    nominal=nominal,
+                    display_name=display_name,
+                    variant=variant,
+                    fields=enum_fields,
+                )
+
+            case IrMakeException(nominal=nominal, display_name=display_name, fields=fields):
+                # Allocate ONE trace id per construction; reuse for all AutoTraceField slots.
+                tid: TextValue = TextValue(self._trace.new_event_id())
+                exc_fields: dict[str, Value] = {}
+                for fname, field_slot in fields:
+                    if isinstance(field_slot, AutoTraceField):
+                        exc_fields[fname] = tid
+                    else:
+                        exc_fields[fname] = self._eval(field_slot)
+                return ExceptionValue(
+                    nominal=nominal,
+                    display_name=display_name,
+                    fields=exc_fields,
+                )
+
+            case IrMakeConstructor(nominal=nominal, display_name=display_name, variant=variant):
+                return ConstructorValue(
+                    nominal=nominal,
+                    display_name=display_name,
+                    variant=variant,
+                )
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

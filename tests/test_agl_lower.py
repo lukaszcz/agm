@@ -665,9 +665,25 @@ class TestSourcesTable:
 
 
 class TestNominalsEmpty:
-    def test_nominals_empty(self) -> None:
+    def test_nominals_contains_builtin_exceptions(self) -> None:
+        """program.nominals always contains at least the built-in exception types.
+
+        Even an empty program populates nominals with all built-in exceptions
+        (they are always in scope).  User-declared records/enums are added on top.
+        """
+        from agm.agl.ir.program import NominalKind
+        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS
+
         prog = _lower("()")
-        assert prog.nominals == {}
+        # All built-in exception names must appear in the table
+        exception_names = {desc.nominal.declared_name for desc in prog.nominals.values()}
+        for builtin_name in BUILTIN_EXCEPTIONS:
+            assert builtin_name in exception_names, (
+                f"Built-in exception {builtin_name!r} missing from program.nominals"
+            )
+        # Every entry in an empty program uses NominalKind.EXCEPTION (only builtins present)
+        for _nominal_id, desc in prog.nominals.items():
+            assert desc.kind is NominalKind.EXCEPTION
 
 
 # ---------------------------------------------------------------------------
@@ -681,8 +697,24 @@ class TestUnsupportedNodes:
         with pytest.raises(NotImplementedError):
             _lower("def f() -> int = 1\nf()")
 
-    def test_qualified_enum_constructor_raises_not_implemented(self) -> None:
-        """Qualified constructor FieldAccess (e.g. Color.Red) raises NotImplementedError."""
+    def test_iife_lambda_call_raises_not_implemented(self) -> None:
+        """Calling an immediately-invoked lambda (non-VarRef, non-FieldAccess callee).
+
+        When the callee of a Call is a Lambda (not a VarRef or FieldAccess),
+        lowering must raise NotImplementedError (deferred to M4).
+        """
+        with pytest.raises(NotImplementedError):
+            _lower("(fn() -> int => 42)()\n()")
+
+    def test_qualified_enum_constructor_lowers_correctly(self) -> None:
+        """Qualified constructor (e.g. Color.Red) lowers to IrMakeEnum/IrMakeConstructor.
+
+        M3d implemented qualified constructor lowering.  A nullary variant (no fields)
+        lowers to IrMakeEnum (eagerly constructed).  A variant with fields lowers to
+        IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeEnum.
+        """
+        from agm.agl.ir.nodes import IrBind, IrMakeEnum
+
         source = """\
 enum Color
   | Red
@@ -691,8 +723,24 @@ enum Color
 let c = Color.Red
 ()
 """
-        with pytest.raises(NotImplementedError, match="qualified constructor"):
-            _lower(source)
+        prog = _lower(source)
+        entry = prog.modules[prog.entry_module]
+        found = False
+        for node in entry.initializers:
+            if isinstance(node, IrBind) and isinstance(node.value, IrMakeEnum):
+                if node.value.variant == "Red":
+                    found = True
+        assert found, "Expected IrBind(value=IrMakeEnum(variant='Red')) in initializers"
+
+    def test_lambda_raises_not_implemented(self) -> None:
+        """Lambda expressions are not yet lowered (deferred to M4+)."""
+        with pytest.raises(NotImplementedError):
+            _lower("let f = fn(x: int) -> int => x + 1\n()")
+
+    def test_if_raises_not_implemented(self) -> None:
+        """If expressions are not yet lowered (deferred to M4+)."""
+        with pytest.raises(NotImplementedError):
+            _lower("let x = if true => 1\nelse => 2\n()")
 
     def test_indexed_assign_lowers_to_ir_assign_with_path(self) -> None:
         """IndexTarget assignment lowers to IrAssign with a non-empty path (M3c)."""

@@ -33,6 +33,7 @@ __all__ = [
     "NominalKind",
     "SourceFile",
     "SymbolDescriptor",
+    "VariantDescriptor",
 ]
 
 
@@ -72,17 +73,41 @@ class SymbolDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
+class VariantDescriptor:
+    """Descriptor for one enum variant (M3d).
+
+    ``name``   — the variant name.
+    ``fields`` — declared field names in declaration order (names only; no
+                 checker ``Type`` objects — the IR is typeless).
+    """
+
+    name: str
+    fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class NominalDescriptor:
     """Descriptor for a named nominal type (record, enum, or exception).
 
-    M1 fields only.  The following are deferred to M3:
-      - Field/variant metadata (field names, types, ordering).
-      - Constructor arity and parameter names.
+    ``nominal``      — the ``NominalId`` key for this descriptor.
+    ``display_name`` — user-facing type name.
+    ``kind``         — RECORD, ENUM, or EXCEPTION.
+    ``fields``       — declared field names in declaration order (names only;
+                       used for RECORD and EXCEPTION; ``()`` for ENUM which
+                       stores fields per-variant in ``variants``).
+    ``variants``     — for ENUM: ordered tuple of ``VariantDescriptor`` objects
+                       (one per variant, in declaration order).  ``()`` for
+                       RECORD and EXCEPTION.
+
+    Safe defaults for ``fields`` and ``variants`` are ``()`` so existing M1/M2
+    construction sites remain valid without keyword arguments for these fields.
     """
 
     nominal: NominalId
     display_name: str
     kind: NominalKind
+    fields: tuple[str, ...] = ()
+    variants: tuple[VariantDescriptor, ...] = ()
 
 
 # ---------------------------------------------------------------------------

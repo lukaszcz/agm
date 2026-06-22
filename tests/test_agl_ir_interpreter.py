@@ -62,12 +62,15 @@ from agm.agl.ir import (
     IrLoad,
     IrMakeDict,
     IrMakeList,
+    IrMakeRecord,
     IrSequence,
     Location,
     MapDictValues,
     MapEnumFields,
     MapList,
     MapRecordFields,
+    NominalDescriptor,
+    NominalKind,
     SourceFile,
     SourceId,
     SymbolDescriptor,
@@ -95,6 +98,7 @@ _SOURCE_TEXT = "x"
 def _make_program(
     initializers: tuple[IrExpr, ...],
     symbols: dict[SymbolId, SymbolDescriptor] | None = None,
+    nominals: dict[NominalId, NominalDescriptor] | None = None,
 ) -> ExecutableProgram:
     """Build a minimal single-module ExecutableProgram."""
     sources = {_SOURCE_ID: SourceFile(display_name="<test>", normalized_text=_SOURCE_TEXT)}
@@ -104,7 +108,7 @@ def _make_program(
             ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=initializers)
         },
         symbols=symbols or {},
-        nominals={},
+        nominals=nominals or {},
         sources=sources,
     )
 
@@ -985,52 +989,60 @@ class TestDefensiveErrors:
 class TestIrField:
     """Tests for the IrField node in IrInterpreter."""
 
-    def _run_with_record(
+    def _run_with_record_via_make(
         self,
-        record: RecordValue,
         field_name: str,
+        *,
+        x_val: int,
+        y_val: int,
     ) -> Value:
-        """Run an IrField read on a pre-built RecordValue.
+        """Run an IrField read by constructing a RecordValue via IrMakeRecord.
 
-        Seeds the frame with the record before running, using IrLoad → IrField.
-        The record symbol is NOT in initializers so that the IrBind for it does
-        not overwrite our pre-seeded value. We seed the frame directly and only
-        include the IrBind for the output binding.
+        Constructs a Point(x, y) record inline with IrMakeRecord, binds it to
+        'rec', then reads the requested field via IrField into 'out'.
+        The nominal is registered in program.nominals.
         """
-        sym, desc = _let_sym(0, "rec")
+        rec_sym, rec_desc = _let_sym(0, "rec")
         out_sym, out_desc = _let_sym(1, "out")
-        # Only the output binding is in initializers; the record is pre-seeded.
+        nominal = NominalId(ENTRY_ID, "Point")
+        make_record = IrMakeRecord(
+            location=_LOC,
+            nominal=nominal,
+            display_name="Point",
+            fields=(
+                ("x", IrConstInt(_LOC, x_val)),
+                ("y", IrConstInt(_LOC, y_val)),
+            ),
+        )
         prog = _make_program(
             (
+                IrBind(_LOC, rec_sym, make_record),
                 IrBind(
                     _LOC,
                     out_sym,
-                    IrField(_LOC, value=IrLoad(_LOC, sym), field=field_name),
+                    IrField(_LOC, value=IrLoad(_LOC, rec_sym), field=field_name),
                 ),
             ),
-            {sym: desc, out_sym: out_desc},
+            {rec_sym: rec_desc, out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    display_name="Point",
+                    kind=NominalKind.RECORD,
+                    fields=("x", "y"),
+                )
+            },
         )
-        # Pre-seed the frame with the RecordValue so IrLoad finds it during run().
-        return IrInterpreter(prog, initial_frame={sym: record}).run()["out"]
+        return IrInterpreter(prog).run()["out"]
 
     def test_ir_field_reads_record_field(self) -> None:
         """IrField returns the value of a named field from a RecordValue."""
-        rec = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Point"),
-            display_name="Point",
-            fields={"x": IntValue(3), "y": IntValue(4)},
-        )
-        result = self._run_with_record(rec, "x")
+        result = self._run_with_record_via_make("x", x_val=3, y_val=4)
         assert result == IntValue(3)
 
     def test_ir_field_reads_second_field(self) -> None:
         """IrField returns the correct value when multiple fields are present."""
-        rec = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Point"),
-            display_name="Point",
-            fields={"x": IntValue(3), "y": IntValue(7)},
-        )
-        result = self._run_with_record(rec, "y")
+        result = self._run_with_record_via_make("y", x_val=3, y_val=7)
         assert result == IntValue(7)
 
     def test_ir_field_on_non_record_raises(self) -> None:

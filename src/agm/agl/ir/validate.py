@@ -34,8 +34,9 @@ from __future__ import annotations
 
 from typing import assert_never
 
-from agm.agl.ir.ids import FunctionId, Location, SourceId
+from agm.agl.ir.ids import FunctionId, Location, NominalId, SourceId
 from agm.agl.ir.nodes import (
+    AutoTraceField,
     IrAnd,
     IrArith,
     IrAssign,
@@ -55,8 +56,12 @@ from agm.agl.ir.nodes import (
     IrIndex,
     IrIndexStep,
     IrLoad,
+    IrMakeConstructor,
     IrMakeDict,
+    IrMakeEnum,
+    IrMakeException,
     IrMakeList,
+    IrMakeRecord,
     IrOr,
     IrRenderTemplate,
     IrSequence,
@@ -65,7 +70,7 @@ from agm.agl.ir.nodes import (
     IrUnary,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
-from agm.agl.ir.program import ExecutableProgram, SourceFile
+from agm.agl.ir.program import ExecutableProgram, NominalKind, SourceFile
 from agm.agl.modules.ids import ModuleId
 
 __all__ = ["InvalidIrError", "validate_ir"]
@@ -149,6 +154,34 @@ def _validate_location(loc: Location, ctx: _Context) -> None:
     _check_location_cheap(loc)
     if ctx.deep:
         _check_location_deep(loc, ctx)
+
+
+# ---------------------------------------------------------------------------
+# Nominal completeness check helpers (deep tier, M3d)
+# ---------------------------------------------------------------------------
+
+
+def _check_nominal_in_table(nominal: NominalId, ctx: _Context) -> None:
+    """Raise ``InvalidIrError`` if *nominal* is not in ``program.nominals``."""
+    if nominal not in ctx.program.nominals:
+        raise InvalidIrError(
+            f"IR node references nominal {nominal!r} which is not in program.nominals"
+        )
+
+
+def _check_enum_variant(nominal: NominalId, variant: str, ctx: _Context) -> None:
+    """Raise ``InvalidIrError`` if *variant* is not declared in the nominal's descriptor."""
+    desc = ctx.program.nominals.get(nominal)
+    if desc is None:  # pragma: no cover
+        return  # already caught by _check_nominal_in_table
+    if desc.kind is not NominalKind.ENUM:
+        return  # not an enum; variant check not applicable
+    known = {v.name for v in desc.variants}
+    if variant not in known:
+        raise InvalidIrError(
+            f"IR node references variant {variant!r} of {nominal!r}"
+            f" which is not in the descriptor's variants {sorted(known)!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +368,38 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                         _validate_expr(val, ctx)
                     case _ as unreachable_seg:  # pragma: no cover
                         assert_never(unreachable_seg)
+
+        case IrMakeRecord(nominal=nominal, fields=fields):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                _check_nominal_in_table(nominal, ctx)
+            for _fname, fexpr in fields:
+                _validate_expr(fexpr, ctx)
+
+        case IrMakeEnum(nominal=nominal, variant=variant, fields=fields):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                _check_nominal_in_table(nominal, ctx)
+                _check_enum_variant(nominal, variant, ctx)
+            for _fname, fexpr in fields:
+                _validate_expr(fexpr, ctx)
+
+        case IrMakeException(nominal=nominal, fields=fields):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                _check_nominal_in_table(nominal, ctx)
+            for _fname, slot in fields:
+                if isinstance(slot, AutoTraceField):
+                    pass
+                else:
+                    _validate_expr(slot, ctx)
+
+        case IrMakeConstructor(nominal=nominal, variant=variant):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                _check_nominal_in_table(nominal, ctx)
+                if variant is not None:
+                    _check_enum_variant(nominal, variant, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

@@ -1431,3 +1431,102 @@ class TestM6aIrParamValidation:
         prog = self._make_program_with_params((p,))
         with pytest.raises(InvalidIrError, match="start_offset"):
             validate_ir(prog, deep=False)
+
+
+# ===========================================================================
+# M6c — IrExec validation
+# ===========================================================================
+
+
+class TestM6cIrExecValidation:
+    """Validation tests for IrExec nodes (M6c)."""
+
+    def _make_prog_with_contract(
+        self,
+        node: "object",
+        contract_id: "object",
+        contracts: "object",
+    ) -> ExecutableProgram:
+        """Build a program with a custom initializer and contracts table."""
+
+        em = ExecutableModule(module_id=MOD_A, initializers=(node,))  # type: ignore[arg-type]
+        sf = SourceFile(display_name="main.agl", normalized_text="exec(\"x\")\n()")
+        nom_desc = NominalDescriptor(nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD)
+        return ExecutableProgram(
+            entry_module=MOD_A,
+            modules={MOD_A: em},
+            symbols=_default_symbols(),
+            nominals={NOM0: nom_desc},
+            sources={SID0: sf},
+            functions={},
+            contracts=contracts,  # type: ignore[arg-type]
+        )
+
+    def test_ir_exec_valid_cheap(self) -> None:
+        """IrExec with valid location and command expr passes cheap validation."""
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="text",
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_exec_bad_contract_id_raises_deep(self) -> None:
+        """IrExec referencing a missing contract_id raises InvalidIrError in deep mode."""
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=9999)
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {})  # empty contracts
+        with pytest.raises(InvalidIrError, match="9999"):
+            validate_ir(prog, deep=True)
+
+    def test_ir_exec_bad_max_attempts_raises_deep(self) -> None:
+        """IrExec with max_attempts=0 raises InvalidIrError in deep mode."""
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="text",
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=0,  # invalid
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="max_attempts"):
+            validate_ir(prog, deep=True)

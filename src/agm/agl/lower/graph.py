@@ -10,6 +10,7 @@ from agm.agl._text import normalize_newlines
 from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
+    DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
     NominalDescriptor,
@@ -143,6 +144,20 @@ def lower_graph(
 
     # Collect entry-module params (only the entry module contributes params).
     entry_lowerer = module_lowerers[checked_graph.entry_id]
+    entry_cm = checked_graph.modules[checked_graph.entry_id]
+    dry_run_inventory = tuple(
+        DryRunEntry(
+            callee=csr.callee,
+            codec_name=csr.codec_name,
+            target_type_label=repr(csr.target_type),
+            has_schema=entry_cm.contract_specs.get(csr.node_id) is not None
+            and entry_cm.contract_specs[csr.node_id].codec_name == "json",
+            parse_policy=csr.parse_policy,
+            line=csr.line,
+            col=csr.col,
+        )
+        for csr in entry_cm.call_sites
+    )
     program = ExecutableProgram(
         entry_module=checked_graph.entry_id,
         modules=executable_modules,
@@ -151,6 +166,8 @@ def lower_graph(
         sources=dict(link.sources),
         functions=dict(link.functions),
         params=tuple(entry_lowerer._params),
+        contracts=dict(link.contracts),
+        dry_run_inventory=dry_run_inventory,
     )
     if validate:
         validate_ir(program, deep=True)

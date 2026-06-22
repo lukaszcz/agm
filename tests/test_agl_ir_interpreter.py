@@ -1715,3 +1715,374 @@ class TestM6aPrintParseJsonParam:
         prog = _make_program(initializers=(node,), symbols={sym: desc})
         with pytest.raises(InvalidIrError, match="IrParseJson"):
             IrInterpreter(prog).run()
+
+
+# ===========================================================================
+# M6c: IrExec evaluator unit tests
+# ===========================================================================
+
+
+class TestM6cIrExec:
+    """Unit tests for _eval_ir_exec in IrInterpreter (M6c)."""
+
+    def _make_exec_program(
+        self,
+        command: "IrExpr",
+        *,
+        codec_name: str = "text",
+        structured_exec: bool = False,
+        max_attempts: int = 1,
+        is_unit: bool = False,
+    ) -> ExecutableProgram:
+        """Build a minimal program with a single IrExec initializer."""
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name=codec_name,
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=structured_exec,
+            format_instructions="",
+            is_unit=is_unit,
+        )
+        node = IrExec(
+            location=_LOC,
+            command=command,
+            contract_id=cid,
+            max_attempts=max_attempts,
+        )
+        return ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
+            symbols={},
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
+            functions={},
+            contracts={cid: contract},
+        )
+
+    def test_ir_exec_non_text_command_renders_via_render_value(self) -> None:
+        """IrExec with a non-TextValue command renders via render_value (line 1178)."""
+        import unittest.mock
+
+        from agm.core.process import ProcessCaptureResult
+
+        fake_result = ProcessCaptureResult(
+            returncode=0,
+            stdout="hello\n",
+            stderr="",
+            elapsed=0.01,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+        # Use a bool command (non-text) — render_value("True") is "True"
+        prog = self._make_exec_program(IrConstBool(_LOC, True))
+        with unittest.mock.patch(
+            "agm.core.process.run_capture_result",
+            return_value=fake_result,
+        ) as mock_rcr:
+            result = IrInterpreter(prog).run()
+        # Verify that the command passed to shell was "True"
+        call_args = mock_rcr.call_args
+        assert call_args[0][0] == ["sh", "-c", "true"]
+        assert result == {}  # no named bindings
+
+    def test_ir_exec_retry_spawn_error_raises_exec_error(self) -> None:
+        """On retry, spawn_error in subsequent shell call raises ExecError (line 1275)."""
+        import unittest.mock
+
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.core.process import ProcessCaptureResult
+
+        call_count = [0]
+
+        def fake_rcr(
+            args: list[str],
+            *,
+            idle_timeout: float | None = None,
+            isolate_process_group: bool = False,
+        ) -> ProcessCaptureResult:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call: succeeds but returns invalid JSON (triggers retry)
+                return ProcessCaptureResult(
+                    returncode=0,
+                    stdout="not_valid_json\n",
+                    stderr="",
+                    elapsed=0.01,
+                    timed_out=False,
+                    spawn_error=None,
+                    spawn_errno=None,
+                )
+            # Second call: spawn error
+            return ProcessCaptureResult(
+                returncode=None,
+                stdout="",
+                stderr="",
+                elapsed=0.0,
+                timed_out=False,
+                spawn_error="No such file or directory",
+                spawn_errno=2,
+            )
+
+        # Use int codec so parse fails and retry triggers
+        import json
+
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.typecheck.types import IntType
+
+        cid = ContractId(value=0)
+        decode_schema = build_decode_schema(IntType())
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=False,
+            json_schema=json.dumps({"type": "integer"}),
+            decode=decode_schema,
+            target_type_label="int",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+        node = IrExec(
+            location=_LOC,
+            command=IrConstText(_LOC, "dummy"),
+            contract_id=cid,
+            max_attempts=2,
+        )
+        prog = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
+            symbols={},
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
+            functions={},
+            contracts={cid: contract},
+        )
+        with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
+            with pytest.raises(AglRaise) as exc_info:
+                IrInterpreter(prog).run()
+        assert exc_info.value.exc.display_name == "ExecError"
+
+    def test_ir_exec_retry_timeout_raises_exec_error(self) -> None:
+        """On retry, timeout in subsequent shell call raises ExecError (lines 1288-1289)."""
+        import json
+        import unittest.mock
+
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.typecheck.types import IntType
+        from agm.core.process import ProcessCaptureResult
+
+        call_count = [0]
+
+        def fake_rcr(
+            args: list[str],
+            *,
+            idle_timeout: float | None = None,
+            isolate_process_group: bool = False,
+        ) -> ProcessCaptureResult:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return ProcessCaptureResult(
+                    returncode=0,
+                    stdout="not_valid_json\n",
+                    stderr="",
+                    elapsed=0.01,
+                    timed_out=False,
+                    spawn_error=None,
+                    spawn_errno=None,
+                )
+            # Second call: timeout
+            return ProcessCaptureResult(
+                returncode=-1,
+                stdout="",
+                stderr="",
+                elapsed=5.0,
+                timed_out=True,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        cid = ContractId(value=0)
+        decode_schema = build_decode_schema(IntType())
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=False,
+            json_schema=json.dumps({"type": "integer"}),
+            decode=decode_schema,
+            target_type_label="int",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+        node = IrExec(
+            location=_LOC,
+            command=IrConstText(_LOC, "dummy"),
+            contract_id=cid,
+            max_attempts=2,
+        )
+        prog = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
+            symbols={},
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
+            functions={},
+            contracts={cid: contract},
+        )
+        with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
+            with pytest.raises(AglRaise) as exc_info:
+                IrInterpreter(prog).run()
+        from agm.agl.eval.values import BoolValue
+        assert exc_info.value.exc.display_name == "ExecError"
+        assert exc_info.value.exc.fields["timed_out"] == BoolValue(True)
+
+    def test_ir_exec_retry_nonzero_exit_raises_exec_error(self) -> None:
+        """On retry, non-zero exit in subsequent shell call raises ExecError (line 1302)."""
+        import json
+        import unittest.mock
+
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.typecheck.types import IntType
+        from agm.core.process import ProcessCaptureResult
+
+        call_count = [0]
+
+        def fake_rcr(
+            args: list[str],
+            *,
+            idle_timeout: float | None = None,
+            isolate_process_group: bool = False,
+        ) -> ProcessCaptureResult:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return ProcessCaptureResult(
+                    returncode=0,
+                    stdout="not_valid_json\n",
+                    stderr="",
+                    elapsed=0.01,
+                    timed_out=False,
+                    spawn_error=None,
+                    spawn_errno=None,
+                )
+            # Second call: non-zero exit
+            return ProcessCaptureResult(
+                returncode=2,
+                stdout="",
+                stderr="error",
+                elapsed=0.01,
+                timed_out=False,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        cid = ContractId(value=0)
+        decode_schema = build_decode_schema(IntType())
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=False,
+            json_schema=json.dumps({"type": "integer"}),
+            decode=decode_schema,
+            target_type_label="int",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+        node = IrExec(
+            location=_LOC,
+            command=IrConstText(_LOC, "dummy"),
+            contract_id=cid,
+            max_attempts=2,
+        )
+        prog = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
+            symbols={},
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
+            functions={},
+            contracts={cid: contract},
+        )
+        with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
+            with pytest.raises(AglRaise) as exc_info:
+                IrInterpreter(prog).run()
+        assert exc_info.value.exc.display_name == "ExecError"
+
+    def test_ir_exec_structured_parse_errors_path(self) -> None:
+        """IrExec JSON parse with structured errors populates last_errors (line 1323)."""
+        import json
+        import unittest.mock
+
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.typecheck.types import IntType
+        from agm.core.process import ProcessCaptureResult
+
+        # JSON parse of a string where int is expected yields structured errors
+        def fake_rcr(
+            args: list[str],
+            *,
+            idle_timeout: float | None = None,
+            isolate_process_group: bool = False,
+        ) -> ProcessCaptureResult:
+            # Returns a valid JSON string (not int), so schema validation fails with errors
+            return ProcessCaptureResult(
+                returncode=0,
+                stdout='"not_a_number"\n',
+                stderr="",
+                elapsed=0.01,
+                timed_out=False,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        cid = ContractId(value=0)
+        decode_schema = build_decode_schema(IntType())
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=True,
+            json_schema=json.dumps({"type": "integer"}),
+            decode=decode_schema,
+            target_type_label="int",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+        node = IrExec(
+            location=_LOC,
+            command=IrConstText(_LOC, "dummy"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
+            symbols={},
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
+            functions={},
+            contracts={cid: contract},
+        )
+        with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
+            with pytest.raises(AglRaise) as exc_info:
+                IrInterpreter(prog).run()
+        assert exc_info.value.exc.display_name == "AgentParseError"

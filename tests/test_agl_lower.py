@@ -1689,11 +1689,15 @@ class TestM6aLowering:
         assert len(ask_binds) == 1
         assert len(prog.contracts) == 1
 
-    def test_exec_raises_not_implemented_m6c(self) -> None:
-        """exec() lowers to NotImplementedError('M6c') — deferred to milestone M6c."""
+    def test_exec_lowers_to_ir_exec(self) -> None:
+        """exec() lowers to IrExec now that M6c is implemented."""
+        from agm.agl.ir.nodes import IrExec
+
         source = "exec(\"ls -la\")\n()"
-        with pytest.raises(NotImplementedError, match="M6c"):
-            _lower(source)
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        exec_nodes = [n for n in inits if isinstance(n, IrExec)]
+        assert len(exec_nodes) == 1, f"Expected 1 IrExec, found {len(exec_nodes)}"
 
     def test_agent_decl_lowers_to_ir_agent_handle_bind(self) -> None:
         """AgentDecl lowers to IrBind(symbol, IrAgentHandle(name)) (M6b golden lowering)."""
@@ -1738,3 +1742,52 @@ class TestM6aLowering:
         assert contract.is_unit is False
 
 
+
+    def test_exec_unit_result_lowers_to_text_contract(self) -> None:
+        """IrExec with is_unit=True path (lowerer.py:1642).
+
+        Triggered by manipulating CheckedProgram to have UnitType for the exec node.
+        """
+        from dataclasses import replace
+
+        from agm.agl.ir.nodes import IrExec
+        from agm.agl.typecheck.types import UnitType
+
+        # Start with a valid exec program
+        source = 'exec("echo hi")\n()'
+        checked = _check(source)
+
+        # Find the exec call node_id in node_types (the one with RecordType / ExecResult)
+        exec_node_id: int | None = None
+        for node_id, spec in checked.contract_specs.items():
+            if spec.structured_exec:
+                exec_node_id = node_id
+                break
+        assert exec_node_id is not None, "exec node_id not found in contract_specs"
+
+        # Patch the checked program: set UnitType for the exec node, remove its contract spec
+        new_node_types = dict(checked.node_types)
+        new_node_types[exec_node_id] = UnitType()
+        new_contract_specs = {
+            k: v for k, v in checked.contract_specs.items() if k != exec_node_id
+        }
+        patched = replace(
+            checked,
+            node_types=new_node_types,
+            contract_specs=new_contract_specs,
+        )
+        from agm.agl.lower import lower_program
+
+        prog = lower_program(
+            patched,
+            source_text=source,
+            source_label="<test>",
+            validate=False,  # skip validate since we have patched types
+        )
+        # The IrExec node should exist in the output with text codec contract
+        inits = prog.modules[prog.entry_module].initializers
+        exec_nodes = [n for n in inits if isinstance(n, IrExec)]
+        assert len(exec_nodes) == 1, f"Expected 1 IrExec, found {len(exec_nodes)}"
+        contract = prog.contracts[exec_nodes[0].contract_id]
+        assert contract.codec_name == "text"
+        assert contract.is_unit is False  # is_unit=False even for the defensive path

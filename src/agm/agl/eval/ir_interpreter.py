@@ -85,6 +85,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
+    IrExec,
     IrExpr,
     IrField,
     IrIf,
@@ -254,6 +255,7 @@ class IrInterpreter:
         param_values: Mapping[SymbolId, Value] | None = None,
         registry: AgentRegistry | None = None,
         strict_json: bool = False,
+        shell_exec_timeout: float | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [{}]
@@ -268,6 +270,7 @@ class IrInterpreter:
             named={}, default_agent=None
         )
         self._strict_json: bool = strict_json
+        self._shell_exec_timeout: float | None = shell_exec_timeout
 
     @property
     def _frame(self) -> Frame:
@@ -969,6 +972,13 @@ class IrInterpreter:
             case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
                 return self._eval_ir_ask_request(node, agent_expr, prompt_expr, contract_id)
 
+            case IrExec(
+                command=command_expr,
+                contract_id=contract_id,
+                max_attempts=max_attempts,
+            ):
+                return self._eval_ir_exec(node, command_expr, contract_id, max_attempts)
+
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
@@ -1145,6 +1155,181 @@ class IrInterpreter:
                     fields={"value": output_contract_value},
                 ),
             },
+        )
+
+    # ------------------------------------------------------------------
+    # Exec call helper (M6c)
+    # ------------------------------------------------------------------
+
+    def _run_exec_shell(self, cmd: str) -> tuple[str, str, int | None]:
+        """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
+
+        Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT
+        raised here so that the structured-exec path can treat it as data.
+        Mirrors legacy ``_run_shell_capture`` (without the trace event).
+        """
+        from agm.core.process import run_capture_result
+
+        result = run_capture_result(
+            ["sh", "-c", cmd],
+            idle_timeout=self._shell_exec_timeout,
+            isolate_process_group=True,
+        )
+        if result.spawn_error is not None:
+            raise AglRaise(
+                _make_exc_value(
+                    "ExecError",
+                    f"Failed to spawn shell: {result.spawn_error}",
+                    trace_id=self._trace.new_event_id(),
+                    command=TextValue(cmd),
+                    exit_code=IntValue(-1),
+                    stdout=TextValue(""),
+                    stderr=TextValue(""),
+                    timed_out=BoolValue(False),
+                )
+            )
+        if result.timed_out:
+            exit_code = result.returncode if result.returncode is not None else -1
+            raise AglRaise(
+                _make_exc_value(
+                    "ExecError",
+                    f"Shell command timed out (idle timeout exceeded): {cmd!r}",
+                    trace_id=self._trace.new_event_id(),
+                    command=TextValue(cmd),
+                    exit_code=IntValue(exit_code),
+                    stdout=TextValue(result.stdout.rstrip("\n")),
+                    stderr=TextValue(result.stderr.rstrip("\n")),
+                    timed_out=BoolValue(True),
+                )
+            )
+        return result.stdout, result.stderr, result.returncode
+
+    def _eval_ir_exec(
+        self,
+        _node: IrExec,
+        command_expr: IrExpr,
+        contract_id: ContractId,
+        max_attempts: int,
+    ) -> Value:
+        """Handle IrExec: run shell command and parse output."""
+        from agm.agl.runtime.request import ValidationError as ReqValidationError
+
+        # 1. Evaluate command expression
+        command_val = self._eval(command_expr)
+        if not isinstance(command_val, TextValue):
+            cmd = render_value(command_val)
+        else:
+            cmd = command_val.value
+
+        contract = self._program.contracts[contract_id]
+
+        # 2. Run shell once (raises on spawn error or timeout)
+        stdout, stderr, returncode = self._run_exec_shell(cmd)
+
+        # 3. Structured exec: return ExecResult regardless of exit code
+        if contract.structured_exec:
+            actual_exit_code = returncode if returncode is not None else 0
+            return RecordValue(
+                nominal=NominalId(PRELUDE_ID, "ExecResult"),
+                display_name="ExecResult",
+                fields={
+                    "stdout": TextValue(stdout.rstrip("\n")),
+                    "exit_code": IntValue(actual_exit_code),
+                    "stderr": TextValue(stderr.rstrip("\n")),
+                    "timed_out": BoolValue(False),
+                },
+            )
+
+        # 4. Non-zero exit raises ExecError (for text/typed execs)
+        if returncode is not None and returncode != 0:
+            raise AglRaise(
+                _make_exc_value(
+                    "ExecError",
+                    f"Shell command exited with code {returncode}: {cmd!r}",
+                    trace_id=self._trace.new_event_id(),
+                    command=TextValue(cmd),
+                    exit_code=IntValue(returncode),
+                    stdout=TextValue(stdout.rstrip("\n")),
+                    stderr=TextValue(stderr.rstrip("\n")),
+                    timed_out=BoolValue(False),
+                )
+            )
+
+        # 5. Text codec: return stdout directly
+        captured = stdout.rstrip("\n")
+        if contract.codec_name == "text":
+            return TextValue(captured)
+
+        # 6. Parse/retry loop for typed exec
+        effective_strict = (
+            contract.strict_json if contract.strict_json is not None else self._strict_json
+        )
+
+        last_raw: str | None = captured
+        last_normalized: str | None = None
+        last_errors: tuple[ReqValidationError, ...] = ()
+
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                # Re-run shell on retry (raises on spawn error / timeout / non-zero exit)
+                stdout2, stderr2, rc2 = self._run_exec_shell(cmd)
+                if rc2 is not None and rc2 != 0:
+                    raise AglRaise(
+                        _make_exc_value(
+                            "ExecError",
+                            f"Shell command exited with code {rc2}: {cmd!r}",
+                            trace_id=self._trace.new_event_id(),
+                            command=TextValue(cmd),
+                            exit_code=IntValue(rc2),
+                            stdout=TextValue(stdout2.rstrip("\n")),
+                            stderr=TextValue(stderr2.rstrip("\n")),
+                            timed_out=BoolValue(False),
+                        )
+                    )
+                last_raw = stdout2.rstrip("\n")
+
+            result = parse_agent_output(last_raw or "", contract, effective_strict=effective_strict)
+
+            if result.ok and result.value is not None:
+                return result.value
+
+            last_normalized = result.normalized_raw
+            if result.errors:
+                last_errors = result.errors
+            elif result.error_msg:
+                last_errors = (
+                    ReqValidationError(
+                        category="invalid_json",
+                        message=result.error_msg,
+                        path="$",
+                        field=None,
+                    ),
+                )
+            else:
+                last_errors = ()
+
+        errors_json_list: list[object] = [e.to_json_obj() for e in last_errors]
+        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
+        raise AglRaise(
+            _make_exc_value(
+                "AgentParseError",
+                (
+                    f"exec output failed to parse as {contract.target_type_label} "
+                    f"after {max_attempts} attempt(s). Last output: {last_raw!r}"
+                ),
+                trace_id=self._trace.new_event_id(),
+                raw=TextValue(last_raw or ""),
+                normalized_raw=TextValue(normalized_text),
+                agent=TextValue("exec"),
+                attempts=IntValue(max_attempts),
+                target_type=TextValue(contract.target_type_label),
+                expected_schema=JsonValue(
+                    None if contract.json_schema is None
+                    else cast(object, json.loads(contract.json_schema))
+                ),
+                validation_errors=JsonValue(errors_json_list),
+                metadata=JsonValue(None),
+            )
         )
 
     # ------------------------------------------------------------------

@@ -30,6 +30,7 @@ from agm.agl.modules.ids import ModuleId
 __all__ = [
     "ContractId",
     "ContractRequest",
+    "DryRunEntry",
     "ExecutableModule",
     "ExecutableProgram",
     "FunctionDescriptor",
@@ -198,6 +199,33 @@ class IrParam:
 
 
 # ---------------------------------------------------------------------------
+# Dry-run inventory
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DryRunEntry:
+    """Inventory entry for a single call site in the entry module.
+
+    callee            — human-readable callee label (agent name, "exec", etc.).
+    codec_name        — codec used ("text", "json").
+    target_type_label — repr(target_type) from the contract spec, or "text".
+    has_schema        — True when the contract carries a JSON Schema.
+    parse_policy      — parse policy string from the call site record.
+    line              — 1-based source line of the call.
+    col               — 0-based source column of the call.
+    """
+
+    callee: str
+    codec_name: str
+    target_type_label: str
+    has_schema: bool
+    parse_policy: str
+    line: int
+    col: int
+
+
+# ---------------------------------------------------------------------------
 # Program root
 # ---------------------------------------------------------------------------
 
@@ -233,3 +261,4 @@ class ExecutableProgram:
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
+    dry_run_inventory: "tuple[DryRunEntry, ...]" = ()

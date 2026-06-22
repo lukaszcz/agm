@@ -24,6 +24,8 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import unittest.mock
+from collections.abc import Callable
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
@@ -58,6 +60,7 @@ from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.typecheck import check
 from agm.agl.typecheck.graph import check_graph
+from agm.core.process import ProcessCaptureResult
 
 _CLOSURE_SENTINEL: TextValue = TextValue("<closure>")
 
@@ -777,6 +780,188 @@ def assert_oracle_raises_with_agents(
         f"  legacy: {legacy_call_log!r}\n"
         f"  ir:     {ir_call_log!r}"
     )
+
+    norm_legacy = _normalize_exception(legacy_exc)
+    norm_ir = _normalize_exception(ir_exc)
+    assert norm_legacy == norm_ir, (
+        f"Oracle exception disagreement:\n"
+        f"  legacy: {norm_legacy!r}\n"
+        f"  ir:     {norm_ir!r}"
+    )
+    return legacy_exc, ir_exc
+
+
+# ---------------------------------------------------------------------------
+# M6c — exec oracle helpers
+# ---------------------------------------------------------------------------
+
+def m6c_caps(
+    *,
+    agent_names: frozenset[str] = frozenset(),
+    has_default: bool = False,
+) -> HostCapabilities:
+    """HostCapabilities for M6c exec tests."""
+    return HostCapabilities(
+        agent_names=agent_names,
+        has_default_agent=has_default,
+        supports_shell_exec=True,
+        codec_kinds={
+            "text": frozenset({"text"}),
+            "json": frozenset(
+                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+            ),
+        },
+    )
+
+
+def _scripted_shell(
+    commands: dict[str, ProcessCaptureResult],
+    *,
+    cmd_log: list[str] | None = None,
+) -> Callable[..., ProcessCaptureResult]:
+    """Return a fake run_capture_result that serves scripted results by command string."""
+
+    def fake_rcr(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        cmd = args[2]  # args = ["sh", "-c", command]
+        if cmd_log is not None:
+            cmd_log.append(cmd)
+        result = commands.get(cmd)
+        assert result is not None, f"No scripted result for shell command {cmd!r}"
+        return result
+
+    return fake_rcr
+
+
+def _run_legacy_exec(
+    source: str,
+    shell_fake: Callable[..., ProcessCaptureResult],
+    caps: HostCapabilities,
+) -> tuple[dict[str, Value], str]:
+    """Run *source* through the legacy interpreter with a patched shell."""
+    from agm.agl.runtime.codec import JsonCodec
+    from agm.agl.runtime.contract import materialize_contract
+
+    program = parse_program(source)
+    resolved = resolve(program)
+    checked = check(resolved, caps)
+    codecs: dict[str, OutputCodec] = {"text": TextCodec(), "json": JsonCodec()}
+    contracts = {
+        node_id: materialize_contract(spec, codecs)
+        for node_id, spec in checked.contract_specs.items()
+    }
+    registry = AgentRegistry(named={}, default_agent=None)
+    root_scope = Scope(parent=None)
+    interp = Interpreter(
+        checked=checked,
+        registry=registry,
+        contracts=contracts,
+        type_env=checked.type_env,
+        loop_limit=100,
+        strict_json=False,
+        source=source,
+    )
+    buf = io.StringIO()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell_fake):
+        with contextlib.redirect_stdout(buf):
+            interp.execute(root_scope)
+    return root_scope.snapshot(), buf.getvalue()
+
+
+def _run_ir_exec(
+    source: str,
+    shell_fake: Callable[..., ProcessCaptureResult],
+    caps: HostCapabilities,
+) -> tuple[dict[str, Value], str]:
+    """Run *source* through the IR pipeline with a patched shell."""
+    program = parse_program(source)
+    resolved = resolve(program)
+    checked = check(resolved, caps)
+    executable = lower_program(
+        checked,
+        source_text=source,
+        source_label="<oracle>",
+        validate=True,
+    )
+    buf = io.StringIO()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell_fake):
+        with contextlib.redirect_stdout(buf):
+            result = IrInterpreter(executable).run()
+    return result, buf.getvalue()
+
+
+def assert_oracle_agrees_with_shell(
+    source: str,
+    commands: dict[str, ProcessCaptureResult],
+    caps: HostCapabilities | None = None,
+    *,
+    cmd_log_legacy: list[str] | None = None,
+    cmd_log_ir: list[str] | None = None,
+) -> tuple[dict[str, Value], dict[str, Value]]:
+    """Assert that legacy and IR evaluators agree on an exec program."""
+    if caps is None:
+        caps = m6c_caps()
+    legacy_fake = _scripted_shell(commands, cmd_log=cmd_log_legacy)
+    ir_fake = _scripted_shell(commands, cmd_log=cmd_log_ir)
+
+    legacy_snap, legacy_out = _run_legacy_exec(source, legacy_fake, caps)
+    ir_snap, ir_out = _run_ir_exec(source, ir_fake, caps)
+
+    assert legacy_out == ir_out, (
+        f"Oracle stdout disagreement:\n"
+        f"  legacy: {legacy_out!r}\n"
+        f"  ir:     {ir_out!r}"
+    )
+
+    legacy_names = set(legacy_snap)
+    ir_names = set(ir_snap)
+    only_legacy = legacy_names - ir_names
+    only_ir = ir_names - legacy_names
+    assert only_legacy == set(), f"Bindings in legacy only: {sorted(only_legacy)}"
+    assert only_ir == set(), f"Bindings in IR only: {sorted(only_ir)}"
+
+    for name in sorted(legacy_names):
+        lv = _normalize_value(legacy_snap[name])
+        iv = _normalize_value(ir_snap[name])
+        assert lv == iv, (
+            f"Oracle value disagreement for {name!r}:\n"
+            f"  legacy: {lv!r}\n"
+            f"  ir:     {iv!r}"
+        )
+
+    return legacy_snap, ir_snap
+
+
+def assert_oracle_raises_with_shell(
+    source: str,
+    commands: dict[str, ProcessCaptureResult],
+    caps: HostCapabilities | None = None,
+) -> tuple[ExceptionValue, ExceptionValue]:
+    """Assert that both pipelines raise AglRaise on an exec program."""
+    if caps is None:
+        caps = m6c_caps()
+    legacy_fake = _scripted_shell(commands)
+    ir_fake = _scripted_shell(commands)
+
+    legacy_exc: ExceptionValue | None = None
+    ir_exc: ExceptionValue | None = None
+
+    try:
+        _run_legacy_exec(source, legacy_fake, caps)
+    except AglRaise as e:
+        legacy_exc = e.exc
+
+    try:
+        _run_ir_exec(source, ir_fake, caps)
+    except AglRaise as e:
+        ir_exc = e.exc
+
+    assert legacy_exc is not None, "Legacy pipeline did not raise AglRaise"
+    assert ir_exc is not None, "IR pipeline did not raise AglRaise"
 
     norm_legacy = _normalize_exception(legacy_exc)
     norm_ir = _normalize_exception(ir_exc)

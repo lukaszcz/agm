@@ -62,6 +62,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
+    IrExec,
     IrExpr,
     IrField,
     IrFunctionParam,
@@ -107,6 +108,7 @@ from agm.agl.ir.operations import (
     UnaryOp,
 )
 from agm.agl.ir.program import (
+    DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
     FunctionDescriptor,
@@ -1132,8 +1134,8 @@ class _Lowerer:
         """Lower a builtin call node by dispatching on ``BuiltinKind`` (D4).
 
         M6a builtins (``PRINT``, ``PARSE_JSON``) are lowered here.
-        M6b builtins (``ASK``, ``ASK_REQUEST``) raise ``NotImplementedError("M6b")``.
-        M6c builtins (``EXEC``) raise ``NotImplementedError("M6c")``.
+        M6b builtins (``ASK``, ``ASK_REQUEST``) are lowered here.
+        M6c builtins (``EXEC``) are lowered here.
         """
         loc = self._loc(span)
         match kind:
@@ -1154,7 +1156,7 @@ class _Lowerer:
                 return self._lower_ask_call(call_node, span, structured_exec=False, is_request=True)
 
             case BuiltinKind.EXEC:
-                raise NotImplementedError("M6c")  # exec/dry-run: deferred to M6c
+                return self._lower_exec_call(call_node, span)
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
@@ -1164,8 +1166,9 @@ class _Lowerer:
 
         Constructor calls (VarRef or FieldAccess callee resolving to a constructor)
         are lowered to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
-        calls are lowered to IrDirectCall.  All other calls (lambdas, indirect, host)
-        still raise NotImplementedError (deferred M4b/M6).
+        calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
+        indirect calls to IrIndirectCall, and host builtins to IrPrint/IrParseJson/
+        IrAsk/IrAskRequest/IrExec.
         """
         callee = call_node.callee
 
@@ -1615,6 +1618,68 @@ class _Lowerer:
             max_attempts=max_attempts,
         )
 
+    # ------------------------------------------------------------------
+    # Exec lowering (M6c)
+    # ------------------------------------------------------------------
+
+    def _lower_exec_call(
+        self,
+        call_node: "Call",
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Lower an exec() builtin call to IrExec."""
+        loc = self._loc(span)
+
+        # command is first positional arg
+        command_ir = self.lower_expr(call_node.args[0])
+
+        max_attempts = self._extract_max_attempts(call_node)
+
+        result_type = self._checked.node_types.get(call_node.node_id)
+        is_unit = isinstance(result_type, UnitType)
+
+        spec = self._checked.contract_specs.get(call_node.node_id)
+        if is_unit or spec is None:
+            contract_req = ContractRequest(
+                codec_name="text",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label="text",
+                structured_exec=False,
+                format_instructions="",
+                is_unit=False,
+            )
+        else:
+            structured_exec = spec.structured_exec
+            if spec.codec_name == "json":
+                schema_dict = derive_schema(spec.target_type)
+                json_schema_str: str | None = json.dumps(schema_dict, sort_keys=True)
+                fmt_instr = _build_format_instructions(schema_dict)
+                decode_schema = build_decode_schema(spec.target_type)
+            else:
+                json_schema_str = None
+                fmt_instr = ""
+                decode_schema = None
+            contract_req = ContractRequest(
+                codec_name=spec.codec_name,
+                strict_json=spec.strict_json,
+                json_schema=json_schema_str,
+                decode=decode_schema,
+                target_type_label=repr(spec.target_type),
+                structured_exec=structured_exec,
+                format_instructions=fmt_instr,
+                is_unit=False,
+            )
+
+        contract_id = self._alloc_contract(contract_req)
+        return IrExec(
+            location=loc,
+            command=command_ir,
+            contract_id=contract_id,
+            max_attempts=max_attempts,
+        )
+
     def _extract_max_attempts(self, call_node: "Call") -> int:
         """Extract max_attempts from the on_parse_error named arg at lowering time."""
         named_map: dict[str, "NamedArg"] = {na.name: na for na in call_node.named_args}
@@ -1927,6 +1992,19 @@ class _Lowerer:
             initializers=tuple(ir_items),
         )
 
+        dry_run_inventory = tuple(
+            DryRunEntry(
+                callee=csr.callee,
+                codec_name=csr.codec_name,
+                target_type_label=repr(csr.target_type),
+                has_schema=self._checked.contract_specs.get(csr.node_id) is not None
+                and self._checked.contract_specs[csr.node_id].codec_name == "json",
+                parse_policy=csr.parse_policy,
+                line=csr.line,
+                col=csr.col,
+            )
+            for csr in self._checked.call_sites
+        )
         return ExecutableProgram(
             entry_module=self._module_id,
             modules={self._module_id: entry_mod},
@@ -1936,6 +2014,7 @@ class _Lowerer:
             functions=dict(self._link.functions),
             params=tuple(self._params),
             contracts=dict(self._link.contracts),
+            dry_run_inventory=dry_run_inventory,
         )
 
 

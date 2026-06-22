@@ -59,6 +59,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
+    IrExec,
     IrExpr,
     IrField,
     IrFunctionParam,
@@ -112,6 +113,7 @@ from agm.agl.ir.operations import (
     UnaryOp,
 )
 from agm.agl.ir.program import (
+    DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
     FunctionDescriptor,
@@ -138,6 +140,7 @@ __all__ = [
     "ConversionStrategy",
     "DecodeSchema",
     "DictDecode",
+    "DryRunEntry",
     "EnumDecode",
     "ExecutableModule",
     "ExecutableProgram",
@@ -168,6 +171,7 @@ __all__ = [
     "IrContains",
     "IrConvert",
     "IrDirectCall",
+    "IrExec",
     "IrExpr",
     "IrField",
     "IrFunctionParam",

@@ -70,6 +70,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
+    IrExec,
     IrExpr,
     IrField,
     IrIf,
@@ -677,6 +678,20 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                 if node.max_attempts < 1:
                     raise InvalidIrError(
                         f"IrAskRequest has max_attempts={node.max_attempts!r} (must be >= 1)"
+                    )
+
+        case IrExec(command=command_expr, contract_id=contract_id):
+            _validate_location(node.location, ctx)
+            _validate_expr(command_expr, ctx)
+            if ctx.deep:
+                if contract_id not in ctx.program.contracts:
+                    raise InvalidIrError(
+                        f"IrExec references contract_id={contract_id!r}"
+                        " which is not in program.contracts"
+                    )
+                if node.max_attempts < 1:
+                    raise InvalidIrError(
+                        f"IrExec has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
         case _ as unreachable:  # pragma: no cover

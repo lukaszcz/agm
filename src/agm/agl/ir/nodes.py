@@ -73,6 +73,7 @@ __all__ = [
     "IrAsk",
     "IrAskRequest",
     "IrAssign",
+    "IrExec",
     "IrBind",
     "IrBindPlan",
     "IrBlock",
@@ -926,6 +927,16 @@ class IrAskRequest:
     max_attempts: int
 
 
+@dataclass(frozen=True, slots=True)
+class IrExec:
+    """IR host-op: exec(command, ...) builtin call."""
+
+    location: Location
+    command: "IrExpr"
+    contract_id: "ContractId"
+    max_attempts: int
+
+
 # ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
@@ -979,4 +990,5 @@ IrExpr = (
     | IrAgentHandle
     | IrAsk
     | IrAskRequest
+    | IrExec
 )

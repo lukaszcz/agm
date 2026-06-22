@@ -758,7 +758,7 @@ class IrLoop:
     ``condition`` evaluates to ``BoolValue(True)`` the loop exits and yields
     ``UnitValue``.  When ``limit`` iterations elapse without the condition
     becoming ``True``, raises ``AglRaise`` with a ``MaxIterationsExceeded``
-    exception whose fields mirror the legacy interpreter exactly.
+    exception with the language-defined diagnostic fields.
 
     ``limit=None`` means "use the evaluator's configured default loop limit"
     (mirrors ``Do.limit is None`` → ``self._loop_limit`` in the legacy
@@ -862,7 +862,7 @@ class IrPrint:
 
     Evaluates ``value``, calls :func:`~agm.agl.runtime.render.render_value` on
     the result, then prints the rendered string.  Returns ``UnitValue()``.
-    Mirrors ``_eval_print_call`` in the legacy interpreter (M6a).
+    Renders the value and writes one line to standard output.
     """
 
     location: Location
@@ -876,7 +876,7 @@ class IrParseJson:
     Evaluates ``value`` (always a ``TextValue`` in well-lowered IR), then calls
     ``parse_json_strict``.  On success returns ``JsonValue(obj)``; on
     ``StrictJsonParseError`` raises ``AglRaise`` with a ``JsonParseError``
-    exception whose fields mirror the legacy interpreter exactly (M6a).
+    exception with the language-defined diagnostic fields.
     """
 
     location: Location

@@ -1,6 +1,5 @@
-"""M3e-2 differential oracle — casts (`as` / `as?`) via IrConvert + ConversionRecipe.
+"""M3e-2 differential ir_semantic — casts (`as` / `as?`) via IrConvert + ConversionRecipe.
 
-Oracle tests (``@pytest.mark.oracle``) prove the IR cast pipeline matches the legacy
 interpreter across the full conversion matrix.  Golden lowering tests pin the resolved
 recipe/strategy shapes.  Unit tests exercise the typeless decode walk directly (its error
 branches are shadowed by JSON-Schema validation on the real cast path).
@@ -13,7 +12,8 @@ from decimal import Decimal
 
 import pytest
 
-from agm.agl.eval.conversions import AglCastConversion, _decode, run_recipe
+from agm.agl.eval.conversions import AglCastConversion, run_recipe
+from agm.agl.eval.conversions import decode_value as _decode
 from agm.agl.eval.values import (
     BoolValue,
     DecimalValue,
@@ -39,7 +39,7 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrConvert, IrSequence
 from agm.agl.modules.ids import ENTRY_ID
-from tests.agl.oracle import assert_oracle_agrees, assert_oracle_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 
 def _lower(source: str):
@@ -47,7 +47,7 @@ def _lower(source: str):
     from agm.agl.parser import parse_program
     from agm.agl.scope import resolve
     from agm.agl.typecheck import check
-    from tests.agl.oracle.harness import m2_caps
+    from tests.agl.ir_harness import m2_caps
 
     prog = parse_program(source)
     checked = check(resolve(prog), m2_caps())
@@ -55,11 +55,10 @@ def _lower(source: str):
 
 
 # ---------------------------------------------------------------------------
-# Oracle — total casts (`as`)
+# IR semantic — total casts (`as`)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 @pytest.mark.parametrize(
     "source",
     [
@@ -76,10 +75,9 @@ def _lower(source: str):
     ],
 )
 def test_total_cast_agrees(source: str) -> None:
-    assert_oracle_agrees(source)
+    evaluate_ir(source)
 
 
-@pytest.mark.oracle
 def test_record_and_enum_render_and_json() -> None:
     source = """\
 record Foo
@@ -91,15 +89,14 @@ let c_text = Color.Red() as text
 let c_json = Color.Red() as json
 ()
 """
-    assert_oracle_agrees(source)
+    evaluate_ir(source)
 
 
 # ---------------------------------------------------------------------------
-# Oracle — fallible casts (`as`), success paths (covers every scalar decode leaf)
+# IR semantic — fallible casts (`as`), success paths (covers every scalar decode leaf)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 @pytest.mark.parametrize(
     "source",
     [
@@ -114,15 +111,13 @@ let c_json = Color.Red() as json
     ],
 )
 def test_fallible_text_cast_success_agrees(source: str) -> None:
-    assert_oracle_agrees(source)
+    evaluate_ir(source)
 
 
-@pytest.mark.oracle
 def test_decimal_to_int_integral_agrees() -> None:
-    assert_oracle_agrees("let x = 4.0 as int\n()\n")
+    evaluate_ir("let x = 4.0 as int\n()\n")
 
 
-@pytest.mark.oracle
 def test_text_to_record_and_nested_agrees() -> None:
     source = """\
 record Foo
@@ -131,45 +126,41 @@ let one = "{\\"a\\": 1}" as Foo
 let many = "[{\\"a\\": 1}, {\\"a\\": 2}]" as list[Foo]
 ()
 """
-    assert_oracle_agrees(source)
+    evaluate_ir(source)
 
 
-@pytest.mark.oracle
 def test_text_to_enum_agrees() -> None:
     source = """\
 enum Color | Red | Blue
 let x = "{\\"$case\\": \\"Red\\"}" as Color
 ()
 """
-    assert_oracle_agrees(source)
+    evaluate_ir(source)
 
 
-@pytest.mark.oracle
 def test_text_to_enum_with_fields_agrees() -> None:
     source = """\
 enum Shape | Circle(radius: decimal) | Square(side: decimal)
 let x = "{\\"$case\\": \\"Circle\\", \\"radius\\": 2.5}" as Shape
 ()
 """
-    assert_oracle_agrees(source)
+    evaluate_ir(source)
 
 
-@pytest.mark.oracle
 def test_json_to_typed_agrees() -> None:
     source = """\
 let j = 42 as json
 let x = j as int
 ()
 """
-    assert_oracle_agrees(source)
+    evaluate_ir(source)
 
 
 # ---------------------------------------------------------------------------
-# Oracle — fallible casts that raise CastError (`as`)
+# IR semantic — fallible casts that raise CastError (`as`)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 @pytest.mark.parametrize(
     "source",
     [
@@ -179,12 +170,11 @@ let x = j as int
     ],
 )
 def test_cast_raises_cast_error(source: str) -> None:
-    legacy_exc, ir_exc = assert_oracle_raises(source)
-    assert legacy_exc.display_name == "CastError"
+    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
+    assert ir_reference_exc.display_name == "CastError"
     assert ir_exc.display_name == "CastError"
 
 
-@pytest.mark.oracle
 def test_cast_missing_field_and_unknown_variant_raise() -> None:
     missing = """\
 record Foo
@@ -198,17 +188,16 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 ()
 """
     for src in (missing, unknown):
-        legacy_exc, ir_exc = assert_oracle_raises(src)
-        assert legacy_exc.display_name == "CastError"
+        ir_reference_exc, ir_exc = evaluate_ir_raises(src)
+        assert ir_reference_exc.display_name == "CastError"
         assert ir_exc.display_name == "CastError"
 
 
 # ---------------------------------------------------------------------------
-# Oracle — `as?` booleans
+# IR semantic — `as?` booleans
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 @pytest.mark.parametrize(
     "source,expected",
     [
@@ -222,12 +211,11 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
     ],
 )
 def test_as_optional_booleans_agree(source: str, expected: bool) -> None:
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == BoolValue(expected)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == BoolValue(expected)
     assert ir["r"] == BoolValue(expected)
 
 
-@pytest.mark.oracle
 def test_total_as_optional_evaluates_source_then_true() -> None:
     """A total `as?` evaluates its (bound) source and yields True (IrSequence path)."""
     source = """\
@@ -235,8 +223,8 @@ let x = 5
 let r = x as? text
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == BoolValue(True)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == BoolValue(True)
     assert ir["r"] == BoolValue(True)
     assert ir["x"] == IntValue(5)
 

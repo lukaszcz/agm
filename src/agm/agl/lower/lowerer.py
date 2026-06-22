@@ -123,8 +123,6 @@ from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import build_decode_schema, compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
-from agm.agl.runtime.codec import _build_format_instructions
-from agm.agl.runtime.schema import derive_schema
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -185,6 +183,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.type_schema import build_format_instructions, derive_schema
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
 from agm.agl.typecheck.types import (
@@ -514,7 +513,7 @@ class _Lowerer:
         ir_params: list[IrFunctionParam] = []
         for param, psym in zip(funcdef.params, param_syms):
             if param.default is not None:
-                param_type_for_default = self._binding_type_for(param.node_id)
+                param_type_for_default = self._binding_type(param.node_id)
                 default_ir: IrExpr | None = self.lower_coerced(
                     param.default, param_type_for_default
                 )
@@ -649,17 +648,17 @@ class _Lowerer:
     def _source_slice(self, span: SourceSpan) -> str:
         """Return the source-text covered by *span*.
 
-        Mirrors ``Interpreter._source_slice`` in the legacy evaluator; used to
+        Captures the source slice used in runtime diagnostics; used to
         capture the condition-expression source text for ``IrLoop.condition_source``
         (the ``MaxIterationsExceeded`` ``condition`` field).
         """
         return self._source_text[span.start_offset : span.end_offset]
 
     # ------------------------------------------------------------------
-    # Binding-type helpers (mirror legacy _binding_type_for)
+    # Binding-type helpers
     # ------------------------------------------------------------------
 
-    def _binding_type_for(self, decl_node_id: int) -> Type:
+    def _binding_type(self, decl_node_id: int) -> Type:
         """Return the checker-recorded type for a declaration node (compiler-error if missing)."""
         t = self._checked.type_env.get_binding_type(decl_node_id)
         assert t is not None, (
@@ -1618,7 +1617,7 @@ class _Lowerer:
             if spec.codec_name == "json":
                 schema_dict = derive_schema(spec.target_type)
                 json_schema_str: str | None = json.dumps(schema_dict)
-                fmt_instr = _build_format_instructions(schema_dict)
+                fmt_instr = build_format_instructions(schema_dict)
                 decode_schema = build_decode_schema(spec.target_type)
             else:
                 json_schema_str = None
@@ -1690,7 +1689,7 @@ class _Lowerer:
             if spec.codec_name == "json":
                 schema_dict = derive_schema(spec.target_type)
                 json_schema_str: str | None = json.dumps(schema_dict)
-                fmt_instr = _build_format_instructions(schema_dict)
+                fmt_instr = build_format_instructions(schema_dict)
                 decode_schema = build_decode_schema(spec.target_type)
             else:
                 json_schema_str = None
@@ -1770,13 +1769,13 @@ class _Lowerer:
             # ----------------------------------------------------------
             case LetDecl(name=name, value=rhs, span=span, node_id=nid):
                 sym = self._alloc_sym(nid, name=name, mutable=False, public=top_level)
-                binding_type = self._binding_type_for(nid)
+                binding_type = self._binding_type(nid)
                 ir_val = self.lower_coerced(rhs, binding_type)
                 return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
 
             case VarDecl(name=name, value=rhs, span=span, node_id=nid):
                 sym = self._alloc_sym(nid, name=name, mutable=True, public=top_level)
-                binding_type = self._binding_type_for(nid)
+                binding_type = self._binding_type(nid)
                 ir_val = self.lower_coerced(rhs, binding_type)
                 return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
 
@@ -1837,7 +1836,7 @@ class _Lowerer:
             public=True,
             owner=self._module_id,
         )
-        binding_type = self._binding_type_for(param.node_id)
+        binding_type = self._binding_type(param.node_id)
         if param.default is not None:
             default_ir: IrExpr | None = self.lower_coerced(param.default, binding_type)
         else:
@@ -1872,7 +1871,7 @@ class _Lowerer:
         sym = self._sym_for_decl(ref.decl_node_id)
 
         if isinstance(target, NameTarget):
-            slot_type = self._binding_type_for(ref.decl_node_id)
+            slot_type = self._binding_type(ref.decl_node_id)
             ir_val = self.lower_coerced(rhs, slot_type)
             return IrAssign(
                 location=self._loc(span),
@@ -1882,7 +1881,7 @@ class _Lowerer:
             )
 
         # IndexTarget: flatten the index path into IrIndexStep list.
-        root_type = self._binding_type_for(ref.decl_node_id)
+        root_type = self._binding_type(ref.decl_node_id)
         steps: list[IrIndexStep] = []
         container_type = self._collect_index_steps_from_obj(target.obj, root_type, steps)
         kind = self._kind_for_container(container_type)
@@ -1947,13 +1946,12 @@ class _Lowerer:
 
         Adds:
         - All user-declared record/enum nominals from the entry module's type env.
-          (Cross-module nominal aggregation is deferred to M5.)
         - All built-in exception descriptors keyed by NominalId(PRELUDE_ID, name).
 
         Out of scope: prelude record/enum descriptors (ExecResult, ParsePolicy, …)
-        — those are constructed only via host ops (M6) and are not added here.
+        — those are constructed only via host operations and are not added here.
         """
-        # User-declared nominals (entry module only — M5 handles cross-module).
+        # User-declared nominals for this lowering unit.
         for name, typ in self._checked.type_env.non_builtin_type_items():
             if isinstance(typ, RecordType):
                 nominal = NominalId(typ.module_id, name)

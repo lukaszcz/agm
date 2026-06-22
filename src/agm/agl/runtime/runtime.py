@@ -1411,7 +1411,7 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
     - ``int``/``decimal``/``bool``/``json``: parsed via stdlib ``json`` with
       ``parse_float=Decimal`` (design §5.1: no binary floats) and validated.
     - ``list``/``dict``/``record``/``enum``: parsed from a JSON string via the
-      ``JsonCodec`` (M2+).
+      ``JsonCodec``.
     """
     import decimal as _decimal
 
@@ -1445,7 +1445,7 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
     # Structured types (list/dict/record/enum): delegate to JsonCodec.
     if isinstance(type_obj, (ListType, DictType, RecordType, EnumType)):
         from agm.agl.runtime.codec import JsonCodec
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
 
         # Accept either a JSON string or a Python native object (dict/list/
         # scalar) that was already parsed from JSON.  For native objects we

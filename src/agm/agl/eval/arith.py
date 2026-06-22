@@ -1,6 +1,6 @@
 """Pure arithmetic and comparison helpers for the AgL evaluator.
 
-Used by both the legacy interpreter and the IR evaluator.
+Used by the IR evaluator.
 This module is the single source of truth for operator semantics.
 
 IMPORTANT: Only imports from stdlib, agm.agl.eval.values, and agm.agl.ir.operations.

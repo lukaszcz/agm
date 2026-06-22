@@ -40,9 +40,8 @@ class MetaContext:
     ``session``     — the live :class:`ReplSession` (handlers query/mutate it).
     ``echo``        — whether successful entries are echoed; the loop reads this
                       live, so ``:set echo on|off`` toggles it by mutation.
-    ``agent_mode``  — the shared, mutable agent-call mode holder (``:agent`` reads
-                      and mutates it; M4's confirming wrapper will read it). It has
-                      no observable effect on evaluation until M4 wires the wrapper.
+    ``agent_mode``  — the shared, mutable agent-call mode holder read and mutated
+                      by ``:agent`` and the confirming wrapper.
     ``quit``        — set ``True`` by a handler to ask the loop to exit.
     ``theme``       — current highlight theme name; mutated by ``:theme`` so the
                       loop can update the ``PromptSession`` style live.

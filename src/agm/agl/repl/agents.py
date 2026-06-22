@@ -30,48 +30,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from agm.agl.runtime.request import AgentCancelled
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from agm.agl.ir.ids import Location
     from agm.agl.repl.agentmode import AgentMode
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.request import AgentRequest, AgentResponse
-    from agm.agl.syntax.spans import SourceSpan
 
 
 # The injected confirmation callback: given the callee name and the rendered
 # prompt, it returns the user's decision.
 ConfirmDecision = Literal["yes", "no", "always"]
 ConfirmCallback = "Callable[[str, str], ConfirmDecision]"
-
-
-class AgentCancelled(Exception):
-    """Raised when a confirmed agent call is declined or interrupted.
-
-    ``callee``
-        The agent name the cancelled call targeted.
-    ``reason``
-        ``"declined"`` (the user answered ``no`` at the confirmation prompt) or
-        ``"interrupted"`` (Ctrl-C during a live call).
-    ``span``
-        Source location of the cancelled ``ask`` node, attached by the IR
-        interpreter so the REPL session can apply partial-effects promotion by
-        source position (mirroring ``AglRaise.span``).  ``None`` until the
-        interpreter annotates it.
-    """
-
-    def __init__(
-        self,
-        callee: str,
-        reason: str,
-        *,
-        span: "SourceSpan | Location | None" = None,
-    ) -> None:
-        super().__init__(f"Agent call to {callee!r} cancelled ({reason}).")
-        self.callee = callee
-        self.reason = reason
-        self.span: "SourceSpan | Location | None" = span
 
 
 class ConfirmingAgent:

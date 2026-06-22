@@ -12,10 +12,6 @@ total casts (``TOTAL_NOOP`` / ``TOTAL_RENDER`` / ``TOTAL_JSON``) never fail;
 fallible casts (``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
 the derived JSON schema and decode walk.
 
-Note (tracked for M9): ``derive_schema`` is a pure compile-time ``Type →
-JSON-Schema`` transformation (it imports only ``typecheck.types``); importing
-it here is cycle-free.  In the end-state layering it should live in a
-lowering-adjacent / neutral location rather than under ``runtime``.
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.runtime.schema import derive_schema
+from agm.agl.type_schema import derive_schema
 from agm.agl.typecheck.types import (
     BoolType,
     CastKind,

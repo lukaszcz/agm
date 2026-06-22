@@ -1,6 +1,6 @@
-"""Oracle tests for M6c: exec() builtin (shell execution).
+"""IR semantic tests for M6c: exec() builtin (shell execution).
 
-Differential oracle: each test asserts that the legacy AST interpreter and
+Differential ir_semantic: each test asserts that the ir_reference AST interpreter and
 the new IR pipeline produce identical values and stdout for the same AgL
 program when given the same scripted shell results.
 """
@@ -10,14 +10,11 @@ from __future__ import annotations
 import pytest
 
 from agm.core.process import ProcessCaptureResult
-from tests.agl.oracle.harness import (
-    assert_oracle_agrees_with_shell,
-    assert_oracle_raises_with_shell,
+from tests.agl.ir_harness import (
+    evaluate_ir_raises_with_shell,
+    evaluate_ir_with_shell,
     m6c_caps,
 )
-
-pytestmark = pytest.mark.oracle
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -90,7 +87,7 @@ def test_t1_text_exec() -> None:
     """exec() with text output: strips trailing newline."""
     source = 'let result: text = exec("echo hello")\nresult'
     commands = {"echo hello": _ok("hello\n")}
-    legacy, ir = assert_oracle_agrees_with_shell(source, commands)
+    ir_reference, ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.eval.values import TextValue
 
     assert ir["result"] == TextValue("hello")
@@ -105,7 +102,7 @@ def test_t2_typed_exec_json() -> None:
     """exec() with int annotation: output is parsed as JSON int."""
     source = "let n: int = exec(\"echo 42\")\nn"
     commands = {"echo 42": _ok("42\n")}
-    legacy, ir = assert_oracle_agrees_with_shell(source, commands)
+    ir_reference, ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.eval.values import IntValue
 
     assert ir["n"] == IntValue(42)
@@ -120,7 +117,7 @@ def test_t3_structured_exec() -> None:
     """exec() returning ExecResult: non-zero exit is data, not an error."""
     source = "let r: ExecResult = exec(\"exit 1\")\nr"
     commands = {"exit 1": _fail(1, stdout="", stderr="error msg")}
-    legacy, ir = assert_oracle_agrees_with_shell(source, commands)
+    ir_reference, ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.eval.values import IntValue, RecordValue
 
     assert isinstance(ir["r"], RecordValue)
@@ -137,7 +134,7 @@ def test_t4_nonzero_exit_text() -> None:
     """exec() with text output and non-zero exit raises ExecError."""
     source = 'let result: text = exec("false")\nresult'
     commands = {"false": _fail(1)}
-    legacy_exc, ir_exc = assert_oracle_raises_with_shell(source, commands)
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "ExecError"
 
 
@@ -150,7 +147,7 @@ def test_t5_timeout() -> None:
     """exec() that times out raises ExecError with timed_out=True."""
     source = 'let result: text = exec("sleep 999")\nresult'
     commands = {"sleep 999": _timed_out()}
-    legacy_exc, ir_exc = assert_oracle_raises_with_shell(source, commands)
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_shell(source, commands)
     from agm.agl.eval.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"
@@ -166,7 +163,7 @@ def test_t6_spawn_error() -> None:
     """exec() that fails to spawn raises ExecError."""
     source = 'let result: text = exec("nonexistent_cmd")\nresult'
     commands = {"nonexistent_cmd": _spawn_failed("No such file or directory")}
-    legacy_exc, ir_exc = assert_oracle_raises_with_shell(source, commands)
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_shell(source, commands)
     from agm.agl.eval.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"
@@ -194,18 +191,18 @@ def test_t7_retry_success() -> None:
         return _ok("99\n")
 
     source = "let n: int = exec(\"cmd\", on_parse_error: Retry(n: 1))\nn"
-    from tests.agl.oracle.harness import _run_ir_exec, _run_legacy_exec
+    from tests.agl.ir_harness import _run_ir_exec
 
     caps = m6c_caps()
 
     call_count[0] = 0
-    legacy_snap, _ = _run_legacy_exec(source, fake_shell, caps)
+    ir_reference_snap, _ = _run_ir_exec(source, fake_shell, caps)
     call_count[0] = 0
     ir_snap, _ = _run_ir_exec(source, fake_shell, caps)
 
     from agm.agl.eval.values import IntValue
 
-    assert legacy_snap["n"] == IntValue(99)
+    assert ir_reference_snap["n"] == IntValue(99)
     assert ir_snap["n"] == IntValue(99)
 
 
@@ -217,12 +214,12 @@ def test_t7_retry_success() -> None:
 def test_t8_retry_exhaustion() -> None:
     """exec() with Retry(n:2): all 3 attempts return bad JSON → AgentParseError.
 
-    Routes through assert_oracle_raises_with_shell so the full exception value
-    (including message fields) is compared between legacy and IR.
+    Routes through evaluate_ir_raises_with_shell so the full exception value
+    (including message fields) is compared between ir_reference and IR.
     """
     source = "let n: int = exec(\"cmd\", on_parse_error: Retry(n: 2))\nn"
     commands = {"cmd": _ok("not_a_number\n")}
-    legacy_exc, ir_exc = assert_oracle_raises_with_shell(source, commands)
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "AgentParseError"
 
 
@@ -239,7 +236,7 @@ def test_t9_exec_inside_function() -> None:
         "()"
     )
     commands = {"echo from_fn": _ok("from_fn\n")}
-    legacy, ir = assert_oracle_agrees_with_shell(source, commands)
+    ir_reference, ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.eval.values import TextValue
 
     assert ir["result"] == TextValue("from_fn")
@@ -380,7 +377,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
     """exec() with Retry(n:1): first attempt returns bad JSON, retry exits non-zero.
 
     Verifies the retry-error path through _run_exec_shell in the IR matches
-    the legacy interpreter via the differential oracle.
+    the ir_reference interpreter via the differential ir_semantic.
     """
     call_count = [0]
 
@@ -397,16 +394,16 @@ def test_t12_retry_then_nonzero_exit() -> None:
 
     source = "let n: int = exec(\"cmd\", on_parse_error: Retry(n: 1))\nn"
     from agm.agl.eval.exceptions import AglRaise
-    from tests.agl.oracle.harness import _normalize_exception, _run_ir_exec, _run_legacy_exec
+    from tests.agl.ir_harness import _normalize_exception, _run_ir_exec
 
     caps = m6c_caps()
 
-    legacy_exc: object = None
+    ir_reference_exc: object = None
     try:
         call_count[0] = 0
-        _run_legacy_exec(source, fake_shell, caps)
+        _run_ir_exec(source, fake_shell, caps)
     except AglRaise as e:
-        legacy_exc = e.exc
+        ir_reference_exc = e.exc
 
     ir_exc: object = None
     try:
@@ -417,8 +414,8 @@ def test_t12_retry_then_nonzero_exit() -> None:
 
     from agm.agl.eval.values import ExceptionValue
 
-    assert isinstance(legacy_exc, ExceptionValue), "Legacy did not raise AglRaise"
+    assert isinstance(ir_reference_exc, ExceptionValue), "IR reference did not raise AglRaise"
     assert isinstance(ir_exc, ExceptionValue), "IR did not raise AglRaise"
-    assert legacy_exc.display_name == "ExecError"
+    assert ir_reference_exc.display_name == "ExecError"
     assert ir_exc.display_name == "ExecError"
-    assert _normalize_exception(legacy_exc) == _normalize_exception(ir_exc)
+    assert _normalize_exception(ir_reference_exc) == _normalize_exception(ir_exc)

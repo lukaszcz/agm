@@ -1,7 +1,7 @@
 """AgL typeless execution IR — public surface.
 
 This package contains the immutable data model for the execution IR emitted
-by the lowering/linking phase (M2+) and consumed by the new evaluator (M2+).
+by the lowering/linking phase and consumed by the evaluator.
 
 The IR carries no checker ``Type``, ``TypeEnvironment``, ``FunctionSignature``,
 ``CastSpec``, type expression, or ``node_types``/``binding_types`` table.

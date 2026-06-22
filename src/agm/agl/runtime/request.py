@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from agm.agl.ir.ids import Location
+
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 
@@ -35,6 +37,22 @@ ValidationErrorCategory = Literal[
     "bad_case",
     "invalid_json",
 ]
+
+
+class AgentCancelled(Exception):
+    """Signal that a host agent call was declined or interrupted."""
+
+    def __init__(
+        self,
+        callee: str,
+        reason: str,
+        *,
+        span: Location | None = None,
+    ) -> None:
+        super().__init__(f"Agent call to {callee!r} cancelled ({reason}).")
+        self.callee = callee
+        self.reason = reason
+        self.span = span
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +107,7 @@ class AgentRequest:
         0-based attempt counter (0 = first call, 1 = first retry, …).
     ``previous_invalid_output``
         The raw text returned by the previous (failed) attempt, or ``None``
-        on the first attempt.  Useful for retry-feedback messages (M4+).
+        on the first attempt. Useful for retry-feedback messages.
     ``validation_errors``
         Structured :class:`ValidationError` records from the previous failed
         attempt (design §7.5 / §7.8).  Empty on the first attempt; populated on

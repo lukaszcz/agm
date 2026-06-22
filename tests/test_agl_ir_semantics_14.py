@@ -1,6 +1,6 @@
-"""Oracle tests for M6b — agent dispatch (ask / ask-request) in the IR pipeline.
+"""IR semantic tests for M6b — agent dispatch (ask / ask-request) in the IR pipeline.
 
-Differential oracle: each test asserts that the legacy AST interpreter and the
+Differential ir_semantic: each test asserts that the ir_reference AST interpreter and the
 new IR pipeline produce identical values and stdout for the same AgL program when
 given the same scripted agent responses.
 """
@@ -21,16 +21,15 @@ from agm.agl.eval.values import (
     RecordValue,
     TextValue,
 )
-from tests.agl.oracle.harness import (
-    assert_oracle_agrees_with_agents,
-    assert_oracle_raises_with_agents,
+from tests.agl.ir_harness import (
+    evaluate_ir_raises_with_agents,
+    evaluate_ir_with_agents,
 )
 
 if TYPE_CHECKING:
     from agm.agl.syntax.nodes import Call
     from agm.agl.syntax.spans import SourceSpan
 
-pytestmark = pytest.mark.oracle
 
 # ---------------------------------------------------------------------------
 # T1 — simple text ask
@@ -44,11 +43,11 @@ agent summarizer
 let summary: text = ask("Summarise it.", agent: summarizer)
 summary
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"summarizer": ["This is a summary."]},
     )
-    assert legacy["summary"] == TextValue("This is a summary.")
+    assert ir_reference["summary"] == TextValue("This is a summary.")
     assert ir["summary"] == TextValue("This is a summary.")
 
 
@@ -64,11 +63,11 @@ agent counter
 let n: int = ask("How many?", agent: counter)
 n
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"counter": ["42"]},
     )
-    assert legacy["n"] == IntValue(42)
+    assert ir_reference["n"] == IntValue(42)
     assert ir["n"] == IntValue(42)
 
 
@@ -88,13 +87,13 @@ agent locator
 let pt: Point = ask("Find the point.", agent: locator)
 pt
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"locator": ['{"x": 3, "y": 7}']},
     )
-    assert isinstance(legacy["pt"], RecordValue)
-    assert legacy["pt"].fields["x"] == IntValue(3)
-    assert legacy["pt"].fields["y"] == IntValue(7)
+    assert isinstance(ir_reference["pt"], RecordValue)
+    assert ir_reference["pt"].fields["x"] == IntValue(3)
+    assert ir_reference["pt"].fields["y"] == IntValue(7)
     assert isinstance(ir["pt"], RecordValue)
     assert ir["pt"].fields["x"] == IntValue(3)
     assert ir["pt"].fields["y"] == IntValue(7)
@@ -112,12 +111,12 @@ agent lister
 let items: list[text] = ask("List items.", agent: lister)
 items
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"lister": ['["alpha", "beta", "gamma"]']},
     )
-    assert isinstance(legacy["items"], ListValue)
-    assert legacy["items"].elements == (
+    assert isinstance(ir_reference["items"], ListValue)
+    assert ir_reference["items"].elements == (
         TextValue("alpha"), TextValue("beta"), TextValue("gamma")
     )
     assert isinstance(ir["items"], ListValue)
@@ -142,12 +141,12 @@ agent checker
 let status: Status = ask("Check it.", agent: checker)
 status
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"checker": ['{"$case": "Ok"}']},
     )
-    assert isinstance(legacy["status"], EnumValue)
-    assert legacy["status"].variant == "Ok"
+    assert isinstance(ir_reference["status"], EnumValue)
+    assert ir_reference["status"].variant == "Ok"
     assert isinstance(ir["status"], EnumValue)
     assert ir["status"].variant == "Ok"
 
@@ -165,11 +164,11 @@ let n: int = ask("Give me a number.", agent: answerer)
 n
 """
     fenced = "```json\n17\n```"
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"answerer": [fenced]},
     )
-    assert legacy["n"] == IntValue(17)
+    assert ir_reference["n"] == IntValue(17)
     assert ir["n"] == IntValue(17)
 
 
@@ -185,11 +184,11 @@ agent parser
 let n: int = ask("Parse this.", agent: parser, on_parse_error: Retry(n: 1))
 n
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"parser": ["not json at all", "99"]},
     )
-    assert legacy["n"] == IntValue(99)
+    assert ir_reference["n"] == IntValue(99)
     assert ir["n"] == IntValue(99)
 
 
@@ -205,12 +204,12 @@ agent parser
 let n: int = ask("Parse this.", agent: parser, on_parse_error: Retry(n: 1))
 n
 """
-    legacy_exc, ir_exc = assert_oracle_raises_with_agents(
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"parser": ["bad1", "bad2"]},
     )
-    assert isinstance(legacy_exc, ExceptionValue)
-    assert legacy_exc.display_name == "AgentParseError"
+    assert isinstance(ir_reference_exc, ExceptionValue)
+    assert ir_reference_exc.display_name == "AgentParseError"
     assert isinstance(ir_exc, ExceptionValue)
     assert ir_exc.display_name == "AgentParseError"
 
@@ -227,11 +226,11 @@ agent strict_agent
 let b: bool = ask("True or false?", agent: strict_agent, strict_json: true)
 b
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"strict_agent": ["true"]},
     )
-    assert legacy["b"] == BoolValue(True)
+    assert ir_reference["b"] == BoolValue(True)
     assert ir["b"] == BoolValue(True)
 
 
@@ -248,12 +247,12 @@ let _: unit = ask("Notify!", agent: notifier)
 let done: text = "done"
 done
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"notifier": ["acknowledged"]},
     )
     # The `_` binding may or may not appear in the snapshot; check `done` which always does.
-    assert legacy.get("done") == TextValue("done")
+    assert ir_reference.get("done") == TextValue("done")
     assert ir.get("done") == TextValue("done")
 
 
@@ -270,11 +269,11 @@ def get_name(prompt: text) -> text = ask(prompt, agent: namer)
 let name: text = get_name("What is the name?")
 name
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"namer": ["Alice"]},
     )
-    assert legacy["name"] == TextValue("Alice")
+    assert ir_reference["name"] == TextValue("Alice")
     assert ir["name"] == TextValue("Alice")
 
 
@@ -292,15 +291,15 @@ let a: text = ask("First.", agent: first)
 let b: text = ask("Second.", agent: second)
 b
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={
             "first": ["hello"],
             "second": ["world"],
         },
     )
-    assert legacy["a"] == TextValue("hello")
-    assert legacy["b"] == TextValue("world")
+    assert ir_reference["a"] == TextValue("hello")
+    assert ir_reference["b"] == TextValue("world")
     assert ir["a"] == TextValue("hello")
     assert ir["b"] == TextValue("world")
 
@@ -318,12 +317,12 @@ let n: int = ask("Give int.", agent: validator)
 n
 """
     # Agent returns a string, not an integer — schema validation fails.
-    legacy_exc, ir_exc = assert_oracle_raises_with_agents(
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"validator": ['"not an int"']},
     )
-    assert isinstance(legacy_exc, ExceptionValue)
-    assert legacy_exc.display_name == "AgentParseError"
+    assert isinstance(ir_reference_exc, ExceptionValue)
+    assert ir_reference_exc.display_name == "AgentParseError"
     assert isinstance(ir_exc, ExceptionValue)
     assert ir_exc.display_name == "AgentParseError"
 
@@ -341,12 +340,12 @@ let n: int = ask("Give int.", agent: strict_agent, strict_json: true)
 n
 """
     # Fenced JSON fails in strict mode (strict does not strip fences).
-    legacy_exc, ir_exc = assert_oracle_raises_with_agents(
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"strict_agent": ["```json\n42\n```"]},
     )
-    assert isinstance(legacy_exc, ExceptionValue)
-    assert legacy_exc.display_name == "AgentParseError"
+    assert isinstance(ir_reference_exc, ExceptionValue)
+    assert ir_reference_exc.display_name == "AgentParseError"
     assert isinstance(ir_exc, ExceptionValue)
     assert ir_exc.display_name == "AgentParseError"
 
@@ -362,14 +361,14 @@ def test_default_agent_ask() -> None:
 let result: text = ask("Hello default.")
 result
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={},
         default_responses=["default response"],
         agent_names=frozenset(),
         has_default=True,
     )
-    assert legacy["result"] == TextValue("default response")
+    assert ir_reference["result"] == TextValue("default response")
     assert ir["result"] == TextValue("default response")
 
 
@@ -388,12 +387,12 @@ let prompt_text: text = req.prompt
 prompt_text
 """
     # ask-request does not call the agent — no scripted responses needed.
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"dummy": []},
     )
-    assert legacy["agent_name"] == TextValue("dummy")
-    assert legacy["prompt_text"] == TextValue("My prompt.")
+    assert ir_reference["agent_name"] == TextValue("dummy")
+    assert ir_reference["prompt_text"] == TextValue("My prompt.")
     assert ir["agent_name"] == TextValue("dummy")
     assert ir["prompt_text"] == TextValue("My prompt.")
 
@@ -411,11 +410,11 @@ let n: int = ask("Give int.", agent: fixer, on_parse_error: Retry(n: 1))
 n
 """
     # First response: string (wrong type) → schema error; second: valid int.
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"fixer": ['"oops"', "42"]},
     )
-    assert legacy["n"] == IntValue(42)
+    assert ir_reference["n"] == IntValue(42)
     assert ir["n"] == IntValue(42)
 
 
@@ -502,12 +501,12 @@ agent checker
 let s: Status = ask("Status?", agent: checker, on_parse_error: Retry(n: 1))
 s
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"checker": ['{"$case": "Bad"}', '{"$case": "Ok"}']},
     )
-    assert isinstance(legacy["s"], EnumValue)
-    assert legacy["s"].variant == "Ok"
+    assert isinstance(ir_reference["s"], EnumValue)
+    assert ir_reference["s"].variant == "Ok"
     assert isinstance(ir["s"], EnumValue)
     assert ir["s"].variant == "Ok"
 
@@ -519,7 +518,6 @@ s
 
 def test_validate_ir_ask_missing_contract() -> None:
     """validate_ir: IrAsk referencing missing contract_id → InvalidIrError."""
-    import pytest
 
     from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrAsk, IrConstText
@@ -553,7 +551,6 @@ def test_validate_ir_ask_missing_contract() -> None:
 
 def test_validate_ir_ask_max_attempts_zero() -> None:
     """validate_ir: IrAsk with max_attempts=0 → InvalidIrError."""
-    import pytest
 
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
@@ -598,7 +595,6 @@ def test_validate_ir_ask_max_attempts_zero() -> None:
 
 def test_validate_contract_request_json_missing_schema() -> None:
     """_validate_contract_request: json codec but no schema → InvalidIrError."""
-    import pytest
 
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
@@ -652,11 +648,11 @@ let req = ask-request::[int]("Give me a number.", agent: worker)
 let prompt_text: text = req.prompt
 prompt_text
 """
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"worker": []},
     )
-    assert legacy["prompt_text"] == TextValue("Give me a number.")
+    assert ir_reference["prompt_text"] == TextValue("Give me a number.")
     assert ir["prompt_text"] == TextValue("Give me a number.")
 
 
@@ -1321,7 +1317,6 @@ def test_enum_known_case_with_additional_props_error() -> None:
 
 def test_validate_ir_ask_request_missing_contract() -> None:
     """validate_ir: IrAskRequest referencing missing contract_id → InvalidIrError."""
-    import pytest
 
     from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrAskRequest, IrConstText
@@ -1355,7 +1350,6 @@ def test_validate_ir_ask_request_missing_contract() -> None:
 
 def test_validate_ir_ask_request_max_attempts_zero() -> None:
     """validate_ir: IrAskRequest with max_attempts=0 → InvalidIrError."""
-    import pytest
 
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
@@ -1400,7 +1394,6 @@ def test_validate_ir_ask_request_max_attempts_zero() -> None:
 
 def test_validate_contract_request_json_missing_decode() -> None:
     """validate.py: json codec with json_schema set but decode=None → InvalidIrError."""
-    import pytest
 
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
@@ -1561,13 +1554,13 @@ let req = ask-request("Do it.", agent: a)
 let prompt_text: text = req.prompt
 prompt_text
 """
-    from tests.agl.oracle.harness import assert_oracle_agrees_with_agents
+    from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"a": []},
     )
-    assert legacy["prompt_text"] == TextValue("Do it.")
+    assert ir_reference["prompt_text"] == TextValue("Do it.")
     assert ir["prompt_text"] == TextValue("Do it.")
 
 
@@ -1640,13 +1633,13 @@ agent a
 let n: int = ask("?", agent: a, on_parse_error: Abort)
 n
 """
-    from tests.agl.oracle.harness import assert_oracle_agrees_with_agents
+    from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"a": ["5"]},
     )
-    assert legacy["n"] == IntValue(5)
+    assert ir_reference["n"] == IntValue(5)
     assert ir["n"] == IntValue(5)
 
 
@@ -1801,15 +1794,15 @@ let req = ask-request::[unit]("Do it.", agent: a)
 let oc = req.output_contract
 oc
 """
-    from tests.agl.oracle.harness import assert_oracle_agrees_with_agents
+    from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"a": []},
     )
     # output_contract should be the None variant (OutputContractOption.None).
-    assert isinstance(legacy["oc"], EnumValue)
-    assert legacy["oc"].variant == "None"
+    assert isinstance(ir_reference["oc"], EnumValue)
+    assert ir_reference["oc"].variant == "None"
     assert isinstance(ir["oc"], EnumValue)
     assert ir["oc"].variant == "None"
 
@@ -1825,8 +1818,6 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     # Actually the only path where result.ok=False AND errors=() AND error_msg="" is
     # when AgentParseResult.failure("") is called. Let's mock parse_agent_output:
     from unittest.mock import patch
-
-    import pytest
 
     from agm.agl.eval.agent_parse import AgentParseResult
     from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -1878,7 +1869,7 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     # Patch parse_agent_output to return failure with EMPTY errors AND EMPTY error_msg.
     empty_failure = AgentParseResult(ok=False, value=None, error_msg="", errors=())
     with patch("agm.agl.eval.ir_interpreter.parse_agent_output", return_value=empty_failure):
-        from agm.agl.eval.interpreter import AglRaise
+        from agm.agl.eval.exceptions import AglRaise
         with pytest.raises(AglRaise):
             interp.run()
 
@@ -1890,14 +1881,14 @@ agent a
 let n: int = ask("?", agent: a, on_parse_error: ::Retry(n: 2))
 n
 """
-    from tests.agl.oracle.harness import assert_oracle_agrees_with_agents
+    from tests.agl.ir_harness import evaluate_ir_with_agents
 
     # First 2 responses are bad JSON, 3rd is valid.
-    legacy, ir = assert_oracle_agrees_with_agents(
+    ir_reference, ir = evaluate_ir_with_agents(
         source,
         scripts={"a": ["bad", "bad", "7"]},
     )
-    assert legacy["n"] == IntValue(7)
+    assert ir_reference["n"] == IntValue(7)
     assert ir["n"] == IntValue(7)
 
 
@@ -2420,19 +2411,19 @@ def test_classify_enum_sub_error_required_missing_is_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M1 (MAJOR) — enum oneOf validation-error message parity oracle tests
+# M1 (MAJOR) — enum oneOf validation-error message parity ir_semantic tests
 #
 # These tests verify that when ask() exhausts all attempts due to enum errors,
 # the validation_errors (category, message, field) from the IR pipeline are
-# byte-identical to the legacy pipeline.  Added per TDD mandate before the fix.
+# byte-identical to the ir_reference pipeline.  Added per TDD mandate before the fix.
 # ---------------------------------------------------------------------------
 
 
-def test_enum_unknown_case_exhausted_oracle_parity() -> None:
-    """Enum ask exhausted: unknown $case → validation_errors match legacy (M1 parity).
+def test_enum_unknown_case_exhausted_ir_semantic_parity() -> None:
+    """Enum ask exhausted: unknown $case → validation_errors match ir_reference (M1 parity).
 
-    The harness's assert_oracle_raises_with_agents already asserts byte-identical
-    parity between legacy and IR.  We additionally document and verify the exact
+    The harness's evaluate_ir_raises_with_agents already asserts byte-identical
+    parity between ir_reference and IR.  We additionally document and verify the exact
     message content for the unknown-$case shape.
     """
     source = """\
@@ -2444,11 +2435,11 @@ agent checker
 let status: Status = ask("Check.", agent: checker)
 status
 """
-    legacy_exc, ir_exc = assert_oracle_raises_with_agents(
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"checker": ['{"$case": "Bogus"}']},
     )
-    assert legacy_exc.display_name == "AgentParseError"
+    assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
     # validation_errors is stored as a JsonValue(raw=[{...}]) in both pipelines.
     from agm.agl.eval.values import JsonValue
@@ -2460,7 +2451,7 @@ status
     first_err = errors_val.raw[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
-    # Legacy message: 'Unknown "$case" \'Bogus\' for enum \'Status\'. Valid variants: Ok, Err.'
+    # The message identifies the bad case and lists the valid variants.
     assert 'Unknown "$case"' in msg
     assert "Bogus" in msg
     assert "Status" in msg
@@ -2468,8 +2459,8 @@ status
     assert "Err" in msg
 
 
-def test_enum_missing_field_exhausted_oracle_parity() -> None:
-    """Enum ask exhausted: known $case but missing field → validation_errors match legacy.
+def test_enum_missing_field_exhausted_ir_semantic_parity() -> None:
+    """Enum ask exhausted: known $case but missing field → validation_errors match ir_reference.
 
     The harness already asserts byte-identical parity.  We additionally document
     and verify the exact message and field content for the missing-field shape.
@@ -2483,11 +2474,11 @@ agent checker
 let status: Status = ask("Check.", agent: checker)
 status
 """
-    legacy_exc, ir_exc = assert_oracle_raises_with_agents(
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"checker": ['{"$case": "Err"}']},
     )
-    assert legacy_exc.display_name == "AgentParseError"
+    assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
 
     from agm.agl.eval.values import JsonValue
@@ -2499,30 +2490,31 @@ status
     first_err = errors_val.raw[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
-    # Legacy message: "Enum variant 'Err' is missing field 'msg'."
+    # IR reference message: "Enum variant 'Err' is missing field 'msg'."
     assert "Err" in msg
     assert "msg" in msg
     assert "missing" in msg.lower()
     # field attribute must name the missing field.
     assert first_err.get("field") == "msg"
 
-    # Parity: legacy must match IR exactly (harness already asserts, but be explicit).
-    legacy_errors_val = legacy_exc.fields.get("validation_errors")
-    assert isinstance(legacy_errors_val, JsonValue)
-    legacy_first = legacy_errors_val.raw[0]
-    assert isinstance(legacy_first, dict)
-    assert legacy_first.get("message") == msg, (
-        f"Message parity failed:\n  legacy: {legacy_first.get('message')!r}\n  ir: {msg!r}"
+    # Parity: ir_reference must match IR exactly (harness already asserts, but be explicit).
+    ir_reference_errors_val = ir_reference_exc.fields.get("validation_errors")
+    assert isinstance(ir_reference_errors_val, JsonValue)
+    ir_reference_first = ir_reference_errors_val.raw[0]
+    assert isinstance(ir_reference_first, dict)
+    assert ir_reference_first.get("message") == msg, (
+        "Message mismatch:\n"
+        f"  reference: {ir_reference_first.get('message')!r}\n  actual: {msg!r}"
     )
-    assert legacy_first.get("field") == first_err.get("field")
+    assert ir_reference_first.get("field") == first_err.get("field")
 
 
-def test_enum_unexpected_field_exhausted_oracle_parity() -> None:
-    """Enum ask exhausted: known $case but unexpected field → validation_errors match legacy.
+def test_enum_unexpected_field_exhausted_ir_semantic_parity() -> None:
+    """Enum ask exhausted: known $case but unexpected field → validation_errors match ir_reference.
 
     The harness already asserts byte-identical parity.  We additionally document
     and verify the exact message and field content for the unexpected-field shape.
-    Legacy sets field=key for unknown_field records (not None).
+    IR reference sets field=key for unknown_field records (not None).
     """
     source = """\
 enum Status
@@ -2533,11 +2525,11 @@ agent checker
 let status: Status = ask("Check.", agent: checker)
 status
 """
-    legacy_exc, ir_exc = assert_oracle_raises_with_agents(
+    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"checker": ['{"$case": "Ok", "extra_field": 42}']},
     )
-    assert legacy_exc.display_name == "AgentParseError"
+    assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
 
     from agm.agl.eval.values import JsonValue
@@ -2549,19 +2541,20 @@ status
     first_err = errors_val.raw[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
-    # Legacy message: "Enum variant 'Ok' has an unexpected field 'extra_field'."
+    # IR reference message: "Enum variant 'Ok' has an unexpected field 'extra_field'."
     assert "Ok" in msg
     assert "extra_field" in msg
     assert "unexpected" in msg.lower()
-    # Legacy sets field=key (the unexpected field name).
+    # IR reference sets field=key (the unexpected field name).
     assert first_err.get("field") == "extra_field"
 
-    # Parity: legacy must match IR exactly.
-    legacy_errors_val = legacy_exc.fields.get("validation_errors")
-    assert isinstance(legacy_errors_val, JsonValue)
-    legacy_first = legacy_errors_val.raw[0]
-    assert isinstance(legacy_first, dict)
-    assert legacy_first.get("message") == msg, (
-        f"Message parity failed:\n  legacy: {legacy_first.get('message')!r}\n  ir: {msg!r}"
+    # Parity: ir_reference must match IR exactly.
+    ir_reference_errors_val = ir_reference_exc.fields.get("validation_errors")
+    assert isinstance(ir_reference_errors_val, JsonValue)
+    ir_reference_first = ir_reference_errors_val.raw[0]
+    assert isinstance(ir_reference_first, dict)
+    assert ir_reference_first.get("message") == msg, (
+        "Message mismatch:\n"
+        f"  reference: {ir_reference_first.get('message')!r}\n  actual: {msg!r}"
     )
-    assert legacy_first.get("field") == first_err.get("field")
+    assert ir_reference_first.get("field") == first_err.get("field")

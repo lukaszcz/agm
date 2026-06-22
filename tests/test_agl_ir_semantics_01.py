@@ -1,6 +1,6 @@
-"""M2 differential oracle — coercion round-trip proof corpus.
+"""M2 differential ir_semantic — coercion round-trip proof corpus.
 
-Each test runs both the legacy AST interpreter and the new IR pipeline
+Each test runs both the ir_reference AST interpreter and the new IR pipeline
 (lower_program → IrInterpreter) on a source program from the M2 node subset
 and asserts they produce identical final binding snapshots.
 
@@ -8,8 +8,7 @@ Where noted, a test also structurally asserts that the lowered IR contains
 the expected ``IrCoerce``/``Coercion`` node (complementing the M2-A golden
 tests in ``test_agl_lower.py``).
 
-Marker: ``@pytest.mark.oracle``.  All tests run in the normal ``just test``
-suite; the marker is for optional selection only (``pytest -m oracle``).
+suite; the marker is for optional selection only (``pytest -m ir_semantic``).
 
 Coercion families covered
 --------------------------
@@ -37,8 +36,6 @@ from __future__ import annotations
 
 import decimal
 
-import pytest
-
 from agm.agl.eval.values import (
     DecimalValue,
     DictValue,
@@ -55,8 +52,7 @@ from agm.agl.lower import lower_program
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.typecheck import check
-from tests.agl.oracle import assert_oracle_agrees
-from tests.agl.oracle.harness import m2_caps
+from tests.agl.ir_harness import evaluate_ir, m2_caps
 
 # ---------------------------------------------------------------------------
 # Shared pipeline helper for structural IR assertions
@@ -65,7 +61,7 @@ from tests.agl.oracle.harness import m2_caps
 
 def _lower(source: str) -> ExecutableProgram:
     checked = check(resolve(parse_program(source)), m2_caps())
-    return lower_program(checked, source_text=source, source_label="<oracle>", validate=True)
+    return lower_program(checked, source_text=source, source_label="<ir_semantic>", validate=True)
 
 
 # ---------------------------------------------------------------------------
@@ -73,12 +69,11 @@ def _lower(source: str) -> ExecutableProgram:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_identity_int_let() -> None:
     """let x: int = 5  — no coercion, both evaluators return IntValue(5)."""
     source = "let x: int = 5\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == IntValue(5)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == IntValue(5)
     assert ir["x"] == IntValue(5)
 
     # Structural: the IR bind value is a plain IrConstInt (no IrCoerce).
@@ -89,21 +84,19 @@ def test_identity_int_let() -> None:
     assert not isinstance(bind.value, IrCoerce)
 
 
-@pytest.mark.oracle
 def test_identity_text_let() -> None:
     """let s: text = \"hello\"  — no coercion."""
     source = 'let s: text = "hello"\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["s"] == TextValue("hello")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["s"] == TextValue("hello")
     assert ir["s"] == TextValue("hello")
 
 
-@pytest.mark.oracle
 def test_identity_list_int() -> None:
     """let xs: list[int] = [1, 2, 3]  — no coercion at element or list level."""
     source = "let xs: list[int] = [1, 2, 3]\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
     assert ir["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
 
     # Structural: no IrCoerce around the IrMakeList.
@@ -116,12 +109,11 @@ def test_identity_list_int() -> None:
         assert not isinstance(item, IrCoerce)
 
 
-@pytest.mark.oracle
 def test_identity_dict_text_int() -> None:
     """let d: dict[text, int] = {\"a\": 1}  — no coercion."""
     source = 'let d: dict[text, int] = {"a": 1}\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["d"] == DictValue({"a": IntValue(1)})
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["d"] == DictValue({"a": IntValue(1)})
     assert ir["d"] == DictValue({"a": IntValue(1)})
 
 
@@ -130,12 +122,11 @@ def test_identity_dict_text_int() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_int_to_decimal_scalar() -> None:
     """let d: decimal = 1  — scalar IntToDecimal coercion at the binding level."""
     source = "let d: decimal = 1\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["d"] == DecimalValue(decimal.Decimal(1))
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["d"] == DecimalValue(decimal.Decimal(1))
     assert ir["d"] == DecimalValue(decimal.Decimal(1))
 
     # Structural: the bind value is IrCoerce(IrConstInt, IntToDecimal).
@@ -148,11 +139,10 @@ def test_int_to_decimal_scalar() -> None:
     assert coerce.operation == IntToDecimal()
 
 
-@pytest.mark.oracle
 def test_int_to_decimal_zero() -> None:
     """let z: decimal = 0  — widening of zero."""
     source = "let z: decimal = 0\n()"
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["z"] == DecimalValue(decimal.Decimal(0))
 
 
@@ -161,11 +151,10 @@ def test_int_to_decimal_zero() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_list_decimal_element_coercion() -> None:
     """let xs: list[decimal] = [1, 2, 3]  — each element gets IntToDecimal."""
     source = "let xs: list[decimal] = [1, 2, 3]\n()"
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     expected: Value = ListValue(
         (
             DecimalValue(decimal.Decimal(1)),
@@ -173,7 +162,7 @@ def test_list_decimal_element_coercion() -> None:
             DecimalValue(decimal.Decimal(3)),
         )
     )
-    assert legacy["xs"] == expected
+    assert ir_reference["xs"] == expected
     assert ir["xs"] == expected
 
     # Structural: elements inside IrMakeList are wrapped in IrCoerce(IntToDecimal).
@@ -206,14 +195,13 @@ def test_list_decimal_element_coercion() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_list_ref_identity_no_coercion() -> None:
     """let a: list[int] = [1, 2]; let b: list[int] = a  — exact type, no coercion."""
     source = "let a: list[int] = [1, 2]\nlet b: list[int] = a\n()"
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     expected: Value = ListValue((IntValue(1), IntValue(2)))
-    assert legacy["a"] == expected
-    assert legacy["b"] == expected
+    assert ir_reference["a"] == expected
+    assert ir_reference["b"] == expected
     assert ir["a"] == expected
     assert ir["b"] == expected
 
@@ -227,13 +215,12 @@ def test_list_ref_identity_no_coercion() -> None:
     assert isinstance(bind_b.value, IrLoad)
 
 
-@pytest.mark.oracle
 def test_dict_ref_identity_no_coercion() -> None:
     """let a: dict[text, int] = {\"x\": 1}; let b: dict[text, int] = a  — no coercion."""
     source = 'let a: dict[text, int] = {"x": 1}\nlet b: dict[text, int] = a\n()'
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     expected: Value = DictValue({"x": IntValue(1)})
-    assert legacy["b"] == expected
+    assert ir_reference["b"] == expected
     assert ir["b"] == expected
 
 
@@ -244,12 +231,11 @@ def test_dict_ref_identity_no_coercion() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_list_int_ref_to_json() -> None:
     """let a: list[int] = [1, 2]; let j: json = a  — whole list coerced via ToJson."""
     source = "let a: list[int] = [1, 2]\nlet j: json = a\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["j"] == JsonValue([1, 2])
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["j"] == JsonValue([1, 2])
     assert ir["j"] == JsonValue([1, 2])
 
     # Structural: IrBind for j wraps IrLoad(a) in IrCoerce(ToJson).
@@ -270,30 +256,27 @@ def test_list_int_ref_to_json() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_to_json_scalar_int() -> None:
     """let j: json = 42  — scalar int wrapped in JsonValue."""
     source = "let j: json = 42\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["j"] == JsonValue(42)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["j"] == JsonValue(42)
     assert ir["j"] == JsonValue(42)
 
 
-@pytest.mark.oracle
 def test_to_json_scalar_text() -> None:
     """let j: json = \"hello\"  — scalar text wrapped in JsonValue."""
     source = 'let j: json = "hello"\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["j"] == JsonValue("hello")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["j"] == JsonValue("hello")
     assert ir["j"] == JsonValue("hello")
 
 
-@pytest.mark.oracle
 def test_to_json_null() -> None:
     """let j: json = null  — null is already JSON; no coercion needed."""
     source = "let j: json = null\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["j"] == JsonValue(None)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["j"] == JsonValue(None)
     assert ir["j"] == JsonValue(None)
 
 
@@ -302,12 +285,11 @@ def test_to_json_null() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_to_json_list_literal() -> None:
     """let j: json = [1, 2]  — list[int] literal coerced to JsonValue."""
     source = "let j: json = [1, 2]\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["j"] == JsonValue([1, 2])
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["j"] == JsonValue([1, 2])
     assert ir["j"] == JsonValue([1, 2])
 
     # Structural: the whole IrMakeList is wrapped in IrCoerce(ToJson).
@@ -326,12 +308,11 @@ def test_to_json_list_literal() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_dict_text_json_from_int_values() -> None:
     """let m: dict[text, json] = {\"a\": 1}  — dict values coerced to JSON."""
     source = 'let m: dict[text, json] = {"a": 1}\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["m"] == DictValue({"a": JsonValue(1)})
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["m"] == DictValue({"a": JsonValue(1)})
     assert ir["m"] == DictValue({"a": JsonValue(1)})
 
     # Structural: the IrMakeDict entry VALUE nodes are wrapped in IrCoerce(ToJson).
@@ -351,12 +332,11 @@ def test_dict_text_json_from_int_values() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_to_json_dict_literal_as_json() -> None:
     """let r: json = {\"x\": 1}  — dict literal coerced to JsonValue."""
     source = 'let r: json = {"x": 1}\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == JsonValue({"x": 1})
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == JsonValue({"x": 1})
     assert ir["r"] == JsonValue({"x": 1})
 
 
@@ -369,12 +349,11 @@ def test_to_json_dict_literal_as_json() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_dict_int_ref_to_json() -> None:
     """let a: dict[text, int] = {\"k\": 5}; let j: json = a  — whole dict coerced via ToJson."""
     source = 'let a: dict[text, int] = {"k": 5}\nlet j: json = a\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["j"] == JsonValue({"k": 5})
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["j"] == JsonValue({"k": 5})
     assert ir["j"] == JsonValue({"k": 5})
 
     # Structural: IrCoerce(ToJson) around the IrLoad(a).
@@ -395,7 +374,6 @@ def test_dict_int_ref_to_json() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_nested_list_dict_decimal() -> None:
     """let n: list[dict[text, decimal]] = [{\"a\": 1}].
 
@@ -403,19 +381,18 @@ def test_nested_list_dict_decimal() -> None:
     each dict element of the outer list.
     """
     source = 'let n: list[dict[text, decimal]] = [{"a": 1}]\n()'
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     expected: Value = ListValue((DictValue({"a": DecimalValue(decimal.Decimal(1))}),))
-    assert legacy["n"] == expected
+    assert ir_reference["n"] == expected
     assert ir["n"] == expected
 
 
-@pytest.mark.oracle
 def test_nested_list_dict_json() -> None:
     """let n: list[dict[text, json]] = [{\"a\": 1, \"b\": true}]."""
     source = 'let n: list[dict[text, json]] = [{"a": 1, "b": true}]\n()'
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     expected: Value = ListValue((DictValue({"a": JsonValue(1), "b": JsonValue(True)}),))
-    assert legacy["n"] == expected
+    assert ir_reference["n"] == expected
     assert ir["n"] == expected
 
 
@@ -424,30 +401,27 @@ def test_nested_list_dict_json() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_var_assign_int_to_decimal() -> None:
     """var x: decimal = 0; x := 5  — coercion on both initial binding and assignment."""
     source = "var x: decimal = 0\nx := 5\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == DecimalValue(decimal.Decimal(5))
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == DecimalValue(decimal.Decimal(5))
     assert ir["x"] == DecimalValue(decimal.Decimal(5))
 
 
-@pytest.mark.oracle
 def test_var_assign_preserves_type() -> None:
     """var x: decimal = 1.5; x := 2  — init is decimal literal, assign coerces int."""
     source = "var x: decimal = 1.5\nx := 2\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == DecimalValue(decimal.Decimal(2))
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == DecimalValue(decimal.Decimal(2))
     assert ir["x"] == DecimalValue(decimal.Decimal(2))
 
 
-@pytest.mark.oracle
 def test_var_assign_multiple_coercions() -> None:
     """var x: decimal = 0; x := 1; x := 2  — repeated coerced assignments."""
     source = "var x: decimal = 0\nx := 1\nx := 2\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == DecimalValue(decimal.Decimal(2))
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == DecimalValue(decimal.Decimal(2))
     assert ir["x"] == DecimalValue(decimal.Decimal(2))
 
 
@@ -456,7 +430,6 @@ def test_var_assign_multiple_coercions() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_multiple_coercions_in_one_program() -> None:
     """Program with several binding coercions; all must agree."""
     source = (
@@ -466,7 +439,7 @@ def test_multiple_coercions_in_one_program() -> None:
         'let d: dict[text, json] = {"x": 5}\n'
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["a"] == DecimalValue(decimal.Decimal(1))
     assert ir["b"] == ListValue(
         (DecimalValue(decimal.Decimal(2)), DecimalValue(decimal.Decimal(3)))
@@ -480,12 +453,11 @@ def test_multiple_coercions_in_one_program() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_var_binding_no_assign() -> None:
     """var x: int = 7  — mutable binding, no reassignment, both return 7."""
     source = "var x: int = 7\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == IntValue(7)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == IntValue(7)
     assert ir["x"] == IntValue(7)
 
 
@@ -494,21 +466,19 @@ def test_var_binding_no_assign() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_empty_list() -> None:
     """let xs: list[int] = []  — empty list; no coercions."""
     source = "let xs: list[int] = []\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["xs"] == ListValue(())
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["xs"] == ListValue(())
     assert ir["xs"] == ListValue(())
 
 
-@pytest.mark.oracle
 def test_empty_dict() -> None:
     """let d: dict[text, int] = {}  — empty dict; no coercions."""
     source = "let d: dict[text, int] = {}\n()"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["d"] == DictValue({})
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["d"] == DictValue({})
     assert ir["d"] == DictValue({})
 
 
@@ -517,7 +487,6 @@ def test_empty_dict() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_coercion_evaluates_operand_once() -> None:
     """Coercion does not duplicate evaluation of its operand.
 
@@ -525,7 +494,7 @@ def test_coercion_evaluates_operand_once() -> None:
     of this property (observable side effects fired exactly once) cannot be
     violated.  Both evaluators produce the same value, proving the coercion
     path is correct.  The stronger test (with counters/exec side-effects) is
-    deferred to M7 when the oracle gains trace comparison.
+    deferred to M7 when the ir_semantic gains trace comparison.
 
     We exercise this with a multi-step program where each binding's RHS is a
     constant; both evaluators must agree on all values.
@@ -536,7 +505,7 @@ def test_coercion_evaluates_operand_once() -> None:
         "let c: list[decimal] = [a, b]\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["a"] == DecimalValue(decimal.Decimal(10))
     assert ir["b"] == DecimalValue(decimal.Decimal(20))
     assert ir["c"] == ListValue(
@@ -549,10 +518,9 @@ def test_coercion_evaluates_operand_once() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_list_text_to_list_json_element_coercion() -> None:
     """let xs: list[json] = [\"a\", \"b\"]  — element-level ToJson."""
     source = 'let xs: list[json] = ["a", "b"]\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["xs"] == ListValue((JsonValue("a"), JsonValue("b")))
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["xs"] == ListValue((JsonValue("a"), JsonValue("b")))
     assert ir["xs"] == ListValue((JsonValue("a"), JsonValue("b")))

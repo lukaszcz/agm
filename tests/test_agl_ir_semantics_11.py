@@ -1,4 +1,4 @@
-"""Oracle tests for M4b: lambdas, indirect (function-value) calls, first-class functions.
+"""IR semantic tests for M4b: lambdas, indirect (function-value) calls, first-class functions.
 
 Covers:
 1. Lambda with explicit return type bound to let, then called
@@ -26,9 +26,7 @@ from agm.agl.lower import lower_program
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.typecheck import check
-from tests.agl.oracle.harness import assert_oracle_agrees, assert_oracle_raises, m2_caps
-
-pytestmark = pytest.mark.oracle
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, m2_caps
 
 
 def test_top_level_call_can_reference_later_function() -> None:
@@ -41,8 +39,8 @@ def first(n: int) -> int =
 def second(n: int) -> int =
   n * 2
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["answer"] == ir["answer"] == IntValue(41)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["answer"] == ir["answer"] == IntValue(41)
 
 
 def test_function_mutates_module_var_without_capture() -> None:
@@ -55,8 +53,8 @@ def increment() -> unit =
 increment()
 increment()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["count"] == ir["count"] == IntValue(2)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["count"] == ir["count"] == IntValue(2)
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +69,7 @@ def test_lambda_explicit_return_type() -> None:
         "let r = dbl(4)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)
 
 
@@ -87,7 +85,7 @@ def test_lambda_inferred_return_type() -> None:
         "let r = inc(9)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(10)
 
 
@@ -107,7 +105,7 @@ def test_def_bound_to_typed_let_indirect_call() -> None:
         "let r3 = g(0)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r1"] == TextValue("pos")
     assert ir["r2"] == TextValue("neg")
     assert ir["r3"] == TextValue("zero")
@@ -128,7 +126,7 @@ def test_higher_order_apply() -> None:
         "let r2 = apply(classify, -5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r1"] == TextValue("pos")
     assert ir["r2"] == TextValue("neg")
 
@@ -146,7 +144,7 @@ def test_returned_lambda_called() -> None:
         "let r = add5(3)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)
 
 
@@ -160,7 +158,7 @@ def test_returned_def_called() -> None:
         "let r = f(7)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(14)
 
 
@@ -177,7 +175,7 @@ def test_capture_through_def_param() -> None:
         "let r = add10(3)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(13)
 
 
@@ -191,7 +189,7 @@ def test_capture_through_def_local_let() -> None:
         "let r = triple_base(5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(30)
 
 
@@ -207,7 +205,7 @@ def test_capture_through_var_by_cell() -> None:
         "let r = getter(())\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)
 
 
@@ -216,7 +214,7 @@ def test_capture_through_var_by_cell() -> None:
 # ---------------------------------------------------------------------------
 #
 # Root cause: indirect calls previously lowered args with lower_expr (no coercion)
-# while legacy compensates via a runtime result-coercion in _apply_closure.  The IR
+# while ir_reference compensates via a runtime result-coercion in _apply_closure.  The IR
 # statically elides the result coercion when body-type == return-type, so an int
 # literal passed to a decimal param leaks as IntValue instead of DecimalValue.
 # Fix: lower indirect args with lower_coerced(arg, param_type) just like direct calls.
@@ -225,7 +223,7 @@ def test_capture_through_var_by_cell() -> None:
 def test_value_call_int_arg_to_decimal_param() -> None:
     """Indirect call passing an int literal to a decimal param must yield DecimalValue.
 
-    Regression for BLOCKER bug: IR previously yielded IntValue(5) while legacy
+    Regression for BLOCKER bug: IR previously yielded IntValue(5) while ir_reference
     yielded DecimalValue(5).  Both evaluators must now agree on DecimalValue.
     """
     source = (
@@ -233,7 +231,7 @@ def test_value_call_int_arg_to_decimal_param() -> None:
         "let r = f(5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("5"))
 
 
@@ -241,7 +239,7 @@ def test_value_call_int_arg_to_json_param() -> None:
     """Indirect call passing an int literal to a json param must yield the JSON int.
 
     Regression for BLOCKER bug: same root cause as the decimal variant — IR used
-    to yield IntValue(5) while legacy yielded the json-wrapped integer.
+    to yield IntValue(5) while ir_reference yielded the json-wrapped integer.
     Both evaluators must agree.
     """
     from agm.agl.eval.values import JsonValue
@@ -251,7 +249,7 @@ def test_value_call_int_arg_to_json_param() -> None:
         "let r = f(5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == JsonValue(5)
 
 
@@ -269,7 +267,7 @@ def test_higher_order_indirect_arg_coercion() -> None:
         "let r = apply(identity, 7)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("7"))
 
 
@@ -290,10 +288,10 @@ def test_recursion_depth_via_indirect_call() -> None:
         "let r = f(0)\n"
         "()"
     )
-    legacy_exc, ir_exc = assert_oracle_raises(source)
-    assert legacy_exc.display_name == "RecursionError"
+    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
+    assert ir_reference_exc.display_name == "RecursionError"
     assert ir_exc.display_name == "RecursionError"
-    assert legacy_exc.fields["message"] == ir_exc.fields["message"]
+    assert ir_reference_exc.fields["message"] == ir_exc.fields["message"]
     assert ir_exc.fields["limit"] == IntValue(256)
 
 
@@ -333,7 +331,7 @@ def test_closure_valued_binding_normalized() -> None:
         "let r = f(3)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(6)
 
 
@@ -366,7 +364,7 @@ def test_function_values_program() -> None:
         "let r_apply_label = apply(label, -5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r_g7"] == TextValue("pos")
     assert ir["r_gm3"] == TextValue("neg")
     assert ir["r_g0"] == TextValue("zero")
@@ -388,7 +386,7 @@ def test_lambda_with_decimal_return() -> None:
         "let r = to_dec(3)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("3"))
 
 
@@ -401,7 +399,7 @@ def test_lambda_called_multiple_times() -> None:
         "let c = square(5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["a"] == IntValue(9)
     assert ir["b"] == IntValue(16)
     assert ir["c"] == IntValue(25)
@@ -414,7 +412,7 @@ def test_lambda_passed_as_arg_to_higher_order() -> None:
         "let r = apply(fn(x: int) => x + 10, 5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(15)
 
 
@@ -425,7 +423,7 @@ def test_indirect_call_with_two_args() -> None:
         "let r = add(3, 4)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(7)
 
 
@@ -437,7 +435,7 @@ def test_function_value_captures_outer_let() -> None:
         "let r = add_offset(5)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(105)
 
 
@@ -452,7 +450,7 @@ def test_two_lambdas_independent_capture() -> None:
         "let rb = fb(1)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["ra"] == IntValue(11)
     assert ir["rb"] == IntValue(21)
 
@@ -471,5 +469,5 @@ def test_lambda_with_default_param() -> None:
         "let r = add(5, 3)\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)

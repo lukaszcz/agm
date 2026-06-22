@@ -17,7 +17,7 @@ Per-kind rules:
 - ``int`` / ``decimal`` / ``bool``     → ``_scalar_text`` at any depth
 - ``unit``                             → ``()``
 - ``agent``                            → ``<agent NAME>``
-- ``function`` (``Closure``)           → ``<function/N -> T>``
+- ``function``                         → ``<function/N -> T>``
 - ``json`` (top-level)                 → pretty JSON, 2-space indent
 - ``json`` (nested)                    → compact JSON, single-line
 - ``list``                             → ``[e1, e2, ...]``, children nested
@@ -36,7 +36,6 @@ from __future__ import annotations
 from agm.agl.eval.values import (
     AgentValue,
     BoolValue,
-    Closure,
     ConstructorValue,
     DecimalValue,
     DictValue,
@@ -106,23 +105,6 @@ def _scalar_text(value: IntValue | DecimalValue | BoolValue) -> str:
     return "true" if value.value else "false"
 
 
-def _closure_surface(closure: Closure) -> str:
-    """Return the human-readable surface form for a ``Closure`` value.
-
-    Uses only the fields the ``Closure`` carries: the arity (from ``params``)
-    and the declared return type (from ``return_type``).  The form is
-    ``"<function/N -> T>"`` where N is the parameter count and T is the return
-    type's canonical representation.
-
-    This surface form is produced ONLY by ``render_value`` for REPL echo and
-    ``:bindings``/``:params`` display — it is never reachable from ``print``,
-    template interpolation, or ``exec``, which the type checker statically
-    prevents (design D9).
-    """
-    arity = len(closure.params)
-    return f"<function/{arity} -> {closure.return_type!r}>"
-
-
 # ---------------------------------------------------------------------------
 # Core recursive renderer
 # ---------------------------------------------------------------------------
@@ -156,9 +138,6 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
         if value.variant is not None:
             return f"<constructor {value.display_name}.{value.variant}>"
         return f"<constructor {value.display_name}>"
-
-    if isinstance(value, Closure):
-        return _closure_surface(value)
 
     if isinstance(value, IrClosureValue):
         return f"<function/{value.arity} -> {value.result_label}>"

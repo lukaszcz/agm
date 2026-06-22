@@ -1,22 +1,12 @@
-"""AgL runtime value hierarchy — full union including container and nominal types.
+"""AgL runtime value hierarchy for the typeless IR evaluator.
 
 The leaf value tags (``TextValue``, ``IntValue``, etc.) live in the canonical,
 frontend-free home ``agm.agl.values``; this module re-exports them for backward
 compatibility so that all existing ``from agm.agl.eval.values import ...`` sites
 keep working unchanged.
 
-Container types (``ListValue``, ``DictValue``) and nominal types
-(``RecordValue``, ``EnumValue``, ``ExceptionValue``) whose payloads reference
-the broad ``Value`` union are defined HERE.  They migrate to ``agm.agl.values``
-in Milestone M4 when the closure/constructor forms become AST-free.
-
-``Closure`` and ``ConstructorValue`` are AST/Type/Scope-coupled and remain
-defined here until Milestone M4.
-
-The **broad** ``Value`` union defined here includes container/nominal types,
-``Closure`` and ``ConstructorValue`` in addition to the leaf tags; the **narrow**
-union in ``agm.agl.values`` has only the leaf tags.  Both are intentional during
-the migration period and collapse in M4/M9.
+Container, nominal, constructor, and IR closure forms live here because their
+recursive payloads reference the broad ``Value`` union.
 """
 
 from __future__ import annotations
@@ -47,12 +37,9 @@ from agm.agl.values import (
 
 if TYPE_CHECKING:
     from agm.agl.eval.frames import Slot
-    from agm.agl.eval.scope import Scope
-    from agm.agl.syntax.nodes import Expr
-    from agm.agl.typecheck.types import Type
 
 # ---------------------------------------------------------------------------
-# AST/Type/Scope-coupled value types (stay here until M4)
+# Callable value types
 # ---------------------------------------------------------------------------
 
 
@@ -77,28 +64,6 @@ class ConstructorValue:
     nominal: NominalId
     display_name: str = field(compare=False, hash=False)
     variant: str | None
-
-
-@dataclass(slots=True)
-class Closure:
-    """A first-class function value — a lambda or def closure.
-
-    ``env`` is the scope captured at closure creation time.
-    ``params`` is an ordered tuple of (name, default_expr_or_None) pairs.
-    ``body`` is the unevaluated body expression.
-    ``return_type`` is the declared return type (used for coercion).
-    """
-
-    env: "Scope"
-    params: "tuple[tuple[str, Expr | None], ...]"
-    body: "Expr"
-    return_type: "Type"
-
-    def __eq__(self, other: object) -> bool:
-        return self is other
-
-    def __hash__(self) -> int:
-        return id(self)
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +231,7 @@ class IrClosureValue:
 
 
 # ---------------------------------------------------------------------------
-# Broad Value union (legacy interpreter union — includes all types)
+# Broad runtime value union
 # ---------------------------------------------------------------------------
 
 Value: TypeAlias = (
@@ -283,7 +248,6 @@ Value: TypeAlias = (
     | UnitValue
     | AgentValue
     | ConstructorValue
-    | Closure
     | IrClosureValue
 )
 
@@ -292,7 +256,6 @@ __all__ = [
     "AgentValue",
     "BaseValue",
     "BoolValue",
-    "Closure",
     "IrClosureValue",
     "ConstructorValue",
     "DecimalValue",

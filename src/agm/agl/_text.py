@@ -1,7 +1,7 @@
 """Shared text helpers for the AgL pipeline.
 
 This is a small, dependency-free leaf module so that *both* the lexer
-(``agm.agl.lexer.scanner``) and the evaluator (``agm.agl.eval.interpreter``)
+(``agm.agl.lexer.scanner``) and lowering/runtime diagnostics
 can share the universal-newline normalization without either depending on the
 other (the eval pass must never import the lexer — see ``agm/agl/CLAUDE.md``).
 """

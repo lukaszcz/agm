@@ -3,7 +3,7 @@
 Per-invocation frame
 --------------------
 A runtime frame is a ``dict[SymbolId, Slot]`` — one per function invocation.
-In M2 there is exactly one frame: the entry-module frame.
+The base frame holds module state and each function invocation adds one frame.
 
 Slot kinds (D5):
 - ``let`` (immutable) symbol → the slot holds a ``Value`` directly (by value).
@@ -12,8 +12,7 @@ Slot kinds (D5):
 
 ``Cell`` wraps a ``Value`` and supports in-place update.  Closures capture a
 ``var`` by capturing the ``Cell`` reference so that mutations remain visible
-through the closure (full wiring arrives in M4; the cell box is established
-here).
+through the closure.
 
 ``Slot`` is the type alias used by the frame dict values.  It is NOT a class —
 use ``isinstance(slot, Cell)`` to discriminate.

@@ -1,6 +1,6 @@
 """Shared pinned decimal context for all AgL arithmetic.
 
-All AgL evaluation (legacy interpreter and the new IrInterpreter) MUST perform
+All AgL evaluation through ``IrInterpreter`` MUST perform
 arithmetic under this context so that results are independent of the host's
 ambient ``decimal`` context.
 
@@ -15,9 +15,7 @@ import decimal
 
 #: Pinned decimal context for all AgL arithmetic.
 #:
-#: Shared between ``agm.agl.eval.interpreter`` (legacy tree-walker) and
-#: ``agm.agl.eval.ir_interpreter`` (new IR evaluator) to guarantee identical
-#: numeric semantics without re-deriving the constant.
+#: Used by ``agm.agl.eval.ir_interpreter`` for stable numeric semantics.
 AGL_DECIMAL_CONTEXT: decimal.Context = decimal.Context(
     prec=28, rounding=decimal.ROUND_HALF_EVEN
 )

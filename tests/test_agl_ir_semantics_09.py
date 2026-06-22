@@ -1,4 +1,4 @@
-"""Oracle tests for M3f-C: do…until loop → IrLoop.
+"""IR semantic tests for M3f-C: do…until loop → IrLoop.
 
 Covers:
 - A do loop with an explicit small limit that terminates via until (body
@@ -29,13 +29,12 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
-from tests.agl.oracle.harness import assert_oracle_agrees, assert_oracle_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-pytestmark = pytest.mark.oracle
 
 _SRC_ID = SourceId(0)
 _DUMMY_LOC = Location(
@@ -53,7 +52,7 @@ def _lower(source: str) -> ExecutableProgram:
     from agm.agl.parser import parse_program
     from agm.agl.scope import resolve
     from agm.agl.typecheck import check
-    from tests.agl.oracle.harness import m2_caps
+    from tests.agl.ir_harness import m2_caps
 
     checked = check(resolve(parse_program(source)), m2_caps())
     return lower_program(
@@ -96,11 +95,11 @@ def _make_minimal_program(
 
 
 # ---------------------------------------------------------------------------
-# Oracle: loop terminates via until (explicit limit, body mutates var)
+# IR semantic: loop terminates via until (explicit limit, body mutates var)
 # ---------------------------------------------------------------------------
 
 
-def test_oracle_loop_terminates_explicit_limit() -> None:
+def test_ir_semantic_loop_terminates_explicit_limit() -> None:
     """do[10] body until cond — terminates after body mutates var; yields unit.
 
     AgL uses `=` for equality, `:=` for assignment, `>=` for ordering.
@@ -114,18 +113,18 @@ def test_oracle_loop_terminates_explicit_limit() -> None:
         "until counter >= 3\n"
         "counter\n"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     # The loop runs 3 iterations: counter goes 1 → 2 → 3; condition true at end of
     # iteration 3 → loop exits.
     assert ir["counter"] == IntValue(3)
 
 
 # ---------------------------------------------------------------------------
-# Oracle: loop terminates via until, body-bound var readable by condition
+# IR semantic: loop terminates via until, body-bound var readable by condition
 # ---------------------------------------------------------------------------
 
 
-def test_oracle_loop_body_bindings_visible_to_condition() -> None:
+def test_ir_semantic_loop_body_bindings_visible_to_condition() -> None:
     """Condition reads a var declared before the loop; body updates it."""
     source = (
         "var x = 0\n"
@@ -134,16 +133,16 @@ def test_oracle_loop_body_bindings_visible_to_condition() -> None:
         "until x >= 4\n"
         "x\n"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["x"] == IntValue(4)
 
 
 # ---------------------------------------------------------------------------
-# Oracle: loop terminates without explicit limit (uses evaluator default)
+# IR semantic: loop terminates without explicit limit (uses evaluator default)
 # ---------------------------------------------------------------------------
 
 
-def test_oracle_loop_no_explicit_limit_terminates() -> None:
+def test_ir_semantic_loop_no_explicit_limit_terminates() -> None:
     """do body until cond (no explicit limit) — terminates before the default 100."""
     source = (
         "var n = 0\n"
@@ -152,24 +151,24 @@ def test_oracle_loop_no_explicit_limit_terminates() -> None:
         "until n >= 5\n"
         "n\n"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["n"] == IntValue(5)
 
 
 # ---------------------------------------------------------------------------
-# Oracle: loop exhaustion → MaxIterationsExceeded with matching fields
+# IR semantic: loop exhaustion → MaxIterationsExceeded with matching fields
 # ---------------------------------------------------------------------------
 
 
-def test_oracle_loop_exhaustion_raises() -> None:
+def test_ir_semantic_loop_exhaustion_raises() -> None:
     """do[3] body until false raises MaxIterationsExceeded; all fields match."""
     # Use a small explicit limit so the test is fast.
     # Top level: must end in an expression, but the loop raises before we get there.
     source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
-    legacy_exc, ir_exc = assert_oracle_raises(source)
+    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
 
     # Both sides raise MaxIterationsExceeded.
-    assert legacy_exc.display_name == "MaxIterationsExceeded"
+    assert ir_reference_exc.display_name == "MaxIterationsExceeded"
     assert ir_exc.display_name == "MaxIterationsExceeded"
 
     # The condition field must be the source-text slice of the condition expression.
@@ -181,22 +180,22 @@ def test_oracle_loop_exhaustion_raises() -> None:
 
     # limit field must be IntValue(3) on both sides.
     assert ir_exc.fields.get("limit") == IntValue(3)
-    assert legacy_exc.fields.get("limit") == IntValue(3)
+    assert ir_reference_exc.fields.get("limit") == IntValue(3)
 
     # last_condition_value must be BoolValue(False) on both sides.
     assert ir_exc.fields.get("last_condition_value") == BoolValue(False)
-    assert legacy_exc.fields.get("last_condition_value") == BoolValue(False)
+    assert ir_reference_exc.fields.get("last_condition_value") == BoolValue(False)
 
     # metadata must be JsonValue(None).
     assert ir_exc.fields.get("metadata") == JsonValue(None)
 
 
 # ---------------------------------------------------------------------------
-# Oracle: condition source-text slice matches legacy _source_slice
+# IR semantic: condition source-text slice matches ir_reference _source_slice
 # ---------------------------------------------------------------------------
 
 
-def test_oracle_condition_source_slice_complex() -> None:
+def test_ir_semantic_condition_source_slice_complex() -> None:
     """Condition source text captures the exact condition expression text."""
     source = (
         "var i = 0\n"
@@ -205,7 +204,7 @@ def test_oracle_condition_source_slice_complex() -> None:
         "until i > 10\n"
     )
     # This loop exhausts (i goes 1, 2 — never > 10 within 2 iterations).
-    legacy_exc, ir_exc = assert_oracle_raises(source)
+    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
 
     cond_field = ir_exc.fields.get("condition")
     assert isinstance(cond_field, TextValue)
@@ -213,9 +212,9 @@ def test_oracle_condition_source_slice_complex() -> None:
     assert cond_field.value == "i > 10", f"got: {cond_field.value!r}"
 
     # Both sides agree.
-    legacy_cond = legacy_exc.fields.get("condition")
-    assert isinstance(legacy_cond, TextValue)
-    assert legacy_cond.value == cond_field.value
+    ir_reference_cond = ir_reference_exc.fields.get("condition")
+    assert isinstance(ir_reference_cond, TextValue)
+    assert ir_reference_cond.value == cond_field.value
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +378,7 @@ def test_crlf_condition_source_is_normalized() -> None:
 
     Spans are computed by the lexer against newline-normalized source; the
     lowerer must normalize too, else the slice is offset by the stripped \\r
-    bytes.  Both pipelines must still agree (the legacy interpreter normalizes).
+    bytes.  Both pipelines must still agree (the ir_reference interpreter normalizes).
     """
     source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
     executable = _lower(source)
@@ -394,7 +393,7 @@ def test_crlf_condition_source_is_normalized() -> None:
 
     # And both evaluators raise an identical MaxIterationsExceeded (modulo trace_id),
     # including the condition source-text field.
-    legacy_exc, ir_exc = assert_oracle_raises(source)
-    assert legacy_exc.display_name == "MaxIterationsExceeded"
+    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
+    assert ir_reference_exc.display_name == "MaxIterationsExceeded"
     assert ir_exc.fields.get("condition") == TextValue("i > 100")
-    assert legacy_exc.fields.get("condition") == TextValue("i > 100")
+    assert ir_reference_exc.fields.get("condition") == TextValue("i > 100")

@@ -2361,26 +2361,26 @@ class TestDeriveSchema:
     """Unit tests for derive_schema covering all type branches."""
 
     def test_bool_type(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import BoolType
 
         assert derive_schema(BoolType()) == {"type": "boolean"}
 
     def test_json_type(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import JsonType
 
         assert derive_schema(JsonType()) == {}
 
     def test_dict_type(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import DictType, IntType
 
         result = derive_schema(DictType(value=IntType()))
         assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_type(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import RecordType, TextType
 
         result = derive_schema(RecordType(name="Point", fields={"x": TextType()}))
@@ -2389,7 +2389,7 @@ class TestDeriveSchema:
         assert result["additionalProperties"] is False
 
     def test_enum_type_with_payload(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import EnumType, TextType
 
         typ = EnumType(
@@ -2401,35 +2401,35 @@ class TestDeriveSchema:
         assert len(result["oneOf"]) == 2
 
     def test_exception_type_raises(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import ExceptionType
 
         with pytest.raises(TypeError, match="ExceptionType"):
             derive_schema(ExceptionType(name="MyErr", fields={}))
 
     def test_unit_type_raises(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import UnitType
 
         with pytest.raises(TypeError, match="UnitType"):
             derive_schema(UnitType())
 
     def test_agent_type_raises(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import AgentType
 
         with pytest.raises(TypeError, match="AgentType"):
             derive_schema(AgentType())
 
     def test_function_type_raises(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import FunctionType, TextType
 
         with pytest.raises(TypeError, match="FunctionType"):
             derive_schema(FunctionType(params=(TextType(),), result=TextType()))
 
     def test_bottom_type_raises(self) -> None:
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         from agm.agl.typecheck.types import BottomType
 
         with pytest.raises(TypeError, match="BottomType"):
@@ -2442,7 +2442,7 @@ class TestDeriveSchema:
 
 
 class TestSerializeV2OpaqueValues:
-    """UnitValue, AgentValue, and Closure have no JSON representation (D9)."""
+    """Unit, agent, and IR closure values have no JSON representation (D9)."""
 
     def test_unit_value_raises(self) -> None:
         from agm.agl.eval.values import UnitValue
@@ -2457,22 +2457,6 @@ class TestSerializeV2OpaqueValues:
 
         with pytest.raises(TypeError, match="AgentValue"):
             value_to_json_obj(AgentValue(name="myagent"))
-
-    def test_closure_raises(self) -> None:
-        from agm.agl.eval.scope import Scope
-        from agm.agl.eval.values import Closure
-        from agm.agl.parser import parse_program
-        from agm.agl.runtime.render import render_value
-        from agm.agl.runtime.serialize import value_to_json_obj
-        from agm.agl.typecheck.types import UnitType
-
-        body = parse_program("()").body.items[0]
-        closure = Closure(
-            env=Scope(parent=None), params=(), body=body, return_type=UnitType()
-        )
-        assert render_value(closure) == "<function/0 -> unit>"
-        with pytest.raises(TypeError, match="Closure"):
-            value_to_json_obj(closure)
 
     def test_ir_closure_value_raises(self) -> None:
         """IrClosureValue has no JSON representation — TypeError is raised."""

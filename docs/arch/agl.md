@@ -15,9 +15,8 @@ source (.agl)
         ↘ host runtime: agents, shell execution, codecs, trace store
 ```
 
-`WorkflowRuntime` always executes this pipeline. The legacy AST interpreter remains
-importable only for the differential oracle and the separately scheduled REPL migration;
-production whole-program and module-graph execution do not call it.
+`WorkflowRuntime` and the REPL always execute this pipeline. Linked IR is the only
+execution format; checked frontend objects are never evaluator inputs.
 
 ## Firewall rule
 
@@ -250,8 +249,8 @@ initializers, matching declaration hoisting and enabling forward references.
   contracts, and dry-run inventory.
 - `contracts.py` holds typeless `ContractRequest`, `ParamDecoder`, decode-schema,
   and conversion descriptors compiled while checker types are available.
-- `validate.py` checks identity references and structural IR invariants before
-  production execution.
+- `validate.py` is the single structural gate. It runs only when explicitly
+  requested at a lowering boundary; production evaluation does not invoke it implicitly.
 
 `agm.agl.eval.ir_interpreter.IrInterpreter` executes only those closed descriptors.
 Its frame stack uses values for immutable bindings and shared `Cell`s for mutable
@@ -268,45 +267,16 @@ format/schema metadata. `IrParam.external_decoder` performs host parameter decod
 without consulting checker binding types. Dry-run output is copied from the linked
 program's inventory rather than reconstructed from checker call-site tables.
 
-The legacy tree-walking evaluator in `agm.agl.eval.interpreter` is retained as a
-transition oracle. Oracle tests independently execute checked programs through the
-legacy AST path and the linked IR path, comparing public values, exception values
-(with nondeterministic trace ids normalized), stdout, and host-call behavior. It is
-not a production execution fallback.
+The package boundaries are enforced by `tests/test_agl_dependencies.py`:
 
-## Legacy evaluator model
+- `agm.agl.ir` imports only its own data modules and `agm.agl.modules.ids`.
+- `agm.agl.lower` may import syntax, scope, typecheck, IR, and the neutral
+  compile-time schema helper, but never evaluator or runtime execution modules.
+- `agm.agl.eval` may import IR, runtime services, runtime values, and module IDs,
+  but never syntax, scope, typecheck, or REPL modules.
 
-`agm.agl.eval` introduces three new value kinds in `agm.agl.eval.values`:
-
-- **`Closure`** — a captured definition environment, parameter list (with
-  resolved default expressions), and body expression. Top-level `def`s are
-  installed as `Closure` values during the evaluator's root pre-pass (enabling
-  mutual recursion without a separate linking step).
-- **`UnitValue`** — the single value of type `unit`; a module-level singleton
-  `UNIT_VALUE` is reused everywhere.
-- **`AgentValue`** — an opaque handle carrying the declared agent name; resolved
-  against the host agent registry at call time.
-- **`ConstructorValue`** — a first-class constructor used as a value, carrying
-  only owner/variant identity (no type args — erased). Calling it builds the
-  record/enum from **positional** arguments in declaration order, sourcing field
-  names/types from the type environment (`GenericTypeDef` template or concrete
-  type) rather than the call-site result type, which may be an erased type
-  variable when the constructor escapes through a higher-order function.
-
-**Type erasure**: generics carry no runtime representation. Generic `def`s are
-ordinary `Closure`s and `Call.type_args` is never evaluated.
-
-All calls go through the unified call dispatch in `Interpreter._eval_call`:
-
-1. Check `builtin_calls` for `PRINT`/`ASK`/`EXEC` and dispatch to the
-   appropriate built-in handler.
-2. Otherwise evaluate the callee to a `Closure`, bind positional and
-   named/defaulted arguments (defaults evaluated in the closure's captured
-   scope), open a call scope, and evaluate the body.
-3. Before entering a call frame, enforce the **call-depth limit** (default 256,
-   configurable via `max_call_depth`). Exceeding it raises the new
-   `RecursionError` exception value — distinct from `MaxIterationsExceeded`
-   (loop-specific) and catchable with `try`/`catch`.
+`agm.agl.type_schema` owns pure checker-type-to-JSON-schema compilation and format
+instruction generation. This keeps lowering independent of runtime execution.
 
 `exec`'s two evaluation paths are selected by `OutputContractSpec.structured_exec`:
 - **Structured form** — returns an `ExecResult` record built from the raw
@@ -327,12 +297,9 @@ Agent-value dispatch: `_eval_ask_call` extracts the `AgentValue` from the
 `agent:` named argument (or uses the default agent when absent) and issues the
 call via the host runtime, exactly as the former `AgentCall` node did.
 
-The legacy module-graph oracle path merges node-id-keyed checker dispatch tables into a
-single interpreter view. Binding types from every checked module are copied
-into a fresh execution environment, so imported function bodies retain their
-implicit coercions without mutating a module's checker state. Each checked
-module also retains its normalized source text; runtime source excerpts select
-that text through the `SourceId` carried by the failing node's span.
+Each checked module retains normalized source text. Lowering copies it into the
+linked source table, and runtime diagnostics select the correct text through the
+`SourceId` carried by each IR location. Module execution performs no checker-table merge.
 
 ## Value rendering
 
@@ -424,8 +391,7 @@ exception→`RunError` mapping with `WorkflowRuntime` via public helpers in
 `agm.agl.runtime.runtime` (`assemble_host_environment`/`HostEnvironment`,
 `convert_param_value`, `exception_value_to_run_error`); registration is delegated to an
 internal `WorkflowRuntime` so reserved-name/duplicate validation is not
-duplicated. The differential oracle retains the legacy tree interpreter;
-production REPL entries execute through `IrInterpreter`.
+duplicated. REPL entries execute through `IrInterpreter` against a persistent linked image.
 
 Agent calls are gated by `agm.agl.repl.agents.ConfirmingAgent`, a wrapper
 `AgentFn` holding a shared mutable `AgentMode` (`confirm`/`auto`, also mutated by
@@ -605,43 +571,11 @@ graph machinery entirely.
 
 ## Graph-aware evaluation (`agm.agl.eval`)
 
-`execute_graph(checked_graph, registry, contracts, ...)` in
-`agm.agl.eval.interpreter` extends the single-program evaluator to operate over a
-`CheckedModuleGraph`.
-
-**Per-module frames.** One `Scope` frame is created for each module.  All frames
-are created at once before any closure is installed.  Each module's `def`
-closures are then installed into that module's frame (`Closure.env` = the module's
-own frame), so intra-module mutual recursion and cross-module calls both work with
-no ordering constraint.  Entry-module `agent` declarations are installed into the
-entry frame.  `param` declarations are evaluated lazily as part of
-`execute_with_frames`.
-
-**Merged dispatch tables.** The interpreter's `_checked` (a `CheckedProgram`)
-consolidates all modules' side tables into a single merged object:
-`resolved.builtin_calls`, `node_types`, `contract_specs`, and `cast_specs` are
-merged by node id (which is globally unique across modules, as M2 seeds each
-module with a disjoint id range).  This lets closure bodies from any module be
-evaluated by the same interpreter without a per-module dispatch.
-
-**`_eval_var_ref` dispatch.** Variable references to top-level `function_binding`
-or `agent_binding` (as recorded in the resolution side table via
-`BindingRef.kind`) are fetched directly from `module_frames[ref.module_id].bindings[ref.name]`,
-where `ref.name` is the **original declared name** in the owning module.  All
-other binder kinds (let, var, param, pattern, catch) remain lexical
-(`scope.lookup`).  This uniform dispatch handles own-module, open-imported,
-renamed, and qualified references with no name injection.
-
-**BindingRef.name for cross-module refs.** `_make_cross_module_ref` in the scope
-resolver stores `name=src_name` (the original declared name in the owning module),
-not `name=exposed_name` (the renamed/aliased name at the import site).  Eval
-uses the original name to look up values in the owning module's frame; the
-rename is handled at the scope level (the VarRef itself carries the renamed name
-for lexical lookup, but the resolution side table maps it to the original).
-
-**Single-program path.** `execute()` sets `_module_frames = {ENTRY_ID: root_scope}`
-before the pre-pass; `_eval_var_ref` finds the entry frame for all
-own-module top-level references.  The existing path is unchanged.
+`lower_graph` links a `CheckedModuleGraph` into one `ExecutableProgram`. Modules,
+exports, functions, nominals, contracts, and sources are resolved to stable IDs
+before `IrInterpreter` starts. Library initializers run in dependency order and
+the entry module runs last. Cross-module loads and calls use linked IDs directly;
+the evaluator never reads or merges resolver/typechecker side tables.
 
 ## Graph-aware type checking (`agm.agl.typecheck.graph`)
 
@@ -785,8 +719,8 @@ by `ModuleId`. The SCC algorithm visits nodes in sorted order.
   wiring code in `agm exec`.
 - `run_prepared_graph(prepared, *, param_values, check_only, log_file) → RunResult`
   — resumes the pipeline from type checking, validates params, materializes
-  contracts (merging `contract_specs` from ALL modules), and either executes via
-  `execute_graph` or returns the call-site inventory (`check_only=True`).  Agent
+  contracts from linked descriptors, and either executes `IrInterpreter` or returns
+  the linked call-site inventory (`check_only=True`). Agent
   reconciliation uses `resolved_graph.entry_agents` (only the entry module owns
   agents).
 

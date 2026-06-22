@@ -4,10 +4,7 @@ This module provides ``_describe_value`` (maps a runtime ``Value`` to its
 AgL type-name string) and ``make_match_error`` (builds a ``MatchError``
 ``ExceptionValue`` with ``scrutinee_type`` and ``scrutinee`` fields).
 
-Both the legacy AST interpreter (``eval/interpreter.py``) and the new IR
-evaluator (``eval/ir_interpreter.py``) delegate to these shared helpers so
-the ``scrutinee_type``/``scrutinee`` fields in ``MatchError`` are
-byte-identical between the two evaluators.
+The IR evaluator delegates here so match diagnostics have one implementation.
 
 Allowed imports: stdlib, ``agm.agl.eval.values``, ``agm.agl.eval.exceptions``,
 ``agm.agl.runtime.serialize``.  No syntax, scope, or typecheck imports.
@@ -19,13 +16,13 @@ from agm.agl.eval.exceptions import make_builtin_exception
 from agm.agl.eval.values import (
     AgentValue,
     BoolValue,
-    Closure,
     ConstructorValue,
     DecimalValue,
     DictValue,
     EnumValue,
     ExceptionValue,
     IntValue,
+    IrClosureValue,
     JsonValue,
     ListValue,
     RecordValue,
@@ -71,8 +68,9 @@ def _describe_value(value: Value) -> str:
     if isinstance(value, ConstructorValue):
         # A first-class constructor's static type is a FunctionType.
         return "function"
-    # Closure is the only remaining Value member.
-    assert isinstance(value, Closure), f"unexpected value kind: {type(value).__name__}"
+    assert isinstance(value, IrClosureValue), (
+        f"unexpected value kind: {type(value).__name__}"
+    )
     return "function"
 
 

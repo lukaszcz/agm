@@ -1,4 +1,4 @@
-"""M3f-A differential oracle — if/raise/try control flow.
+"""M3f-A differential ir_semantic — if/raise/try control flow.
 
 Covers IrIf, IrRaise, IrTry with all parity cases:
 - if without else → UnitValue
@@ -14,7 +14,6 @@ Covers IrIf, IrRaise, IrTry with all parity cases:
 - negative validate tests
 - golden lowering tests
 
-All oracle tests use @pytest.mark.oracle.
 """
 
 from __future__ import annotations
@@ -52,7 +51,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
-from tests.agl.oracle import assert_oracle_agrees, assert_oracle_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,20 +92,18 @@ def _make_program(
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — if without else
+# IR semantic tests — if without else
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_if_without_else_true_runs_body_returns_unit() -> None:
     """if without else: taken branch still yields unit (effects run)."""
     source = "let u: unit = if true => ()\nu"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["u"] == UnitValue()
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["u"] == UnitValue()
     assert ir["u"] == UnitValue()
 
 
-@pytest.mark.oracle
 def test_if_without_else_false_returns_unit() -> None:
     """if without else: condition false, unit still returned (no side effects)."""
     source = """\
@@ -115,12 +112,11 @@ if false =>
   r := 99
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == IntValue(0)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == IntValue(0)
     assert ir["r"] == IntValue(0)
 
 
-@pytest.mark.oracle
 def test_if_without_else_variable_effect() -> None:
     """if without else: body side-effects are applied when condition is true."""
     source = """\
@@ -129,35 +125,32 @@ if true =>
   r := 42
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == IntValue(42)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == IntValue(42)
     assert ir["r"] == IntValue(42)
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — if with else (returns branch value)
+# IR semantic tests — if with else (returns branch value)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_if_with_else_taken_true() -> None:
     """if-else: condition true → then branch value returned."""
     source = "let r = if true => 1 | else => 2\nr"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == IntValue(1)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == IntValue(1)
     assert ir["r"] == IntValue(1)
 
 
-@pytest.mark.oracle
 def test_if_with_else_taken_false() -> None:
     """if-else: condition false → else branch value returned."""
     source = "let r = if false => 1 | else => 2\nr"
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == IntValue(2)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == IntValue(2)
     assert ir["r"] == IntValue(2)
 
 
-@pytest.mark.oracle
 def test_if_with_else_text_values() -> None:
     """if-else: returns text value from branches."""
     source = """\
@@ -165,12 +158,11 @@ let x = 5
 let r = if x > 10 => "big" | else => "small"
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("small")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("small")
     assert ir["r"] == TextValue("small")
 
 
-@pytest.mark.oracle
 def test_if_nested() -> None:
     """Nested if expressions."""
     source = """\
@@ -178,24 +170,22 @@ let x = 5
 let r = if x > 0 => (if x > 3 => "big" | else => "small") | else => "neg"
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("big")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("big")
     assert ir["r"] == TextValue("big")
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — raise
+# IR semantic tests — raise
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_raise_propagates() -> None:
     """raise propagates as AglRaise; both pipelines raise equivalent exceptions."""
     source = "raise Abort(message: \"oops\")\n"
-    assert_oracle_raises(source)
+    evaluate_ir_raises(source)
 
 
-@pytest.mark.oracle
 def test_raise_caught_by_try() -> None:
     """raise inside try is caught by a matching handler."""
     source = """\
@@ -205,17 +195,16 @@ catch Abort =>
   99
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == IntValue(99)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == IntValue(99)
     assert ir["r"] == IntValue(99)
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — try body does not raise
+# IR semantic tests — try body does not raise
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_try_no_raise_returns_body_value() -> None:
     """try body does not raise → returns body value."""
     source = """\
@@ -225,12 +214,11 @@ catch Exception =>
   0
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == IntValue(42)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == IntValue(42)
     assert ir["r"] == IntValue(42)
 
 
-@pytest.mark.oracle
 def test_try_no_raise_expression_body() -> None:
     """try with non-raising expression body returns body value."""
     source = """\
@@ -242,17 +230,16 @@ catch Exception =>
   0
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == IntValue(7)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == IntValue(7)
     assert ir["r"] == IntValue(7)
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — try with specific catch handler (no binding)
+# IR semantic tests — try with specific catch handler (no binding)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_try_specific_catch_no_binding() -> None:
     """try: specific exc_type match without binding variable."""
     source = """\
@@ -264,17 +251,16 @@ catch Exception =>
   "caught other"
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("caught Abort")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("caught Abort")
     assert ir["r"] == TextValue("caught Abort")
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — try with specific catch handler WITH binding
+# IR semantic tests — try with specific catch handler WITH binding
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_try_specific_catch_with_binding() -> None:
     """try: specific exc_type match WITH binding variable; bound value accessible."""
     source = """\
@@ -284,12 +270,11 @@ catch Abort as e =>
   e.message
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("the message")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("the message")
     assert ir["r"] == TextValue("the message")
 
 
-@pytest.mark.oracle
 def test_try_catch_with_binding_exception_value() -> None:
     """try: binding variable gives access to exception fields."""
     source = """\
@@ -299,19 +284,18 @@ catch Abort as e =>
   e.message
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert isinstance(legacy["r"], TextValue)
-    assert legacy["r"].value == "hello"
+    ir_reference, ir = evaluate_ir(source)
+    assert isinstance(ir_reference["r"], TextValue)
+    assert ir_reference["r"].value == "hello"
     assert isinstance(ir["r"], TextValue)
     assert ir["r"].value == "hello"
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — catch-all handlers
+# IR semantic tests — catch-all handlers
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_try_catchall_underscore() -> None:
     """try: catch-all with _ exc_type catches anything."""
     source = """\
@@ -321,12 +305,11 @@ catch _ =>
   "caught all"
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("caught all")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("caught all")
     assert ir["r"] == TextValue("caught all")
 
 
-@pytest.mark.oracle
 def test_try_catchall_exception() -> None:
     """try: catch-all with 'Exception' catches anything."""
     source = """\
@@ -336,12 +319,11 @@ catch Exception =>
   "caught all exception"
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("caught all exception")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("caught all exception")
     assert ir["r"] == TextValue("caught all exception")
 
 
-@pytest.mark.oracle
 def test_try_catchall_with_binding() -> None:
     """try: catch-all with binding variable."""
     source = """\
@@ -351,17 +333,16 @@ catch Exception as e =>
   e.message
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("catchall msg")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("catchall msg")
     assert ir["r"] == TextValue("catchall msg")
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — first-match ordering
+# IR semantic tests — first-match ordering
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_try_first_match_wins() -> None:
     """try: first matching handler wins; later handlers not tried."""
     source = """\
@@ -373,12 +354,11 @@ catch Exception =>
   "second"
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("first")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("first")
     assert ir["r"] == TextValue("first")
 
 
-@pytest.mark.oracle
 def test_try_first_match_wins_catchall_last() -> None:
     """try: catch-all at end wins when specific handler doesn't match."""
     source = """\
@@ -390,17 +370,16 @@ catch _ =>
   "fallback"
 r
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == TextValue("fallback")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == TextValue("fallback")
     assert ir["r"] == TextValue("fallback")
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — no matching handler re-raises
+# IR semantic tests — no matching handler re-raises
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_try_no_match_reraises() -> None:
     """try: when no handler matches, original exception re-propagates."""
     source = """\
@@ -409,7 +388,7 @@ try
 catch CastError =>
   ()
 """
-    assert_oracle_raises(source)
+    evaluate_ir_raises(source)
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +719,6 @@ def test_validate_ir_try_cheap_ok() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_let_inside_if_branch_does_not_leak() -> None:
     """let declared inside an if branch body must not appear in top-level results.
 
@@ -754,14 +732,13 @@ if true =>
   sink := inner
 sink
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert "inner" not in legacy
+    ir_reference, ir = evaluate_ir(source)
+    assert "inner" not in ir_reference
     assert "inner" not in ir
-    assert legacy["sink"] == IntValue(7)
+    assert ir_reference["sink"] == IntValue(7)
     assert ir["sink"] == IntValue(7)
 
 
-@pytest.mark.oracle
 def test_var_inside_if_branch_does_not_leak() -> None:
     """var declared inside an if branch body must not appear in top-level results."""
     source = """\
@@ -771,14 +748,13 @@ if true =>
   result := tmp + 1
 result
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert "tmp" not in legacy
+    ir_reference, ir = evaluate_ir(source)
+    assert "tmp" not in ir_reference
     assert "tmp" not in ir
-    assert legacy["result"] == IntValue(6)
+    assert ir_reference["result"] == IntValue(6)
     assert ir["result"] == IntValue(6)
 
 
-@pytest.mark.oracle
 def test_let_inside_try_body_does_not_leak() -> None:
     """let declared inside a try body must not appear in top-level results."""
     source = """\
@@ -790,14 +766,13 @@ catch Exception =>
   ()
 out
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert "inner" not in legacy
+    ir_reference, ir = evaluate_ir(source)
+    assert "inner" not in ir_reference
     assert "inner" not in ir
-    assert legacy["out"] == IntValue(42)
+    assert ir_reference["out"] == IntValue(42)
     assert ir["out"] == IntValue(42)
 
 
-@pytest.mark.oracle
 def test_let_inside_catch_handler_does_not_leak() -> None:
     """let declared inside a catch handler body must not appear in top-level results."""
     source = """\
@@ -809,14 +784,13 @@ catch Abort =>
   out := handler_val
 out
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert "handler_val" not in legacy
+    ir_reference, ir = evaluate_ir(source)
+    assert "handler_val" not in ir_reference
     assert "handler_val" not in ir
-    assert legacy["out"] == IntValue(99)
+    assert ir_reference["out"] == IntValue(99)
     assert ir["out"] == IntValue(99)
 
 
-@pytest.mark.oracle
 def test_nested_block_initializer_only_outer_let_visible() -> None:
     """Block-scoped let inside if branch: outer let gets value; inner binder not in results.
 
@@ -830,8 +804,8 @@ let x = if true =>
 | else => 0
 x
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert "y" not in legacy
+    ir_reference, ir = evaluate_ir(source)
+    assert "y" not in ir_reference
     assert "y" not in ir
-    assert legacy["x"] == IntValue(6)
+    assert ir_reference["x"] == IntValue(6)
     assert ir["x"] == IntValue(6)

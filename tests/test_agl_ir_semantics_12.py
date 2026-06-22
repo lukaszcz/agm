@@ -1,17 +1,13 @@
-"""Differential oracle for M5 — multi-module linking.
+"""Differential ir_semantic for M5 — multi-module linking.
 
-All tests use the ``oracle`` pytest mark so they can be run in isolation
-with ``uv run pytest -m oracle``.
+All tests use the ``ir_semantic`` pytest mark so they can be run in isolation
+with ``uv run pytest -m ir_semantic``.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from tests.agl.oracle.harness import assert_graph_oracle_agrees, assert_graph_oracle_raises
-
-pytestmark = pytest.mark.oracle
+from tests.agl.ir_harness import evaluate_ir_graph, evaluate_ir_graph_raises
 
 
 def test_imported_function_and_local_let(tmp_path: Path) -> None:
@@ -26,7 +22,7 @@ let result = lib::add(3, 4)
 let x = 10
 ()
 """
-    assert_graph_oracle_agrees(entry_source, {"lib": lib_source}, tmp_path)
+    evaluate_ir_graph(entry_source, {"lib": lib_source}, tmp_path)
 
 
 def test_cross_module_mutual_recursion(tmp_path: Path) -> None:
@@ -49,7 +45,7 @@ let r1 = even::is_even(4)
 let r2 = even::is_even(3)
 ()
 """
-    assert_graph_oracle_agrees(
+    evaluate_ir_graph(
         entry_source, {"even": even_source, "odd": odd_source}, tmp_path
     )
 
@@ -75,7 +71,7 @@ let is_red = case c of
     | _ => false
 ()
 """
-    assert_graph_oracle_agrees(entry_source, {"shapes": shapes_source}, tmp_path)
+    evaluate_ir_graph(entry_source, {"shapes": shapes_source}, tmp_path)
 
 
 def test_same_named_types_in_two_modules(tmp_path: Path) -> None:
@@ -103,7 +99,7 @@ let v1 = mod_a::get_first(p1)
 let v2 = mod_b::get_first(p2)
 ()
 """
-    assert_graph_oracle_agrees(
+    evaluate_ir_graph(
         entry_source, {"mod_a": mod_a_source, "mod_b": mod_b_source}, tmp_path
     )
 
@@ -119,7 +115,7 @@ import mathlib
 let result = mathlib::safe_div(10, 0)
 ()
 """
-    assert_graph_oracle_raises(entry_source, {"mathlib": mathlib_source}, tmp_path)
+    evaluate_ir_graph_raises(entry_source, {"mathlib": mathlib_source}, tmp_path)
 
 
 def test_open_imported_nullary_enum_as_value(tmp_path: Path) -> None:
@@ -137,4 +133,4 @@ let is_running = case s of
     | Done => false
 ()
 """
-    assert_graph_oracle_agrees(entry_source, {"status": status_source}, tmp_path)
+    evaluate_ir_graph(entry_source, {"status": status_source}, tmp_path)

@@ -28,9 +28,6 @@ packages = ["src/agm"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--cov=agm", "--cov-branch", "--cov-fail-under=100"]
-markers = [
-    "oracle: differential oracle tests comparing legacy AST interpreter against IR evaluator",
-]
 
 [tool.mypy]
 python_version = "3.12"

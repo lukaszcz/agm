@@ -8,7 +8,7 @@ caller wraps it into the appropriate ``CastError`` / ``BoolValue(False)``.
 
 This module is the single source of truth for the typeless decode walk
 (``_decode``), which mirrors ``runtime.convert.json_to_value`` so the two
-evaluators stay in lock-step (the differential oracle proves it).  It reuses
+conversion paths share one implementation. It reuses
 the existing runtime leaf primitives (rendering, JSON serialization, strict
 parse, integral-decimal normalization, JSON-Schema validation) rather than
 reimplementing them.
@@ -228,11 +228,6 @@ def decode_value(schema: DecodeSchema, obj: object) -> Value:
             )
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
-
-
-# Transitional private name retained for the agent parser until M9 removes
-# migration-era module boundaries.
-_decode = decode_value
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:

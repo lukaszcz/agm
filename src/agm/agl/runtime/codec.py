@@ -27,7 +27,7 @@ from jsonschema import ValidationError as JsonschemaValidationError
 from agm.agl.eval.values import Value
 from agm.agl.runtime.convert import json_to_value, normalize_integral_decimals
 from agm.agl.runtime.request import ValidationError
-from agm.agl.runtime.schema import derive_schema
+from agm.agl.type_schema import build_format_instructions, derive_schema
 from agm.agl.typecheck.types import (
     DictType,
     EnumType,
@@ -539,32 +539,6 @@ def _path_sort_key(error: JsonschemaValidationError) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_format_instructions(schema: dict[str, object]) -> str:
-    """Build format instructions embedding the JSON *schema* (design §7.3/§7.4).
-
-    A short behavioural preamble tells the agent to return exactly one JSON
-    value conforming to the schema, with no Markdown/prose/fences.  The schema
-    itself is appended pretty-printed so the agent receives the precise,
-    authoritative shape rather than a hand-maintained prose paraphrase that
-    can drift from the actual validation rules.
-
-    For the permissive ``json`` type (schema ``{}``) there is no shape to
-    convey, so only the behavioural preamble is emitted.
-    """
-    if not schema:
-        return (
-            "Return exactly one JSON value.\n"
-            "Do not include Markdown, prose, or code fences."
-        )
-    schema_text = json.dumps(schema, indent=2, ensure_ascii=False)
-    return (
-        "Return exactly one JSON value conforming to the following JSON Schema.\n"
-        "Do not include Markdown, prose, or code fences.\n"
-        "\n"
-        f"```json\n{schema_text}\n```"
-    )
-
-
 # ---------------------------------------------------------------------------
 # JsonCodec — M2 structured-output codec
 # ---------------------------------------------------------------------------
@@ -627,7 +601,7 @@ class JsonCodec:
         from agm.agl.runtime.contract import OutputContract
 
         schema = derive_schema(type_ref)
-        instructions = _build_format_instructions(schema)
+        instructions = build_format_instructions(schema)
         return OutputContract(
             target_type=type_ref,
             codec=self,

@@ -13,8 +13,7 @@ is raised; it propagates up the Python call stack and is caught by:
     ``RunResult.error``).
 
 ``make_builtin_exception`` is the single shared factory for built-in exception
-values.  Both the legacy interpreter and the IR interpreter call it with their
-own trace id (trace-id minting is per-evaluator).
+values. The IR interpreter supplies the trace id.
 """
 
 from __future__ import annotations
@@ -22,13 +21,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agm.agl.eval.values import ExceptionValue, TextValue
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import Location, NominalId
 from agm.agl.modules.ids import PRELUDE_ID
 
 if TYPE_CHECKING:
     from agm.agl.eval.values import Value
-    from agm.agl.ir.ids import Location
-    from agm.agl.syntax.spans import SourceSpan
 
 
 def make_builtin_exception(
@@ -67,8 +64,8 @@ class AglRaise(Exception):
     """
 
     def __init__(
-        self, exc: ExceptionValue, *, span: "SourceSpan | Location | None" = None
+        self, exc: ExceptionValue, *, span: Location | None = None
     ) -> None:
         super().__init__(exc.display_name)
         self.exc = exc
-        self.span: SourceSpan | Location | None = span
+        self.span = span

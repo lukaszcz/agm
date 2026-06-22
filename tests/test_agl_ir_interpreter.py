@@ -1257,7 +1257,7 @@ class TestImportIsolation:
 
     We parse the source file's import statements directly (AST-based) rather
     than probing ``sys.modules``, because ``agm.agl.eval.__init__`` re-exports
-    the legacy interpreter (which DOES import syntax/scope/typecheck), so
+    unrelated frontend modules, so
     ``sys.modules`` would include those regardless of what ir_interpreter does.
     AST parsing checks what the file *itself* declares as a dependency.
     """

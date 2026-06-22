@@ -1,4 +1,4 @@
-"""JSON Schema derivation from AgL semantic types.
+"""Compile-time JSON Schema and format-instruction derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
 semantic :class:`~agm.agl.typecheck.types.Type`.  The derived schema is used:
@@ -25,6 +25,7 @@ Derivation rules (design §7.3 / §7.4):
 
 from __future__ import annotations
 
+import json
 from typing import assert_never
 
 from agm.agl.typecheck.types import (
@@ -138,3 +139,19 @@ def _enum_schema(typ: EnumType) -> dict[str, object]:
             }
         )
     return {"oneOf": variant_schemas}
+
+
+def build_format_instructions(schema: dict[str, object]) -> str:
+    """Build agent instructions embedding the authoritative JSON schema."""
+    if not schema:
+        return (
+            "Return exactly one JSON value.\n"
+            "Do not include Markdown, prose, or code fences."
+        )
+    schema_text = json.dumps(schema, indent=2, ensure_ascii=False)
+    return (
+        "Return exactly one JSON value conforming to the following JSON Schema.\n"
+        "Do not include Markdown, prose, or code fences.\n"
+        "\n"
+        f"```json\n{schema_text}\n```"
+    )

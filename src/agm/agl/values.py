@@ -11,7 +11,7 @@ Design constraints
   ``typecheck``, or ``runtime`` — not even under ``TYPE_CHECKING``.
 - All members are frozen dataclasses with ``__slots__`` for memory efficiency.
 - ``Value`` here is the **narrow** union (leaf tags only).  The **broad** union
-  that includes container/nominal types, ``Closure`` and ``ConstructorValue``
+  that includes container/nominal types, constructors, and IR closures
   lives in ``agm.agl.eval.values`` during the migration period and collapses
   here in M4.
 """
@@ -155,7 +155,7 @@ class AgentValue:
 
 
 # ---------------------------------------------------------------------------
-# Narrow Value union (leaf tags only — no containers, no Closure, no ConstructorValue)
+# Narrow Value union (leaf tags only; containers and callable forms live in eval.values)
 # ---------------------------------------------------------------------------
 
 Value: TypeAlias = (

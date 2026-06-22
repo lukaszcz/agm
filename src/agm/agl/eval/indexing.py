@@ -1,6 +1,6 @@
 """Pure list/dict index get/set helpers for the AgL evaluator.
 
-Used by both the legacy interpreter and the IR evaluator.
+Used by the IR evaluator.
 This module is the single source of truth for list/dict indexing semantics.
 
 IMPORTANT: Only imports from stdlib, agm.agl.eval.values, and agm.agl.ir.operations.

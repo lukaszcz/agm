@@ -1,7 +1,6 @@
-"""M3c differential oracle — field access, index access, templates, indexed assignment.
+"""M3c differential ir_semantic — field access, index access, templates, indexed assignment.
 
 Tests all M3c node types: IrField, IrIndex, IrRenderTemplate, IrAssign(path).
-All tests use @pytest.mark.oracle.
 """
 
 from __future__ import annotations
@@ -20,10 +19,10 @@ from agm.agl.eval.values import (
 )
 from agm.agl.ir.operations import IndexKind
 from agm.agl.ir.program import ExecutableProgram
-from tests.agl.oracle import assert_oracle_agrees, assert_oracle_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
-# indexing.py unit tests (not oracle-marked)
+# indexing.py unit tests (not ir_semantic-marked)
 # ---------------------------------------------------------------------------
 
 
@@ -127,11 +126,10 @@ def test_index_set_dict_wrong_index() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests (differential: legacy == IR)
+# IR semantic tests (differential: ir_reference == IR)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_record_field_access() -> None:
     """Record field access: p.x on a record.
 
@@ -147,11 +145,10 @@ let p = Point(x: 3, y: 4)
 let px = p.x
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["px"] == IntValue(3)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["px"] == IntValue(3)
 
 
-@pytest.mark.oracle
 def test_list_index() -> None:
     """List index: xs[1] returns the element at index 1."""
     source = """\
@@ -159,11 +156,10 @@ let xs = [10, 20, 30]
 let x = xs[1]
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == IntValue(20)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == IntValue(20)
 
 
-@pytest.mark.oracle
 def test_list_negative_index() -> None:
     """List negative index: xs[-1] returns the last element."""
     source = """\
@@ -171,11 +167,10 @@ let xs = [10, 20, 30]
 let x = xs[-1]
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == IntValue(30)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == IntValue(30)
 
 
-@pytest.mark.oracle
 def test_list_index_out_of_range() -> None:
     """List out-of-bounds index raises IndexError."""
     source = """\
@@ -183,10 +178,9 @@ let xs = [10, 20]
 let x = xs[5]
 ()
 """
-    assert_oracle_raises(source)
+    evaluate_ir_raises(source)
 
 
-@pytest.mark.oracle
 def test_dict_index() -> None:
     """Dict index: m["a"] returns the value for key "a"."""
     source = """\
@@ -194,11 +188,10 @@ let m = {"a": 1, "b": 2}
 let x = m["a"]
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == IntValue(1)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == IntValue(1)
 
 
-@pytest.mark.oracle
 def test_dict_missing_key() -> None:
     """Dict missing key raises KeyError."""
     source = """\
@@ -206,26 +199,23 @@ let m = {"a": 1}
 let x = m["z"]
 ()
 """
-    assert_oracle_raises(source)
+    evaluate_ir_raises(source)
 
 
-@pytest.mark.oracle
 def test_template_text_only() -> None:
     """Template with only text segments."""
     source = 'let x: text = "hello world"\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == TextValue("hello world")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == TextValue("hello world")
 
 
-@pytest.mark.oracle
 def test_template_with_interpolation() -> None:
     """Template with an integer interpolation."""
     source = 'let x: text = "val: ${42}"\n()'
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == TextValue("val: 42")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == TextValue("val: 42")
 
 
-@pytest.mark.oracle
 def test_template_with_var_interpolation() -> None:
     """Template with a variable reference interpolation."""
     source = """\
@@ -233,11 +223,10 @@ let n = 7
 let x: text = "n is ${n}"
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["x"] == TextValue("n is 7")
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["x"] == TextValue("n is 7")
 
 
-@pytest.mark.oracle
 def test_template_with_record_interpolation() -> None:
     """Template with a record value interpolation.
 
@@ -252,13 +241,12 @@ let p = Point(x: 1, y: 2)
 let s: text = "point: ${p}"
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    # Both should render the same string (legacy == ir)
-    assert isinstance(legacy["s"], TextValue)
-    assert legacy["s"] == ir["s"]
+    ir_reference, ir = evaluate_ir(source)
+    # Both should render the same string (ir_reference == ir)
+    assert isinstance(ir_reference["s"], TextValue)
+    assert ir_reference["s"] == ir["s"]
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_list_depth1() -> None:
     """Indexed assignment depth 1: list."""
     source = """\
@@ -266,11 +254,10 @@ var xs = [1, 2, 3]
 xs[0] := 99
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["xs"] == ListValue((IntValue(99), IntValue(2), IntValue(3)))
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["xs"] == ListValue((IntValue(99), IntValue(2), IntValue(3)))
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_dict_depth1() -> None:
     """Indexed assignment depth 1: dict."""
     source = """\
@@ -278,11 +265,10 @@ var m = {"a": 1}
 m["a"] := 99
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["m"] == DictValue({"a": IntValue(99)})
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["m"] == DictValue({"a": IntValue(99)})
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_list_of_list() -> None:
     """Indexed assignment depth 2: list-of-list."""
     source = """\
@@ -290,14 +276,13 @@ var xss = [[1, 2], [3, 4]]
 xss[0][1] := 99
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["xss"] == ListValue((
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["xss"] == ListValue((
         ListValue((IntValue(1), IntValue(99))),
         ListValue((IntValue(3), IntValue(4))),
     ))
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_dict_of_list() -> None:
     """Indexed assignment depth 2: dict-of-list."""
     source = """\
@@ -305,13 +290,12 @@ var m = {"a": [1, 2]}
 m["a"][0] := 99
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["m"] == DictValue({
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["m"] == DictValue({
         "a": ListValue((IntValue(99), IntValue(2))),
     })
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_list_of_dict() -> None:
     """Indexed assignment depth 2: list-of-dict."""
     source = """\
@@ -319,13 +303,12 @@ var m = [{"x": 1}]
 m[0]["x"] := 99
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["m"] == ListValue((
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["m"] == ListValue((
         DictValue({"x": IntValue(99)}),
     ))
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_depth3_list_of_list_of_list() -> None:
     """Indexed assignment depth 3: list-of-list-of-list."""
     source = """\
@@ -333,8 +316,8 @@ var xsss = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
 xsss[0][1][0] := 99
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["xsss"] == ListValue((
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["xsss"] == ListValue((
         ListValue((
             ListValue((IntValue(1), IntValue(2))),
             ListValue((IntValue(99), IntValue(4))),
@@ -346,7 +329,6 @@ xsss[0][1][0] := 99
     ))
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_oob_raises() -> None:
     """Indexed assignment with out-of-bounds index raises IndexError."""
     source = """\
@@ -354,10 +336,9 @@ var xs = [1, 2]
 xs[5] := 99
 ()
 """
-    assert_oracle_raises(source)
+    evaluate_ir_raises(source)
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_intermediate_oob_raises() -> None:
     """Indexed assignment with out-of-bounds intermediate index raises IndexError."""
     source = """\
@@ -365,10 +346,9 @@ var xss = [[1, 2], [3, 4]]
 xss[5][0] := 99
 ()
 """
-    assert_oracle_raises(source)
+    evaluate_ir_raises(source)
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_dict_missing_key_raises() -> None:
     """Indexed assignment with missing dict key raises KeyError."""
     source = """\
@@ -376,10 +356,9 @@ var m = {"a": 1}
 m["z"] := 99
 ()
 """
-    assert_oracle_raises(source)
+    evaluate_ir_raises(source)
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_decimal_leaf_list_depth1() -> None:
     """Indexed assignment into list[decimal] exercises the IrCoerce IntToDecimal leaf path.
 
@@ -391,13 +370,12 @@ var xs: list[decimal] = [1.0, 2.0, 3.0]
 xs[1] := 42
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    result = legacy["xs"]
+    ir_reference, ir = evaluate_ir(source)
+    result = ir_reference["xs"]
     assert isinstance(result, ListValue)
     assert result.elements[1] == DecimalValue(decimal.Decimal(42))
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_decimal_leaf_dict_depth1() -> None:
     """Indexed assignment into dict[text, decimal] exercises the IrCoerce IntToDecimal leaf path.
 
@@ -408,13 +386,12 @@ var m: dict[text, decimal] = {"a": 1.0, "b": 2.0}
 m["a"] := 7
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    result = legacy["m"]
+    ir_reference, ir = evaluate_ir(source)
+    result = ir_reference["m"]
     assert isinstance(result, DictValue)
     assert result.entries["a"] == DecimalValue(decimal.Decimal(7))
 
 
-@pytest.mark.oracle
 def test_indexed_assignment_decimal_leaf_list_of_list_depth2() -> None:
     """Indexed assignment depth 2 into list[list[decimal]] exercises IntToDecimal at the leaf.
 
@@ -426,8 +403,8 @@ var xss: list[list[decimal]] = [[1.0, 2.0], [3.0, 4.0]]
 xss[0][1] := 99
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    result = legacy["xss"]
+    ir_reference, ir = evaluate_ir(source)
+    result = ir_reference["xss"]
     assert isinstance(result, ListValue)
     inner = result.elements[0]
     assert isinstance(inner, ListValue)

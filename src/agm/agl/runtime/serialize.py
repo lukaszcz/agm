@@ -26,7 +26,6 @@ from typing import assert_never
 from agm.agl.eval.values import (
     AgentValue,
     BoolValue,
-    Closure,
     ConstructorValue,
     DecimalValue,
     DictValue,
@@ -78,8 +77,6 @@ def value_to_json_obj(value: Value) -> object:
         raise TypeError("AgentValue has no JSON representation")
     if isinstance(value, ConstructorValue):
         raise TypeError("ConstructorValue has no JSON representation")
-    if isinstance(value, Closure):
-        raise TypeError("Closure has no JSON representation")
     if isinstance(value, IrClosureValue):
         raise TypeError("IrClosureValue has no JSON representation")
     assert_never(value)  # pragma: no cover

@@ -7,7 +7,7 @@ Enums are derived directly from the operator sets supported by AgL:
 - ``CmpOp``: comparison operators (``=``, ``!=``, ``<``, ``<=``, ``>``, ``>=``).
   Derived from ``BinOp.EQ/NEQ/LT/LE/GT/GE`` in ``agm.agl.syntax.nodes``.
   The ``in`` operator is lowered to ``IrContains`` (not a CmpOp).
-  ``and``/``or`` are lowered to ``IrAnd``/``IrOr`` (deferred to M3).
+  ``and``/``or`` are lowered to ``IrAnd``/``IrOr``.
 
 ``Coercion`` is a closed union of frozen dataclasses.  An identity coercion
 (no-op) is represented by ``None`` at use sites — it is not a member here.

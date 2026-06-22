@@ -632,7 +632,7 @@ class ReplSession:
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_entry
-        from agm.agl.repl.agents import AgentCancelled
+        from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.runtime import exception_value_to_run_error
         from agm.agl.runtime.trace import TraceStore
 
@@ -949,7 +949,6 @@ class ReplSession:
         the full scope/typecheck pass with the session context, then evaluates
         or returns a check-only result.
         """
-        from agm.agl.eval.interpreter import _merge_graph_into_checked_program
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
@@ -1017,12 +1016,9 @@ class ReplSession:
             *cgraph.warnings,
         ]
 
+        checked = self._checked_program_from_module(entry_cm)
         if check_only:
-            checked = _merge_graph_into_checked_program(entry_cm, cgraph)
             return self._build_check_only_result(orig_program, checked, warnings)
-
-        # Build merged CheckedProgram for param check and echo.
-        checked = _merge_graph_into_checked_program(entry_cm, cgraph)
 
         pre_eval_result, param_values, entry_program_name, entry_active_config = (
             self._pre_eval_param_check(orig_program, checked, warnings)
@@ -1057,6 +1053,22 @@ class ReplSession:
             entry_active_config=entry_active_config,
         )
 
+    @staticmethod
+    def _checked_program_from_module(entry: "CheckedModule") -> "CheckedProgram":
+        """Adapt entry-module checker output for REPL static-state promotion."""
+        from agm.agl.typecheck.env import CheckedProgram
+
+        return CheckedProgram(
+            resolved=entry.resolved,
+            node_types=entry.node_types,
+            contract_specs=entry.contract_specs,
+            call_sites=entry.call_sites,
+            warnings=entry.warnings,
+            type_env=entry.type_env,
+            function_signatures=entry.function_signatures,
+            cast_specs=entry.cast_specs,
+        )
+
     def _evaluate_ir_graph_mode(
         self,
         *,
@@ -1078,7 +1090,7 @@ class ReplSession:
         from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_graph
-        from agm.agl.repl.agents import AgentCancelled
+        from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.runtime import (
             _materialize_ir_contracts,
             exception_value_to_run_error,

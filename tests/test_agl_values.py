@@ -464,14 +464,12 @@ def test_eval_values_still_exports_leaf_tags() -> None:
     assert ev_AgentValue is bv_AgentValue
 
 
-def test_eval_values_broad_value_includes_closure_and_constructor() -> None:
-    """agm.agl.eval.values.Value is the broad union including Closure and ConstructorValue."""
-    from agm.agl.eval.values import Closure, ConstructorValue, Value
+def test_eval_values_broad_value_includes_ir_callable_forms() -> None:
+    """The broad runtime union includes IR closure and constructor values."""
+    from agm.agl.eval.values import ConstructorValue, IrClosureValue, Value
 
-    # The broad Value type alias exists; Closure and ConstructorValue are defined here.
-    assert Closure is not None
+    assert IrClosureValue is not None
     assert ConstructorValue is not None
-    # Value is a type alias, not inspectable as a set, but we can at least verify it exists.
     assert Value is not None
 
 

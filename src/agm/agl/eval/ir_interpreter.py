@@ -1,8 +1,7 @@
 """IR evaluator for the AgL typeless execution IR (M2-B).
 
 ``IrInterpreter`` executes an ``ExecutableProgram`` using the D5 per-invocation
-frame / let-by-value / var-by-cell model.  It is the seed of the evaluator that
-ultimately replaces the legacy AST interpreter.
+frame / let-by-value / var-by-cell model.
 
 Allowed imports (per M2 contract):
 - ``agm.agl.ir.*``
@@ -243,8 +242,7 @@ class IrInterpreter:
     ``public_name`` and is owned by the entry module.
     """
 
-    #: Default loop iteration limit — matches the legacy Interpreter default used
-    #: in the oracle harness (``loop_limit=100`` in ``tests/agl/oracle/harness.py``).
+    #: Default loop iteration limit.
     DEFAULT_LOOP_LIMIT: int = 100
 
     DEFAULT_MAX_CALL_DEPTH: int = 256
@@ -624,7 +622,7 @@ class IrInterpreter:
                     # Module-level bindings (let, var, function symbols) live in the base
                     # frame (frames[0]) and are always accessible — even from inside a
                     # function call frame that did not explicitly capture them.  This
-                    # mirrors the legacy interpreter's scope-chain parent traversal.
+                    # mirrors lexical scope-chain parent traversal.
                     slot = self._frames[0].get(sym)
                 if slot is None:
                     raise InvalidIrError(
@@ -661,7 +659,7 @@ class IrInterpreter:
                     )
                 if not path:
                     # Simple assignment.  An assignment statement yields unit
-                    # (parity with the legacy interpreter); the mutation is the
+                    # The mutation is the
                     # side effect.
                     slot.value = self._eval(val_expr)
                     mutation_desc = self._program.symbols[sym]
@@ -1086,7 +1084,7 @@ class IrInterpreter:
         ``AgentCancelled(reason="interrupted")`` to match the
         ``ConfirmingAgent`` conversion and give the session a uniform carrier.
         """
-        from agm.agl.repl.agents import AgentCancelled
+        from agm.agl.runtime.request import AgentCancelled
 
         try:
             return self._registry.dispatch(agent_name, request)

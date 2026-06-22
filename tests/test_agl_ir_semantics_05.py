@@ -1,6 +1,5 @@
-"""M3e-1 differential oracle — `is` / `is not` enum-variant membership (IrVariantIs).
+"""M3e-1 differential ir_semantic — `is` / `is not` enum-variant membership (IrVariantIs).
 
-All oracle tests use @pytest.mark.oracle.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
-from tests.agl.oracle import assert_oracle_agrees
+from tests.agl.ir_harness import evaluate_ir
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -54,11 +53,10 @@ def _lower(source: str) -> ExecutableProgram:
 
 
 # ---------------------------------------------------------------------------
-# Oracle tests — is / is not
+# IR semantic tests — is / is not
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.oracle
 def test_is_matching_variant() -> None:
     """`c is Red` is True when the value is that variant."""
     source = """\
@@ -67,12 +65,11 @@ let c = Color.Red()
 let r = c is Red
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == BoolValue(True)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == BoolValue(True)
     assert ir["r"] == BoolValue(True)
 
 
-@pytest.mark.oracle
 def test_is_non_matching_variant() -> None:
     """`c is Blue` is False when the value is a different variant."""
     source = """\
@@ -81,12 +78,11 @@ let c = Color.Red()
 let r = c is Blue
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == BoolValue(False)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == BoolValue(False)
     assert ir["r"] == BoolValue(False)
 
 
-@pytest.mark.oracle
 def test_is_not_matching_variant() -> None:
     """`c is not Red` negates the membership test."""
     source = """\
@@ -96,14 +92,13 @@ let r = c is not Red
 let s = c is not Blue
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == BoolValue(False)
-    assert legacy["s"] == BoolValue(True)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == BoolValue(False)
+    assert ir_reference["s"] == BoolValue(True)
     assert ir["r"] == BoolValue(False)
     assert ir["s"] == BoolValue(True)
 
 
-@pytest.mark.oracle
 def test_is_field_carrying_variant() -> None:
     """`is` works on a value of a variant that carries fields."""
     source = """\
@@ -113,14 +108,13 @@ let is_circle = s is Circle
 let is_rect = s is Rectangle
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["is_circle"] == BoolValue(True)
-    assert legacy["is_rect"] == BoolValue(False)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["is_circle"] == BoolValue(True)
+    assert ir_reference["is_rect"] == BoolValue(False)
     assert ir["is_circle"] == BoolValue(True)
     assert ir["is_rect"] == BoolValue(False)
 
 
-@pytest.mark.oracle
 def test_is_qualified_variant() -> None:
     """`is` accepts a qualified variant name (Color.Red)."""
     source = """\
@@ -129,8 +123,8 @@ let c = Color.Blue()
 let r = c is Color.Blue
 ()
 """
-    legacy, ir = assert_oracle_agrees(source)
-    assert legacy["r"] == BoolValue(True)
+    ir_reference, ir = evaluate_ir(source)
+    assert ir_reference["r"] == BoolValue(True)
     assert ir["r"] == BoolValue(True)
 
 

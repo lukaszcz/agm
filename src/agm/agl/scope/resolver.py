@@ -826,7 +826,7 @@ class _Resolver:
                         "declarations in a library module.",
                         span=item.span,
                     )
-                # Module-system pass (M2+) processes imports; resolver skips them.
+                # The graph module-system pass processes imports; this pass skips them.
                 continue
             # Non-entry enforcement: track that a non-import item has been seen.
             if is_non_entry_root:

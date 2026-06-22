@@ -1,4 +1,4 @@
-"""Oracle tests for M4a: top-level user function calls through the IR.
+"""IR semantic tests for M4a: top-level user function calls through the IR.
 
 Covers:
 - Simple positional args
@@ -25,20 +25,17 @@ from agm.agl.lower import lower_program
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.typecheck import check
-from tests.agl.oracle.harness import assert_oracle_agrees, m2_caps
-
-pytestmark = pytest.mark.oracle
-
+from tests.agl.ir_harness import evaluate_ir, m2_caps
 
 # ---------------------------------------------------------------------------
-# Oracle tests — both pipelines must agree
+# IR semantic tests — both pipelines must agree
 # ---------------------------------------------------------------------------
 
 
 def test_simple_positional_args() -> None:
     """Simple two-arg function called with positional args."""
     source = "def add(x: int, y: int) -> int = x + y\nlet result = add(3, 4)\n()"
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(7)
 
 
@@ -48,7 +45,7 @@ def test_named_args_reordered() -> None:
         'def greet(greeting: text, name: text) -> text = greeting + " " + name\n'
         'let result = greet(name: "World", greeting: "Hello")\n()'
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == TextValue("Hello World")
 
 
@@ -59,7 +56,7 @@ def test_default_arg_used() -> None:
         "let a = inc(10)\n"
         "let b = inc(10, 5)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["a"] == IntValue(11)
     assert ir["b"] == IntValue(15)
 
@@ -67,14 +64,14 @@ def test_default_arg_used() -> None:
 def test_return_coercion() -> None:
     """Function with int body but decimal return type — coercion applied."""
     source = "def to_dec(x: int) -> decimal = x\nlet result = to_dec(3)\n()"
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("3"))
 
 
 def test_arg_coercion() -> None:
     """int argument passed to decimal parameter — coercion at call site."""
     source = "def halve(x: decimal) -> decimal = x / 2.0\nlet result = halve(10)\n()"
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("5"))
 
 
@@ -85,7 +82,7 @@ def test_self_recursion_factorial() -> None:
         "  if n <= 1 => 1 else => n * factorial(n - 1)\n"
         "let result = factorial(6)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(720)
 
 
@@ -99,7 +96,7 @@ def test_mutual_recursion_even_odd() -> None:
         "let r1 = is_even(4)\n"
         "let r2 = is_odd(3)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r1"] == BoolValue(True)
     assert ir["r2"] == BoolValue(True)
 
@@ -107,8 +104,8 @@ def test_mutual_recursion_even_odd() -> None:
 def test_closure_value_normalized() -> None:
     """Function binding normalizes to sentinel on both sides."""
     source = "def double(x: int) -> int = x * 2\nlet result = double(5)\n()"
-    # assert_oracle_agrees normalizes IrClosureValue / Closure to sentinel
-    legacy, ir = assert_oracle_agrees(source)
+    # evaluate_ir normalizes IrClosureValue / Closure to sentinel
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(10)
 
 
@@ -141,7 +138,7 @@ def test_multiple_calls() -> None:
         "let b = square(4)\n"
         "let c = square(5)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["a"] == IntValue(9)
     assert ir["b"] == IntValue(16)
     assert ir["c"] == IntValue(25)
@@ -154,14 +151,14 @@ def test_function_calling_another() -> None:
         "def quad(x: int) -> int = double(double(x))\n"
         "let result = quad(3)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(12)
 
 
 def test_simple_function_call() -> None:
     """Simple user function call works end-to-end."""
     source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(2)
 
 
@@ -174,7 +171,7 @@ def test_function_with_let_in_body() -> None:
         "  sq_a + sq_b\n"
         "let result = sum_of_squares(3, 4)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(25)
 
 
@@ -185,7 +182,7 @@ def test_function_captures_outer_variable() -> None:
         "def add_offset(x: int) -> int = x + offset\n"
         "let result = add_offset(5)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(15)
 
 
@@ -200,7 +197,7 @@ def test_function_with_case_in_body() -> None:
         "    | Blue() => 3\n"
         "let r = color_code(Red())\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)
 
 
@@ -211,7 +208,7 @@ def test_function_with_unary_in_body() -> None:
         "def neg_scaled(x: int) -> int = -(x * scale)\n"
         "let result = neg_scaled(3)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(-6)
 
 
@@ -223,7 +220,7 @@ def test_function_with_named_args_in_body_call() -> None:
         "def greet_world(g: text) -> text = greet(name: \"World\", greeting: g)\n"
         "let result = greet_world(\"Hello\")\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == TextValue("Hello, World!")
 
 
@@ -236,7 +233,7 @@ def test_function_with_list_in_body() -> None:
     )
     from agm.agl.eval.values import ListValue
 
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == ListValue((IntValue(1), IntValue(3), IntValue(6)))
 
 
@@ -250,7 +247,7 @@ def test_function_with_field_access_in_body() -> None:
         "let p = Point(x: 3, y: 4)\n"
         "let result = get_x(p)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(3)
 
 
@@ -260,7 +257,7 @@ def test_function_with_cast_in_body() -> None:
         "def cast_to_decimal(x: int) -> decimal = x as decimal\n"
         "let result = cast_to_decimal(7)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("7"))
 
 
@@ -271,7 +268,7 @@ def test_function_with_template_in_body() -> None:
         "def label(n: int) -> text = \"${prefix} #${n}\"\n"
         "let result = label(5)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == TextValue("Item #5")
 
 
@@ -285,7 +282,7 @@ def test_function_with_try_in_body() -> None:
         "    0\n"
         "let result = safe_add(3, 4)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(7)
 
 
@@ -300,7 +297,7 @@ def test_function_with_do_loop_in_body() -> None:
         "  i\n"
         "let result = count_to(5)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(5)
 
 
@@ -314,7 +311,7 @@ def test_function_with_var_and_assignment_capture() -> None:
         "  acc\n"
         "let result = triple_then_add(4, 5)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(17)
 
 
@@ -328,7 +325,7 @@ def test_function_with_raise_in_body() -> None:
         "    n + 1\n"
         "let result = checked_inc(5)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(6)
 
 
@@ -339,7 +336,7 @@ def test_function_with_index_access_and_capture() -> None:
         "def get_item(i: int) -> int = items[i]\n"
         "let result = get_item(1)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(20)
 
 
@@ -352,7 +349,7 @@ def test_function_with_dict_literal_and_capture() -> None:
     )
     from agm.agl.eval.values import DictValue
 
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == DictValue({"a": IntValue(15), "b": IntValue(5)})
 
 
@@ -364,7 +361,7 @@ def test_function_with_is_test_and_capture() -> None:
         "def check_red(c: Color) -> bool = c is Red or my_color is Red\n"
         "let result = check_red(Green())\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == BoolValue(True)
 
 
@@ -375,7 +372,7 @@ def test_function_captures_mutable_outer_var() -> None:
         "def get_counter() -> int = counter\n"
         "let result = get_counter()\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == IntValue(0)
 
 
@@ -400,7 +397,7 @@ def test_index_target_capture() -> None:
         "  arr[k] := 99\n"
         "setit()\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["arr"] == ListValue((IntValue(0), IntValue(99), IntValue(0)))
 
 
@@ -424,9 +421,9 @@ def test_assignment_as_function_result_yields_unit() -> None:
         "let z = setit()\n"
         "()"
     )
-    legacy, ir = assert_oracle_agrees(index_source)
+    ir_reference, ir = evaluate_ir(index_source)
     assert ir["z"] == UnitValue()
-    assert legacy["z"] == UnitValue()
+    assert ir_reference["z"] == UnitValue()
 
     # Name-target assignment as the function body / return value.
     name_source = (
@@ -436,7 +433,7 @@ def test_assignment_as_function_result_yields_unit() -> None:
         "let z = reset()\n"
         "()"
     )
-    legacy2, ir2 = assert_oracle_agrees(name_source)
+    ir_reference2, ir2 = evaluate_ir(name_source)
     assert ir2["z"] == UnitValue()
 
 
@@ -453,7 +450,7 @@ def test_name_target_only_assign_capture() -> None:
         "  counter := 5\n"
         "reset()\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["counter"] == IntValue(5)
 
 
@@ -475,7 +472,7 @@ def test_capture_through_nested_positions_and_pattern_locals() -> None:
         "let c = describe(Shape.Circle(radius: 4))\n"
         "let sq = describe(Shape.Square(side: 5))\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["c"] == IntValue(12)
     assert ir["sq"] == IntValue(15)
 
@@ -487,14 +484,14 @@ def test_recursion_depth_parity() -> None:
     the ``limit`` field value.
     """
     source = "def loop(n: int) -> int = loop(n + 1)\nlet result = loop(0)\n()"
-    from tests.agl.oracle.harness import assert_oracle_raises
+    from tests.agl.ir_harness import evaluate_ir_raises
 
-    legacy_exc, ir_exc = assert_oracle_raises(source)
+    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
     # Both must be RecursionError
-    assert legacy_exc.display_name == "RecursionError"
+    assert ir_reference_exc.display_name == "RecursionError"
     assert ir_exc.display_name == "RecursionError"
     # Both must carry the identical message including parenthesized depth
-    assert legacy_exc.fields["message"] == ir_exc.fields["message"]
+    assert ir_reference_exc.fields["message"] == ir_exc.fields["message"]
     # The limit field must match DEFAULT_MAX_CALL_DEPTH = 256
     assert ir_exc.fields["limit"] == IntValue(256)
 
@@ -516,7 +513,7 @@ def test_case_wildcard_and_literal_patterns_in_function_body() -> None:
         "let b = classify(1)\n"
         "let c = classify(99)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["a"] == IntValue(-1)
     assert ir["b"] == IntValue(1)
     assert ir["c"] == IntValue(0)
@@ -538,5 +535,5 @@ def test_bare_variant_pattern_in_function_body() -> None:
         "    | Off => 0\n"
         "let r = check(flag)\n()"
     )
-    legacy, ir = assert_oracle_agrees(source)
+    ir_reference, ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)

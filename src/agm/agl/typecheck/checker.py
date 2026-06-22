@@ -666,7 +666,7 @@ class _Checker:
         if isinstance(item, ProgramDecl):
             return UnitType()
         if isinstance(item, ImportDecl):
-            return UnitType()  # Module-system pass (M2+) will process import declarations
+            return UnitType()  # The graph module-system pass processes imports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
             self._check_binding(item)

@@ -18,9 +18,6 @@ Covers (per PLAN_DSL §9.3 and §13):
    targets; format_instructions reach AgentRequest; make_contract API.
 9. decimal exactness end-to-end: 1.5 parsed from agent response stays Decimal("1.5").
 
-Note: tests for record/enum targets use the direct-AST approach from test_agl_eval.py
-since those type declarations require M2a parser features.  Scalar / json / list /
-dict targets can be tested via ``WorkflowRuntime.run`` with parseable source.
 """
 
 from __future__ import annotations
@@ -33,8 +30,6 @@ import pytest
 from agm.agl import WorkflowRuntime
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.exceptions import AglRaise
-from agm.agl.eval.interpreter import Interpreter
-from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
     BoolValue,
     DecimalValue,
@@ -50,7 +45,6 @@ from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract
 from agm.agl.runtime.request import AgentRequest
-from agm.agl.runtime.schema import derive_schema
 from agm.agl.scope import resolve
 from agm.agl.syntax import nodes as ast
 from agm.agl.syntax import types as tast
@@ -59,6 +53,7 @@ from agm.agl.syntax.nodes import (
     TemplateSegment,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.type_schema import derive_schema
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
 from agm.agl.typecheck.types import (
@@ -172,16 +167,23 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedProgram:
     return check(resolved, caps)
 
 
+class _Bindings(dict[str, object]):
+    def snapshot(self) -> "_Bindings":
+        return self
+
+
 def _run_with_json_codec(
     body: tuple[Item, ...],
     *,
     named: dict[str, AgentFn] | None = None,
     default_agent: AgentFn | None = None,
     strict_json: bool = False,
-) -> Scope:
+) -> _Bindings:
     """Build + resolve + check + execute *body* with JsonCodec registered."""
+    from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.lower import lower_program
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
-    from agm.agl.runtime.contract import materialize_contract
+    from agm.agl.runtime.runtime import _materialize_ir_contracts
 
     checked = _check_program_with_json(body)
     text_codec = TextCodec()
@@ -190,22 +192,20 @@ def _run_with_json_codec(
         text_codec.name: text_codec,
         json_codec.name: json_codec,
     }
-    contracts: dict[int, OutputContract] = {}
-    for node_id, spec in checked.contract_specs.items():
-        contracts[node_id] = materialize_contract(spec, codecs)
-
     registry = AgentRegistry(named=named or {}, default_agent=default_agent)
-    interp = Interpreter(
-        checked=checked,
+    executable = lower_program(
+        checked, source_text="<direct-ast>", source_label="<test>", validate=True
+    )
+    contracts, errors = _materialize_ir_contracts(executable, codecs)
+    assert errors == []
+    interp = IrInterpreter(
+        executable,
         registry=registry,
-        contracts=contracts,
-        type_env=checked.type_env,
         loop_limit=3,
         strict_json=strict_json,
+        host_contracts=contracts,
     )
-    root = Scope(parent=None)
-    interp.execute(root)
-    return root
+    return _Bindings(interp.run())
 
 
 # AST statement / expression builders (subset needed for codec tests)
@@ -1546,93 +1546,18 @@ class TestRecordEnumParams:
     """Runtime.convert_param now accepts record/enum types via JsonCodec."""
 
     def test_record_param_parsed_from_json_string(self) -> None:
-        # record Issue; title: text; severity: int; param issue: Issue; print issue.title
-        # Use direct-AST since record decl needs M2a parser.
-        from agm.agl.syntax.nodes import ParamDecl, VarRef
-
-        record_def = _record_def(
-            "Issue",
-            _field_def("title", _text_ty()),
-            _field_def("severity", _int_ty()),
+        result = WorkflowRuntime().run(
+            """
+record Issue
+  title: text
+  severity: int
+param issue: Issue
+issue
+""",
+            param_values={"issue": '{"title": "Bug", "severity": 5}'},
         )
-        param_decl = ParamDecl(
-            name="issue",
-            annotation=_name_ty("Issue"),
-            default=None,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        # In v2 print is a Call expression, not a PrintStmt.
-        print_call = ast.Call(
-            callee=VarRef(name="print", span=_sp(), node_id=_nid()),
-            args=(VarRef(name="issue", span=_sp(), node_id=_nid()),),
-            named_args=(),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        program = ast.Program(
-            body=ast.Block(
-                items=(record_def, param_decl, print_call),
-                span=_sp(),
-                node_id=_nid(),
-            ),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        resolved = resolve(program, ambient_agents=ambient_agents_for(program))
-        caps = HostCapabilities(
-            codec_kinds={
-                "text": frozenset({"text"}),
-                "json": frozenset(
-                    {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-                ),
-            },
-        )
-        checked = check(resolved, caps)
-        from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
-        from agm.agl.runtime.contract import materialize_contract
-
-        text_codec = TextCodec()
-        json_codec = JsonCodec()
-        codecs: dict[str, OutputCodec] = {
-            text_codec.name: text_codec,
-            json_codec.name: json_codec,
-        }
-        contracts: dict[int, OutputContract] = {
-            nid: materialize_contract(spec, codecs)
-            for nid, spec in checked.contract_specs.items()
-        }
-        from agm.agl.eval.interpreter import Interpreter
-        from agm.agl.runtime.agents import AgentRegistry
-
-        registry = AgentRegistry(named={}, default_agent=None)
-        root = Scope(parent=None)
-        # Convert and pass the param value as the runtime would.
-        raw_input = '{"title": "Bug", "severity": 5}'
-        issue_type = RecordType(
-            name="Issue", fields={"title": TextType(), "severity": IntType()}
-        )
-        codec = JsonCodec()
-        parse_result = codec.parse(raw_input, issue_type, strict_json=False)
-        assert parse_result.ok and parse_result.value is not None
-        from agm.agl.syntax.nodes import ParamDecl as ID
-
-        param_values = {
-            stmt.name: parse_result.value
-            for stmt in program.body.items
-            if isinstance(stmt, ID)
-        }
-        interp = Interpreter(
-            checked=checked,
-            registry=registry,
-            contracts=contracts,
-            type_env=checked.type_env,
-            loop_limit=3,
-            strict_json=False,
-            param_values=param_values,
-        )
-        interp.execute(root)
-        v = root.snapshot()["issue"]
+        assert result.ok
+        v = result.bindings["issue"]
         assert isinstance(v, RecordValue)
         assert v.fields["title"] == TextValue("Bug")
 
@@ -2105,7 +2030,7 @@ class TestSchemaPrecomputedInParse:
     def test_parse_with_precomputed_schema_succeeds(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         schema = derive_schema(typ)
         raw = '{"title": "Bug", "severity": 5, "description": "A bug"}'
         result = codec.parse(raw, typ, strict_json=False, schema=schema)
@@ -2114,7 +2039,7 @@ class TestSchemaPrecomputedInParse:
     def test_parse_with_precomputed_schema_validation_failure(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        from agm.agl.runtime.schema import derive_schema
+        from agm.agl.type_schema import derive_schema
         schema = derive_schema(typ)
         # Missing required fields → schema validation fails even with precomputed schema.
         result = codec.parse('{"title": "Bug"}', typ, strict_json=False, schema=schema)

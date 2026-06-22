@@ -54,8 +54,8 @@ from agm.agl.eval.values import (
 )
 from agm.agl.eval.values import Value as BaseValue
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.schema import derive_schema
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.type_schema import derive_schema
 from agm.agl.typecheck.types import (
     BoolType,
     DecimalType,
@@ -331,7 +331,7 @@ def json_obj_to_value(obj: object, typ: Type) -> Value:
        equivalent ``int``.  This lets ``1.0`` satisfy an integer schema while
        ``1.5`` still fails.
     2. Validate the normalized object against the JSON Schema derived from
-       *typ* via :func:`~agm.agl.runtime.schema.derive_schema`.
+       *typ* via :func:`~agm.agl.type_schema.derive_schema`.
     3. Construct the typed ``Value`` via :func:`json_to_value`.
 
     :raises CastConversionError: On schema validation failure or type-mismatch

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
-from agm.agl.eval.conversions import _decode
+from agm.agl.eval.conversions import decode_value
 from agm.agl.eval.values import TextValue, Value
 from agm.agl.ir.contracts import ContractRequest, EnumDecode
 from agm.agl.runtime.codec import _AMBIGUOUS_MULTI_VALUE, _extract_json_text
@@ -174,7 +174,7 @@ def _validate_and_convert(
     if contract.decode is None:
         return AgentParseResult.failure("ContractRequest has no decode schema for json codec")
     try:
-        value = _decode(contract.decode, normalized_obj)
+        value = decode_value(contract.decode, normalized_obj)
     except ValueError as exc:
         return AgentParseResult.failure(
             f"Value conversion failed: {exc}", normalized_raw=json_text

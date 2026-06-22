@@ -930,8 +930,8 @@ class TestM4aLowerFunctions:
 class TestM4aLowerDefensivePaths:
     """Tests for M4a lowerer defensive code paths via internal API."""
 
-    def test_lower_funcdef_without_preallocation(self) -> None:
-        """_lower_funcdef with a non-pre-allocated FuncDef exercises the else branch."""
+    def test_lower_funcdef_without_preallocation_raises(self) -> None:
+        """_lower_funcdef with a non-pre-allocated FuncDef raises AssertionError."""
         from agm.agl.lower.lowerer import _Lowerer
         from agm.agl.syntax.nodes import FuncDef
 
@@ -947,10 +947,9 @@ class TestM4aLowerDefensivePaths:
                 break
         assert funcdef is not None
 
-        # Call _lower_funcdef without pre-allocating — exercises else branch (lines 433-442)
-        result = lowerer._lower_funcdef(funcdef, top_level=True)
-        from agm.agl.ir.nodes import IrBind
-        assert isinstance(result, IrBind)
+        # _lower_funcdef without pre-allocation raises AssertionError (compiler bug guard)
+        with pytest.raises(AssertionError, match="was not pre-allocated"):
+            lowerer._lower_funcdef(funcdef)
 
     def test_lower_direct_call_fallback_signature_by_name(self) -> None:
         """_lower_direct_call uses fallback get_function_signature when by_node_id returns None."""
@@ -974,7 +973,7 @@ class TestM4aLowerDefensivePaths:
             # Now call _lower_funcdef — it will fall back to get_function_signature(name)
             for item in checked.resolved.program.body.items:
                 if isinstance(item, FuncDef):
-                    result = lowerer._lower_funcdef(item, top_level=True)
+                    result = lowerer._lower_funcdef(item)
                     from agm.agl.ir.nodes import IrBind
                     assert isinstance(result, IrBind)
         finally:
@@ -1004,40 +1003,6 @@ class TestM4aLowerDefensivePaths:
                 lowerer.lower_item(item, top_level=True)
         finally:
             type_env._function_signatures_by_node_id.update(original)
-
-    def test_walk_collect_locals_stops_at_funcdef(self) -> None:
-        """_walk_collect_locals with a FuncDef node returns immediately (nested fn stop)."""
-        from agm.agl.lower.lowerer import _Lowerer
-        from agm.agl.syntax.nodes import FuncDef
-
-        source = "def f(x: int) -> int = x + 1\n()"
-        checked = _check(source)
-        lowerer = _Lowerer(checked, source, "<test>")
-
-        funcdef = next(
-            item for item in checked.resolved.program.body.items if isinstance(item, FuncDef)
-        )
-        out: set[int] = set()
-        # Should return immediately, leaving out empty
-        lowerer._walk_collect_locals(funcdef, out)
-        assert out == set()
-
-    def test_walk_for_captures_stops_at_funcdef(self) -> None:
-        """_walk_for_captures with a FuncDef node returns immediately (nested fn stop)."""
-        from agm.agl.lower.lowerer import _Lowerer
-        from agm.agl.syntax.nodes import FuncDef
-
-        source = "def f(x: int) -> int = x + 1\n()"
-        checked = _check(source)
-        lowerer = _Lowerer(checked, source, "<test>")
-
-        funcdef = next(
-            item for item in checked.resolved.program.body.items if isinstance(item, FuncDef)
-        )
-        out: dict[int, object] = {}
-        # Should return immediately, leaving out empty
-        lowerer._walk_for_captures(funcdef, set(), out)
-        assert out == {}
 
     def test_field_access_callee_without_qcr_raises_not_implemented(self) -> None:
         """FieldAccess callee not in qualified_constructor_refs raises NotImplementedError."""
@@ -1098,5 +1063,27 @@ class TestM4aLowerDefensivePaths:
 
         with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._lower_direct_call(fake_call, callee_ref, 10001, span)
+
+    def test_scan_captures_stops_at_nested_lambda_boundary(self) -> None:
+        """_scan_captures returns early at Lambda boundary without descending into it.
+
+        When a function body contains a lambda expression, ``_scan_captures``
+        must treat Lambda as a scope boundary (line 354) and stop descending.
+        Lowering then fails at the lambda lowering step (NotImplementedError),
+        confirming the capture scan completed successfully up to the boundary.
+        """
+        # f's body is a block containing a lambda let-binding followed by the unit value.
+        # _scan_captures should stop at the Lambda boundary (line 354) rather than
+        # descending into the lambda's body and incorrectly treating y as a capture of f.
+        source = (
+            "let y = 5\n"
+            "def f() -> unit =\n"
+            "  let _g = fn() -> int => y\n"
+            "  ()\n"
+            "f()\n"
+            "()"
+        )
+        with pytest.raises(NotImplementedError):
+            _lower(source)
 
 

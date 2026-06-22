@@ -336,8 +336,9 @@ class IrInterpreter:
             raise AglRaise(
                 _make_exc_value(
                     "RecursionError",
-                    f"Maximum call depth of {self._max_call_depth} exceeded",
+                    f"Maximum call depth ({self._max_call_depth}) exceeded",
                     trace_id=self._trace.new_event_id(),
+                    limit=IntValue(self._max_call_depth),
                 )
             )
         desc = self._program.functions[fn_id]
@@ -345,7 +346,7 @@ class IrInterpreter:
         captures_dict: Frame = dict(closure_val.captures)
 
         bound_values: list[Value] = []
-        for param, arg in zip(desc.params, arguments):
+        for param, arg in zip(desc.params, arguments, strict=True):
             if isinstance(arg, UseDefault):
                 assert param.default is not None, (
                     "UseDefault arg but param has no default (lowerer bug)"
@@ -359,13 +360,11 @@ class IrInterpreter:
                 val = self._eval(arg)
             bound_values.append(val)
 
+        # Function parameters are immutable in AgL (they can never be the target
+        # of an assignment), so they are bound by value — never boxed in a Cell.
         call_frame: Frame = dict(captures_dict)
-        for param, val in zip(desc.params, bound_values):
-            param_desc = self._program.symbols.get(param.symbol)
-            if param_desc is not None and param_desc.mutable:
-                call_frame[param.symbol] = Cell(val)
-            else:
-                call_frame[param.symbol] = val
+        for param, val in zip(desc.params, bound_values, strict=True):
+            call_frame[param.symbol] = val
 
         self._frames.append(call_frame)
         self._call_depth += 1
@@ -470,10 +469,11 @@ class IrInterpreter:
                         f" (public_name={desc.public_name!r}) is not a mutable var"
                     )
                 if not path:
-                    # Simple assignment
-                    new_value = self._eval(val_expr)
-                    slot.value = new_value
-                    return new_value
+                    # Simple assignment.  An assignment statement yields unit
+                    # (parity with the legacy interpreter); the mutation is the
+                    # side effect.
+                    slot.value = self._eval(val_expr)
+                    return UnitValue()
                 # Indexed assignment with non-empty path
                 root = slot.value
                 # Traverse all intermediate steps, collecting (container, index_val, kind)
@@ -501,7 +501,8 @@ class IrInterpreter:
                 for container, idx_val, kind in reversed(containers):
                     updated = index_set(kind, container, idx_val, updated)
                 slot.value = updated
-                return updated
+                # An assignment statement yields unit (parity with legacy).
+                return UnitValue()
 
             case IrCoerce(value=val_expr, operation=op):
                 value = self._eval(val_expr)
@@ -782,7 +783,6 @@ class IrInterpreter:
                         metadata=JsonValue(None),
                     )
                 )
-
 
             case IrMakeClosure(function_id=fn_id, captures=captures):
                 cap_slots: list[tuple[SymbolId, Value | Cell]] = []

@@ -579,7 +579,6 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(body, ctx)
             _validate_expr(condition, ctx)
 
-
         case IrMakeClosure(function_id=fn_id, captures=captures):
             _validate_location(node.location, ctx)
             if ctx.deep:
@@ -603,6 +602,25 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                         f"IrDirectCall references function_id={fn_id!r}"
                         " which is not in program.functions"
                     )
+                fn_desc = ctx.program.functions[fn_id]
+                if len(arguments) != len(fn_desc.params):
+                    raise InvalidIrError(
+                        f"IrDirectCall to function_id={fn_id!r} has {len(arguments)}"
+                        f" arguments but the function has {len(fn_desc.params)} parameters"
+                    )
+                for index, arg in enumerate(arguments):
+                    if isinstance(arg, UseDefault):
+                        if arg.param_index != index:
+                            raise InvalidIrError(
+                                f"IrDirectCall to function_id={fn_id!r}: UseDefault at"
+                                f" position {index} has param_index={arg.param_index}"
+                                " (must equal its position)"
+                            )
+                        if fn_desc.params[index].default is None:
+                            raise InvalidIrError(
+                                f"IrDirectCall to function_id={fn_id!r}: UseDefault for"
+                                f" parameter {index} which has no default"
+                            )
             for arg in arguments:
                 if not isinstance(arg, UseDefault):
                     _validate_expr(arg, ctx)
@@ -664,7 +682,6 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
                 f" nominal={nom_desc.nominal!r} (mismatch)"
             )
 
-
     # 4. functions table consistency
     fn_ctx = _Context(program, deep=True)
     for fn_key, fn_desc in program.functions.items():
@@ -689,6 +706,8 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
                     f"FunctionDescriptor for {fn_key!r}: param symbol {param.symbol!r}"
                     " is not in program.symbols"
                 )
+            if param.default is not None:
+                _validate_expr(param.default, fn_ctx)
         _validate_expr(fn_desc.body, fn_ctx)
 
     # (Sources table has no key/id consistency invariant beyond being keyed by

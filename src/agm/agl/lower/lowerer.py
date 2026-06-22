@@ -140,6 +140,7 @@ from agm.agl.syntax.nodes import (
     IfBranch,
     ImportDecl,
     IndexAccess,
+    IndexTarget,
     InterpSegment,
     IntLit,
     IsTest,
@@ -298,148 +299,161 @@ class _Lowerer:
         self._fn_node_to_sym[funcdef.node_id] = sym
         self._fn_node_to_id[funcdef.node_id] = fn_id
 
-    def _walk_collect_locals(self, node: object, out: "set[int]") -> None:
-        """Walk collecting LetDecl/VarDecl node_ids, stopping at FuncDef/Lambda."""
-        if isinstance(node, (FuncDef, Lambda)):
-            return
-        if isinstance(node, (LetDecl, VarDecl)):
-            out.add(node.node_id)
-            self._walk_collect_locals(node.value, out)
-        elif isinstance(node, Block):
-            for item in node.items:
-                self._walk_collect_locals(item, out)
-        elif isinstance(node, If):
-            for branch in node.branches:
-                if not isinstance(branch.cond, ElseSentinel):
-                    self._walk_collect_locals(branch.cond, out)
-                self._walk_collect_locals(branch.body, out)
-        elif isinstance(node, Case):
-            for case_branch in node.branches:
-                self._walk_collect_locals(case_branch.body, out)
-        elif isinstance(node, Try):
-            self._walk_collect_locals(node.body, out)
-            for clause in node.handlers:
-                if clause.binding is not None:
-                    out.add(clause.node_id)
-                self._walk_collect_locals(clause.body, out)
-        elif isinstance(node, Do):
-            self._walk_collect_locals(node.body, out)
+    # Binder kinds whose values live in evaluation frames and can therefore be
+    # captured by a closure (D5).  function_binding is resolved through the function
+    # table; agent_binding/constructor_binding are not frame values in the M4 IR
+    # (host prep / constructors are handled elsewhere) so they are not captures here.
+    _CAPTURABLE_KINDS = frozenset({
+        BinderKind.let_binding,
+        BinderKind.var_binding,
+        BinderKind.param_binding,
+        BinderKind.catch_binder,
+        BinderKind.pattern_binding,
+    })
 
-    def _collect_local_decl_ids(self, body: "Expr") -> "set[int]":
-        """Collect node_ids of LetDecl/VarDecl inside body, stopping at FuncDef/Lambda."""
-        local_ids: set[int] = set()
-        self._walk_collect_locals(body, local_ids)
-        return local_ids
+    def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
+        """Collect node_ids of the variable binders a pattern introduces (D4 closed match)."""
+        match pattern:
+            case VarPattern():
+                if pattern.node_id not in self._checked.resolved.bare_variant_patterns:
+                    out.add(pattern.node_id)
+            case ConstructorPattern():
+                for pf in pattern.fields:
+                    self._pattern_binding_ids(pf.pattern, out)
+            case WildcardPattern() | LiteralPattern():
+                pass
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
-    def _walk_for_captures(
-        self, node: object, local_ids: "set[int]", out: "dict[int, BindingRef]"
-    ) -> None:
-        """Walk node collecting VarRef resolutions, stopping at FuncDef/Lambda boundaries."""
-        if isinstance(node, VarRef):
-            ref = self._checked.resolved.resolution.get(node.node_id)
-            if (
-                ref is not None
+    def _record_capture(self, node_id: int, local_ids: set[int],
+                        captured: dict[int, BindingRef]) -> None:
+        ref = self._checked.resolved.resolution.get(node_id)
+        if (ref is not None
                 and ref.decl_node_id not in local_ids
-                and ref.kind is not BinderKind.function_binding
-            ):
-                out[ref.decl_node_id] = ref
-        elif isinstance(node, (FuncDef, Lambda)):
-            return
-        elif isinstance(node, Block):
-            for item in node.items:
-                self._walk_for_captures(item, local_ids, out)
-        elif isinstance(node, (LetDecl, VarDecl)):
-            self._walk_for_captures(node.value, local_ids, out)
-        elif isinstance(node, AssignStmt):
-            self._walk_for_captures(node.value, local_ids, out)
-        elif isinstance(node, If):
-            for branch in node.branches:
-                if not isinstance(branch.cond, ElseSentinel):
-                    self._walk_for_captures(branch.cond, local_ids, out)
-                self._walk_for_captures(branch.body, local_ids, out)
-        elif isinstance(node, BinaryOp):
-            self._walk_for_captures(node.left, local_ids, out)
-            self._walk_for_captures(node.right, local_ids, out)
-        elif isinstance(node, (UnaryNot, UnaryNeg)):
-            self._walk_for_captures(node.operand, local_ids, out)
-        elif isinstance(node, Call):
-            self._walk_for_captures(node.callee, local_ids, out)
-            for arg in node.args:
-                self._walk_for_captures(arg, local_ids, out)
-            for na in node.named_args:
-                self._walk_for_captures(na.value, local_ids, out)
-        elif isinstance(node, FieldAccess):
-            self._walk_for_captures(node.obj, local_ids, out)
-        elif isinstance(node, IndexAccess):
-            self._walk_for_captures(node.obj, local_ids, out)
-            self._walk_for_captures(node.index, local_ids, out)
-        elif isinstance(node, ListLit):
-            for elem in node.elements:
-                self._walk_for_captures(elem, local_ids, out)
-        elif isinstance(node, DictLit):
-            for entry in node.entries:
-                self._walk_for_captures(entry.key, local_ids, out)
-                self._walk_for_captures(entry.value, local_ids, out)
-        elif isinstance(node, Template):
-            for seg in node.segments:
-                if isinstance(seg, InterpSegment):
-                    self._walk_for_captures(seg.expr, local_ids, out)
-        elif isinstance(node, Case):
-            self._walk_for_captures(node.subject, local_ids, out)
-            for case_branch in node.branches:
-                self._walk_for_captures(case_branch.body, local_ids, out)
-        elif isinstance(node, Try):
-            self._walk_for_captures(node.body, local_ids, out)
-            for clause in node.handlers:
-                self._walk_for_captures(clause.body, local_ids, out)
-        elif isinstance(node, Raise):
-            self._walk_for_captures(node.exc, local_ids, out)
-        elif isinstance(node, Do):
-            self._walk_for_captures(node.body, local_ids, out)
-            self._walk_for_captures(node.condition, local_ids, out)
-        elif isinstance(node, Cast):
-            self._walk_for_captures(node.expr, local_ids, out)
-        elif isinstance(node, IsTest):
-            self._walk_for_captures(node.expr, local_ids, out)
+                and ref.kind in self._CAPTURABLE_KINDS):
+            captured[ref.decl_node_id] = ref
+
+    def _scan_captures(self, node: Item, local_ids: set[int],
+                       captured: dict[int, BindingRef]) -> None:
+        """Single boundary-aware pass collecting a function body's free-var captures.
+
+        Registers every in-body binder (let/var/pattern/catch) into ``local_ids``
+        BEFORE descending the scope it governs, and records in ``captured`` every
+        reference that resolves to a CAPTURABLE binding declared OUTSIDE the body.
+        Stops at nested FuncDef/Lambda boundaries (they analyze their own free vars).
+        A shared monotonically-growing ``local_ids`` set is safe: a reference can
+        only resolve to a binder already in scope (declared earlier), so out-of-scope
+        leakage into sibling branches can never produce a false local/false capture.
+        """
+        match node:
+            case VarRef():
+                self._record_capture(node.node_id, local_ids, captured)
+            # Boundaries + declarations introduce no value captures for THIS function:
+            case (Lambda() | FuncDef() | RecordDef() | EnumDef() | TypeAlias()
+                  | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigPragma() | ImportDecl()):
+                return
+            case LetDecl() | VarDecl():
+                local_ids.add(node.node_id)
+                self._scan_captures(node.value, local_ids, captured)
+            case AssignStmt():
+                # The assigned binding (NameTarget root, or IndexTarget root) must be
+                # captured even when it is never otherwise read (e.g. `x := 5`).
+                self._record_capture(node.node_id, local_ids, captured)
+                if isinstance(node.target, IndexTarget):
+                    self._scan_captures(node.target.obj, local_ids, captured)
+                    self._scan_captures(node.target.index, local_ids, captured)
+                self._scan_captures(node.value, local_ids, captured)
+            case Block():
+                for item in node.items:
+                    self._scan_captures(item, local_ids, captured)
+            case If():
+                for br in node.branches:
+                    if not isinstance(br.cond, ElseSentinel):
+                        self._scan_captures(br.cond, local_ids, captured)
+                    self._scan_captures(br.body, local_ids, captured)
+            case Case():
+                self._scan_captures(node.subject, local_ids, captured)
+                for cbr in node.branches:
+                    self._pattern_binding_ids(cbr.pattern, local_ids)
+                    self._scan_captures(cbr.body, local_ids, captured)
+            case Try():
+                self._scan_captures(node.body, local_ids, captured)
+                for clause in node.handlers:
+                    if clause.binding is not None:
+                        local_ids.add(clause.node_id)
+                    self._scan_captures(clause.body, local_ids, captured)
+            case Do():
+                self._scan_captures(node.body, local_ids, captured)
+                self._scan_captures(node.condition, local_ids, captured)
+            case BinaryOp():
+                self._scan_captures(node.left, local_ids, captured)
+                self._scan_captures(node.right, local_ids, captured)
+            case UnaryNot() | UnaryNeg():
+                self._scan_captures(node.operand, local_ids, captured)
+            case Cast() | IsTest():
+                self._scan_captures(node.expr, local_ids, captured)
+            case Call():
+                self._scan_captures(node.callee, local_ids, captured)
+                for arg in node.args:
+                    self._scan_captures(arg, local_ids, captured)
+                for na in node.named_args:
+                    self._scan_captures(na.value, local_ids, captured)
+            case FieldAccess():
+                self._scan_captures(node.obj, local_ids, captured)
+            case IndexAccess():
+                self._scan_captures(node.obj, local_ids, captured)
+                self._scan_captures(node.index, local_ids, captured)
+            case ListLit():
+                for elem in node.elements:
+                    self._scan_captures(elem, local_ids, captured)
+            case DictLit():
+                for entry in node.entries:
+                    self._scan_captures(entry.key, local_ids, captured)
+                    self._scan_captures(entry.value, local_ids, captured)
+            case Template():
+                for seg in node.segments:
+                    if isinstance(seg, InterpSegment):
+                        self._scan_captures(seg.expr, local_ids, captured)
+            case Raise():
+                self._scan_captures(node.exc, local_ids, captured)
+            case UnitLit() | IntLit() | DecimalLit() | BoolLit() | NullLit() | StringLit():
+                pass
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
     def _compute_captures(
         self, funcdef: "FuncDef", param_decl_ids: "set[int]"
     ) -> "tuple[IrCapture, ...]":
-        """Compute the captures for a FuncDef body."""
-        local_body_ids = self._collect_local_decl_ids(funcdef.body)
-        local_ids = param_decl_ids | local_body_ids
+        """Compute the captures for a FuncDef body using the single boundary-aware pass."""
+        local_ids: set[int] = set(param_decl_ids)
         local_ids.add(funcdef.node_id)
-
-        captured_refs: dict[int, BindingRef] = {}
-        self._walk_for_captures(funcdef.body, local_ids, captured_refs)
+        captured: dict[int, BindingRef] = {}
+        self._scan_captures(funcdef.body, local_ids, captured)
         for param in funcdef.params:
             if param.default is not None:
-                self._walk_for_captures(param.default, local_ids, captured_refs)
-
+                self._scan_captures(param.default, local_ids, captured)
         captures: list[IrCapture] = []
-        for decl_id, ref in captured_refs.items():
+        for decl_id, ref in captured.items():
             sym = self._decl_to_sym.get(decl_id)
-            if sym is None:
-                continue
+            assert sym is not None, (  # capturable outer bindings are always pre-allocated
+                f"compiler bug: captured binding {ref.name!r} (decl_node_id={decl_id})"
+                " has no allocated symbol"
+            )
             captures.append(IrCapture(symbol=sym, by_cell=ref.mutable))
         return tuple(captures)
 
-    def _lower_funcdef(self, funcdef: "FuncDef", top_level: bool) -> IrExpr:
-        """Lower a FuncDef to IrBind(sym, IrMakeClosure(fn_id, captures))."""
-        if funcdef.node_id in self._fn_node_to_id:
-            fn_id = self._fn_node_to_id[funcdef.node_id]
-            fn_sym = self._fn_node_to_sym[funcdef.node_id]
-        else:
-            fn_id = self._alloc_fn()
-            fn_sym = self._alloc_sym(
-                funcdef.node_id,
-                name=funcdef.name,
-                mutable=False,
-                public=False,
-                owner=ENTRY_ID,
-            )
-            self._fn_node_to_sym[funcdef.node_id] = fn_sym
-            self._fn_node_to_id[funcdef.node_id] = fn_id
+    def _lower_funcdef(self, funcdef: "FuncDef") -> IrExpr:
+        """Lower a FuncDef to IrBind(sym, IrMakeClosure(fn_id, captures)).
+
+        All top-level FuncDefs are pre-allocated before any body is lowered (phase 1),
+        so the symbol + function-id are always present; nested ``def`` is rejected by
+        the scope checker.
+        """
+        assert funcdef.node_id in self._fn_node_to_id, (
+            f"compiler bug: FuncDef {funcdef.name!r} was not pre-allocated"
+        )
+        fn_id = self._fn_node_to_id[funcdef.node_id]
+        fn_sym = self._fn_node_to_sym[funcdef.node_id]
 
         param_decl_ids: set[int] = set()
         param_syms: list[SymbolId] = []
@@ -1411,7 +1425,7 @@ class _Lowerer:
             # Declarations with no runtime action in M2
             # ----------------------------------------------------------
             case FuncDef() as funcdef:
-                return self._lower_funcdef(funcdef, top_level=top_level)
+                return self._lower_funcdef(funcdef)
 
             case (
                 AgentDecl()

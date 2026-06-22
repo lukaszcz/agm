@@ -1400,9 +1400,12 @@ class TestM4aFunctionEvaluation:
         from agm.agl.eval.values import IntValue
         assert result["result"] == IntValue(99)
 
-    def test_direct_call_with_mutable_param(self) -> None:
-        """IrDirectCall with a mutable param symbol creates a Cell in the call frame."""
-        # Create a function with a mutable param symbol (not produced by lowerer but valid IR)
+    def test_direct_call_param_bound_by_value(self) -> None:
+        """IrDirectCall binds parameters by value regardless of the symbol's mutable flag.
+
+        Params are always bound by value (D5); a mutable SymbolDescriptor for a param
+        is unusual IR but the evaluator must still bind by value and return the arg.
+        """
         mutable_param_sym = SymbolId(150)
         mutable_param_desc = SymbolDescriptor(
             symbol_id=mutable_param_sym, mutable=True, public_name="x", owner=_FN_ID

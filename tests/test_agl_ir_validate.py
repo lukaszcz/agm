@@ -1056,7 +1056,8 @@ class TestM4aIrDirectCall:
 
     def test_valid_direct_call_passes(self) -> None:
         """IrDirectCall with valid function_id and UseDefault arg passes."""
-        fn_param = _make_fn_param(sym=SYM0)
+        # Param must have a default for UseDefault to be valid
+        fn_param = IrFunctionParam(symbol=SYM0, default=IrConstInt(location=LOC, value=42))
         fn_desc = _make_fn_desc(fn_sym=SYM0, params=(fn_param,))
         call = _make_direct_call(FN0, args=(UseDefault(param_index=0),))
         prog = _make_program(
@@ -1077,3 +1078,52 @@ class TestM4aIrDirectCall:
         call = _make_direct_call(FN0)
         prog = _make_program(initializers=(IrBind(LOC, SYM0, call),))
         validate_ir(prog, deep=False)  # no exception
+
+    def test_direct_call_wrong_arg_count_raises(self) -> None:
+        """IrDirectCall with wrong argument count raises InvalidIrError."""
+        # Function has 1 param but call passes 0 args
+        fn_param = IrFunctionParam(symbol=SYM0, default=None)
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(fn_param,))
+        # No args — should fail arity check
+        call = _make_direct_call(FN0, args=())
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, call),),
+            functions={FN0: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="arguments"):
+            validate_ir(prog)
+
+    def test_use_default_out_of_position_raises(self) -> None:
+        """UseDefault at wrong position (param_index != slot index) raises InvalidIrError."""
+        fn_param = IrFunctionParam(symbol=SYM0, default=IrConstInt(location=LOC, value=1))
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(fn_param,))
+        # UseDefault with param_index=99 but it is at position 0
+        call = _make_direct_call(FN0, args=(UseDefault(param_index=99),))
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, call),),
+            functions={FN0: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="param_index"):
+            validate_ir(prog)
+
+    def test_use_default_for_non_defaulted_param_raises(self) -> None:
+        """UseDefault for a param that has no default raises InvalidIrError."""
+        fn_param = IrFunctionParam(symbol=SYM0, default=None)  # no default!
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(fn_param,))
+        call = _make_direct_call(FN0, args=(UseDefault(param_index=0),))
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, call),),
+            functions={FN0: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="no default"):
+            validate_ir(prog)
+
+    def test_function_param_default_deep_validated(self) -> None:
+        """FunctionDescriptor param default is deep-validated (structurally bad node raises)."""
+        # A param default that references a dangling symbol — must be caught by validator
+        bad_default = IrLoad(location=LOC, symbol=SymbolId(value=9999))
+        fn_param = IrFunctionParam(symbol=SYM0, default=bad_default)
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(fn_param,))
+        prog = _make_program(functions={FN0: fn_desc})
+        with pytest.raises(InvalidIrError, match="9999"):
+            validate_ir(prog)

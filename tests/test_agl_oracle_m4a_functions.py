@@ -113,10 +113,10 @@ def test_closure_value_normalized() -> None:
 
 
 def test_call_depth_guard_ir_only() -> None:
-    """IR call-depth guard raises RecursionError after exceeding max_call_depth."""
+    """IR call-depth guard raises RecursionError at a custom low depth (IR-side only)."""
+    from agm.agl.eval.values import TextValue
+
     source = "def inf(n: int) -> int = inf(n + 1)\nlet result = inf(0)\n()"
-    # We only test the IR side here — legacy will hit Python's recursion limit
-    # in a non-AglRaise way. The IR must raise AglRaise(RecursionError).
     program = parse_program(source)
     resolved = resolve(program)
     caps = m2_caps()
@@ -127,7 +127,10 @@ def test_call_depth_guard_ir_only() -> None:
     interp = IrInterpreter(executable, max_call_depth=10)
     with pytest.raises(AglRaise) as exc_info:
         interp.run()
-    assert exc_info.value.exc.display_name == "RecursionError"
+    exc = exc_info.value.exc
+    assert exc.display_name == "RecursionError"
+    assert exc.fields["message"] == TextValue("Maximum call depth (10) exceeded")
+    assert exc.fields["limit"] == IntValue(10)
 
 
 def test_multiple_calls() -> None:
@@ -374,3 +377,166 @@ def test_function_captures_mutable_outer_var() -> None:
     )
     legacy, ir = assert_oracle_agrees(source)
     assert ir["result"] == IntValue(0)
+
+
+# ---------------------------------------------------------------------------
+# B1/capture fix tests (review-fixes task)
+# ---------------------------------------------------------------------------
+
+
+def test_index_target_capture() -> None:
+    """B1 fix: function mutating outer var via index target captures the var correctly.
+
+    `arr[k] := 99` inside a function must capture both the outer `var arr` (IndexTarget
+    root) and the outer `let k` (index expression).  Before the fix the root was missed
+    and lowering raised InvalidIrError.  Both evaluators must agree on arr = [0, 99, 0].
+    """
+    from agm.agl.eval.values import ListValue
+
+    source = (
+        "var arr = [0, 0, 0]\n"
+        "let k = 1\n"
+        "def setit() -> unit =\n"
+        "  arr[k] := 99\n"
+        "setit()\n()"
+    )
+    legacy, ir = assert_oracle_agrees(source)
+    assert ir["arr"] == ListValue((IntValue(0), IntValue(99), IntValue(0)))
+
+
+def test_assignment_as_function_result_yields_unit() -> None:
+    """An assignment statement yields unit, even as a function's return value.
+
+    Regression: the IR's IrAssign previously returned the assigned value rather
+    than unit.  This was invisible while assignment results were always discarded
+    (non-tail block items), but a `unit`-returning function whose body IS the
+    assignment exposes it: `let z = setit()` must observe UnitValue in both
+    evaluators, not the mutated container/value.
+    """
+    from agm.agl.eval.values import UnitValue
+
+    # Index-target assignment as the function body / return value.
+    index_source = (
+        "var arr = [0, 0, 0]\n"
+        "let k = 1\n"
+        "def setit() -> unit =\n"
+        "  arr[k] := 99\n"
+        "let z = setit()\n"
+        "()"
+    )
+    legacy, ir = assert_oracle_agrees(index_source)
+    assert ir["z"] == UnitValue()
+    assert legacy["z"] == UnitValue()
+
+    # Name-target assignment as the function body / return value.
+    name_source = (
+        "var counter = 0\n"
+        "def reset() -> unit =\n"
+        "  counter := 5\n"
+        "let z = reset()\n"
+        "()"
+    )
+    legacy2, ir2 = assert_oracle_agrees(name_source)
+    assert ir2["z"] == UnitValue()
+
+
+def test_name_target_only_assign_capture() -> None:
+    """Fix: a function whose only reference to an outer var is an assignment captures it.
+
+    `counter := 5` must capture the outer `var counter` even though it is never
+    READ inside the function.  Before the fix the NameTarget was not walked and the
+    capture was missed, causing IrAssign to fail at runtime.
+    """
+    source = (
+        "var counter = 0\n"
+        "def reset() -> unit =\n"
+        "  counter := 5\n"
+        "reset()\n()"
+    )
+    legacy, ir = assert_oracle_agrees(source)
+    assert ir["counter"] == IntValue(5)
+
+
+def test_capture_through_nested_positions_and_pattern_locals() -> None:
+    """Fix: captures work through case/if/list/template/call-arg; pattern binders are local.
+
+    Exercises:
+    - Outer let used only inside a `case` arm (captured correctly).
+    - A `case` branch that binds a pattern variable: that variable must NOT be treated
+      as a capture of an outer binding (it is a local binder in the branch body).
+    """
+    source = (
+        "enum Shape | Circle(radius: int) | Square(side: int)\n"
+        "let multiplier = 3\n"
+        "def describe(s: Shape) -> int =\n"
+        "  case s of\n"
+        "    | Circle(radius: r) => r * multiplier\n"
+        "    | Square(side: sd) => sd * multiplier\n"
+        "let c = describe(Shape.Circle(radius: 4))\n"
+        "let sq = describe(Shape.Square(side: 5))\n()"
+    )
+    legacy, ir = assert_oracle_agrees(source)
+    assert ir["c"] == IntValue(12)
+    assert ir["sq"] == IntValue(15)
+
+
+def test_recursion_depth_parity() -> None:
+    """M1 fix: both evaluators raise RecursionError with identical message at DEFAULT depth.
+
+    Replaces the IR-only test; verifies full parity including message text and
+    the ``limit`` field value.
+    """
+    source = "def loop(n: int) -> int = loop(n + 1)\nlet result = loop(0)\n()"
+    from tests.agl.oracle.harness import assert_oracle_raises
+
+    legacy_exc, ir_exc = assert_oracle_raises(source)
+    # Both must be RecursionError
+    assert legacy_exc.display_name == "RecursionError"
+    assert ir_exc.display_name == "RecursionError"
+    # Both must carry the identical message including parenthesized depth
+    assert legacy_exc.fields["message"] == ir_exc.fields["message"]
+    # The limit field must match DEFAULT_MAX_CALL_DEPTH = 256
+    assert ir_exc.fields["limit"] == IntValue(256)
+
+
+def test_case_wildcard_and_literal_patterns_in_function_body() -> None:
+    """_pattern_binding_ids covers WildcardPattern and LiteralPattern arms (lines 323-324).
+
+    A function body with case branches using ``_`` (wildcard) and a literal
+    exercises the WildcardPattern/LiteralPattern arm that calls `pass`.
+    Neither introduces a new binder, so local_ids is unaffected.
+    """
+    source = (
+        "def classify(n: int) -> int =\n"
+        "  case n of\n"
+        "    | 0 => -1\n"
+        "    | 1 => 1\n"
+        "    | _ => 0\n"
+        "let a = classify(0)\n"
+        "let b = classify(1)\n"
+        "let c = classify(99)\n()"
+    )
+    legacy, ir = assert_oracle_agrees(source)
+    assert ir["a"] == IntValue(-1)
+    assert ir["b"] == IntValue(1)
+    assert ir["c"] == IntValue(0)
+
+
+def test_bare_variant_pattern_in_function_body() -> None:
+    """_pattern_binding_ids covers VarPattern-as-bare-constructor branch (line 318->exit).
+
+    A bare name in a case pattern (e.g. ``| On => ...``) is a VarPattern whose
+    node_id appears in ``bare_variant_patterns``.  The ``if`` on line 318 is False
+    so the node_id is NOT added to local_ids (correct: it is not a binder).
+    """
+    source = (
+        "enum Flag | On | Off\n"
+        "let flag = Flag.On()\n"
+        "def check(f: Flag) -> int =\n"
+        "  case f of\n"
+        "    | On => 1\n"
+        "    | Off => 0\n"
+        "let r = check(flag)\n()"
+    )
+    legacy, ir = assert_oracle_agrees(source)
+    assert ir["r"] == IntValue(1)

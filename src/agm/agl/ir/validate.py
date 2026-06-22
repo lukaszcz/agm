@@ -34,6 +34,15 @@ from __future__ import annotations
 
 from typing import assert_never
 
+from agm.agl.ir.contracts import (
+    ConversionStrategy,
+    DecodeSchema,
+    DictDecode,
+    EnumDecode,
+    ListDecode,
+    RecordDecode,
+    ScalarDecode,
+)
 from agm.agl.ir.ids import FunctionId, Location, NominalId, SourceId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -51,6 +60,7 @@ from agm.agl.ir.nodes import (
     IrConstText,
     IrConstUnit,
     IrContains,
+    IrConvert,
     IrExpr,
     IrField,
     IrIndex,
@@ -183,6 +193,55 @@ def _check_enum_variant(nominal: NominalId, variant: str, ctx: _Context) -> None
             f"IR node references variant {variant!r} of {nominal!r}"
             f" which is not in the descriptor's variants {sorted(known)!r}"
         )
+
+
+_DECODE_STRATEGIES = frozenset(
+    {
+        ConversionStrategy.NARROW_DECIMAL_TO_INT,
+        ConversionStrategy.PARSE_TEXT_THEN_DECODE,
+        ConversionStrategy.DECODE_JSON,
+    }
+)
+
+
+def _check_recipe_consistency(
+    strategy: ConversionStrategy,
+    json_schema: str | None,
+    decode: DecodeSchema | None,
+) -> None:
+    """Enforce that decode strategies carry schema+decode and total strategies do not."""
+    needs_decode = strategy in _DECODE_STRATEGIES
+    has_decode = json_schema is not None and decode is not None
+    if needs_decode and not has_decode:
+        raise InvalidIrError(
+            f"ConversionRecipe strategy {strategy.value!r} requires json_schema and decode"
+        )
+    if not needs_decode and (json_schema is not None or decode is not None):
+        raise InvalidIrError(
+            f"ConversionRecipe strategy {strategy.value!r} must not carry json_schema/decode"
+        )
+
+
+def _check_decode_nominals(decode: DecodeSchema, ctx: _Context) -> None:
+    """Deep tier: every nominal referenced by a decode schema must be registered."""
+    match decode:
+        case ScalarDecode():
+            return
+        case ListDecode(elem=elem):
+            _check_decode_nominals(elem, ctx)
+        case DictDecode(value=value_schema):
+            _check_decode_nominals(value_schema, ctx)
+        case RecordDecode(nominal=nominal, fields=fields):
+            _check_nominal_in_table(nominal, ctx)
+            for _fname, fschema in fields:
+                _check_decode_nominals(fschema, ctx)
+        case EnumDecode(nominal=nominal, variants=variants):
+            _check_nominal_in_table(nominal, ctx)
+            for variant in variants:
+                for _fname, fschema in variant.fields:
+                    _check_decode_nominals(fschema, ctx)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +466,13 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             if ctx.deep:
                 _check_nominal_in_table(nominal, ctx)
                 _check_enum_variant(nominal, variant, ctx)
+            _validate_expr(val, ctx)
+
+        case IrConvert(value=val, recipe=recipe):
+            _validate_location(node.location, ctx)
+            _check_recipe_consistency(recipe.strategy, recipe.json_schema, recipe.decode)
+            if ctx.deep and recipe.decode is not None:
+                _check_decode_nominals(recipe.decode, ctx)
             _validate_expr(val, ctx)
 
         case _ as unreachable:  # pragma: no cover

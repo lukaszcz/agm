@@ -33,6 +33,7 @@ from agm.agl.eval.arith import (
     sub,
     value_eq,
 )
+from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.eval.frames import Cell, Frame
@@ -52,6 +53,7 @@ from agm.agl.eval.values import (
     UnitValue,
     Value,
 )
+from agm.agl.ir.contracts import ConversionFailureMode
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAnd,
@@ -68,6 +70,7 @@ from agm.agl.ir.nodes import (
     IrConstText,
     IrConstUnit,
     IrContains,
+    IrConvert,
     IrExpr,
     IrField,
     IrIndex,
@@ -245,6 +248,31 @@ class IrInterpreter:
                         key=TextValue(err.key),
                     ),
                 )
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+
+    def _on_cast_failure(
+        self, failure_mode: ConversionFailureMode, exc: AglCastConversion
+    ) -> BoolValue:
+        """Handle a fallible-cast failure per the conversion failure mode.
+
+        ``RAISE_CAST_ERROR`` (``as``) raises a ``CastError`` matching the legacy
+        field shapes; ``RETURN_BOOL`` (``as?``) yields ``BoolValue(False)``.
+        """
+        match failure_mode:
+            case ConversionFailureMode.RAISE_CAST_ERROR:
+                raise AglRaise(
+                    _make_exc_value(
+                        "CastError",
+                        exc.message,
+                        trace_id=self._trace.new_event_id(),
+                        source_type=TextValue(exc.source_label),
+                        target_type=TextValue(exc.target_label),
+                        raw=TextValue(exc.raw),
+                    ),
+                )
+            case ConversionFailureMode.RETURN_BOOL:
+                return BoolValue(False)
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
@@ -565,6 +593,16 @@ class IrInterpreter:
                         f"IrVariantIs: value is not EnumValue, got {type(value).__name__}"
                     )
                 return BoolValue((value.variant == variant) != negated)
+
+            case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
+                source_value = self._eval(val_expr)
+                try:
+                    converted = run_recipe(recipe, source_value)
+                except AglCastConversion as exc:
+                    return self._on_cast_failure(failure_mode, exc)
+                if failure_mode is ConversionFailureMode.RETURN_BOOL:
+                    return BoolValue(True)
+                return converted
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

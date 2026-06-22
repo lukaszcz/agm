@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from typing import assert_never
 
+from agm.agl.ir.contracts import ConversionFailureMode
 from agm.agl.ir.ids import Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -47,6 +48,7 @@ from agm.agl.ir.nodes import (
     IrConstText,
     IrConstUnit,
     IrContains,
+    IrConvert,
     IrExpr,
     IrField,
     IrIndex,
@@ -60,6 +62,7 @@ from agm.agl.ir.nodes import (
     IrMakeRecord,
     IrOr,
     IrRenderTemplate,
+    IrSequence,
     IrTemplateText,
     IrTemplateValue,
     IrUnary,
@@ -86,6 +89,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
+from agm.agl.lower.conversions import compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -138,6 +142,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.types import (
     BUILTIN_EXCEPTIONS,
+    CastKind,
     DecimalType,
     DictType,
     EnumType,
@@ -439,6 +444,36 @@ class _Lowerer:
             case Call(node_id=nid, span=span) as call_node:
                 return self._lower_call(call_node, nid, span)
 
+            case Cast(expr=operand, test_only=test_only, span=span, node_id=nid):
+                spec = self._checked.cast_specs[nid]
+                source_type = self._node_type(operand.node_id)
+                recipe = compile_recipe(source_type, spec.target_type, spec.kind)
+                inner = self.lower_expr(operand)
+                if not test_only:
+                    return IrConvert(
+                        location=self._loc(span),
+                        value=inner,
+                        recipe=recipe,
+                        failure_mode=ConversionFailureMode.RAISE_CAST_ERROR,
+                    )
+                # `as?`: total casts always succeed — evaluate the (possibly
+                # effectful) source, then yield True.  Fallible casts trial-convert.
+                if spec.kind in (
+                    CastKind.TOTAL_NOOP,
+                    CastKind.TOTAL_RENDER,
+                    CastKind.TOTAL_JSON,
+                ):
+                    return IrSequence(
+                        location=self._loc(span),
+                        items=(inner, IrConstBool(location=self._loc(span), value=True)),
+                    )
+                return IrConvert(
+                    location=self._loc(span),
+                    value=inner,
+                    recipe=recipe,
+                    failure_mode=ConversionFailureMode.RETURN_BOOL,
+                )
+
             case IsTest(expr=operand, variant=variant, negated=negated, span=span):
                 # The checker guarantees the operand is enum-typed (see
                 # _check_is_test); build the nominal from its checked EnumType.
@@ -464,7 +499,6 @@ class _Lowerer:
                 | Do()
                 | Try()
                 | Raise()
-                | Cast()
             ):
                 raise NotImplementedError(
                     f"Lowering of {type(node).__name__!r} is not yet implemented "

@@ -51,6 +51,7 @@ from __future__ import annotations
 import decimal
 from dataclasses import dataclass
 
+from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
 from agm.agl.ir.ids import Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
     ArithKind,
@@ -80,6 +81,7 @@ __all__ = [
     "IrConstText",
     "IrConstUnit",
     "IrContains",
+    "IrConvert",
     "IrExpr",
     "IrField",
     "IrIndex",
@@ -517,6 +519,24 @@ class IrMakeConstructor:
 
 
 @dataclass(frozen=True, slots=True)
+class IrConvert:
+    """IR cast / conversion (``as`` and fallible ``as?``).
+
+    Evaluates ``value`` once, then runs ``recipe`` (a typeless
+    ``ConversionRecipe``).  ``failure_mode`` selects behavior on a fallible
+    failure: ``RAISE_CAST_ERROR`` raises a ``CastError`` (the ``as`` operator);
+    ``RETURN_BOOL`` yields ``False`` (the fallible ``as?`` operator).  Total
+    ``as?`` is lowered to ``IrSequence((source, IrConstBool(True)))`` and never
+    reaches this node.
+    """
+
+    location: Location
+    value: "IrExpr"
+    recipe: ConversionRecipe
+    failure_mode: ConversionFailureMode
+
+
+@dataclass(frozen=True, slots=True)
 class IrVariantIs:
     """IR enum-variant membership test (``is`` / ``is not``).
 
@@ -574,4 +594,5 @@ IrExpr = (
     | IrMakeException
     | IrMakeConstructor
     | IrVariantIs
+    | IrConvert
 )

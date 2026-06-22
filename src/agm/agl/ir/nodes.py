@@ -72,6 +72,7 @@ __all__ = [
     "IrAssign",
     "IrBind",
     "IrBlock",
+    "IrCatchHandler",
     "IrCoerce",
     "IrCompare",
     "IrConstBool",
@@ -84,6 +85,8 @@ __all__ = [
     "IrConvert",
     "IrExpr",
     "IrField",
+    "IrIf",
+    "IrIfBranch",
     "IrIndex",
     "IrIndexStep",
     "IrLoad",
@@ -94,11 +97,13 @@ __all__ = [
     "IrMakeList",
     "IrMakeRecord",
     "IrOr",
+    "IrRaise",
     "IrRenderTemplate",
     "IrSequence",
     "IrTemplateSegment",
     "IrTemplateText",
     "IrTemplateValue",
+    "IrTry",
     "IrUnary",
     "IrVariantIs",
 ]
@@ -556,6 +561,93 @@ class IrVariantIs:
 
 
 # ---------------------------------------------------------------------------
+# Control-flow nodes (M3f-A)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrIfBranch:
+    """A single branch in an ``IrIf`` node.
+
+    ``cond`` is ``None`` for the else branch (always taken), or an ``IrExpr``
+    that must evaluate to ``BoolValue``.  ``body`` is evaluated when the branch
+    is taken.
+
+    This is NOT a member of ``IrExpr``.
+    """
+
+    cond: "IrExpr | None"
+    body: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrIf:
+    """IR if expression: evaluates branches in order, takes first matching one.
+
+    ``has_else`` is ``True`` when the original source ``if`` had an ``else``
+    branch (i.e. there is a branch with ``cond=None``).  The evaluator returns
+    the taken branch's body value when ``has_else`` is ``True``, and
+    ``UnitValue`` when ``has_else`` is ``False`` (regardless of which branch
+    was taken) — matching legacy ``_eval_if`` value semantics.
+    """
+
+    location: Location
+    branches: "tuple[IrIfBranch, ...]"
+    has_else: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IrRaise:
+    """IR raise: evaluate ``exc`` (must yield ``ExceptionValue``) and propagate it."""
+
+    location: Location
+    exc: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrCatchHandler:
+    """A single catch handler in an ``IrTry`` node.
+
+    ``nominal`` and ``display_name`` together identify the exception type:
+    - ``nominal=None, display_name=None`` — catch-all (catches everything).
+    - ``nominal`` set, ``display_name`` set — specific match by ``display_name``
+      string equality against ``ExceptionValue.display_name`` (legacy semantics).
+
+    ``symbol`` is the ``SymbolId`` of the binding variable when the handler
+    declares one (``catch SomeError e => ...``); ``None`` otherwise.  The
+    evaluator writes the caught ``ExceptionValue`` into the frame under this
+    symbol before evaluating ``body``.
+
+    This is NOT a member of ``IrExpr``.
+    """
+
+    nominal: NominalId | None
+    display_name: str | None
+    symbol: SymbolId | None
+    body: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrTry:
+    """IR try/catch: evaluate ``body``; on ``AglRaise``, match handlers in order.
+
+    Semantics mirror legacy ``_eval_try``:
+    - Evaluate ``body``; if it completes normally, return its value.
+    - On ``AglRaise``, iterate ``handlers`` in order; the first handler that
+      matches (catch-all when ``display_name is None``; specific when
+      ``display_name == exc.display_name``) wins.
+    - If a handler matches and ``handler.symbol`` is not ``None``, bind the
+      caught ``ExceptionValue`` in the current frame under that symbol.
+    - Evaluate the handler's ``body`` and return its value.
+    - If no handler matches, re-raise the original ``AglRaise`` unchanged.
+    """
+
+    location: Location
+    body: "IrExpr"
+    handlers: "tuple[IrCatchHandler, ...]"
+
+
+# ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
 
@@ -595,4 +687,7 @@ IrExpr = (
     | IrMakeConstructor
     | IrVariantIs
     | IrConvert
+    | IrIf
+    | IrRaise
+    | IrTry
 )

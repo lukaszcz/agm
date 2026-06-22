@@ -39,6 +39,7 @@ from agm.agl.ir.nodes import (
     IrAssign,
     IrBind,
     IrBlock,
+    IrCatchHandler,
     IrCoerce,
     IrCompare,
     IrConstBool,
@@ -51,6 +52,8 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrExpr,
     IrField,
+    IrIf,
+    IrIfBranch,
     IrIndex,
     IrIndexStep,
     IrLoad,
@@ -61,10 +64,12 @@ from agm.agl.ir.nodes import (
     IrMakeList,
     IrMakeRecord,
     IrOr,
+    IrRaise,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
+    IrTry,
     IrUnary,
     IrVariantIs,
 )
@@ -102,15 +107,18 @@ from agm.agl.syntax.nodes import (
     Call,
     Case,
     Cast,
+    CatchClause,
     ConfigPragma,
     DecimalLit,
     DictLit,
     Do,
+    ElseSentinel,
     EnumDef,
     Expr,
     FieldAccess,
     FuncDef,
     If,
+    IfBranch,
     ImportDecl,
     IndexAccess,
     InterpSegment,
@@ -198,15 +206,28 @@ class _Lowerer:
     # SymbolId allocation
     # ------------------------------------------------------------------
 
-    def _alloc_sym(self, decl_node_id: int, *, name: str, mutable: bool) -> SymbolId:
-        """Allocate a fresh ``SymbolId`` for a declaration and register it."""
+    def _alloc_sym(
+        self,
+        decl_node_id: int,
+        *,
+        name: str,
+        mutable: bool,
+        public: bool = True,
+    ) -> SymbolId:
+        """Allocate a fresh ``SymbolId`` for a declaration and register it.
+
+        When ``public`` is ``False`` the ``SymbolDescriptor.public_name`` is set
+        to ``None`` so the symbol is not exposed in ``_collect_results``; this is
+        used for catch-clause binders that live in the flat module frame but are
+        not top-level exported bindings.
+        """
         sym = SymbolId(self._next_sym)
         self._next_sym += 1
         self._decl_to_sym[decl_node_id] = sym
         self._symbols[sym] = SymbolDescriptor(
             symbol_id=sym,
             mutable=mutable,
-            public_name=name,
+            public_name=name if public else None,
             owner=ENTRY_ID,
         )
         return sym
@@ -490,15 +511,27 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
+            # Control flow — M3f-A: if, raise, try
+            # ----------------------------------------------------------
+            case If(branches=branches, span=span):
+                return self._lower_if(branches, span)
+
+            case Raise(exc=exc_expr, span=span):
+                return IrRaise(
+                    location=self._loc(span),
+                    exc=self.lower_expr(exc_expr),
+                )
+
+            case Try(body=body_expr, handlers=handlers, span=span):
+                return self._lower_try(body_expr, handlers, span)
+
+            # ----------------------------------------------------------
             # Unsupported M4+ nodes — deferred
             # ----------------------------------------------------------
             case (
                 Lambda()
-                | If()
                 | Case()
                 | Do()
-                | Try()
-                | Raise()
             ):
                 raise NotImplementedError(
                     f"Lowering of {type(node).__name__!r} is not yet implemented "
@@ -864,18 +897,96 @@ class _Lowerer:
         items: tuple[Item, ...],
         span: SourceSpan,
     ) -> IrBlock:
-        """Lower a ``Block``'s items to an ``IrBlock``."""
-        ir_items = tuple(self.lower_item(it) for it in items)
+        """Lower a ``Block``'s items to an ``IrBlock``.
+
+        All items inside a block body are lowered as **nested** (``top_level=False``),
+        so any ``let``/``var`` binders they declare are allocated with
+        ``public=False`` and do not appear in ``_collect_results``.  Only the
+        top-level module-initializer driver passes ``top_level=True``.
+        """
+        ir_items = tuple(self.lower_item(it, top_level=False) for it in items)
         # Filter out None (items with no runtime action); validate non-empty.
         real: list[IrExpr] = [x for x in ir_items if x is not None]
         assert real, "compiler bug: lowered block has no runtime items"
         return IrBlock(location=self._loc(span), items=tuple(real))
 
     # ------------------------------------------------------------------
+    # Control-flow helpers (M3f-A)
+    # ------------------------------------------------------------------
+
+    def _lower_if(
+        self,
+        branches: "tuple[IfBranch, ...]",
+        span: "SourceSpan",
+    ) -> IrIf:
+        """Lower an ``If`` AST node to ``IrIf``."""
+        has_else = any(isinstance(br.cond, ElseSentinel) for br in branches)
+        ir_branches: list[IrIfBranch] = []
+        for branch in branches:
+            if isinstance(branch.cond, ElseSentinel):
+                ir_branches.append(
+                    IrIfBranch(cond=None, body=self.lower_expr(branch.body))
+                )
+            else:
+                ir_branches.append(
+                    IrIfBranch(
+                        cond=self.lower_expr(branch.cond),
+                        body=self.lower_expr(branch.body),
+                    )
+                )
+        return IrIf(
+            location=self._loc(span),
+            branches=tuple(ir_branches),
+            has_else=has_else,
+        )
+
+    def _lower_try(
+        self,
+        body_expr: "Expr",
+        handlers: "tuple[CatchClause, ...]",
+        span: "SourceSpan",
+    ) -> IrTry:
+        """Lower a ``Try`` AST node to ``IrTry``."""
+        return IrTry(
+            location=self._loc(span),
+            body=self.lower_expr(body_expr),
+            handlers=tuple(self._lower_catch_clause(c) for c in handlers),
+        )
+
+    def _lower_catch_clause(self, clause: "CatchClause") -> IrCatchHandler:
+        """Lower a ``CatchClause`` to an ``IrCatchHandler``."""
+        # Determine nominal + display_name.
+        exc_type = clause.exc_type
+        if exc_type is None or exc_type == "_" or exc_type == "Exception":
+            nominal: NominalId | None = None
+            display_name: str | None = None
+        else:
+            nominal = NominalId(PRELUDE_ID, exc_type)
+            display_name = exc_type
+
+        # Allocate a SymbolId for the binding variable when present.
+        # public=False: catch-clause binders are not top-level exported names.
+        sym: SymbolId | None = None
+        if clause.binding is not None:
+            sym = self._alloc_sym(
+                clause.node_id,
+                name=clause.binding,
+                mutable=False,
+                public=False,
+            )
+
+        return IrCatchHandler(
+            nominal=nominal,
+            display_name=display_name,
+            symbol=sym,
+            body=self.lower_expr(clause.body),
+        )
+
+    # ------------------------------------------------------------------
     # Item lowering
     # ------------------------------------------------------------------
 
-    def lower_item(self, item: Item) -> IrExpr | None:
+    def lower_item(self, item: Item, *, top_level: bool = False) -> IrExpr | None:
         """Lower a block item.
 
         Returns an ``IrExpr`` for nodes with runtime action, or ``None`` for
@@ -883,19 +994,31 @@ class _Lowerer:
         that have no IR representation in M2.
 
         The IrBlock construction must then filter out the ``None`` values.
+
+        Parameters
+        ----------
+        top_level:
+            When ``True``, ``let``/``var`` binders are allocated with
+            ``public=True`` so they appear in ``_collect_results``.  When
+            ``False`` (the default), binders are allocated with ``public=False``
+            — they live in the flat per-invocation frame but are not exported.
+            The module-initializer driver passes ``top_level=True``; all block
+            bodies (``_lower_block``, if/try/case/do branch bodies) use the
+            default ``False`` so future control-flow nodes inherit safe behaviour
+            automatically.
         """
         match item:
             # ----------------------------------------------------------
             # Binders
             # ----------------------------------------------------------
             case LetDecl(name=name, value=rhs, span=span, node_id=nid):
-                sym = self._alloc_sym(nid, name=name, mutable=False)
+                sym = self._alloc_sym(nid, name=name, mutable=False, public=top_level)
                 binding_type = self._binding_type_for(nid)
                 ir_val = self.lower_coerced(rhs, binding_type)
                 return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
 
             case VarDecl(name=name, value=rhs, span=span, node_id=nid):
-                sym = self._alloc_sym(nid, name=name, mutable=True)
+                sym = self._alloc_sym(nid, name=name, mutable=True, public=top_level)
                 binding_type = self._binding_type_for(nid)
                 ir_val = self.lower_coerced(rhs, binding_type)
                 return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
@@ -1078,7 +1201,7 @@ class _Lowerer:
         body = self._checked.resolved.program.body
         ir_items: list[IrExpr] = []
         for item in body.items:
-            ir = self.lower_item(item)
+            ir = self.lower_item(item, top_level=True)
             if ir is not None:
                 ir_items.append(ir)
 

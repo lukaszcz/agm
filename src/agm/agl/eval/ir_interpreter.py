@@ -73,6 +73,7 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrExpr,
     IrField,
+    IrIf,
     IrIndex,
     IrLoad,
     IrMakeConstructor,
@@ -82,10 +83,12 @@ from agm.agl.ir.nodes import (
     IrMakeList,
     IrMakeRecord,
     IrOr,
+    IrRaise,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
+    IrTry,
     IrUnary,
     IrVariantIs,
 )
@@ -603,6 +606,47 @@ class IrInterpreter:
                 if failure_mode is ConversionFailureMode.RETURN_BOOL:
                     return BoolValue(True)
                 return converted
+
+            case IrIf(branches=branches, has_else=has_else):
+                for branch in branches:
+                    if branch.cond is None:
+                        # Else branch — always taken.
+                        branch_val = self._eval(branch.body)
+                        return branch_val if has_else else UnitValue()
+                    cond_val = self._eval(branch.cond)
+                    if not isinstance(cond_val, BoolValue):
+                        raise InvalidIrError(
+                            f"IrIf: branch condition evaluated to"
+                            f" {type(cond_val).__name__}, expected BoolValue"
+                        )
+                    if cond_val.value:
+                        branch_val = self._eval(branch.body)
+                        return branch_val if has_else else UnitValue()
+                # No branch matched and no else — yield unit.
+                return UnitValue()
+
+            case IrRaise(exc=exc_expr):
+                exc_val = self._eval(exc_expr)
+                if not isinstance(exc_val, ExceptionValue):
+                    raise InvalidIrError(
+                        f"IrRaise: exc evaluated to {type(exc_val).__name__},"
+                        " expected ExceptionValue"
+                    )
+                raise AglRaise(exc_val)
+
+            case IrTry(body=body_expr, handlers=handlers):
+                try:
+                    return self._eval(body_expr)
+                except AglRaise as exc:
+                    for handler in handlers:
+                        if (
+                            handler.display_name is None
+                            or handler.display_name == exc.exc.display_name
+                        ):
+                            if handler.symbol is not None:
+                                self._frame[handler.symbol] = exc.exc
+                            return self._eval(handler.body)
+                    raise
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

@@ -737,10 +737,18 @@ let c = Color.Red
         with pytest.raises(NotImplementedError):
             _lower("let f = fn(x: int) -> int => x + 1\n()")
 
-    def test_if_raises_not_implemented(self) -> None:
-        """If expressions are not yet lowered (deferred to M4+)."""
-        with pytest.raises(NotImplementedError):
-            _lower("let x = if true => 1\nelse => 2\n()")
+    def test_if_lowers_correctly(self) -> None:
+        """If expressions are lowered to IrIf in M3f-A."""
+        from agm.agl.ir.nodes import IrBind, IrIf
+
+        prog = _lower("let x = if true => 1 | else => 2\n()")
+        entry = prog.modules[prog.entry_module]
+        found = False
+        for node in entry.initializers:
+            if isinstance(node, IrBind) and isinstance(node.value, IrIf):
+                assert node.value.has_else
+                found = True
+        assert found, "Expected IrBind(value=IrIf(has_else=True)) in initializers"
 
     def test_indexed_assign_lowers_to_ir_assign_with_path(self) -> None:
         """IndexTarget assignment lowers to IrAssign with a non-empty path (M3c)."""

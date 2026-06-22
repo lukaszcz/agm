@@ -51,6 +51,7 @@ from agm.agl.ir.nodes import (
     IrAssign,
     IrBind,
     IrBlock,
+    IrCatchHandler,
     IrCoerce,
     IrCompare,
     IrConstBool,
@@ -63,6 +64,7 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrExpr,
     IrField,
+    IrIf,
     IrIndex,
     IrIndexStep,
     IrLoad,
@@ -73,10 +75,12 @@ from agm.agl.ir.nodes import (
     IrMakeList,
     IrMakeRecord,
     IrOr,
+    IrRaise,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
+    IrTry,
     IrUnary,
     IrVariantIs,
 )
@@ -252,6 +256,25 @@ def _check_decode_nominals(decode: DecodeSchema, ctx: _Context) -> None:
 def _validate_index_step(step: IrIndexStep, ctx: _Context) -> None:
     _validate_location(step.location, ctx)
     _validate_expr(step.index, ctx)
+
+
+# ---------------------------------------------------------------------------
+# IrCatchHandler validation (deep tier, M3f-A)
+# ---------------------------------------------------------------------------
+
+
+def _validate_catch_handler(handler: IrCatchHandler, ctx: _Context) -> None:
+    """Validate a catch handler: nominal/symbol cross-references (deep) + body."""
+    if ctx.deep:
+        if handler.nominal is not None:
+            _check_nominal_in_table(handler.nominal, ctx)
+        if handler.symbol is not None:
+            if handler.symbol not in ctx.program.symbols:
+                raise InvalidIrError(
+                    f"IrCatchHandler references symbol_id={handler.symbol.value!r}"
+                    " which is not in program.symbols"
+                )
+    _validate_expr(handler.body, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +497,23 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             if ctx.deep and recipe.decode is not None:
                 _check_decode_nominals(recipe.decode, ctx)
             _validate_expr(val, ctx)
+
+        case IrIf(branches=branches):
+            _validate_location(node.location, ctx)
+            for branch in branches:
+                if branch.cond is not None:
+                    _validate_expr(branch.cond, ctx)
+                _validate_expr(branch.body, ctx)
+
+        case IrRaise(exc=exc):
+            _validate_location(node.location, ctx)
+            _validate_expr(exc, ctx)
+
+        case IrTry(body=body, handlers=handlers):
+            _validate_location(node.location, ctx)
+            _validate_expr(body, ctx)
+            for handler in handlers:
+                _validate_catch_handler(handler, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

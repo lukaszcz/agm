@@ -28,6 +28,7 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm (D4).
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import assert_never
 
 from agm.agl._text import normalize_newlines
@@ -174,6 +175,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck.graph import CheckedModule
 from agm.agl.typecheck.types import (
     BUILTIN_EXCEPTIONS,
     CastKind,
@@ -189,7 +191,7 @@ from agm.agl.typecheck.types import (
     Type,
 )
 
-__all__ = ["lower_program"]
+__all__ = ["_LinkState", "lower_program"]
 
 
 # ---------------------------------------------------------------------------
@@ -197,50 +199,36 @@ __all__ = ["lower_program"]
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _LinkState:
+    next_sym: int = 0
+    next_fn: int = 0
+    next_source: int = 0
+    decl_to_sym: dict[int, SymbolId] = field(default_factory=dict)
+    fn_node_to_sym: dict[int, SymbolId] = field(default_factory=dict)
+    fn_node_to_id: dict[int, FunctionId] = field(default_factory=dict)
+    symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
+    functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
+    nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
+    sources: dict[SourceId, SourceFile] = field(default_factory=dict)
+
+
 class _Lowerer:
     """Holds all mutable state for one lowering pass."""
 
     def __init__(
         self,
-        checked: CheckedProgram,
+        checked: CheckedProgram | CheckedModule,
+        link: _LinkState,
+        module_id: ModuleId,
+        source_id: SourceId,
         source_text: str,
-        source_label: str,
     ) -> None:
         self._checked = checked
-        # Spans/offsets from the lexer are relative to the newline-normalized
-        # source (scanner normalizes with ``normalize_newlines``), and the
-        # legacy interpreter slices normalized text.  Normalize here so source
-        # slices, the stored SourceFile, and every Location offset are all
-        # consistent against the same string (idempotent if already normalized).
+        self._link = link
+        self._module_id = module_id
+        self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
-
-        # Allocate the single source file entry.
-        self._source_id = SourceId(0)
-        self._source_file = SourceFile(
-            display_name=source_label,
-            normalized_text=self._source_text,
-        )
-
-        # Monotonic symbol counter; each declaration gets a fresh SymbolId.
-        self._next_sym: int = 0
-
-        # Maps decl_node_id → SymbolId so VarRef/AssignStmt can look up symbols.
-        self._decl_to_sym: dict[int, SymbolId] = {}
-
-        # Accumulated symbol descriptors.
-        self._symbols: dict[SymbolId, SymbolDescriptor] = {}
-
-        # Accumulated nominal descriptors (populated in lower()).
-        self._nominals: dict[NominalId, NominalDescriptor] = {}
-
-        # Function allocation counter
-        self._next_fn: int = 0
-        # Accumulated FunctionDescriptors
-        self._functions: dict[FunctionId, FunctionDescriptor] = {}
-        # Maps FuncDef.node_id -> SymbolId (pre-allocated in phase 1)
-        self._fn_node_to_sym: dict[int, SymbolId] = {}
-        # Maps FuncDef.node_id -> FunctionId (pre-allocated in phase 1)
-        self._fn_node_to_id: dict[int, FunctionId] = {}
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -262,20 +250,20 @@ class _Lowerer:
         used for catch-clause binders that live in the flat module frame but are
         not top-level exported bindings.
         """
-        sym = SymbolId(self._next_sym)
-        self._next_sym += 1
-        self._decl_to_sym[decl_node_id] = sym
-        self._symbols[sym] = SymbolDescriptor(
+        sym = SymbolId(self._link.next_sym)
+        self._link.next_sym += 1
+        self._link.decl_to_sym[decl_node_id] = sym
+        self._link.symbols[sym] = SymbolDescriptor(
             symbol_id=sym,
             mutable=mutable,
             public_name=name if public else None,
-            owner=owner if owner is not None else ENTRY_ID,
+            owner=owner if owner is not None else self._module_id,
         )
         return sym
 
     def _sym_for_decl(self, decl_node_id: int) -> SymbolId:
         """Return the pre-allocated ``SymbolId`` for a declaration node."""
-        sym = self._decl_to_sym.get(decl_node_id)
+        sym = self._link.decl_to_sym.get(decl_node_id)
         assert sym is not None, (
             f"compiler bug: no SymbolId for decl_node_id={decl_node_id!r}; "
             "declaration must be visited before its references"
@@ -284,8 +272,8 @@ class _Lowerer:
 
     def _alloc_fn(self) -> FunctionId:
         """Allocate a fresh ``FunctionId``."""
-        fn_id = FunctionId(self._next_fn)
-        self._next_fn += 1
+        fn_id = FunctionId(self._link.next_fn)
+        self._link.next_fn += 1
         return fn_id
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
@@ -296,10 +284,10 @@ class _Lowerer:
             name=funcdef.name,
             mutable=False,
             public=not funcdef.is_private,
-            owner=ENTRY_ID,
+            owner=self._module_id,
         )
-        self._fn_node_to_sym[funcdef.node_id] = sym
-        self._fn_node_to_id[funcdef.node_id] = fn_id
+        self._link.fn_node_to_sym[funcdef.node_id] = sym
+        self._link.fn_node_to_id[funcdef.node_id] = fn_id
 
     # Binder kinds whose values live in evaluation frames and can therefore be
     # captured by a closure (D5).  function_binding is resolved through the function
@@ -447,7 +435,7 @@ class _Lowerer:
                 self._scan_captures(param.default, local_ids, captured)
         captures: list[IrCapture] = []
         for decl_id, ref in captured.items():
-            sym = self._decl_to_sym.get(decl_id)
+            sym = self._link.decl_to_sym.get(decl_id)
             assert sym is not None, (  # capturable outer bindings are always pre-allocated
                 f"compiler bug: captured binding {ref.name!r} (decl_node_id={decl_id})"
                 " has no allocated symbol"
@@ -470,11 +458,11 @@ class _Lowerer:
         so the symbol + function-id are always present; nested ``def`` is rejected by
         the scope checker.
         """
-        assert funcdef.node_id in self._fn_node_to_id, (
+        assert funcdef.node_id in self._link.fn_node_to_id, (
             f"compiler bug: FuncDef {funcdef.name!r} was not pre-allocated"
         )
-        fn_id = self._fn_node_to_id[funcdef.node_id]
-        fn_sym = self._fn_node_to_sym[funcdef.node_id]
+        fn_id = self._link.fn_node_to_id[funcdef.node_id]
+        fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
 
         param_decl_ids: set[int] = set()
         param_syms: list[SymbolId] = []
@@ -513,11 +501,11 @@ class _Lowerer:
         desc = FunctionDescriptor(
             function_id=fn_id,
             function_symbol=fn_sym,
-            module_id=ENTRY_ID,
+            module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
         )
-        self._functions[fn_id] = desc
+        self._link.functions[fn_id] = desc
 
         loc = self._loc(funcdef.span)
         closure_ir = IrMakeClosure(location=loc, function_id=fn_id, captures=captures)
@@ -601,11 +589,11 @@ class _Lowerer:
         desc = FunctionDescriptor(
             function_id=fn_id,
             function_symbol=fn_sym,
-            module_id=ENTRY_ID,
+            module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
         )
-        self._functions[fn_id] = desc
+        self._link.functions[fn_id] = desc
 
         loc = self._loc(span)
         return IrMakeClosure(location=loc, function_id=fn_id, captures=captures)
@@ -724,28 +712,11 @@ class _Lowerer:
                     # Nullary constructor used as a value → construct immediately.
                     # AgL grammar requires ≥1 field in a record, so a nullary
                     # record VarRef is impossible under the current grammar.
-                    return self._lower_nullary_constructor(  # pragma: no cover
+                    return self._lower_nullary_constructor(
                         nid, cref.owner_name, cref.variant, span
                     )
 
-                # Cross-module constructor via BinderKind.constructor_binding.
-                # Deferred to M5 (multi-module linking).
                 ref = self._checked.resolved.resolution.get(nid)
-                # pragma: no cover — cross-module constructor binding (deferred to M5).
-                if (  # pragma: no cover
-                    ref is not None and ref.kind is BinderKind.constructor_binding
-                ):
-                    node_typ = self._node_type(nid)
-                    if isinstance(node_typ, FunctionType):
-                        nominal, display = self._nominal_for_resolution_name(ref.name)
-                        return IrMakeConstructor(
-                            location=self._loc(span),
-                            nominal=nominal,
-                            display_name=display,
-                            variant=None,
-                        )
-                    return self._lower_nullary_constructor_by_name(nid, ref.name, None, span)
-
                 assert ref is not None, (
                     f"compiler bug: no resolution for VarRef node_id={nid!r}"
                 )
@@ -1120,13 +1091,6 @@ class _Lowerer:
                 return NominalId(tmpl.module_id, owner_name), owner_name  # pragma: no cover
         return NominalId(ENTRY_ID, owner_name), owner_name  # pragma: no cover
 
-    def _nominal_for_resolution_name(self, name: str) -> tuple[NominalId, str]:  # pragma: no cover
-        """Return (NominalId, display_name) for a constructor_binding resolution name.
-
-        Called only from the cross-module constructor_binding VarRef path (M5).
-        """
-        return self._nominal_for_cref_owner(name)  # pragma: no cover
-
     def _lower_nullary_constructor(
         self,
         ref_node_id: int,
@@ -1137,19 +1101,6 @@ class _Lowerer:
         """Lower a nullary constructor reference (value position) to an IrMake* node."""
         typ = self._checked.node_types.get(ref_node_id)
         return self._lower_constructor_from_type(typ, owner_name, variant, {}, span)
-
-    def _lower_nullary_constructor_by_name(  # pragma: no cover
-        self,
-        ref_node_id: int,
-        name: str,
-        variant: str | None,
-        span: "SourceSpan",
-    ) -> IrExpr:
-        """Lower a nullary constructor by name (for constructor_binding VarRef).
-
-        Called only from the cross-module constructor_binding VarRef path (M5).
-        """
-        return self._lower_nullary_constructor(ref_node_id, name, variant, span)  # pragma: no cover
 
     def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
         """Lower a Call node.
@@ -1177,11 +1128,11 @@ class _Lowerer:
                 )
             # (b) VarRef callee resolving via BinderKind.constructor_binding (M5).
             callee_ref = self._checked.resolved.resolution.get(callee.node_id)
-            if (  # pragma: no cover
+            if (
                 callee_ref is not None
                 and callee_ref.kind is BinderKind.constructor_binding
             ):
-                return self._lower_named_constructor_call(  # pragma: no cover
+                return self._lower_named_constructor_call(
                     nid, callee.name, None, call_node.named_args, span
                 )
             # (c) Direct user function call
@@ -1212,7 +1163,7 @@ class _Lowerer:
         span: "SourceSpan",
     ) -> IrDirectCall:
         """Lower a direct call to a named user function."""
-        fn_id = self._fn_node_to_id.get(callee_ref.decl_node_id)
+        fn_id = self._link.fn_node_to_id.get(callee_ref.decl_node_id)
         assert fn_id is not None, (
             f"compiler bug: no FunctionId for function decl_node_id={callee_ref.decl_node_id!r}"
         )
@@ -1677,7 +1628,7 @@ class _Lowerer:
     # ------------------------------------------------------------------
 
     def _build_nominals(self) -> None:
-        """Populate ``self._nominals`` with all user-declared and built-in nominals.
+        """Populate ``self._link.nominals`` with all user-declared and built-in nominals.
 
         Adds:
         - All user-declared record/enum nominals from the entry module's type env.
@@ -1691,7 +1642,7 @@ class _Lowerer:
         for name, typ in self._checked.type_env.non_builtin_type_items():
             if isinstance(typ, RecordType):
                 nominal = NominalId(typ.module_id, name)
-                self._nominals[nominal] = NominalDescriptor(
+                self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.RECORD,
@@ -1704,7 +1655,7 @@ class _Lowerer:
                     VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
                     for vname, vfields in typ.variants.items()
                 )
-                self._nominals[nominal] = NominalDescriptor(
+                self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.ENUM,
@@ -1715,7 +1666,7 @@ class _Lowerer:
                 # User-declared exceptions are not supported by the current grammar.
                 # Reserved for a future grammar extension.
                 nominal = NominalId(PRELUDE_ID, name)  # pragma: no cover
-                self._nominals[nominal] = NominalDescriptor(  # pragma: no cover
+                self._link.nominals[nominal] = NominalDescriptor(  # pragma: no cover
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.EXCEPTION,
@@ -1726,8 +1677,8 @@ class _Lowerer:
         # Built-in exceptions: always keyed by NominalId(PRELUDE_ID, name).
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             nominal = NominalId(PRELUDE_ID, exc_name)
-            if nominal not in self._nominals:  # pragma: no cover — always true for builtins
-                self._nominals[nominal] = NominalDescriptor(
+            if nominal not in self._link.nominals:  # pragma: no cover — always true for builtins
+                self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=exc_name,
                     kind=NominalKind.EXCEPTION,
@@ -1754,17 +1705,17 @@ class _Lowerer:
                 ir_items.append(ir)
 
         entry_mod = ExecutableModule(
-            module_id=ENTRY_ID,
+            module_id=self._module_id,
             initializers=tuple(ir_items),
         )
 
         return ExecutableProgram(
-            entry_module=ENTRY_ID,
-            modules={ENTRY_ID: entry_mod},
-            symbols=dict(self._symbols),
-            nominals=dict(self._nominals),
-            sources={self._source_id: self._source_file},
-            functions=dict(self._functions),
+            entry_module=self._module_id,
+            modules={self._module_id: entry_mod},
+            symbols=dict(self._link.symbols),
+            nominals=dict(self._link.nominals),
+            sources=dict(self._link.sources),
+            functions=dict(self._link.functions),
         )
 
 
@@ -1790,7 +1741,12 @@ def lower_program(
     :raises NotImplementedError: for AST nodes outside the M2 subset.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
     """
-    lowerer = _Lowerer(checked, source_text, source_label)
+    link = _LinkState()
+    source_id = SourceId(link.next_source)
+    link.next_source += 1
+    normalized = normalize_newlines(source_text)
+    link.sources[source_id] = SourceFile(display_name=source_label, normalized_text=normalized)
+    lowerer = _Lowerer(checked, link, ENTRY_ID, source_id, source_text)
     program = lowerer.lower()
     if validate:
         validate_ir(program)

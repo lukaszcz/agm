@@ -455,15 +455,18 @@ class IrInterpreter:
     # ------------------------------------------------------------------
 
     def run(self) -> dict[str, Value]:
-        """Execute the entry module and return its public bindings.
+        """Execute all modules in order and return the entry module's public bindings.
 
-        All evaluation runs under the pinned AgL decimal context so results
-        are independent of the host's ambient ``decimal`` context (F7).
+        Iterates over all modules in insertion order (library modules first, entry
+        last — the order guaranteed by :func:`~agm.agl.lower.graph.lower_graph`),
+        executing each module's initializers.  All evaluation runs under the pinned
+        AgL decimal context so results are independent of the host's ambient
+        ``decimal`` context (F7).
         """
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-            entry_mod = self._program.modules[self._program.entry_module]
-            for node in entry_mod.initializers:
-                self._eval(node)
+            for mod in self._program.modules.values():
+                for node in mod.initializers:
+                    self._eval(node)
         return self._collect_results()
 
     # ------------------------------------------------------------------

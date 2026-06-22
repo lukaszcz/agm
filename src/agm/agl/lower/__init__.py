@@ -12,6 +12,7 @@ Public API
 """
 
 from agm.agl.lower.coercions import compile_coercion
+from agm.agl.lower.graph import lower_graph
 from agm.agl.lower.lowerer import lower_program
 
-__all__ = ["compile_coercion", "lower_program"]
+__all__ = ["compile_coercion", "lower_graph", "lower_program"]

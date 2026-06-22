@@ -12,6 +12,7 @@ Pipeline helper: reuses the ``parse_resolve_check`` pattern from
 from __future__ import annotations
 
 import decimal
+from pathlib import Path
 
 import pytest
 
@@ -98,6 +99,20 @@ def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:
         validate=validate,
     )
 
+
+def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
+    """Create a _Lowerer with a fresh _LinkState for unit tests."""
+    from agm.agl._text import normalize_newlines
+    from agm.agl.ir.ids import SourceId
+    from agm.agl.ir.program import SourceFile
+    from agm.agl.lower.lowerer import _LinkState, _Lowerer
+    from agm.agl.modules.ids import ENTRY_ID
+    link = _LinkState()
+    source_id = SourceId(link.next_source)
+    link.next_source += 1
+    normalized = normalize_newlines(source)
+    link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
+    return _Lowerer(checked, link, ENTRY_ID, source_id, source)
 
 # ---------------------------------------------------------------------------
 # compile_coercion unit tests — every branch
@@ -613,7 +628,7 @@ class TestBlockLowering:
         checked = _check(src)
         # Build a _Lowerer in the same state as lower_program would, but stop
         # before running the top-level body so we can call lower_expr manually.
-        lowerer = _Lowerer(checked, src, "<test>")
+        lowerer = _make_lowerer(checked, src)
 
         body = checked.resolved.program.body
         # body.items = [LetDecl(_a, ...), VarRef(_a, ...)]
@@ -686,6 +701,56 @@ class TestNominalsEmpty:
         # Every entry in an empty program uses NominalKind.EXCEPTION (only builtins present)
         for _nominal_id, desc in prog.nominals.items():
             assert desc.kind is NominalKind.EXCEPTION
+
+    def test_type_alias_does_not_create_spurious_nominal(self) -> None:
+        """A type alias does NOT register a spurious NominalId in program.nominals.
+
+        ``type Foo = Record`` must not create NominalId(..., "Foo") — only the
+        canonical declaration NominalId(..., "Record") must exist.  Same for
+        enum aliases.
+        """
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+
+        source = (
+            "record Point\n"
+            "  x: int\n"
+            "  y: int\n"
+            "\n"
+            "type PointAlias = Point\n"
+            "\n"
+            "enum Color\n"
+            "  | Red\n"
+            "  | Blue\n"
+            "\n"
+            "type ColorAlias = Color\n"
+            "\n"
+            "let p = Point(x: 1, y: 2)\n"
+            "let c = Color.Red\n"
+            "()\n"
+        )
+        prog = _lower(source)
+
+        nominal_names = {desc.display_name for desc in prog.nominals.values()}
+        nominal_ids = set(prog.nominals.keys())
+
+        # The canonical record and enum nominals must be present
+        assert "Point" in nominal_names, "NominalId for 'Point' must be registered"
+        assert "Color" in nominal_names, "NominalId for 'Color' must be registered"
+
+        # The aliases must NOT register spurious nominals
+        assert "PointAlias" not in nominal_names, (
+            "Record alias 'PointAlias' must NOT register a spurious nominal descriptor"
+        )
+        assert NominalId(ENTRY_ID, "PointAlias") not in nominal_ids, (
+            "NominalId(ENTRY_ID, 'PointAlias') must NOT appear in program.nominals"
+        )
+        assert "ColorAlias" not in nominal_names, (
+            "Enum alias 'ColorAlias' must NOT register a spurious nominal descriptor"
+        )
+        assert NominalId(ENTRY_ID, "ColorAlias") not in nominal_ids, (
+            "NominalId(ENTRY_ID, 'ColorAlias') must NOT appear in program.nominals"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -866,7 +931,7 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="myfield", span=span, node_id=fake_node_id)
 
-        lowerer = _Lowerer(checked, "()", "<test>")
+        lowerer = _make_lowerer(checked, "()")
         result = lowerer.lower_expr(field_access)
 
         assert isinstance(result, IrField)
@@ -880,7 +945,7 @@ class TestIrFieldLowering:
         """
         import pytest
         checked = _check("()")
-        lowerer = _Lowerer(checked, "()", "<test>")
+        lowerer = _make_lowerer(checked, "()")
         with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._kind_for_container(IntType())
 
@@ -891,7 +956,7 @@ class TestIrFieldLowering:
         """
         import pytest
         checked = _check("()")
-        lowerer = _Lowerer(checked, "()", "<test>")
+        lowerer = _make_lowerer(checked, "()")
         with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._elem_type_for_container(TextType())
 
@@ -950,14 +1015,13 @@ class TestM4aLowerDefensivePaths:
 
     def test_lower_funcdef_without_preallocation_raises(self) -> None:
         """_lower_funcdef with a non-pre-allocated FuncDef raises AssertionError."""
-        from agm.agl.lower.lowerer import _Lowerer
         from agm.agl.syntax.nodes import FuncDef
 
         source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
         checked = _check(source)
 
         # Create lowerer and find FuncDef WITHOUT pre-allocating it
-        lowerer = _Lowerer(checked, source, "<test>")
+        lowerer = _make_lowerer(checked, source)
         funcdef = None
         for item in checked.resolved.program.body.items:
             if isinstance(item, FuncDef):
@@ -971,14 +1035,13 @@ class TestM4aLowerDefensivePaths:
 
     def test_lower_direct_call_fallback_signature_by_name(self) -> None:
         """_lower_direct_call uses fallback get_function_signature when by_node_id returns None."""
-        from agm.agl.lower.lowerer import _Lowerer
         from agm.agl.syntax.nodes import FuncDef
 
         source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
         checked = _check(source)
 
         # Create lowerer and pre-allocate the funcdef
-        lowerer = _Lowerer(checked, source, "<test>")
+        lowerer = _make_lowerer(checked, source)
         for item in checked.resolved.program.body.items:
             if isinstance(item, FuncDef):
                 lowerer._prealloc_funcdef(item)
@@ -998,14 +1061,13 @@ class TestM4aLowerDefensivePaths:
             type_env._function_signatures_by_node_id.update(original)
     def test_lower_direct_call_fallback_sig_lookup_by_name(self) -> None:
         """_lower_direct_call fallback: get_function_signature(name) when by_node_id is None."""
-        from agm.agl.lower.lowerer import _Lowerer
         from agm.agl.syntax.nodes import FuncDef
 
         source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
         checked = _check(source)
 
         # Pre-allocate funcdef (phase 1)
-        lowerer = _Lowerer(checked, source, "<test>")
+        lowerer = _make_lowerer(checked, source)
         for item in checked.resolved.program.body.items:
             if isinstance(item, FuncDef):
                 lowerer._prealloc_funcdef(item)
@@ -1030,12 +1092,11 @@ class TestM4aLowerDefensivePaths:
         with no resolution triggers an AssertionError inside lower_expr (compiler bug),
         which is the correct behavior for a malformed node in a unit test.
         """
-        from agm.agl.lower.lowerer import _Lowerer
         from agm.agl.syntax.nodes import Call, FieldAccess, VarRef
 
         source = "let x = 1\n()"
         checked = _check(source)
-        lowerer = _Lowerer(checked, source, "<test>")
+        lowerer = _make_lowerer(checked, source)
 
         # Get a real SourceSpan from the parsed program
         span = checked.resolved.program.body.items[0].span
@@ -1056,12 +1117,11 @@ class TestM4aLowerDefensivePaths:
 
     def test_missing_required_arg_raises_assertion_error(self) -> None:
         """_lower_direct_call raises AssertionError when call is missing a required arg."""
-        from agm.agl.lower.lowerer import _Lowerer
         from agm.agl.syntax.nodes import Call, FuncDef, VarRef
 
         source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
         checked = _check(source)
-        lowerer = _Lowerer(checked, source, "<test>")
+        lowerer = _make_lowerer(checked, source)
 
         # Pre-allocate funcdef
         funcdef = next(
@@ -1305,3 +1365,226 @@ class TestM4bIndirectCallLowering:
         )
         prog = _lower(source)
         validate_ir(prog, deep=True)  # no exception
+
+
+
+# ---------------------------------------------------------------------------
+# M5 — lower_graph: multi-module golden test
+# ---------------------------------------------------------------------------
+
+
+class TestLowerGraph:
+    """Golden tests for lower_graph (M5 whole-graph module linking)."""
+
+    def test_lower_graph_simple(self, tmp_path: Path) -> None:
+        """lower_graph on a two-module program builds a valid ExecutableProgram.
+
+        Asserts the task-specified structure for a 2-module program:
+        - Both modules appear in ``program.modules`` with distinct entries.
+        - Both modules' functions appear in ``program.functions`` with DISTINCT FunctionIds.
+        - ``program.nominals`` contains types from both modules (one record per module).
+        - Exactly one ``SourceFile`` per module (2 sources total).
+        - The library ``ExecutableModule.initializers`` contains ONLY function binds
+          (IrBind wrapping IrMakeClosure).
+        - The entry module is LAST in ``program.modules`` insertion order.
+        - ``validate_ir`` passes (deep=True).
+        """
+        import os
+
+        from agm.agl.lower.graph import lower_graph
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.modules.loader import load_graph
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.typecheck.graph import check_graph
+
+        # Library defines a record type + a function using it.
+        # Entry defines its own record type + imports lib's function.
+        lib_source = (
+            "record LibPoint\n"
+            "  x: int\n"
+            "  y: int\n"
+            "\n"
+            "def make_point(a: int, b: int) -> LibPoint =\n"
+            "    LibPoint(x: a, y: b)\n"
+        )
+        entry_source = (
+            "import lib\n"
+            "record EntryBox\n"
+            "  width: int\n"
+            "\n"
+            "let result = lib::make_point(1, 2)\n"
+            "let box = EntryBox(width: 10)\n"
+            "()\n"
+        )
+
+        root = tmp_path / "root"
+        root.mkdir()
+        lib_mid = ModuleId.from_dotted("lib")
+        lib_path = root / lib_mid.relpath().replace("/", os.sep)
+        lib_path.parent.mkdir(parents=True, exist_ok=True)
+        lib_path.write_text(lib_source)
+
+        mg = load_graph(entry_source, entry_path=None, roots=RootSet(roots=frozenset([root])))
+        rg = resolve_graph(mg)
+        cg = check_graph(rg, _caps())
+
+        prog = lower_graph(cg, validate=True)
+
+        # Both modules must appear
+        assert len(prog.modules) == 2
+
+        # Entry module is LAST in insertion order
+        module_ids = list(prog.modules.keys())
+        assert module_ids[-1] == prog.entry_module, (
+            "Entry module must be last in program.modules insertion order"
+        )
+
+        # Exactly one SourceFile per module
+        assert len(prog.sources) == 2
+
+        # Both modules' functions appear in program.functions with DISTINCT FunctionIds.
+        # lib has make_point; entry has no user functions here, but they share one table.
+        lib_fn_ids = {
+            desc.function_id
+            for desc in prog.functions.values()
+            if desc.module_id == lib_mid
+        }
+        assert len(lib_fn_ids) >= 1, "lib module must contribute at least one FunctionId"
+        # All FunctionIds across both modules must be distinct
+        assert len(prog.functions) == len({d.function_id for d in prog.functions.values()}), (
+            "All FunctionIds must be distinct across modules"
+        )
+
+        # program.nominals contains types from BOTH modules: LibPoint (lib) and EntryBox (entry).
+        nominal_names = {desc.display_name for desc in prog.nominals.values()}
+        assert "LibPoint" in nominal_names, "LibPoint from lib module must be in nominals"
+        assert "EntryBox" in nominal_names, "EntryBox from entry module must be in nominals"
+
+        # Library ExecutableModule.initializers contains ONLY IrBind wrapping IrMakeClosure.
+        lib_mod = prog.modules[lib_mid]
+        for init_node in lib_mod.initializers:
+            assert isinstance(init_node, IrBind), (
+                f"Library initializer must be IrBind, got {type(init_node).__name__}"
+            )
+            assert isinstance(init_node.value, IrMakeClosure), (
+                f"Library IrBind value must be IrMakeClosure, got {type(init_node.value).__name__}"
+            )
+
+        # The entry module's result binding must be in the symbols table
+        result_syms = [
+            desc for desc in prog.symbols.values()
+            if desc.public_name == "result"
+        ]
+        assert len(result_syms) == 1
+
+        # validate_ir must pass (already called with validate=True above,
+        # but call again explicitly to be explicit)
+        validate_ir(prog, deep=True)
+
+    def test_lower_graph_type_alias_no_spurious_nominal(self, tmp_path: Path) -> None:
+        """Type alias does not register a spurious NominalId in lower_graph.
+
+        A program with ``type Foo = Point`` (where Point is a record) must NOT
+        create a ``NominalId(mid, "Foo")`` entry in ``program.nominals``.
+        Only the canonical declaration site ``NominalId(mid, "Point")`` must exist.
+        """
+        import os
+
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.lower.graph import lower_graph
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.modules.loader import load_graph
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.typecheck.graph import check_graph
+
+        # Library defines a record and an enum, each with an alias pointing to them.
+        # Exercises both the RecordType and EnumType alias-skip guards in graph.py.
+        lib_source = (
+            "record Point\n"
+            "  x: int\n"
+            "  y: int\n"
+            "\n"
+            "type PointAlias = Point\n"
+            "\n"
+            "enum Color\n"
+            "  | Red\n"
+            "  | Blue\n"
+            "\n"
+            "type ColorAlias = Color\n"
+            "\n"
+            "def origin() -> Point =\n"
+            "    Point(x: 0, y: 0)\n"
+        )
+        entry_source = (
+            "import lib\n"
+            "let p = lib::origin()\n"
+            "()\n"
+        )
+
+        root = tmp_path / "root"
+        root.mkdir()
+        lib_mid = ModuleId.from_dotted("lib")
+        lib_path = root / lib_mid.relpath().replace("/", os.sep)
+        lib_path.parent.mkdir(parents=True, exist_ok=True)
+        lib_path.write_text(lib_source)
+
+        mg = load_graph(entry_source, entry_path=None, roots=RootSet(roots=frozenset([root])))
+        rg = resolve_graph(mg)
+        cg = check_graph(rg, _caps())
+
+        prog = lower_graph(cg, validate=True)
+
+        nominal_names = {desc.display_name for desc in prog.nominals.values()}
+        nominal_ids = set(prog.nominals.keys())
+
+        # Canonical record and enum nominals must be present
+        assert "Point" in nominal_names, "NominalId for 'Point' must be registered"
+        assert "Color" in nominal_names, "NominalId for 'Color' must be registered"
+
+        # Record alias must NOT register a spurious nominal
+        assert "PointAlias" not in nominal_names, (
+            "Record alias 'PointAlias' must NOT register a spurious nominal descriptor"
+        )
+        assert NominalId(lib_mid, "PointAlias") not in nominal_ids, (
+            "NominalId(lib_mid, 'PointAlias') must NOT appear in program.nominals"
+        )
+
+        # Enum alias must NOT register a spurious nominal (exercises EnumType guard in graph.py)
+        assert "ColorAlias" not in nominal_names, (
+            "Enum alias 'ColorAlias' must NOT register a spurious nominal descriptor"
+        )
+        assert NominalId(lib_mid, "ColorAlias") not in nominal_ids, (
+            "NominalId(lib_mid, 'ColorAlias') must NOT appear in program.nominals"
+        )
+
+    def test_lower_graph_without_validate(self, tmp_path: Path) -> None:
+        """lower_graph with validate=False skips validate_ir (covers the non-validate branch)."""
+        import os
+
+        from agm.agl.lower.graph import lower_graph
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.modules.loader import load_graph
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.typecheck.graph import check_graph
+
+        lib_source = "def greet(n: int) -> int =\n    n + 1\n"
+        entry_source = "import lib\nlet r = lib::greet(5)\n()\n"
+
+        root = tmp_path / "root"
+        root.mkdir()
+        lib_mid = ModuleId.from_dotted("lib")
+        lib_path = root / lib_mid.relpath().replace("/", os.sep)
+        lib_path.parent.mkdir(parents=True, exist_ok=True)
+        lib_path.write_text(lib_source)
+
+        mg = load_graph(entry_source, entry_path=None, roots=RootSet(roots=frozenset([root])))
+        rg = resolve_graph(mg)
+        cg = check_graph(rg, _caps())
+
+        # validate=False (the default) skips validate_ir — covers the branch at graph.py:144
+        prog = lower_graph(cg)
+        assert len(prog.modules) == 2
+

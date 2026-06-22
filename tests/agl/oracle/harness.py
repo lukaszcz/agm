@@ -18,9 +18,12 @@ Design notes (extensibility for M7)
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.exceptions import AglRaise
-from agm.agl.eval.interpreter import Interpreter
+from agm.agl.eval.interpreter import Interpreter, execute_graph
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
@@ -35,12 +38,18 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.lower import lower_program
+from agm.agl.lower.graph import lower_graph
+from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.loader import load_graph
+from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import OutputCodec, TextCodec
 from agm.agl.runtime.contract import materialize_contract
 from agm.agl.scope import resolve
+from agm.agl.scope.graph import resolve_graph
 from agm.agl.typecheck import check
+from agm.agl.typecheck.graph import check_graph
 
 _CLOSURE_SENTINEL: TextValue = TextValue("<closure>")
 
@@ -299,4 +308,128 @@ def assert_oracle_raises(source: str) -> tuple[ExceptionValue, ExceptionValue]:
         f"  ir:     {norm_ir!r}"
     )
 
+    return legacy_exc, ir_exc
+
+
+def _write_module_file(root: Path, dotted: str, source: str) -> None:
+    """Write a module source file at the expected path under *root*."""
+    mid = ModuleId.from_dotted(dotted)
+    p = root / mid.relpath().replace("/", os.sep)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(source)
+
+
+def _roots_set(*paths: Path) -> RootSet:
+    return RootSet(roots=frozenset(paths))
+
+
+def assert_graph_oracle_agrees(
+    entry_source: str,
+    modules: dict[str, str],
+    tmp_path: Path,
+) -> tuple[dict[str, Value], dict[str, Value]]:
+    """Assert that legacy and IR evaluators agree on a multi-module program.
+
+    *modules* is a ``{dotted_name: source}`` mapping for library modules.
+    The entry source is passed directly (no file needed).
+
+    Returns ``(legacy_snapshot, ir_snapshot)``.
+    """
+    root = tmp_path / "root"
+    root.mkdir(parents=True, exist_ok=True)
+    for dotted, source in modules.items():
+        _write_module_file(root, dotted, source)
+
+    mg = load_graph(entry_source, entry_path=None, roots=_roots_set(root))
+    rg = resolve_graph(mg)
+    caps = m2_caps()
+    cg = check_graph(rg, caps)
+
+    # Legacy path
+    codecs = _m2_codecs()
+    contracts = {}
+    for _mid, cm in cg.modules.items():
+        for node_id, spec in cm.contract_specs.items():
+            contracts[node_id] = materialize_contract(spec, codecs)
+    registry = AgentRegistry(named={}, default_agent=None)
+    legacy = execute_graph(cg, registry, contracts, loop_limit=100, strict_json=False)
+
+    # IR path
+    executable = lower_graph(cg, validate=True)
+    ir = IrInterpreter(executable).run()
+
+    # Compare
+    legacy_names = set(legacy.keys())
+    ir_names = set(ir.keys())
+    if legacy_names != ir_names:
+        legacy_only = sorted(legacy_names - ir_names)
+        ir_only = sorted(ir_names - legacy_names)
+        parts: list[str] = []
+        if legacy_only:
+            parts.append(f"  legacy-only: {legacy_only}")
+        if ir_only:
+            parts.append(f"  ir-only:     {ir_only}")
+        raise AssertionError("Oracle name-set mismatch:\n" + "\n".join(parts))
+
+    mismatches: list[str] = []
+    for name in sorted(legacy_names):
+        legacy_val = _normalize_value(legacy[name])
+        ir_val = _normalize_value(ir[name])
+        if legacy_val != ir_val:
+            mismatches.append(f"  {name!r}: legacy={legacy_val!r}, ir={ir_val!r}")
+    assert not mismatches, "Oracle value disagreement:\n" + "\n".join(mismatches)
+
+    return legacy, ir
+
+
+def assert_graph_oracle_raises(
+    entry_source: str,
+    modules: dict[str, str],
+    tmp_path: Path,
+) -> tuple[ExceptionValue, ExceptionValue]:
+    """Assert that both pipelines raise AglRaise on a multi-module program.
+
+    Returns ``(legacy_exc, ir_exc)`` for additional structural assertions.
+    """
+    root = tmp_path / "root"
+    root.mkdir(parents=True, exist_ok=True)
+    for dotted, source in modules.items():
+        _write_module_file(root, dotted, source)
+
+    mg = load_graph(entry_source, entry_path=None, roots=_roots_set(root))
+    rg = resolve_graph(mg)
+    caps = m2_caps()
+    cg = check_graph(rg, caps)
+
+    codecs = _m2_codecs()
+    contracts = {}
+    for _mid, cm in cg.modules.items():
+        for node_id, spec in cm.contract_specs.items():
+            contracts[node_id] = materialize_contract(spec, codecs)
+    registry = AgentRegistry(named={}, default_agent=None)
+
+    legacy_exc: ExceptionValue | None = None
+    ir_exc: ExceptionValue | None = None
+
+    try:
+        execute_graph(cg, registry, contracts, loop_limit=100, strict_json=False)
+    except AglRaise as e:
+        legacy_exc = e.exc
+
+    try:
+        executable = lower_graph(cg, validate=True)
+        IrInterpreter(executable).run()
+    except AglRaise as e:
+        ir_exc = e.exc
+
+    assert legacy_exc is not None, "Legacy pipeline did not raise AglRaise"
+    assert ir_exc is not None, "IR pipeline did not raise AglRaise"
+
+    norm_legacy = _normalize_exception(legacy_exc)
+    norm_ir = _normalize_exception(ir_exc)
+    assert norm_legacy == norm_ir, (
+        f"Oracle exception disagreement:\n"
+        f"  legacy: {norm_legacy!r}\n"
+        f"  ir:     {norm_ir!r}"
+    )
     return legacy_exc, ir_exc

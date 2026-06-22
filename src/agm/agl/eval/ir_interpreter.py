@@ -22,7 +22,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
-from agm.agl.eval.agent_parse import AgentParseResult, parse_agent_output
 from agm.agl.eval.arith import (
     AglDivisionByZero,
     add,
@@ -133,6 +132,7 @@ from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 from agm.agl.runtime.agents import AgentRegistry
+from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
@@ -140,7 +140,6 @@ from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
 
 if TYPE_CHECKING:
-    from agm.agl.runtime.codec import ParseResult
     from agm.agl.runtime.contract import OutputContract
 
 __all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
@@ -281,11 +280,11 @@ class IrInterpreter:
 
     def _parse_host_output(
         self, raw: str, contract_id: ContractId, *, effective_strict: bool
-    ) -> "AgentParseResult | ParseResult":
+    ) -> ParseResult:
         contract = self._program.contracts[contract_id]
         host_contract = self._host_contracts.get(contract_id)
         if host_contract is None or contract.codec_name in {"text", "json"}:
-            return parse_agent_output(raw, contract, effective_strict=effective_strict)
+            return _parse_contract_output(raw, contract, effective_strict=effective_strict)
         schema = (
             host_contract.json_schema
             if isinstance(host_contract.json_schema, dict)
@@ -405,6 +404,17 @@ class IrInterpreter:
 
         return result
 
+    def _check_call_depth(self) -> None:
+        if self._call_depth >= self._max_call_depth:
+            raise AglRaise(
+                _make_exc_value(
+                    "RecursionError",
+                    f"Maximum call depth ({self._max_call_depth}) exceeded",
+                    trace_id=self._trace.new_event_id(),
+                    limit=IntValue(self._max_call_depth),
+                )
+            )
+
     def _execute_direct_call(
         self,
         fn_id: FunctionId,
@@ -416,15 +426,7 @@ class IrInterpreter:
         Depth check → evaluate arguments (UseDefault uses a captures frame) →
         ``_bind_and_invoke``.
         """
-        if self._call_depth >= self._max_call_depth:
-            raise AglRaise(
-                _make_exc_value(
-                    "RecursionError",
-                    f"Maximum call depth ({self._max_call_depth}) exceeded",
-                    trace_id=self._trace.new_event_id(),
-                    limit=IntValue(self._max_call_depth),
-                )
-            )
+        self._check_call_depth()
         desc = self._program.functions[fn_id]
         closure_val = self._get_closure_for(fn_id)
         captures_dict: Frame = dict(closure_val.captures)
@@ -497,15 +499,7 @@ class IrInterpreter:
             )
         desc = self._program.functions[callee_val.function_id]
 
-        if self._call_depth >= self._max_call_depth:
-            raise AglRaise(
-                _make_exc_value(
-                    "RecursionError",
-                    f"Maximum call depth ({self._max_call_depth}) exceeded",
-                    trace_id=self._trace.new_event_id(),
-                    limit=IntValue(self._max_call_depth),
-                )
-            )
+        self._check_call_depth()
 
         # Evaluate each positional argument in the CALLER frame (no coercion).
         bound_values: list[Value] = []
@@ -709,14 +703,8 @@ class IrInterpreter:
                 value = self._eval(val_expr)
                 return _apply_coercion(value, op)
 
-            case IrSequence(items=items):
+            case IrSequence(items=items) | IrBlock(items=items):
                 last: Value = UnitValue()
-                for item in items:
-                    last = self._eval(item)
-                return last
-
-            case IrBlock(items=items):
-                last = UnitValue()
                 for item in items:
                     last = self._eval(item)
                 return last

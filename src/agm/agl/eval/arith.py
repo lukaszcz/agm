@@ -10,7 +10,7 @@ No syntax, scope, or typecheck imports are permitted here.
 from __future__ import annotations
 
 import decimal
-from typing import assert_never
+from typing import TypeVar, assert_never
 
 from agm.agl.eval.values import (
     BoolValue,
@@ -60,27 +60,10 @@ def value_eq(left: Value, right: Value) -> bool:
     return left == right
 
 
-def _cmp_int(op: CmpOp, lv: int, rv: int) -> bool:
-    if op == CmpOp.LT:
-        return lv < rv
-    if op == CmpOp.LE:
-        return lv <= rv
-    if op == CmpOp.GT:
-        return lv > rv
-    return lv >= rv
+_Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)
 
 
-def _cmp_decimal(op: CmpOp, lv: decimal.Decimal, rv: decimal.Decimal) -> bool:
-    if op == CmpOp.LT:
-        return lv < rv
-    if op == CmpOp.LE:
-        return lv <= rv
-    if op == CmpOp.GT:
-        return lv > rv
-    return lv >= rv
-
-
-def _cmp_text(op: CmpOp, lv: str, rv: str) -> bool:
+def _cmp(op: CmpOp, lv: _Ordered, rv: _Ordered) -> bool:
     if op == CmpOp.LT:
         return lv < rv
     if op == CmpOp.LE:
@@ -101,11 +84,11 @@ def order(op: CmpOp, left: Value, right: Value) -> bool:
         right = DecimalValue(decimal.Decimal(right.value))
 
     if isinstance(left, IntValue) and isinstance(right, IntValue):
-        return _cmp_int(op, left.value, right.value)
+        return _cmp(op, left.value, right.value)
     if isinstance(left, DecimalValue) and isinstance(right, DecimalValue):
-        return _cmp_decimal(op, left.value, right.value)
+        return _cmp(op, left.value, right.value)
     if isinstance(left, TextValue) and isinstance(right, TextValue):
-        return _cmp_text(op, left.value, right.value)
+        return _cmp(op, left.value, right.value)
     raise AssertionError(
         f"order: cannot compare {type(left).__name__} and {type(right).__name__}"
     )

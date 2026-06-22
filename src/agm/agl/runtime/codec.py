@@ -24,18 +24,20 @@ import json_repair
 from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
+from agm.agl.eval.conversions import decode_value
 from agm.agl.eval.values import Value
-from agm.agl.runtime.convert import json_to_value, normalize_integral_decimals
-from agm.agl.runtime.request import ValidationError
-from agm.agl.type_schema import build_format_instructions, derive_schema
-from agm.agl.typecheck.types import (
-    DictType,
-    EnumType,
-    ListType,
-    RecordType,
-    TextType,
-    Type,
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    DecodeSchema,
+    DictDecode,
+    EnumDecode,
+    ListDecode,
+    RecordDecode,
 )
+from agm.agl.runtime.convert import normalize_integral_decimals
+from agm.agl.runtime.request import ValidationError
+from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
+from agm.agl.typecheck.types import TextType, Type
 from agm.agl.values import TextValue
 
 if TYPE_CHECKING:
@@ -365,173 +367,226 @@ def _extract_json_text(raw: str) -> str | None | object:
 
 
 # ---------------------------------------------------------------------------
-# JSON → Value conversion helpers
+# Typeless validation-error classification and shared JSON parse core
 # ---------------------------------------------------------------------------
-
-
-def _missing_required_field(error: JsonschemaValidationError) -> str | None:
-    """Return the absent field for a ``required`` validation error.
-
-    jsonschema reports the full ``required`` list as ``validator_value``; the
-    actually-missing field is whichever required name is not present in the
-    (object) instance.
-    """
-    required = error.validator_value
-    instance = error.instance
-    if isinstance(required, list) and isinstance(instance, dict):
-        for name in required:
-            if isinstance(name, str) and name not in instance:
-                return name
-    return None
-
-
-def _classify_jsonschema_error(
-    error: JsonschemaValidationError, target_type: Type
-) -> ValidationError:
-    """Map a single jsonschema error into a structured :class:`ValidationError`.
-
-    The mapping is type-directed so that opaque ``oneOf`` failures (enums) are
-    reported as ``bad_case`` / ``missing_field`` rather than leaking the
-    jsonschema phrasing "is not valid under any of the given schemas".
-    """
-    path = "$" + "".join(f".{p}" if isinstance(p, str) else f"[{p}]" for p in error.path)
-
-    if error.validator == "required":
-        name = _missing_required_field(error)
-        return ValidationError(
-            category="missing_field",
-            message=error.message,
-            path=path,
-            field=name,
-        )
-    if error.validator == "additionalProperties":
-        return ValidationError(
-            category="unknown_field",
-            message=error.message,
-            path=path,
-            field=None,
-        )
-    if error.validator == "type":
-        # The offending field (if any) is the last path element.
-        field = error.path[-1] if error.path else None
-        name = field if isinstance(field, str) else None
-        return ValidationError(
-            category="wrong_type",
-            message=error.message,
-            path=path,
-            field=name,
-        )
-    if error.validator == "oneOf":
-        return _classify_enum_failure(error, target_type, path)
-    # Any other validator (e.g. const inside a non-enum context): treat the
-    # mismatch as a wrong-type failure with the original message.
-    return ValidationError(
-        category="wrong_type",
-        message=error.message,
-        path=path,
-        field=None,
-    )
-
-
-def _classify_enum_failure(
-    error: JsonschemaValidationError, target_type: Type, path: str
-) -> ValidationError:
-    """Type-directed classification of an enum ``oneOf`` validation failure.
-
-    Inspects the failing instance against the *target_type* (an ``EnumType``
-    when this branch is reached for an enum target) to decide whether the
-    ``$case`` tag is missing/invalid (``bad_case``) or a known variant is
-    missing a payload field (``missing_field``).
-    """
-    instance = error.instance
-    # Locate the enum type governing the offending value.
-    enum_type = _enum_type_at_path(target_type, list(error.path))
-    if not isinstance(instance, dict) or enum_type is None:
-        return ValidationError(
-            category="bad_case",
-            message="Enum object did not match any known variant.",
-            path=path,
-            field=None,
-        )
-
-    case = instance.get("$case")
-    if not isinstance(case, str):
-        return ValidationError(
-            category="bad_case",
-            message='Enum object is missing a string "$case" tag.',
-            path=path,
-            field="$case",
-        )
-    variant_fields = enum_type.variants.get(case)
-    if variant_fields is None:
-        valid = ", ".join(enum_type.variants.keys())
-        return ValidationError(
-            category="bad_case",
-            message=f'Unknown "$case" {case!r} for enum {enum_type.name!r}. '
-            f"Valid variants: {valid}.",
-            path=path,
-            field="$case",
-        )
-    # Known variant → report the first missing payload field (if any).
-    for field_name in variant_fields:
-        if field_name not in instance:
-            return ValidationError(
-                category="missing_field",
-                message=f'Enum variant {case!r} is missing field {field_name!r}.',
-                path=path,
-                field=field_name,
-            )
-    # Otherwise an unknown payload field was supplied.
-    declared = set(variant_fields) | {"$case"}
-    for key in instance:
-        if key not in declared:
-            return ValidationError(
-                category="unknown_field",
-                message=f"Enum variant {case!r} has an unexpected field {key!r}.",
-                path=path,
-                field=key,
-            )
-    return ValidationError(  # pragma: no cover — defensive fallback
-        category="bad_case",
-        message="Enum object did not match the selected variant schema.",
-        path=path,
-        field=None,
-    )
-
-
-def _enum_type_at_path(target_type: Type, path: list[object]) -> EnumType | None:
-    """Resolve the ``EnumType`` governing the value at *path* within *target_type*."""
-    current: Type = target_type
-    for step in path:
-        if isinstance(current, ListType):
-            current = current.elem
-        elif isinstance(current, DictType):
-            current = current.value
-        elif isinstance(current, RecordType) and isinstance(step, str):
-            field_type = current.fields.get(step)
-            if field_type is None:
-                return None
-            current = field_type
-        else:
-            return None
-    return current if isinstance(current, EnumType) else None
-
-
-def _collect_validation_errors(
-    obj: object, target_type: Type, schema: dict[str, object]
-) -> tuple[ValidationError, ...]:
-    """Validate *obj* against *schema*, returning structured errors (empty if OK)."""
-    validator = Draft202012Validator(schema)
-    raw_errors: list[JsonschemaValidationError] = list(validator.iter_errors(obj))
-    # Deterministic ordering by the (string) JSON path; path elements may mix
-    # ``str`` and ``int`` and are not directly comparable.
-    errors = sorted(raw_errors, key=_path_sort_key)
-    return tuple(_classify_jsonschema_error(e, target_type) for e in errors)
 
 
 def _path_sort_key(error: JsonschemaValidationError) -> str:
     """A stable, comparable sort key for a jsonschema error (by path)."""
     return "/".join(str(p) for p in error.path)
+
+
+def _find_enum_decode_at_path(
+    decode: DecodeSchema,
+    path_elements: list[object],
+) -> EnumDecode | None:
+    """Navigate the decode schema to find an ``EnumDecode`` at the given JSON path."""
+    for elem in path_elements:
+        if isinstance(decode, ListDecode):
+            decode = decode.elem
+        elif isinstance(decode, DictDecode):
+            decode = decode.value
+        elif isinstance(decode, RecordDecode):
+            if not isinstance(elem, str):
+                return None
+            field_decode: DecodeSchema | None = None
+            for fname, fschema in decode.fields:
+                if fname == elem:
+                    field_decode = fschema
+                    break
+            if field_decode is None:
+                return None
+            decode = field_decode
+        else:
+            return None
+    return decode if isinstance(decode, EnumDecode) else None
+
+
+def _make_validation_error(error: object, decode_schema: DecodeSchema) -> ValidationError:
+    """Map a jsonschema error into a structured :class:`ValidationError`."""
+    if not isinstance(error, JsonschemaValidationError):
+        return ValidationError(category="wrong_type", message=str(error), path="$", field=None)
+
+    path = "$" + "".join(f".{p}" if isinstance(p, str) else f"[{p}]" for p in error.path)
+
+    if error.validator == "required":
+        required = error.validator_value
+        instance = error.instance
+        name: str | None = None
+        if isinstance(required, list) and isinstance(instance, dict):
+            for n in required:
+                if isinstance(n, str) and n not in instance:
+                    name = n
+                    break
+        return ValidationError(
+            category="missing_field", message=error.message, path=path, field=name
+        )
+    if error.validator == "additionalProperties":
+        return ValidationError(
+            category="unknown_field", message=error.message, path=path, field=None
+        )
+    if error.validator == "type":
+        field_elem = error.path[-1] if error.path else None
+        fname: str | None = field_elem if isinstance(field_elem, str) else None
+        return ValidationError(
+            category="wrong_type", message=error.message, path=path, field=fname
+        )
+    if error.validator == "oneOf":
+        return _classify_enum_failure(error, path, decode_schema)
+    return ValidationError(category="wrong_type", message=error.message, path=path, field=None)
+
+
+def _classify_enum_failure(
+    error: JsonschemaValidationError,
+    path: str,
+    decode_schema: DecodeSchema,
+) -> ValidationError:
+    """Classify a oneOf enum validation failure using the typeless ``DecodeSchema``."""
+    instance = error.instance
+    if not isinstance(instance, dict):
+        return ValidationError(
+            category="bad_case",
+            message="Enum object did not match any known variant.",
+            path=path, field=None,
+        )
+
+    case_val = instance.get("$case")
+    if not isinstance(case_val, str):
+        return ValidationError(
+            category="bad_case",
+            message='Enum object is missing a string "$case" tag.',
+            path=path, field="$case",
+        )
+
+    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path))
+    if enum_decode is None:
+        return ValidationError(
+            category="bad_case",
+            message='Enum object is missing a string "$case" tag.',
+            path=path, field="$case",
+        )
+
+    known_variants = {v.name: v for v in enum_decode.variants}
+    if case_val not in known_variants:
+        valid = ", ".join(v.name for v in enum_decode.variants)
+        return ValidationError(
+            category="bad_case",
+            message=f'Unknown "$case" {case_val!r} for enum {enum_decode.display_name!r}. '
+            f"Valid variants: {valid}.",
+            path=path, field="$case",
+        )
+
+    variant = known_variants[case_val]
+    variant_field_names = [fname for fname, _ in variant.fields]
+    for field_name in variant_field_names:
+        if field_name not in instance:
+            return ValidationError(
+                category="missing_field",
+                message=f"Enum variant {case_val!r} is missing field {field_name!r}.",
+                path=path, field=field_name,
+            )
+    declared = set(variant_field_names) | {"$case"}
+    for key in instance:
+        if key not in declared:
+            return ValidationError(
+                category="unknown_field",
+                message=f"Enum variant {case_val!r} has an unexpected field {key!r}.",
+                path=path, field=key,
+            )
+
+    return ValidationError(
+        category="bad_case",
+        message="Enum object did not match the selected variant schema.",
+        path=path, field=None,
+    )
+
+
+def _parse_json_core(
+    raw: str,
+    schema_dict: dict[str, object],
+    decode_schema: DecodeSchema,
+    *,
+    strict: bool,
+) -> ParseResult:
+    """Shared JSON parse core used by ``JsonCodec`` and the IR evaluator.
+
+    Takes pre-compiled *schema_dict* (a JSON Schema dict) and *decode_schema*
+    (a typeless ``DecodeSchema``) so the IR evaluator can call it with values
+    already embedded in the ``ContractRequest`` without holding checker types.
+    """
+    if strict:
+        try:
+            parsed_obj: object = json.loads(raw, parse_float=Decimal)
+        except json.JSONDecodeError as exc:
+            return ParseResult.failure(f"Strict JSON parse failed: {exc}")
+        return _validate_and_decode_core(raw.strip(), parsed_obj, schema_dict, decode_schema)
+
+    json_text = _extract_json_text(raw)
+    if json_text is _AMBIGUOUS_MULTI_VALUE:
+        return ParseResult.failure(
+            "Ambiguous agent response: multiple JSON values were found, but "
+            "exactly one is required (design §2.8)."
+        )
+    if json_text is None or not isinstance(json_text, str):
+        return ParseResult.failure(
+            f"Could not extract a JSON value from the agent response: {raw!r}"
+        )
+    try:
+        parsed_obj = json.loads(json_text, parse_float=Decimal)
+    except json.JSONDecodeError as exc:
+        return ParseResult.failure(f"JSON parse failed after repair attempt: {exc}")
+    return _validate_and_decode_core(json_text, parsed_obj, schema_dict, decode_schema)
+
+
+def _validate_and_decode_core(
+    json_text: str,
+    parsed_obj: object,
+    schema_dict: dict[str, object],
+    decode_schema: DecodeSchema,
+) -> ParseResult:
+    """Validate *parsed_obj* against *schema_dict*, then decode to typed ``Value``."""
+    normalized = normalize_integral_decimals(parsed_obj)
+    validator = Draft202012Validator(schema_dict)
+    raw_errors: list[JsonschemaValidationError] = list(validator.iter_errors(normalized))
+    if raw_errors:
+        errors_sorted = sorted(raw_errors, key=_path_sort_key)
+        errors = tuple(_make_validation_error(e, decode_schema) for e in errors_sorted)
+        summary = "; ".join(e.message for e in errors)
+        return ParseResult.failure(
+            f"Schema validation failed: {summary}",
+            errors=errors,
+            normalized_raw=json_text,
+        )
+    try:
+        value = decode_value(decode_schema, normalized)
+    except ValueError as exc:
+        return ParseResult.failure(f"Value conversion failed: {exc}", normalized_raw=json_text)
+    return ParseResult.success(value, normalized_raw=json_text)
+
+
+def _parse_contract_output(
+    raw: str,
+    contract: ContractRequest,
+    *,
+    effective_strict: bool,
+) -> ParseResult:
+    """Parse a raw agent/exec response per a built-in-codec ``ContractRequest``.
+
+    Handles the ``text`` passthrough and the ``json`` parse path, including
+    defensive checks for missing ``json_schema`` and ``decode`` fields.
+    Called by ``IrInterpreter._parse_host_output`` for built-in codecs.
+    """
+    if contract.codec_name == "text":
+        return ParseResult.success(TextValue(raw))
+    # json codec
+    if contract.json_schema is None:
+        return ParseResult.failure("ContractRequest has no json_schema for json codec")
+    schema_raw: object = json.loads(contract.json_schema)
+    if not isinstance(schema_raw, dict):
+        return ParseResult.failure("ContractRequest json_schema is not a JSON object")
+    if contract.decode is None:
+        return ParseResult.failure("ContractRequest has no decode schema for json codec")
+    return _parse_json_core(raw, schema_raw, contract.decode, strict=effective_strict)
 
 
 # ---------------------------------------------------------------------------
@@ -632,8 +687,7 @@ class JsonCodec:
           2. Validate and convert as in lenient mode.
 
         *schema* (CARRY-IN 2): optional precomputed JSON Schema dict.  When
-        ``None`` (the default — e.g. when called from the interpreter which
-        does not hold the contract), ``derive_schema`` is called to produce it.
+        ``None`` (the default), ``derive_schema`` is called to produce it.
         Runtime-side callers that already have the materialized
         ``OutputContract`` should pass ``schema=contract.json_schema`` to
         avoid redundant schema derivation.
@@ -645,83 +699,5 @@ class JsonCodec:
         """
         if schema is None:
             schema = derive_schema(target_type)
-
-        if strict_json:
-            return self._parse_strict(raw, target_type, schema)
-        return self._parse_lenient(raw, target_type, schema)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _parse_strict(
-        self, raw: str, target_type: Type, schema: dict[str, object]
-    ) -> ParseResult:
-        """Strict JSON parsing: stdlib json.loads, no repair or extraction."""
-        try:
-            parsed_obj: object = json.loads(raw, parse_float=Decimal)
-        except json.JSONDecodeError as exc:
-            return ParseResult.failure(f"Strict JSON parse failed: {exc}")
-
-        return self._validate_and_convert(raw.strip(), parsed_obj, target_type, schema)
-
-    def _parse_lenient(
-        self, raw: str, target_type: Type, schema: dict[str, object]
-    ) -> ParseResult:
-        """Lenient JSON recovery: fence stripping + json-repair + re-parse."""
-        json_text = _extract_json_text(raw)
-        if json_text is _AMBIGUOUS_MULTI_VALUE:
-            return ParseResult.failure(
-                "Ambiguous agent response: multiple JSON values were found, but "
-                "exactly one is required (design §2.8)."
-            )
-        if json_text is None or not isinstance(json_text, str):
-            return ParseResult.failure(
-                f"Could not extract a JSON value from the agent response: {raw!r}"
-            )
-
-        try:
-            parsed_obj: object = json.loads(json_text, parse_float=Decimal)
-        except json.JSONDecodeError as exc:
-            return ParseResult.failure(
-                f"JSON parse failed after repair attempt: {exc}"
-            )
-
-        return self._validate_and_convert(json_text, parsed_obj, target_type, schema)
-
-    def _validate_and_convert(
-        self,
-        json_text: str,
-        parsed_obj: object,
-        target_type: Type,
-        schema: dict[str, object],
-    ) -> ParseResult:
-        """Validate *parsed_obj* against *schema*, then convert to typed Value."""
-        # F2: normalize integral Decimals to int before validation so that e.g.
-        # ``1.0`` satisfies ``{"type": "integer"}`` (and decimal targets re-widen
-        # via the int→Decimal path in ``json_to_value``).  ``1.5`` is left as a
-        # Decimal and still fails integer targets.
-        normalized_obj = normalize_integral_decimals(parsed_obj)
-
-        # Schema validation (always strict — design §2.8 rules 3–6).  The
-        # recovered/normalized JSON text is threaded through validation-failure
-        # results so the host can trace it alongside the raw output (design §2.8,
-        # F5) — e.g. ``AgentParseError.normalized_raw``.
-        errors = _collect_validation_errors(normalized_obj, target_type, schema)
-        if errors:
-            summary = "; ".join(e.message for e in errors)
-            return ParseResult.failure(
-                f"Schema validation failed: {summary}",
-                errors=errors,
-                normalized_raw=json_text,
-            )
-
-        # Convert to typed Value.
-        try:
-            value = json_to_value(normalized_obj, target_type)
-        except ValueError as exc:
-            return ParseResult.failure(
-                f"Value conversion failed: {exc}", normalized_raw=json_text
-            )
-
-        return ParseResult.success(value, normalized_raw=json_text)
+        decode_schema = build_decode_schema(target_type)
+        return _parse_json_core(raw, schema, decode_schema, strict=strict_json)

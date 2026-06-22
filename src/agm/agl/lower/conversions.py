@@ -12,6 +12,10 @@ total casts (``TOTAL_NOOP`` / ``TOTAL_RENDER`` / ``TOTAL_JSON``) never fail;
 fallible casts (``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
 the derived JSON schema and decode walk.
 
+``build_decode_schema`` lives in :mod:`agm.agl.type_schema` (alongside
+``derive_schema``) so both the lowerer and the runtime codec can import it
+without a cycle.
+
 """
 
 from __future__ import annotations
@@ -19,84 +23,11 @@ from __future__ import annotations
 import json
 from typing import assert_never
 
-from agm.agl.ir.contracts import (
-    ConversionRecipe,
-    ConversionStrategy,
-    DecodeSchema,
-    DictDecode,
-    EnumDecode,
-    ListDecode,
-    RecordDecode,
-    ScalarDecode,
-    ScalarKind,
-    VariantDecode,
-)
-from agm.agl.ir.ids import NominalId
-from agm.agl.type_schema import derive_schema
-from agm.agl.typecheck.types import (
-    BoolType,
-    CastKind,
-    DecimalType,
-    DictType,
-    EnumType,
-    IntType,
-    JsonType,
-    ListType,
-    RecordType,
-    TextType,
-    Type,
-)
+from agm.agl.ir.contracts import ConversionRecipe, ConversionStrategy
+from agm.agl.type_schema import build_decode_schema, derive_schema
+from agm.agl.typecheck.types import CastKind, DecimalType, IntType, JsonType, TextType, Type
 
-__all__ = ["build_decode_schema", "compile_recipe"]
-
-
-def build_decode_schema(typ: Type) -> DecodeSchema:
-    """Compile a checker ``Type`` into a typeless ``DecodeSchema``.
-
-    Mirrors the type recursion of ``runtime.convert.json_to_value`` so the
-    evaluator can reconstruct the typed value without the checker ``Type``.
-    """
-    if isinstance(typ, TextType):
-        return ScalarDecode(ScalarKind.TEXT)
-    if isinstance(typ, IntType):
-        return ScalarDecode(ScalarKind.INT)
-    if isinstance(typ, DecimalType):
-        return ScalarDecode(ScalarKind.DECIMAL)
-    if isinstance(typ, BoolType):
-        return ScalarDecode(ScalarKind.BOOL)
-    if isinstance(typ, JsonType):
-        return ScalarDecode(ScalarKind.JSON)
-    if isinstance(typ, ListType):
-        return ListDecode(build_decode_schema(typ.elem))
-    if isinstance(typ, DictType):
-        return DictDecode(build_decode_schema(typ.value))
-    if isinstance(typ, RecordType):
-        return RecordDecode(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
-            fields=tuple(
-                (fname, build_decode_schema(ftype)) for fname, ftype in typ.fields.items()
-            ),
-        )
-    if isinstance(typ, EnumType):
-        return EnumDecode(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
-            variants=tuple(
-                VariantDecode(
-                    name=vname,
-                    fields=tuple(
-                        (fname, build_decode_schema(ftype)) for fname, ftype in vfields.items()
-                    ),
-                )
-                for vname, vfields in typ.variants.items()
-            ),
-        )
-    # Non-data targets (unit/agent/function/exception/bottom/typevar) are not
-    # decodable from JSON and are rejected by the checker before lowering.
-    raise AssertionError(  # pragma: no cover
-        f"build_decode_schema: undecodable type {typ!r}"
-    )
+__all__ = ["compile_recipe"]
 
 
 def compile_recipe(source: Type, target: Type, kind: CastKind) -> ConversionRecipe:

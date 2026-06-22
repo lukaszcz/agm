@@ -824,25 +824,23 @@ class ReplSession:
                 if partial and name in entry_names:
                     installed.append(name)
         self._type_env.seed_from(checked.type_env)
+
+        def _before_failure(end_offset: int) -> bool:
+            return not partial or (
+                failure_span is not None and end_offset <= failure_span.start_offset
+            )
+
         promoted_type_names = {
             item.name
             for item in program.body.items
             if isinstance(item, (RecordDef, EnumDef, TypeAlias))
-            and (
-                not partial
-                or failure_span is not None
-                and item.span.end_offset <= failure_span.start_offset
-            )
+            and _before_failure(item.span.end_offset)
         }
         promoted_agents = {
             item.name
             for item in program.body.items
             if isinstance(item, AgentDecl)
-            and (
-                not partial
-                or failure_span is not None
-                and item.span.end_offset <= failure_span.start_offset
-            )
+            and _before_failure(item.span.end_offset)
         }
         self._declared_agents.update(promoted_agents)
         if promoted_type_names:

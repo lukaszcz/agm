@@ -121,7 +121,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
-from agm.agl.lower.conversions import build_decode_schema, compile_recipe
+from agm.agl.lower.conversions import compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.syntax.nodes import (
@@ -183,7 +183,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.type_schema import build_format_instructions, derive_schema
+from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
 from agm.agl.typecheck.types import (
@@ -224,6 +224,20 @@ class _LinkState:
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
+
+
+_ARITH_OP_MAP: dict[BinOp, ArithOp] = {
+    BinOp.ADD: ArithOp.ADD,
+    BinOp.SUB: ArithOp.SUB,
+    BinOp.MUL: ArithOp.MUL,
+}
+
+_CMP_OP_MAP: dict[BinOp, CmpOp] = {
+    BinOp.LT: CmpOp.LT,
+    BinOp.LE: CmpOp.LE,
+    BinOp.GT: CmpOp.GT,
+    BinOp.GE: CmpOp.GE,
+}
 
 
 class _Lowerer:
@@ -1005,12 +1019,7 @@ class _Lowerer:
         else:
             common = IntType()
             kind = ArithKind.INT
-        arith_op_map: dict[BinOp, ArithOp] = {
-            BinOp.ADD: ArithOp.ADD,
-            BinOp.SUB: ArithOp.SUB,
-            BinOp.MUL: ArithOp.MUL,
-        }
-        arith_op = arith_op_map[op]
+        arith_op = _ARITH_OP_MAP[op]
         return IrArith(
             location=loc,
             op=arith_op,
@@ -1064,13 +1073,7 @@ class _Lowerer:
         else:
             common = IntType()
             kind = CompareKind.INT
-        cmp_op_map: dict[BinOp, CmpOp] = {
-            BinOp.LT: CmpOp.LT,
-            BinOp.LE: CmpOp.LE,
-            BinOp.GT: CmpOp.GT,
-            BinOp.GE: CmpOp.GE,
-        }
-        cmp_op = cmp_op_map[op]
+        cmp_op = _CMP_OP_MAP[op]
         return IrCompare(
             location=loc,
             op=cmp_op,
@@ -2062,8 +2065,10 @@ class _Lowerer:
                 callee=csr.callee,
                 codec_name=csr.codec_name,
                 target_type_label=repr(csr.target_type),
-                has_schema=self._checked.contract_specs.get(csr.node_id) is not None
-                and self._checked.contract_specs[csr.node_id].codec_name == "json",
+                has_schema=(
+                    (_spec := self._checked.contract_specs.get(csr.node_id)) is not None
+                    and _spec.codec_name == "json"
+                ),
                 parse_policy=csr.parse_policy,
                 line=csr.line,
                 col=csr.col,

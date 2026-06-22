@@ -427,7 +427,6 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
     """Enum ask: agent returns unknown $case → AgentParseError from both pipelines."""
     import json
 
-    from agm.agl.eval.agent_parse import parse_agent_output
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -437,6 +436,7 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
     )
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _parse_contract_output
 
     nominal = NominalId(PRELUDE_ID, "Status")
     decode = EnumDecode(
@@ -467,19 +467,19 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
         is_unit=False,
     )
     # Unknown $case.
-    result = parse_agent_output('{"$case": "Unknown"}', contract, effective_strict=False)
+    result = _parse_contract_output('{"$case": "Unknown"}', contract, effective_strict=False)
     assert not result.ok
     assert len(result.errors) == 1
     assert result.errors[0].category == "bad_case"
 
     # Missing $case (not a dict at all first, then missing).
-    result2 = parse_agent_output('{"value": "hello"}', contract, effective_strict=False)
+    result2 = _parse_contract_output('{"value": "hello"}', contract, effective_strict=False)
     assert not result2.ok
     assert len(result2.errors) == 1
     assert result2.errors[0].category == "bad_case"
 
     # Missing 'msg' field for Err variant.
-    result3 = parse_agent_output('{"$case": "Err"}', contract, effective_strict=False)
+    result3 = _parse_contract_output('{"$case": "Err"}', contract, effective_strict=False)
     assert not result3.ok
     assert len(result3.errors) == 1
     assert result3.errors[0].category == "missing_field"
@@ -657,15 +657,14 @@ prompt_text
 
 
 # ---------------------------------------------------------------------------
-# T22 — agent_parse.py unit tests for uncovered branches
+# T22 — _parse_contract_output unit tests for uncovered branches
 # ---------------------------------------------------------------------------
 
 
-
-def test_parse_agent_output_json_schema_none() -> None:
-    """parse_agent_output: json codec but json_schema is None → failure."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+def test_parse_contract_output_json_schema_none() -> None:
+    """_parse_contract_output: json codec but json_schema is None → failure."""
     from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -677,15 +676,15 @@ def test_parse_agent_output_json_schema_none() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output("42", contract, effective_strict=False)
+    result = _parse_contract_output("42", contract, effective_strict=False)
     assert not result.ok
     assert "json_schema" in result.error_msg
 
 
-def test_parse_agent_output_ambiguous_multi_value() -> None:
-    """parse_agent_output: lenient mode with ambiguous multi-value → failure."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+def test_parse_contract_output_ambiguous_multi_value() -> None:
+    """_parse_contract_output: lenient mode with ambiguous multi-value → failure."""
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -698,15 +697,15 @@ def test_parse_agent_output_ambiguous_multi_value() -> None:
         is_unit=False,
     )
     # Two bare JSON values → _extract_json_text returns _AMBIGUOUS_MULTI_VALUE.
-    result = parse_agent_output("1 2", contract, effective_strict=False)
+    result = _parse_contract_output("1 2", contract, effective_strict=False)
     assert not result.ok
     assert "Ambiguous" in result.error_msg or "multiple" in result.error_msg
 
 
-def test_parse_agent_output_lenient_no_json_found() -> None:
-    """parse_agent_output: lenient mode with no JSON at all → failure."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+def test_parse_contract_output_lenient_no_json_found() -> None:
+    """_parse_contract_output: lenient mode with no JSON at all → failure."""
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -718,15 +717,14 @@ def test_parse_agent_output_lenient_no_json_found() -> None:
         format_instructions="",
         is_unit=False,
     )
-    # Empty string → no JSON found.
-    result = parse_agent_output("no json here at all!@#$%", contract, effective_strict=False)
+    result = _parse_contract_output("no json here at all!@#$%", contract, effective_strict=False)
     assert not result.ok
 
 
-def test_parse_agent_output_schema_obj_not_dict() -> None:
-    """parse_agent_output: json_schema that parses to a non-dict → failure."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+def test_parse_contract_output_schema_not_dict() -> None:
+    """_parse_contract_output: json_schema that parses to a non-dict → failure."""
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -738,15 +736,15 @@ def test_parse_agent_output_schema_obj_not_dict() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output("42", contract, effective_strict=False)
+    result = _parse_contract_output("42", contract, effective_strict=False)
     assert not result.ok
-    assert "Invalid JSON schema" in result.error_msg
+    assert "not a JSON object" in result.error_msg
 
 
-def test_parse_agent_output_decode_none_after_valid_schema() -> None:
-    """parse_agent_output: decode=None with valid schema → failure after validation passes."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+def test_parse_contract_output_decode_none() -> None:
+    """_parse_contract_output: decode=None with valid schema → failure."""
     from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -758,15 +756,15 @@ def test_parse_agent_output_decode_none_after_valid_schema() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output("42", contract, effective_strict=False)
+    result = _parse_contract_output("42", contract, effective_strict=False)
     assert not result.ok
     assert "decode" in result.error_msg
 
 
-def test_parse_agent_output_strict_parse_failure() -> None:
-    """parse_agent_output: strict mode with invalid JSON → failure."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+def test_parse_contract_output_strict_parse_failure() -> None:
+    """_parse_contract_output: strict mode with invalid JSON → failure."""
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -778,14 +776,13 @@ def test_parse_agent_output_strict_parse_failure() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output("not json!", contract, effective_strict=True)
+    result = _parse_contract_output("not json!", contract, effective_strict=True)
     assert not result.ok
     assert "Strict JSON" in result.error_msg
 
 
 def test_parse_agent_output_required_field_error() -> None:
     """parse_agent_output: missing required field on record → missing_field error."""
-    from agm.agl.eval.agent_parse import parse_agent_output
     from agm.agl.ir.contracts import (
         ContractRequest,
         RecordDecode,
@@ -794,6 +791,7 @@ def test_parse_agent_output_required_field_error() -> None:
     )
     from agm.agl.ir.ids import NominalId as IrNominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _parse_contract_output
 
     nom = IrNominalId(PRELUDE_ID, "Point")
     schema = _json.dumps({
@@ -818,7 +816,7 @@ def test_parse_agent_output_required_field_error() -> None:
         is_unit=False,
     )
     # Missing 'y' field.
-    result = parse_agent_output('{"x": 1}', contract, effective_strict=False)
+    result = _parse_contract_output('{"x": 1}', contract, effective_strict=False)
     assert not result.ok
     assert len(result.errors) >= 1
     assert any(e.category == "missing_field" for e in result.errors)
@@ -826,10 +824,10 @@ def test_parse_agent_output_required_field_error() -> None:
 
 def test_parse_agent_output_additional_properties_error() -> None:
     """parse_agent_output: extra field on record → unknown_field error."""
-    from agm.agl.eval.agent_parse import parse_agent_output
     from agm.agl.ir.contracts import ContractRequest, RecordDecode, ScalarDecode, ScalarKind
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _parse_contract_output
 
     nom = NominalId(PRELUDE_ID, "Point")
     schema = _json.dumps({
@@ -853,15 +851,15 @@ def test_parse_agent_output_additional_properties_error() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output('{"x": 1, "extra": true}', contract, effective_strict=False)
+    result = _parse_contract_output('{"x": 1, "extra": true}', contract, effective_strict=False)
     assert not result.ok
     assert any(e.category == "unknown_field" for e in result.errors)
 
 
 def test_parse_agent_output_wrong_type_error() -> None:
     """parse_agent_output: wrong JSON type (string vs integer) → wrong_type error."""
-    from agm.agl.eval.agent_parse import parse_agent_output
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -873,15 +871,15 @@ def test_parse_agent_output_wrong_type_error() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output('"not an int"', contract, effective_strict=False)
+    result = _parse_contract_output('"not an int"', contract, effective_strict=False)
     assert not result.ok
     assert any(e.category == "wrong_type" for e in result.errors)
 
 
 def test_parse_agent_output_unknown_validator_fallback() -> None:
     """parse_agent_output: schema with minimum validator → wrong_type fallback."""
-    from agm.agl.eval.agent_parse import parse_agent_output
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     # Use a "minimum" constraint that fails — falls through to default ValidationError.
     schema = _json.dumps({"type": "integer", "minimum": 100})
@@ -895,43 +893,25 @@ def test_parse_agent_output_unknown_validator_fallback() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output("5", contract, effective_strict=False)
+    result = _parse_contract_output("5", contract, effective_strict=False)
     assert not result.ok
     # The error should be categorized (wrong_type is our fallback for unknown validators)
     assert len(result.errors) >= 1
 
 
-def test_path_sort_key_non_error_object() -> None:
-    """_path_sort_key: non-ValidationError argument returns empty string."""
-    from agm.agl.eval.agent_parse import _path_sort_key
-
-    key = _path_sort_key("not an error")
-    assert key == ""
-
-
 def test_make_validation_error_non_error_object() -> None:
     """_make_validation_error: non-ValidationError argument → wrong_type with str()."""
-    from agm.agl.eval.agent_parse import _make_validation_error
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _make_validation_error
 
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "integer"}),
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    ve = _make_validation_error("plain string error", contract)
+    decode = ScalarDecode(ScalarKind.INT)
+    ve = _make_validation_error("plain string error", decode)
     assert ve.category == "wrong_type"
     assert "plain string error" in ve.message
 
 
 def test_enum_instance_not_dict_bad_case() -> None:
-    """_classify_enum_failure_typeless: non-dict instance → bad_case error."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """_classify_enum_failure: non-dict instance → bad_case error."""
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -939,6 +919,7 @@ def test_enum_instance_not_dict_bad_case() -> None:
     )
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _parse_contract_output
 
     nominal = NominalId(PRELUDE_ID, "Flag")
     decode = EnumDecode(
@@ -965,14 +946,13 @@ def test_enum_instance_not_dict_bad_case() -> None:
         is_unit=False,
     )
     # Pass a non-dict (string) → instance not dict path.
-    result = parse_agent_output('"not-a-dict"', contract, effective_strict=False)
+    result = _parse_contract_output('"not-a-dict"', contract, effective_strict=False)
     assert not result.ok
     assert any(e.category == "bad_case" for e in result.errors)
 
 
 def test_enum_no_case_tag_bad_case() -> None:
-    """_classify_enum_failure_typeless: dict missing $case → bad_case error."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """_classify_enum_failure: dict missing $case → bad_case error."""
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -1005,16 +985,18 @@ def test_enum_no_case_tag_bad_case() -> None:
         format_instructions="",
         is_unit=False,
     )
+    from agm.agl.runtime.codec import _parse_contract_output
+
     # Missing $case key entirely.
-    result = parse_agent_output('{"value": 42}', contract, effective_strict=False)
+    result = _parse_contract_output('{"value": 42}', contract, effective_strict=False)
     assert not result.ok
     assert any(e.category == "bad_case" for e in result.errors)
 
 
 def test_enum_bad_case_no_decode_schema() -> None:
-    """_classify_enum_failure_typeless: decode=None → falls back to bad_case with case_val."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """decode=None in ContractRequest → failure (no decode schema check before validation)."""
     from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.runtime.codec import _parse_contract_output
 
     schema = _json.dumps({
         "oneOf": [
@@ -1033,14 +1015,12 @@ def test_enum_bad_case_no_decode_schema() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output('{"$case": "Unknown"}', contract, effective_strict=False)
-    assert not result.ok
-    assert any(e.category == "bad_case" for e in result.errors)
+    result = _parse_contract_output('{"$case": "Unknown"}', contract, effective_strict=False)
+    assert not result.ok  # decode=None → failure before schema validation
 
 
 def test_find_enum_decode_at_path_through_list() -> None:
     """_find_enum_decode_at_path: navigate through ListDecode to find EnumDecode."""
-    from agm.agl.eval.agent_parse import _find_enum_decode_at_path
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -1049,6 +1029,7 @@ def test_find_enum_decode_at_path_through_list() -> None:
     )
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _find_enum_decode_at_path
 
     nominal = NominalId(PRELUDE_ID, "Status")
     enum_dec = EnumDecode(
@@ -1068,14 +1049,13 @@ def test_find_enum_decode_at_path_through_list() -> None:
         is_unit=False,
     )
     # Navigate into element 0 of list.
-    result = _find_enum_decode_at_path(contract, [0])
+    result = _find_enum_decode_at_path(contract.decode, [0])
     assert isinstance(result, EnumDecode)
     assert result.display_name == "Status"
 
 
 def test_find_enum_decode_at_path_through_dict() -> None:
     """_find_enum_decode_at_path: navigate through DictDecode to find EnumDecode."""
-    from agm.agl.eval.agent_parse import _find_enum_decode_at_path
     from agm.agl.ir.contracts import (
         ContractRequest,
         DictDecode,
@@ -1084,6 +1064,7 @@ def test_find_enum_decode_at_path_through_dict() -> None:
     )
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _find_enum_decode_at_path
 
     nominal = NominalId(PRELUDE_ID, "Status")
     enum_dec = EnumDecode(
@@ -1102,13 +1083,12 @@ def test_find_enum_decode_at_path_through_dict() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = _find_enum_decode_at_path(contract, ["somekey"])
+    result = _find_enum_decode_at_path(contract.decode, ["somekey"])
     assert isinstance(result, EnumDecode)
 
 
 def test_find_enum_decode_at_path_through_record() -> None:
     """_find_enum_decode_at_path: navigate through RecordDecode fields to find EnumDecode."""
-    from agm.agl.eval.agent_parse import _find_enum_decode_at_path
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -1119,6 +1099,7 @@ def test_find_enum_decode_at_path_through_record() -> None:
     )
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _find_enum_decode_at_path
 
     nominal = NominalId(PRELUDE_ID, "Status")
     enum_dec = EnumDecode(
@@ -1143,21 +1124,20 @@ def test_find_enum_decode_at_path_through_record() -> None:
         is_unit=False,
     )
     # Navigate into record field "status".
-    result = _find_enum_decode_at_path(contract, ["status"])
+    result = _find_enum_decode_at_path(contract.decode, ["status"])
     assert isinstance(result, EnumDecode)
 
     # Non-existent field → None.
-    result2 = _find_enum_decode_at_path(contract, ["missing"])
+    result2 = _find_enum_decode_at_path(contract.decode, ["missing"])
     assert result2 is None
 
     # Non-string path element in record → None.
-    result3 = _find_enum_decode_at_path(contract, [0])
+    result3 = _find_enum_decode_at_path(contract.decode, [0])
     assert result3 is None
 
 
 def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
     """_find_enum_decode_at_path: enum at top level navigated deeper → None."""
-    from agm.agl.eval.agent_parse import _find_enum_decode_at_path
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -1165,6 +1145,7 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
     )
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _find_enum_decode_at_path
 
     nominal = NominalId(PRELUDE_ID, "Status")
     enum_dec = EnumDecode(
@@ -1183,18 +1164,18 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
         is_unit=False,
     )
     # Path goes inside the enum (invalid) → None.
-    result = _find_enum_decode_at_path(contract, ["something"])
+    result = _find_enum_decode_at_path(contract.decode, ["something"])
     assert result is None
 
 
 def test_find_enum_decode_at_path_scalar_navigated_into() -> None:
     """_find_enum_decode_at_path: scalar navigated into → None (else branch)."""
-    from agm.agl.eval.agent_parse import _find_enum_decode_at_path
     from agm.agl.ir.contracts import (
         ContractRequest,
         ScalarDecode,
         ScalarKind,
     )
+    from agm.agl.runtime.codec import _find_enum_decode_at_path
 
     contract = ContractRequest(
         codec_name="json",
@@ -1207,13 +1188,12 @@ def test_find_enum_decode_at_path_scalar_navigated_into() -> None:
         is_unit=False,
     )
     # Scalar can't be navigated into.
-    result = _find_enum_decode_at_path(contract, ["key"])
+    result = _find_enum_decode_at_path(contract.decode, ["key"])
     assert result is None
 
 
 def test_find_enum_decode_at_path_end_at_scalar() -> None:
     """_find_enum_decode_at_path: path ends at scalar → None (not EnumDecode)."""
-    from agm.agl.eval.agent_parse import _find_enum_decode_at_path
     from agm.agl.ir.contracts import (
         ContractRequest,
         RecordDecode,
@@ -1222,6 +1202,7 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
     )
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _find_enum_decode_at_path
 
     nom = NominalId(PRELUDE_ID, "Point")
     rec_dec = RecordDecode(
@@ -1240,32 +1221,13 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
         is_unit=False,
     )
     # Navigate to "x" which is a ScalarDecode, not EnumDecode → None.
-    result = _find_enum_decode_at_path(contract, ["x"])
+    result = _find_enum_decode_at_path(contract.decode, ["x"])
     assert result is None
 
-
-def test_find_enum_decode_at_path_decode_none() -> None:
-    """_find_enum_decode_at_path: decode=None → None immediately."""
-    from agm.agl.eval.agent_parse import _find_enum_decode_at_path
-    from agm.agl.ir.contracts import ContractRequest
-
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema="{}",
-        decode=None,
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    result = _find_enum_decode_at_path(contract, [])
-    assert result is None
 
 
 def test_enum_known_case_with_additional_props_error() -> None:
-    """_classify_enum_failure_typeless: known case but extra field → unknown_field."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """_classify_enum_failure: known case but extra field → unknown_field."""
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -1304,8 +1266,10 @@ def test_enum_known_case_with_additional_props_error() -> None:
         format_instructions="",
         is_unit=False,
     )
+    from agm.agl.runtime.codec import _parse_contract_output
+
     # Ok with extra field → additionalProperties error.
-    result = parse_agent_output('{"$case": "Ok", "extra": 1}', contract, effective_strict=False)
+    result = _parse_contract_output('{"$case": "Ok", "extra": 1}', contract, effective_strict=False)
     assert not result.ok
     assert any(e.category == "unknown_field" for e in result.errors)
 
@@ -1649,12 +1613,9 @@ n
 
 
 def test_parse_lenient_json_parse_failure_after_repair() -> None:
-    """parse_agent_output lenient: json_text found but json.loads fails → failure."""
-    # This is hard to trigger via _extract_json_text returning invalid JSON,
-    # since json-repair usually fixes things.  We test via strict mode that
-    # definitely hits the JSONDecodeError path.
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """_parse_contract_output lenient: json_text found but json.loads fails → failure."""
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -1666,24 +1627,17 @@ def test_parse_lenient_json_parse_failure_after_repair() -> None:
         format_instructions="",
         is_unit=False,
     )
-    # Strict mode parse failure (covers lines 143-144 via _parse_strict path).
-    result = parse_agent_output("this is not json at all!!", contract, effective_strict=True)
+    # Strict mode parse failure.
+    result = _parse_contract_output("this is not json at all!!", contract, effective_strict=True)
     assert not result.ok
     assert "Strict JSON" in result.error_msg
 
 
 def test_parse_value_conversion_failure() -> None:
-    """parse_agent_output: schema valid but _decode raises ValueError → failure."""
-    # Build a schema that passes validation but gives _decode a coercion problem:
-    # e.g., validate as int but decode schema expects bool.
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """_parse_contract_output: schema valid but decode raises ValueError → failure."""
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
-    # Use a boolean schema but pass in integer value — schema passes but
-    # if we set decode=ScalarDecode(ScalarKind.INT) with schema {"type": "boolean"} this
-    # would fail schema validation. Instead, pass null with int schema:
-    # The simplest way is to pass a string "42" and use "type": "string" schema with
-    # INT decode — schema passes, but decode will fail converting string to int.
     schema = _json.dumps({"type": "string"})
     contract = ContractRequest(
         codec_name="json",
@@ -1695,8 +1649,8 @@ def test_parse_value_conversion_failure() -> None:
         format_instructions="",
         is_unit=False,
     )
-    result = parse_agent_output('"not-a-number"', contract, effective_strict=False)
-    # Either schema validation fails (wrong_type) or _decode fails (value conversion)
+    result = _parse_contract_output('"not-a-number"', contract, effective_strict=False)
+    # Either schema validation fails (wrong_type) or decode fails (value conversion)
     assert not result.ok
 
 
@@ -1819,7 +1773,6 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     # when AgentParseResult.failure("") is called. Let's mock parse_agent_output:
     from unittest.mock import patch
 
-    from agm.agl.eval.agent_parse import AgentParseResult
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
     from agm.agl.ir.ids import ContractId, Location, SourceId
@@ -1827,6 +1780,7 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.modules.ids import ENTRY_ID
     from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.runtime.codec import ParseResult
     from agm.agl.runtime.request import AgentRequest, AgentResponse
 
     src_id = SourceId(0)
@@ -1866,9 +1820,9 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     registry = AgentRegistry(named={"ask": _agent_fn}, default_agent=None)
     interp = IrInterpreter(prog, registry=registry)
 
-    # Patch parse_agent_output to return failure with EMPTY errors AND EMPTY error_msg.
-    empty_failure = AgentParseResult(ok=False, value=None, error_msg="", errors=())
-    with patch("agm.agl.eval.ir_interpreter.parse_agent_output", return_value=empty_failure):
+    # Patch _parse_contract_output to return failure with EMPTY errors AND EMPTY error_msg.
+    empty_failure = ParseResult(ok=False, value=None, error_msg="", errors=())
+    with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=empty_failure):
         from agm.agl.eval.exceptions import AglRaise
         with pytest.raises(AglRaise):
             interp.run()
@@ -2111,9 +2065,7 @@ def test_lower_extract_max_attempts_field_access_non_retry() -> None:
 
 
 def test_enum_required_field_loop_partial_coverage() -> None:
-    """_classify_enum_failure_typeless: required list has field that IS present (loop no-break)."""
-    # This covers branch 210->215 (loop runs but doesn't break on first item).
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """_classify_enum_failure: known case with missing field → missing_field (loop covers all)."""
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -2158,19 +2110,21 @@ def test_enum_required_field_loop_partial_coverage() -> None:
         format_instructions="",
         is_unit=False,
     )
+    from agm.agl.runtime.codec import _parse_contract_output
+
     # Both 'a' present but 'b' is missing → required error with 2 items in list.
-    result = parse_agent_output('{"$case": "Both", "a": 1}', contract, effective_strict=False)
+    result = _parse_contract_output('{"$case": "Both", "a": 1}', contract, effective_strict=False)
     assert not result.ok
     # Should find 'b' as missing (loop iterates past '$case' and 'a').
     assert any(e.category in ("missing_field", "bad_case") for e in result.errors)
 
 
 def test_parse_lenient_extracted_json_fails_decode() -> None:
-    """parse_agent_output lenient: extracted JSON text fails json.loads (lines 143-144)."""
+    """_parse_contract_output lenient: extracted JSON text fails json.loads."""
     from unittest.mock import patch
 
-    from agm.agl.eval.agent_parse import parse_agent_output
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _parse_contract_output
 
     contract = ContractRequest(
         codec_name="json",
@@ -2182,66 +2136,46 @@ def test_parse_lenient_extracted_json_fails_decode() -> None:
         format_instructions="",
         is_unit=False,
     )
-    # Patch _extract_json_text to return a non-ambiguous broken string.
-    with patch("agm.agl.eval.agent_parse._extract_json_text", return_value="{broken: !}"):
-        result = parse_agent_output("irrelevant", contract, effective_strict=False)
+    # Patch _extract_json_text in codec to return a non-ambiguous broken string.
+    with patch("agm.agl.runtime.codec._extract_json_text", return_value="{broken: !}"):
+        result = _parse_contract_output("irrelevant", contract, effective_strict=False)
     assert not result.ok
     assert "JSON parse failed" in result.error_msg
 
 
 def test_make_validation_error_required_non_list() -> None:
-    """_make_validation_error: required validator with non-list required (210->215 branch)."""
+    """_make_validation_error: required validator with non-list required → field=None."""
     from unittest.mock import MagicMock
 
     from jsonschema import ValidationError as JsError
 
-    from agm.agl.eval.agent_parse import _make_validation_error
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _make_validation_error
 
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "object"}),
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    # Mock a ValidationError where validator='required' but validator_value is NOT a list.
+    decode = ScalarDecode(ScalarKind.INT)
     fake_error = MagicMock(spec=JsError)
     fake_error.validator = "required"
-    fake_error.validator_value = "not-a-list"  # triggers the False branch at 210
+    fake_error.validator_value = "not-a-list"  # not a list → name stays None
     fake_error.instance = {"some": "dict"}
     fake_error.message = "something required"
-    fake_error.path = []  # empty deque-like
+    fake_error.path = []
 
-    ve = _make_validation_error(fake_error, contract)
+    ve = _make_validation_error(fake_error, decode)
     assert ve.category == "missing_field"
     assert ve.field is None  # name was never set (loop never ran)
 
 
 def test_make_validation_error_required_all_present() -> None:
-    """_make_validation_error: required validator loop where all fields ARE present (211->215)."""
+    """_make_validation_error: required validator where all fields ARE present → field=None."""
     from unittest.mock import MagicMock
 
     from jsonschema import ValidationError as JsError
 
-    from agm.agl.eval.agent_parse import _make_validation_error
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+    from agm.agl.runtime.codec import _make_validation_error
 
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "object"}),
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
+    decode = ScalarDecode(ScalarKind.INT)
     # Mock a required error where required=["x"] but instance already has "x".
-    # This forces the loop to complete without break (211->215 branch).
     fake_error = MagicMock(spec=JsError)
     fake_error.validator = "required"
     fake_error.validator_value = ["x"]
@@ -2249,14 +2183,13 @@ def test_make_validation_error_required_all_present() -> None:
     fake_error.message = "required property"
     fake_error.path = []
 
-    ve = _make_validation_error(fake_error, contract)
+    ve = _make_validation_error(fake_error, decode)
     assert ve.category == "missing_field"
     assert ve.field is None  # missing was never set (break never happened)
 
 
 def test_classify_enum_sub_error_type_only_fallback() -> None:
-    """_classify_enum_failure_typeless: known case, sub-errors only 'type' → fallback (line 306)."""
-    from agm.agl.eval.agent_parse import parse_agent_output
+    """_classify_enum_failure: known case, type-mismatch payload → defensive bad_case fallback."""
     from agm.agl.ir.contracts import (
         ContractRequest,
         EnumDecode,
@@ -2295,28 +2228,26 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
         format_instructions="",
         is_unit=False,
     )
-    # Known case "Err" but wrong type for "msg" (integer) → sub-errors are 'const'+'type'.
-    # The loop at 283 finds neither 'required' nor 'additionalProperties' → falls to line 306.
+    from agm.agl.runtime.codec import _parse_contract_output
+
+    # Known case "Err" but wrong type for "msg" (integer): all fields present, no extra fields
+    # → _classify_enum_failure falls through to the defensive bad_case fallback.
     raw = _json.dumps({"$case": "Err", "msg": 42})
-    result = parse_agent_output(raw, contract, effective_strict=False)
+    result = _parse_contract_output(raw, contract, effective_strict=False)
     assert not result.ok
     assert any(e.category == "bad_case" for e in result.errors)
 
 
-def test_classify_enum_sub_error_required_non_list_validator_value() -> None:
-    """_classify_enum_failure_typeless: sub required with non-list validator_value (288->293)."""
+def test_classify_enum_failure_nullary_case_all_fields_present() -> None:
+    """_classify_enum_failure: known nullary case with no missing/extra fields → fallback."""
     from unittest.mock import MagicMock
 
     from jsonschema import ValidationError as JsError
 
-    from agm.agl.eval.agent_parse import _classify_enum_failure_typeless
-    from agm.agl.ir.contracts import (
-        ContractRequest,
-        EnumDecode,
-        VariantDecode,
-    )
+    from agm.agl.ir.contracts import EnumDecode, VariantDecode
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _classify_enum_failure
 
     nominal = NominalId(PRELUDE_ID, "Status")
     decode = EnumDecode(
@@ -2324,52 +2255,28 @@ def test_classify_enum_sub_error_required_non_list_validator_value() -> None:
         display_name="Status",
         variants=(VariantDecode(name="Err", fields=()),),
     )
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema="{}",
-        decode=decode,
-        target_type_label="Status",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    # Sub-error with required validator but validator_value is NOT a list (e.g., a string).
-    # This forces 288->293 (False branch of the isinstance checks).
-    sub_err = MagicMock(spec=JsError)
-    sub_err.validator = "required"
-    sub_err.validator_value = "not-a-list"  # Not a list → 288->293 branch
-    sub_err.instance = {"$case": "Err"}
-    sub_err.message = "required"
-
+    # instance has only "$case" → no missing or extra fields in the nullary "Err" variant.
     main_error = MagicMock(spec=JsError)
     main_error.validator = "oneOf"
     main_error.instance = {"$case": "Err"}
-    main_error.context = [sub_err]
     main_error.absolute_path = []
     main_error.path = []
 
-    ve = _classify_enum_failure_typeless(main_error, "$", contract)
-    # missing remains None → 293->299 (if missing is not None is False) → 306 fallback.
+    ve = _classify_enum_failure(main_error, "$", decode)
+    # All variant fields accounted for → defensive fallback returns bad_case.
     assert ve.category == "bad_case"
 
 
-def test_classify_enum_sub_error_required_missing_is_none() -> None:
-    """_classify_enum_failure_typeless: sub required with all fields present → 293->299."""
+def test_classify_enum_failure_known_case_all_payload_present() -> None:
+    """_classify_enum_failure: known case with all payload fields present → defensive fallback."""
     from unittest.mock import MagicMock
 
     from jsonschema import ValidationError as JsError
 
-    from agm.agl.eval.agent_parse import _classify_enum_failure_typeless
-    from agm.agl.ir.contracts import (
-        ContractRequest,
-        EnumDecode,
-        ScalarDecode,
-        ScalarKind,
-        VariantDecode,
-    )
+    from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.runtime.codec import _classify_enum_failure
 
     nominal = NominalId(PRELUDE_ID, "Status")
     decode = EnumDecode(
@@ -2380,33 +2287,14 @@ def test_classify_enum_sub_error_required_missing_is_none() -> None:
             VariantDecode(name="Err", fields=(("msg", ScalarDecode(ScalarKind.TEXT)),)),
         ),
     )
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema="{}",
-        decode=decode,
-        target_type_label="Status",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    # Create a oneOf error where case_val is "Err" (known variant).
-    # Sub-error has validator="required" but ALL fields in required ARE in instance → missing=None.
-    sub_err = MagicMock(spec=JsError)
-    sub_err.validator = "required"
-    sub_err.validator_value = ["msg"]
-    sub_err.instance = {"$case": "Err", "msg": "hello"}  # "msg" IS present
-    sub_err.message = "required"
-
+    # "msg" IS present — no missing, no extra → defensive fallback.
     main_error = MagicMock(spec=JsError)
     main_error.validator = "oneOf"
     main_error.instance = {"$case": "Err", "msg": "hello"}
-    main_error.context = [sub_err]
     main_error.absolute_path = []
     main_error.path = []
 
-    ve = _classify_enum_failure_typeless(main_error, "$", contract)
-    # missing=None for sub_err, no additionalProperties → falls to line 306 fallback.
+    ve = _classify_enum_failure(main_error, "$", decode)
     assert ve.category == "bad_case"
 
 

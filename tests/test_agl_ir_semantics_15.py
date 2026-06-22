@@ -295,7 +295,6 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     with neither errors nor error_msg, AgentParseError still raises (line 1334)."""
     import unittest.mock
 
-    from agm.agl.eval.agent_parse import AgentParseResult
     from agm.agl.eval.exceptions import AglRaise
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractRequest
@@ -355,13 +354,14 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         spawn_error=None,
         spawn_errno=None,
     )
-    empty_failure = AgentParseResult(ok=False, value=None, error_msg="", errors=())
+    from agm.agl.runtime.codec import ParseResult
+    empty_failure = ParseResult(ok=False, value=None, error_msg="", errors=())
 
     with unittest.mock.patch(
         "agm.core.process.run_capture_result", return_value=ok_result
     ):
         with unittest.mock.patch(
-            "agm.agl.eval.ir_interpreter.parse_agent_output", return_value=empty_failure
+            "agm.agl.eval.ir_interpreter._parse_contract_output", return_value=empty_failure
         ):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()

@@ -961,7 +961,7 @@ class TestUnparseableFeedback:
         # Patch the IR output parser to return a failure with no details at all.
         bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
         with patch(
-            "agm.agl.eval.ir_interpreter.parse_agent_output", return_value=bare_fail
+            "agm.agl.eval.ir_interpreter._parse_contract_output", return_value=bare_fail
         ):
             result = rt.run(
                 'agent impl\nlet x: int = ask("q", agent: impl, on_parse_error: Abort())\nx'

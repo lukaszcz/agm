@@ -1852,13 +1852,14 @@ class TestLenientParseAfterRepair:
         assert result.ok is False
         assert "Schema validation failed" in result.error_msg
 
-    def test_validate_and_convert_value_conversion_failure(self) -> None:
-        """_validate_and_convert: schema passes (permissive) but _json_to_value fails."""
-        codec = JsonCodec()
-        # Call _validate_and_convert directly with a permissive schema ({}) but a
-        # TextType target that rejects a non-string value.  The permissive schema {}
-        # accepts anything, but _json_to_value(42, TextType()) raises ValueError.
-        result = codec._validate_and_convert("42", 42, TextType(), {})
+    def test_validate_and_decode_core_value_conversion_failure(self) -> None:
+        """_validate_and_decode_core: schema passes (permissive) but decode_value raises."""
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.codec import _validate_and_decode_core
+
+        # Permissive schema {} accepts anything; ScalarDecode(TEXT) rejects non-strings.
+        decode = ScalarDecode(ScalarKind.TEXT)
+        result = _validate_and_decode_core("42", 42, {}, decode)
         assert result.ok is False
         assert "Value conversion failed" in result.error_msg
 
@@ -1939,54 +1940,103 @@ class TestValidationMappingCoverage:
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$.k"
 
-    def test_missing_required_field_helper_defensive(self) -> None:
-        """_missing_required_field returns None for non-list / non-dict shapes."""
+    def test_make_validation_error_required_non_list(self) -> None:
+        """_make_validation_error: required validator with non-list value → field=None."""
+        from unittest.mock import MagicMock
+
         from jsonschema import ValidationError as JVE
 
-        from agm.agl.runtime.codec import _missing_required_field
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.codec import _make_validation_error
 
-        err = JVE("required")
+        err = MagicMock(spec=JVE)
+        err.validator = "required"
         err.validator_value = "not-a-list"
         err.instance = {"x": 1}
-        assert _missing_required_field(err) is None
+        err.message = "required"
+        err.path = []
+        decode = ScalarDecode(ScalarKind.INT)
+        ve = _make_validation_error(err, decode)
+        assert ve.category == "missing_field"
+        assert ve.field is None
 
-    def test_missing_required_field_helper_all_present(self) -> None:
-        """_missing_required_field returns None when every required name is present."""
+    def test_make_validation_error_required_all_present(self) -> None:
+        """_make_validation_error: all required fields present → field=None."""
+        from unittest.mock import MagicMock
+
         from jsonschema import ValidationError as JVE
 
-        from agm.agl.runtime.codec import _missing_required_field
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.codec import _make_validation_error
 
-        err = JVE("required")
+        err = MagicMock(spec=JVE)
+        err.validator = "required"
         err.validator_value = ["a", "b"]
         err.instance = {"a": 1, "b": 2}
-        assert _missing_required_field(err) is None
+        err.message = "required"
+        err.path = []
+        decode = ScalarDecode(ScalarKind.INT)
+        ve = _make_validation_error(err, decode)
+        assert ve.category == "missing_field"
+        assert ve.field is None
 
-    def test_classify_unknown_validator_is_wrong_type(self) -> None:
+    def test_make_validation_error_unknown_validator_is_wrong_type(self) -> None:
         """A non-required/additionalProperties/type/oneOf validator → wrong_type."""
+        from unittest.mock import MagicMock
+
         from jsonschema import ValidationError as JVE
 
-        from agm.agl.runtime.codec import _classify_jsonschema_error
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.codec import _make_validation_error
 
-        err = JVE("const mismatch")
+        err = MagicMock(spec=JVE)
         err.validator = "const"
         err.validator_value = "X"
         err.instance = "Y"
-        ve = _classify_jsonschema_error(err, TextType())
+        err.message = "const mismatch"
+        err.path = []
+        decode = ScalarDecode(ScalarKind.TEXT)
+        ve = _make_validation_error(err, decode)
         assert ve.category == "wrong_type"
         assert ve.message == "const mismatch"
 
-    def test_enum_type_at_path_unknown_record_field(self) -> None:
-        """_enum_type_at_path returns None when a path step names an unknown field."""
-        from agm.agl.runtime.codec import _enum_type_at_path
+    def test_find_enum_decode_at_path_unknown_record_field(self) -> None:
+        """_find_enum_decode_at_path returns None when path names unknown field."""
+        from agm.agl.runtime.codec import _find_enum_decode_at_path
+        from agm.agl.type_schema import build_decode_schema
 
         rec = RecordType(name="R", fields={"a": IntType()})
-        assert _enum_type_at_path(rec, ["missing"]) is None
+        decode = build_decode_schema(rec)
+        assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
-    def test_enum_type_at_path_scalar_with_remaining_path(self) -> None:
-        """_enum_type_at_path returns None when path descends past a scalar."""
-        from agm.agl.runtime.codec import _enum_type_at_path
+    def test_find_enum_decode_at_path_scalar_with_remaining_path(self) -> None:
+        """_find_enum_decode_at_path returns None when path descends past a scalar."""
+        from agm.agl.runtime.codec import _find_enum_decode_at_path
+        from agm.agl.type_schema import build_decode_schema
 
-        assert _enum_type_at_path(IntType(), ["deeper"]) is None
+        decode = build_decode_schema(IntType())
+        assert _find_enum_decode_at_path(decode, ["deeper"]) is None
+
+    def test_classify_enum_failure_no_enum_decode_at_path(self) -> None:
+        """_classify_enum_failure: _find_enum_decode_at_path returns None → bad_case fallback."""
+        from unittest.mock import MagicMock
+
+        from jsonschema import ValidationError as JVE
+
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.codec import _classify_enum_failure
+
+        # decode_schema is a ScalarDecode (not EnumDecode) → _find_enum_decode_at_path returns None.
+        # instance is a dict with a string $case to get past the first two guards.
+        decode = ScalarDecode(ScalarKind.INT)
+        err = MagicMock(spec=JVE)
+        err.validator = "oneOf"
+        err.instance = {"$case": "X"}
+        err.absolute_path = []
+        err.path = []
+        ve = _classify_enum_failure(err, "$", decode)
+        assert ve.category == "bad_case"
+        assert ve.field == "$case"
 
 
 # ---------------------------------------------------------------------------

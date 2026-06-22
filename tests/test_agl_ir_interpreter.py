@@ -1837,7 +1837,7 @@ class TestM6cIrExec:
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
-        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.type_schema import build_decode_schema
         from agm.agl.typecheck.types import IntType
 
         cid = ContractId(value=0)
@@ -1881,7 +1881,7 @@ class TestM6cIrExec:
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
-        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.type_schema import build_decode_schema
         from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
 
@@ -1958,7 +1958,7 @@ class TestM6cIrExec:
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
-        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.type_schema import build_decode_schema
         from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
 
@@ -2033,7 +2033,7 @@ class TestM6cIrExec:
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
-        from agm.agl.lower.conversions import build_decode_schema
+        from agm.agl.type_schema import build_decode_schema
         from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
 

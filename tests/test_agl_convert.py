@@ -283,6 +283,21 @@ class TestJsonObjToValue:
         with pytest.raises(CastConversionError):
             json_obj_to_value({"$case": "Green"}, enum_type)
 
+    def test_enum_variant_with_fields(self) -> None:
+        from agm.agl.eval.values import IntValue
+
+        enum_type = EnumType(
+            name="Result",
+            variants={"Ok": {}, "Err": {"code": IntType()}},
+        )
+        result = json_obj_to_value({"$case": "Err", "code": 42}, enum_type)
+        assert result == EnumValue(
+            nominal=NominalId(ENTRY_ID, "Result"),
+            display_name="Result",
+            variant="Err",
+            fields={"code": IntValue(42)},
+        )
+
     # --- JsonType passthrough ---
 
     def test_any_value_to_json_value(self) -> None:

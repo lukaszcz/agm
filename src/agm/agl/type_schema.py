@@ -1,4 +1,4 @@
-"""Compile-time JSON Schema and format-instruction derivation.
+"""Compile-time JSON Schema and decode-schema derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
 semantic :class:`~agm.agl.typecheck.types.Type`.  The derived schema is used:
@@ -8,6 +8,11 @@ semantic :class:`~agm.agl.typecheck.types.Type`.  The derived schema is used:
    API-backed agents can request native structured output.
 2. For schema validation via the ``jsonschema`` library inside
    :class:`~agm.agl.runtime.codec.JsonCodec`.
+
+:func:`build_decode_schema` compiles a ``Type`` into a typeless
+:class:`~agm.agl.ir.contracts.DecodeSchema` used by the IR evaluator to
+reconstruct typed ``Value`` objects from validated JSON without holding
+checker ``Type`` references.
 
 Derivation rules (design §7.3 / §7.4):
 - ``text``    → ``{"type": "string"}``
@@ -28,6 +33,17 @@ from __future__ import annotations
 import json
 from typing import assert_never
 
+from agm.agl.ir.contracts import (
+    DecodeSchema,
+    DictDecode,
+    EnumDecode,
+    ListDecode,
+    RecordDecode,
+    ScalarDecode,
+    ScalarKind,
+    VariantDecode,
+)
+from agm.agl.ir.ids import NominalId
 from agm.agl.typecheck.types import (
     AgentType,
     BoolType,
@@ -139,6 +155,55 @@ def _enum_schema(typ: EnumType) -> dict[str, object]:
             }
         )
     return {"oneOf": variant_schemas}
+
+
+def build_decode_schema(typ: Type) -> DecodeSchema:
+    """Compile a checker ``Type`` into a typeless ``DecodeSchema``.
+
+    Mirrors the type recursion of ``runtime.convert.json_to_value`` so the
+    evaluator can reconstruct the typed value without the checker ``Type``.
+    """
+    if isinstance(typ, TextType):
+        return ScalarDecode(ScalarKind.TEXT)
+    if isinstance(typ, IntType):
+        return ScalarDecode(ScalarKind.INT)
+    if isinstance(typ, DecimalType):
+        return ScalarDecode(ScalarKind.DECIMAL)
+    if isinstance(typ, BoolType):
+        return ScalarDecode(ScalarKind.BOOL)
+    if isinstance(typ, JsonType):
+        return ScalarDecode(ScalarKind.JSON)
+    if isinstance(typ, ListType):
+        return ListDecode(build_decode_schema(typ.elem))
+    if isinstance(typ, DictType):
+        return DictDecode(build_decode_schema(typ.value))
+    if isinstance(typ, RecordType):
+        return RecordDecode(
+            nominal=NominalId(typ.module_id, typ.name),
+            display_name=typ.name,
+            fields=tuple(
+                (fname, build_decode_schema(ftype)) for fname, ftype in typ.fields.items()
+            ),
+        )
+    if isinstance(typ, EnumType):
+        return EnumDecode(
+            nominal=NominalId(typ.module_id, typ.name),
+            display_name=typ.name,
+            variants=tuple(
+                VariantDecode(
+                    name=vname,
+                    fields=tuple(
+                        (fname, build_decode_schema(ftype)) for fname, ftype in vfields.items()
+                    ),
+                )
+                for vname, vfields in typ.variants.items()
+            ),
+        )
+    # Non-data targets (unit/agent/function/exception/bottom/typevar) are not
+    # decodable from JSON and are rejected by the checker before lowering.
+    raise AssertionError(  # pragma: no cover
+        f"build_decode_schema: undecodable type {typ!r}"
+    )
 
 
 def build_format_instructions(schema: dict[str, object]) -> str:

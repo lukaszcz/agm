@@ -43,6 +43,7 @@ from __future__ import annotations
 import enum as _enum
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 
@@ -387,6 +388,39 @@ def is_json_shaped(value_type: Type) -> bool:
     return False
 
 
+def _has_no_value_equality(t: Type) -> bool:
+    """True if ``t`` is, or transitively contains, a type with no value equality.
+
+    Function, agent, and unit values are opaque / identity-only and AgL gives
+    them no ``=``/``!=`` operator (design D7 agents, D9 functions; ``unit`` has a
+    single value but no equality operator).  A list, dict, record, enum, or
+    exception that transitively holds such a type is therefore itself not
+    comparable.  (v1 forbids recursive types, so this recursion terminates.)
+    """
+    match t:
+        case FunctionType() | AgentType() | UnitType():
+            return True
+        case ListType():
+            return _has_no_value_equality(t.elem)
+        case DictType():
+            return _has_no_value_equality(t.value)
+        case RecordType():
+            return any(_has_no_value_equality(ft) for ft in t.fields.values())
+        case EnumType():
+            return any(
+                _has_no_value_equality(ft)
+                for variant in t.variants.values()
+                for ft in variant.values()
+            )
+        case ExceptionType():
+            return any(_has_no_value_equality(ft) for ft in t.fields.values())
+        case (TextType() | JsonType() | BoolType() | IntType() | DecimalType()
+              | BottomType() | TypeVarType()):
+            return False
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
 def comparable_types(left: Type, right: Type) -> bool:
     """Return ``True`` if ``left`` and ``right`` may be compared (design §5.8 r4).
 
@@ -400,11 +434,17 @@ def comparable_types(left: Type, right: Type) -> bool:
     AgL v2: ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
     NON-comparable — using ``=``/``!=``/``<`` on them is a static error (plan
     D7: agents have no equality in v1; plan D9: function values are opaque).
+    This rule is **transitive**: a ``list``, ``dict``, ``record``, ``enum``, or
+    ``exception`` that (at any depth) contains a function, agent, or ``unit``
+    value likewise has no equality and cannot be compared with ``=``/``!=``.
     """
-    # Guard: agent, function, unit, bottom, and type-variable values are never comparable.
-    if isinstance(left, (AgentType, FunctionType, UnitType, BottomType, TypeVarType)):
+    # Function/agent/unit values — and any container/record/enum that transitively
+    # holds one — have no value equality.
+    if _has_no_value_equality(left) or _has_no_value_equality(right):
         return False
-    if isinstance(right, (AgentType, FunctionType, UnitType, BottomType, TypeVarType)):
+    # Bare type variables and the bottom type are never comparable here (the
+    # checker additionally rejects bare type variables at the comparison site).
+    if isinstance(left, (BottomType, TypeVarType)) or isinstance(right, (BottomType, TypeVarType)):
         return False
     if left == right:
         return True

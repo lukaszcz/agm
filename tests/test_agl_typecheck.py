@@ -309,6 +309,50 @@ class TestComparableTypes:
         assert not comparable_types(TextType(), IntType())
         assert not comparable_types(JsonType(), TextType())
 
+    # Transitive rejection: containers/records/enums holding non-comparable types.
+    def test_list_of_function_not_comparable(self) -> None:
+        ft = FunctionType(params=(), result=IntType())
+        assert not comparable_types(ListType(elem=ft), ListType(elem=ft))
+
+    def test_list_of_agent_not_comparable(self) -> None:
+        assert not comparable_types(ListType(elem=AgentType()), ListType(elem=AgentType()))
+
+    def test_list_of_unit_not_comparable(self) -> None:
+        assert not comparable_types(ListType(elem=UnitType()), ListType(elem=UnitType()))
+
+    def test_dict_of_function_not_comparable(self) -> None:
+        ft = FunctionType(params=(IntType(),), result=TextType())
+        assert not comparable_types(DictType(value=ft), DictType(value=ft))
+
+    def test_record_with_agent_field_not_comparable(self) -> None:
+        rt = RecordType(name="R", fields={"a": AgentType()})
+        assert not comparable_types(rt, rt)
+
+    def test_record_with_function_field_not_comparable(self) -> None:
+        ft = FunctionType(params=(), result=IntType())
+        rt = RecordType(name="R", fields={"f": ft})
+        assert not comparable_types(rt, rt)
+
+    def test_enum_with_function_field_not_comparable(self) -> None:
+        ft = FunctionType(params=(), result=IntType())
+        et = EnumType(name="E", variants={"A": {"fn": ft}})
+        assert not comparable_types(et, et)
+
+    def test_exception_with_function_field_not_comparable(self) -> None:
+        ft = FunctionType(params=(), result=IntType())
+        et = ExceptionType(name="E", fields={"handler": ft})
+        assert not comparable_types(et, et)
+
+    def test_record_with_only_scalars_comparable(self) -> None:
+        rt = RecordType(name="R", fields={"x": IntType(), "y": TextType()})
+        assert comparable_types(rt, rt)
+
+    def test_list_of_int_comparable(self) -> None:
+        assert comparable_types(ListType(elem=IntType()), ListType(elem=IntType()))
+
+    def test_dict_of_text_comparable(self) -> None:
+        assert comparable_types(DictType(value=TextType()), DictType(value=TextType()))
+
 
 class TestIsAssignable:
     def test_same_type(self) -> None:
@@ -1649,6 +1693,123 @@ class TestBinaryOps:
     def test_eq_different_types_raises(self) -> None:
         err = reject_type('1 = "hello"')
         assert "same" in str(err).lower() or "equality" in str(err).lower()
+
+    # Transitive no-equality: function/agent/unit inside containers/records/enums.
+    def test_eq_list_of_fn_raises(self) -> None:
+        err = reject_type(
+            "def f(n: int) -> int = n\n"
+            "def g(n: int) -> int = n\n"
+            "let fs: list[(int) -> int] = [f, g]\n"
+            "let gs: list[(int) -> int] = [f]\n"
+            "let r = (fs = gs)\nr"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_dict_of_fn_raises(self) -> None:
+        err = reject_type(
+            "def f(n: int) -> int = n\n"
+            'let d1: dict[text, (int) -> int] = {"a": f}\n'
+            'let d2: dict[text, (int) -> int] = {"b": f}\n'
+            "let r = (d1 = d2)\nr"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_record_with_fn_field_raises(self) -> None:
+        err = reject_type(
+            "def f(n: int) -> int = n\n"
+            "record R\n  cb: (int) -> int\n"
+            "let r1 = R(cb: f)\n"
+            "let r2 = R(cb: f)\n"
+            "let result = (r1 = r2)\nresult"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_enum_with_fn_field_raises(self) -> None:
+        err = reject_type(
+            "def f(n: int) -> int = n\n"
+            "enum E\n  | A(cb: (int) -> int)\n  | B\n"
+            "let e1 = E.A(cb: f)\n"
+            "let e2 = E.B\n"
+            "let result = (e1 = e2)\nresult"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_list_of_agent_raises(self) -> None:
+        err = reject_type(
+            "agent reviewer\n"
+            "let as1: list[agent] = [reviewer]\n"
+            "let as2: list[agent] = [reviewer]\n"
+            "let r = (as1 = as2)\nr"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_list_of_unit_raises(self) -> None:
+        err = reject_type(
+            "let us1: list[unit] = [()]\n"
+            "let us2: list[unit] = [()]\n"
+            "let r = (us1 = us2)\nr"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_record_with_agent_field_raises(self) -> None:
+        err = reject_type(
+            "agent reviewer\n"
+            "record Task\n  name: text\n  assignee: agent\n"
+            "let t1 = Task(name: \"a\", assignee: reviewer)\n"
+            "let t2 = Task(name: \"b\", assignee: reviewer)\n"
+            "let result = (t1 = t2)\nresult"
+        )
+        assert "equality" in str(err).lower()
+
+    # Regression: bare function/agent/unit still rejected.
+    def test_eq_bare_fn_raises(self) -> None:
+        err = reject_type(
+            "def f(n: int) -> int = n\n"
+            "let r = (f = f)\nr"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_bare_agent_raises(self) -> None:
+        err = reject_type(
+            "agent reviewer\n"
+            "let r = (reviewer = reviewer)\nr"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_bare_unit_raises(self) -> None:
+        err = reject_type("let r = (() = ())\nr")
+        assert "equality" in str(err).lower()
+
+    # Still-accept: lists/records/dicts of equatable scalars must stay green.
+    def test_eq_list_of_int_accepted(self) -> None:
+        accept_type("let xs: list[int] = [1, 2]\nlet ys: list[int] = [3]\nlet r = (xs = ys)\nr")
+
+    def test_eq_dict_of_text_accepted(self) -> None:
+        accept_type(
+            'let d1: dict[text, text] = {"a": "x"}\n'
+            'let d2: dict[text, text] = {"b": "y"}\n'
+            "let r = (d1 = d2)\nr"
+        )
+
+    def test_eq_json_accepted(self) -> None:
+        accept_type("let a: json = null\nlet b: json = null\nlet r = (a = b)\nr")
+
+    def test_eq_int_decimal_cross_accepted(self) -> None:
+        accept_type("let r = (1 = 1.0)\nr")
+
+    def test_eq_record_with_scalar_fields_accepted(self) -> None:
+        accept_type(
+            "record Point\n  x: int\n  y: int\n"
+            "let p1 = Point(x: 0, y: 0)\n"
+            "let p2 = Point(x: 1, y: 1)\n"
+            "let r = (p1 = p2)\nr"
+        )
+
+    def test_eq_enum_with_scalar_fields_accepted(self) -> None:
+        accept_type(
+            "enum Color\n  | Red\n  | Blue\n"
+            "let r = (Color.Red = Color.Blue)\nr"
+        )
 
     def test_ordering_non_numeric_non_text_raises(self) -> None:
         err = reject_type("true < false")

@@ -338,6 +338,11 @@ A single `=` is **equality**, not assignment. Both operands must have the
 same type after `int → decimal` widening. Equality is full value equality
 ([Types](types.md)).
 
+Operands whose type is, or transitively contains, a function, agent, or
+`unit` value are a static error — this applies to bare values as well as to
+containers (`list`, `dict`), records, enums, or exceptions that hold such
+a type at any depth.
+
 `=` is non-associative; `x = y = z` is a parse error.
 
 ### Ordering: `<` `<=` `>` `>=`

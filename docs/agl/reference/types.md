@@ -429,7 +429,9 @@ Typing is exact nominal matching with **one** implicit coercion:
    a more specific static type is bound into a `json` slot, it is stored in
    canonical `json` representation.
 4. Equality (`=`, `!=`) and ordering comparisons require both operands to
-   have the *same* type after rule 1.
+   have the *same* type after rule 1. Operands whose type is, or transitively
+   contains, a function, agent, or `unit` value are a static error — see
+   [Values and equality](#values-and-equality) below.
 5. All branches of a `case` expression must have the same type after rule 1.
 
 For explicit, user-requested conversions between types, see
@@ -566,11 +568,13 @@ Every **data** type has full value equality (`=` / `!=`):
 - Records and enums compare by type, variant (for enums), and field values.
 - `json` values compare structurally.
 
-**Opaque types** — `agent` and function types — have **no equality**. A
-comparison involving an agent or function value is a static error.
-
-`unit` has one value (`()`), and `() = ()` is therefore trivially true, but
-comparing `unit` values is rarely useful in practice.
+**Opaque types** — `agent`, function types, and `unit` — have **no equality**.
+A comparison involving one of these types is a static error. This rule is
+**transitive**: a `list`, `dict`, `record`, `enum`, or `exception` that (at
+any depth) contains a function, agent, or `unit` value likewise has no
+equality and cannot be used with `=`/`!=`. For example,
+`list[(int) -> int] = list[(int) -> int]` is a static error, as is a
+`record` with an `agent` field compared with `=`.
 
 See [Expressions](expressions.md) for the operator rules and
 [Pattern matching](pattern-matching.md) for variant tests with `is`.

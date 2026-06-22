@@ -692,10 +692,12 @@ class TestNominalsEmpty:
 
 
 class TestUnsupportedNodes:
-    def test_function_call_raises_not_implemented(self) -> None:
-        """Calls are not in the M2 subset; lowering must raise NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            _lower("def f() -> int = 1\nf()")
+    def test_user_function_call_lowers_correctly(self) -> None:
+        """Direct user function calls are supported in M4a and must lower without error."""
+        # f() is a direct user function call — M4a supports this.
+        prog = _lower("def f() -> int = 1\nlet result = f()\n()")
+        # Verify the program has a function in the functions table
+        assert len(prog.functions) == 1
 
     def test_iife_lambda_call_raises_not_implemented(self) -> None:
         """Calling an immediately-invoked lambda (non-VarRef, non-FieldAccess callee).
@@ -880,3 +882,221 @@ class TestIrFieldLowering:
         lowerer = _Lowerer(checked, "()", "<test>")
         with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._elem_type_for_container(TextType())
+
+
+# ---------------------------------------------------------------------------
+# M4a lower: function-related coverage
+# ---------------------------------------------------------------------------
+
+
+class TestM4aLowerFunctions:
+    """Tests for M4a function lowering coverage."""
+
+    def test_try_with_bound_exception_in_function_body(self) -> None:
+        """Function body with try-catch-as (bound handler) exercises clause.binding path."""
+        source = (
+            "def safe_add(a: int, b: int) -> int =\n"
+            "  try\n"
+            "    a + b\n"
+            "  catch ArithmeticError as e =>\n"
+            "    0\n"
+            "let result = safe_add(3, 4)\n()"
+        )
+        prog = _lower(source)
+        assert len(prog.functions) == 1
+
+    def test_builtin_call_in_function_body_raises_not_implemented(self) -> None:
+        """print() inside a function body triggers builtin-call NotImplementedError."""
+        source = (
+            "def f(x: int) -> int =\n"
+            "  print(x)\n"
+            "  x + 1\n"
+            "let result = f(5)\n()"
+        )
+        with pytest.raises(NotImplementedError, match="builtin"):
+            _lower(source)
+
+    def test_indirect_call_via_let_binding_raises_not_implemented(self) -> None:
+        """Calling a let-bound function reference raises NotImplementedError (indirect call)."""
+        source = (
+            "def f(x: int) -> int = x + 1\n"
+            "let fn_ref = f\n"
+            "let result = fn_ref(5)\n()"
+        )
+        with pytest.raises(NotImplementedError, match="indirect"):
+            _lower(source)
+
+
+class TestM4aLowerDefensivePaths:
+    """Tests for M4a lowerer defensive code paths via internal API."""
+
+    def test_lower_funcdef_without_preallocation(self) -> None:
+        """_lower_funcdef with a non-pre-allocated FuncDef exercises the else branch."""
+        from agm.agl.lower.lowerer import _Lowerer
+        from agm.agl.syntax.nodes import FuncDef
+
+        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
+        checked = _check(source)
+
+        # Create lowerer and find FuncDef WITHOUT pre-allocating it
+        lowerer = _Lowerer(checked, source, "<test>")
+        funcdef = None
+        for item in checked.resolved.program.body.items:
+            if isinstance(item, FuncDef):
+                funcdef = item
+                break
+        assert funcdef is not None
+
+        # Call _lower_funcdef without pre-allocating — exercises else branch (lines 433-442)
+        result = lowerer._lower_funcdef(funcdef, top_level=True)
+        from agm.agl.ir.nodes import IrBind
+        assert isinstance(result, IrBind)
+
+    def test_lower_direct_call_fallback_signature_by_name(self) -> None:
+        """_lower_direct_call uses fallback get_function_signature when by_node_id returns None."""
+        from agm.agl.lower.lowerer import _Lowerer
+        from agm.agl.syntax.nodes import FuncDef
+
+        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
+        checked = _check(source)
+
+        # Create lowerer and pre-allocate the funcdef
+        lowerer = _Lowerer(checked, source, "<test>")
+        for item in checked.resolved.program.body.items:
+            if isinstance(item, FuncDef):
+                lowerer._prealloc_funcdef(item)
+
+        # Temporarily clear the by_node_id table to force fallback to by-name lookup
+        type_env = checked.type_env
+        original = dict(type_env._function_signatures_by_node_id)
+        type_env._function_signatures_by_node_id.clear()
+        try:
+            # Now call _lower_funcdef — it will fall back to get_function_signature(name)
+            for item in checked.resolved.program.body.items:
+                if isinstance(item, FuncDef):
+                    result = lowerer._lower_funcdef(item, top_level=True)
+                    from agm.agl.ir.nodes import IrBind
+                    assert isinstance(result, IrBind)
+        finally:
+            type_env._function_signatures_by_node_id.update(original)
+    def test_lower_direct_call_fallback_sig_lookup_by_name(self) -> None:
+        """_lower_direct_call fallback: get_function_signature(name) when by_node_id is None."""
+        from agm.agl.lower.lowerer import _Lowerer
+        from agm.agl.syntax.nodes import FuncDef
+
+        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
+        checked = _check(source)
+
+        # Pre-allocate funcdef (phase 1)
+        lowerer = _Lowerer(checked, source, "<test>")
+        for item in checked.resolved.program.body.items:
+            if isinstance(item, FuncDef):
+                lowerer._prealloc_funcdef(item)
+
+        # Clear by_node_id table to force both _lower_funcdef and _lower_direct_call fallbacks
+        type_env = checked.type_env
+        original = dict(type_env._function_signatures_by_node_id)
+        type_env._function_signatures_by_node_id.clear()
+        try:
+            # Lower all items — will trigger fallback in both _lower_funcdef (472)
+            # and _lower_direct_call (1103)
+            for item in checked.resolved.program.body.items:
+                lowerer.lower_item(item, top_level=True)
+        finally:
+            type_env._function_signatures_by_node_id.update(original)
+
+    def test_walk_collect_locals_stops_at_funcdef(self) -> None:
+        """_walk_collect_locals with a FuncDef node returns immediately (nested fn stop)."""
+        from agm.agl.lower.lowerer import _Lowerer
+        from agm.agl.syntax.nodes import FuncDef
+
+        source = "def f(x: int) -> int = x + 1\n()"
+        checked = _check(source)
+        lowerer = _Lowerer(checked, source, "<test>")
+
+        funcdef = next(
+            item for item in checked.resolved.program.body.items if isinstance(item, FuncDef)
+        )
+        out: set[int] = set()
+        # Should return immediately, leaving out empty
+        lowerer._walk_collect_locals(funcdef, out)
+        assert out == set()
+
+    def test_walk_for_captures_stops_at_funcdef(self) -> None:
+        """_walk_for_captures with a FuncDef node returns immediately (nested fn stop)."""
+        from agm.agl.lower.lowerer import _Lowerer
+        from agm.agl.syntax.nodes import FuncDef
+
+        source = "def f(x: int) -> int = x + 1\n()"
+        checked = _check(source)
+        lowerer = _Lowerer(checked, source, "<test>")
+
+        funcdef = next(
+            item for item in checked.resolved.program.body.items if isinstance(item, FuncDef)
+        )
+        out: dict[int, object] = {}
+        # Should return immediately, leaving out empty
+        lowerer._walk_for_captures(funcdef, set(), out)
+        assert out == {}
+
+    def test_field_access_callee_without_qcr_raises_not_implemented(self) -> None:
+        """FieldAccess callee not in qualified_constructor_refs raises NotImplementedError."""
+        from agm.agl.lower.lowerer import _Lowerer
+        from agm.agl.syntax.nodes import Call, FieldAccess, VarRef
+
+        source = "let x = 1\n()"
+        checked = _check(source)
+        lowerer = _Lowerer(checked, source, "<test>")
+
+        # Get a real SourceSpan from the parsed program
+        span = checked.resolved.program.body.items[0].span
+
+        # FieldAccess callee not in qualified_constructor_refs → falls through to
+        # NotImplementedError (line 1077->1084 in lowerer)
+        fa = FieldAccess(
+            obj=VarRef(name="x", node_id=9999, span=span, module_qualifier=None),
+            field="method",
+            node_id=10000,
+            span=span,
+        )
+        fake_call = Call(callee=fa, args=(), named_args=(), node_id=10001, span=span)
+        with pytest.raises(NotImplementedError, match="indirect"):
+            lowerer._lower_call(fake_call, 10001, span)
+
+    def test_missing_required_arg_raises_assertion_error(self) -> None:
+        """_lower_direct_call raises AssertionError when call is missing a required arg."""
+        from agm.agl.lower.lowerer import _Lowerer
+        from agm.agl.syntax.nodes import Call, FuncDef, VarRef
+
+        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
+        checked = _check(source)
+        lowerer = _Lowerer(checked, source, "<test>")
+
+        # Pre-allocate funcdef
+        funcdef = next(
+            item for item in checked.resolved.program.body.items if isinstance(item, FuncDef)
+        )
+        lowerer._prealloc_funcdef(funcdef)
+
+        # Get a callee_ref for the function binding
+        from agm.agl.scope.symbols import BinderKind, BindingRef
+        span = funcdef.span
+        from agm.agl.modules.ids import ENTRY_ID
+
+        callee_ref = BindingRef(
+            name="f",
+            mutable=False,
+            decl_span=span,
+            decl_node_id=funcdef.node_id,
+            kind=BinderKind.function_binding,
+            module_id=ENTRY_ID,
+        )
+
+        # Create a fake call with NO args (f requires 1 arg)
+        varref = VarRef(name="f", node_id=9999, span=span, module_qualifier=None)
+        fake_call = Call(callee=varref, args=(), named_args=(), node_id=10001, span=span)
+
+        with pytest.raises(AssertionError, match="compiler bug"):
+            lowerer._lower_direct_call(fake_call, callee_ref, 10001, span)
+
+

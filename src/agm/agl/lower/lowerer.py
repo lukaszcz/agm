@@ -32,7 +32,7 @@ from typing import assert_never
 
 from agm.agl._text import normalize_newlines
 from agm.agl.ir.contracts import ConversionFailureMode
-from agm.agl.ir.ids import Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAnd,
@@ -41,6 +41,7 @@ from agm.agl.ir.nodes import (
     IrBind,
     IrBindPlan,
     IrBlock,
+    IrCapture,
     IrCase,
     IrCaseArm,
     IrCatchHandler,
@@ -55,8 +56,10 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrConvert,
+    IrDirectCall,
     IrExpr,
     IrField,
+    IrFunctionParam,
     IrIf,
     IrIfBranch,
     IrIndex,
@@ -64,6 +67,7 @@ from agm.agl.ir.nodes import (
     IrLiteralPlan,
     IrLoad,
     IrLoop,
+    IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
@@ -82,6 +86,7 @@ from agm.agl.ir.nodes import (
     IrVariantIs,
     IrVariantPlan,
     IrWildcardPlan,
+    UseDefault,
 )
 from agm.agl.ir.operations import (
     ArithKind,
@@ -96,6 +101,7 @@ from agm.agl.ir.operations import (
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
+    FunctionDescriptor,
     NominalDescriptor,
     NominalKind,
     SourceFile,
@@ -105,7 +111,8 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.scope.symbols import BinderKind, BindingRef
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
@@ -223,6 +230,15 @@ class _Lowerer:
         # Accumulated nominal descriptors (populated in lower()).
         self._nominals: dict[NominalId, NominalDescriptor] = {}
 
+        # Function allocation counter
+        self._next_fn: int = 0
+        # Accumulated FunctionDescriptors
+        self._functions: dict[FunctionId, FunctionDescriptor] = {}
+        # Maps FuncDef.node_id -> SymbolId (pre-allocated in phase 1)
+        self._fn_node_to_sym: dict[int, SymbolId] = {}
+        # Maps FuncDef.node_id -> FunctionId (pre-allocated in phase 1)
+        self._fn_node_to_id: dict[int, FunctionId] = {}
+
     # ------------------------------------------------------------------
     # SymbolId allocation
     # ------------------------------------------------------------------
@@ -234,6 +250,7 @@ class _Lowerer:
         name: str,
         mutable: bool,
         public: bool = True,
+        owner: "ModuleId | FunctionId | None" = None,
     ) -> SymbolId:
         """Allocate a fresh ``SymbolId`` for a declaration and register it.
 
@@ -249,7 +266,7 @@ class _Lowerer:
             symbol_id=sym,
             mutable=mutable,
             public_name=name if public else None,
-            owner=ENTRY_ID,
+            owner=owner if owner is not None else ENTRY_ID,
         )
         return sym
 
@@ -261,6 +278,215 @@ class _Lowerer:
             "declaration must be visited before its references"
         )
         return sym
+
+    def _alloc_fn(self) -> FunctionId:
+        """Allocate a fresh ``FunctionId``."""
+        fn_id = FunctionId(self._next_fn)
+        self._next_fn += 1
+        return fn_id
+
+    def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
+        """Pre-allocate SymbolId and FunctionId for a top-level FuncDef."""
+        fn_id = self._alloc_fn()
+        sym = self._alloc_sym(
+            funcdef.node_id,
+            name=funcdef.name,
+            mutable=False,
+            public=not funcdef.is_private,
+            owner=ENTRY_ID,
+        )
+        self._fn_node_to_sym[funcdef.node_id] = sym
+        self._fn_node_to_id[funcdef.node_id] = fn_id
+
+    def _walk_collect_locals(self, node: object, out: "set[int]") -> None:
+        """Walk collecting LetDecl/VarDecl node_ids, stopping at FuncDef/Lambda."""
+        if isinstance(node, (FuncDef, Lambda)):
+            return
+        if isinstance(node, (LetDecl, VarDecl)):
+            out.add(node.node_id)
+            self._walk_collect_locals(node.value, out)
+        elif isinstance(node, Block):
+            for item in node.items:
+                self._walk_collect_locals(item, out)
+        elif isinstance(node, If):
+            for branch in node.branches:
+                if not isinstance(branch.cond, ElseSentinel):
+                    self._walk_collect_locals(branch.cond, out)
+                self._walk_collect_locals(branch.body, out)
+        elif isinstance(node, Case):
+            for case_branch in node.branches:
+                self._walk_collect_locals(case_branch.body, out)
+        elif isinstance(node, Try):
+            self._walk_collect_locals(node.body, out)
+            for clause in node.handlers:
+                if clause.binding is not None:
+                    out.add(clause.node_id)
+                self._walk_collect_locals(clause.body, out)
+        elif isinstance(node, Do):
+            self._walk_collect_locals(node.body, out)
+
+    def _collect_local_decl_ids(self, body: "Expr") -> "set[int]":
+        """Collect node_ids of LetDecl/VarDecl inside body, stopping at FuncDef/Lambda."""
+        local_ids: set[int] = set()
+        self._walk_collect_locals(body, local_ids)
+        return local_ids
+
+    def _walk_for_captures(
+        self, node: object, local_ids: "set[int]", out: "dict[int, BindingRef]"
+    ) -> None:
+        """Walk node collecting VarRef resolutions, stopping at FuncDef/Lambda boundaries."""
+        if isinstance(node, VarRef):
+            ref = self._checked.resolved.resolution.get(node.node_id)
+            if (
+                ref is not None
+                and ref.decl_node_id not in local_ids
+                and ref.kind is not BinderKind.function_binding
+            ):
+                out[ref.decl_node_id] = ref
+        elif isinstance(node, (FuncDef, Lambda)):
+            return
+        elif isinstance(node, Block):
+            for item in node.items:
+                self._walk_for_captures(item, local_ids, out)
+        elif isinstance(node, (LetDecl, VarDecl)):
+            self._walk_for_captures(node.value, local_ids, out)
+        elif isinstance(node, AssignStmt):
+            self._walk_for_captures(node.value, local_ids, out)
+        elif isinstance(node, If):
+            for branch in node.branches:
+                if not isinstance(branch.cond, ElseSentinel):
+                    self._walk_for_captures(branch.cond, local_ids, out)
+                self._walk_for_captures(branch.body, local_ids, out)
+        elif isinstance(node, BinaryOp):
+            self._walk_for_captures(node.left, local_ids, out)
+            self._walk_for_captures(node.right, local_ids, out)
+        elif isinstance(node, (UnaryNot, UnaryNeg)):
+            self._walk_for_captures(node.operand, local_ids, out)
+        elif isinstance(node, Call):
+            self._walk_for_captures(node.callee, local_ids, out)
+            for arg in node.args:
+                self._walk_for_captures(arg, local_ids, out)
+            for na in node.named_args:
+                self._walk_for_captures(na.value, local_ids, out)
+        elif isinstance(node, FieldAccess):
+            self._walk_for_captures(node.obj, local_ids, out)
+        elif isinstance(node, IndexAccess):
+            self._walk_for_captures(node.obj, local_ids, out)
+            self._walk_for_captures(node.index, local_ids, out)
+        elif isinstance(node, ListLit):
+            for elem in node.elements:
+                self._walk_for_captures(elem, local_ids, out)
+        elif isinstance(node, DictLit):
+            for entry in node.entries:
+                self._walk_for_captures(entry.key, local_ids, out)
+                self._walk_for_captures(entry.value, local_ids, out)
+        elif isinstance(node, Template):
+            for seg in node.segments:
+                if isinstance(seg, InterpSegment):
+                    self._walk_for_captures(seg.expr, local_ids, out)
+        elif isinstance(node, Case):
+            self._walk_for_captures(node.subject, local_ids, out)
+            for case_branch in node.branches:
+                self._walk_for_captures(case_branch.body, local_ids, out)
+        elif isinstance(node, Try):
+            self._walk_for_captures(node.body, local_ids, out)
+            for clause in node.handlers:
+                self._walk_for_captures(clause.body, local_ids, out)
+        elif isinstance(node, Raise):
+            self._walk_for_captures(node.exc, local_ids, out)
+        elif isinstance(node, Do):
+            self._walk_for_captures(node.body, local_ids, out)
+            self._walk_for_captures(node.condition, local_ids, out)
+        elif isinstance(node, Cast):
+            self._walk_for_captures(node.expr, local_ids, out)
+        elif isinstance(node, IsTest):
+            self._walk_for_captures(node.expr, local_ids, out)
+
+    def _compute_captures(
+        self, funcdef: "FuncDef", param_decl_ids: "set[int]"
+    ) -> "tuple[IrCapture, ...]":
+        """Compute the captures for a FuncDef body."""
+        local_body_ids = self._collect_local_decl_ids(funcdef.body)
+        local_ids = param_decl_ids | local_body_ids
+        local_ids.add(funcdef.node_id)
+
+        captured_refs: dict[int, BindingRef] = {}
+        self._walk_for_captures(funcdef.body, local_ids, captured_refs)
+        for param in funcdef.params:
+            if param.default is not None:
+                self._walk_for_captures(param.default, local_ids, captured_refs)
+
+        captures: list[IrCapture] = []
+        for decl_id, ref in captured_refs.items():
+            sym = self._decl_to_sym.get(decl_id)
+            if sym is None:
+                continue
+            captures.append(IrCapture(symbol=sym, by_cell=ref.mutable))
+        return tuple(captures)
+
+    def _lower_funcdef(self, funcdef: "FuncDef", top_level: bool) -> IrExpr:
+        """Lower a FuncDef to IrBind(sym, IrMakeClosure(fn_id, captures))."""
+        if funcdef.node_id in self._fn_node_to_id:
+            fn_id = self._fn_node_to_id[funcdef.node_id]
+            fn_sym = self._fn_node_to_sym[funcdef.node_id]
+        else:
+            fn_id = self._alloc_fn()
+            fn_sym = self._alloc_sym(
+                funcdef.node_id,
+                name=funcdef.name,
+                mutable=False,
+                public=False,
+                owner=ENTRY_ID,
+            )
+            self._fn_node_to_sym[funcdef.node_id] = fn_sym
+            self._fn_node_to_id[funcdef.node_id] = fn_id
+
+        param_decl_ids: set[int] = set()
+        param_syms: list[SymbolId] = []
+        for param in funcdef.params:
+            param_decl_ids.add(param.node_id)
+            psym = self._alloc_sym(
+                param.node_id,
+                name=param.name,
+                mutable=False,
+                public=False,
+                owner=fn_id,
+            )
+            param_syms.append(psym)
+
+        captures = self._compute_captures(funcdef, param_decl_ids)
+
+        ir_params: list[IrFunctionParam] = []
+        for param, psym in zip(funcdef.params, param_syms):
+            if param.default is not None:
+                param_type_for_default = self._binding_type_for(param.node_id)
+                default_ir: IrExpr | None = self.lower_coerced(
+                    param.default, param_type_for_default
+                )
+            else:
+                default_ir = None
+            ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
+
+        sig = self._checked.type_env.get_function_signature_by_node_id(funcdef.node_id)
+        if sig is None:
+            sig = self._checked.type_env.get_function_signature(funcdef.name)
+        assert sig is not None, (
+            f"compiler bug: no function signature for {funcdef.name!r}"
+        )
+        body_ir = self.lower_coerced(funcdef.body, sig.result)
+
+        desc = FunctionDescriptor(
+            function_id=fn_id,
+            function_symbol=fn_sym,
+            module_id=ENTRY_ID,
+            params=tuple(ir_params),
+            body=body_ir,
+        )
+        self._functions[fn_id] = desc
+
+        loc = self._loc(funcdef.span)
+        closure_ir = IrMakeClosure(location=loc, function_id=fn_id, captures=captures)
+        return IrBind(location=loc, symbol=fn_sym, value=closure_ir)
 
     # ------------------------------------------------------------------
     # Location helpers
@@ -382,8 +608,6 @@ class _Lowerer:
 
                 # Cross-module constructor via BinderKind.constructor_binding.
                 # Deferred to M5 (multi-module linking).
-                from agm.agl.scope.symbols import BinderKind
-
                 ref = self._checked.resolved.resolution.get(nid)
                 # pragma: no cover — cross-module constructor binding (deferred to M5).
                 if (  # pragma: no cover
@@ -812,12 +1036,18 @@ class _Lowerer:
         """Lower a Call node.
 
         Constructor calls (VarRef or FieldAccess callee resolving to a constructor)
-        are lowered to IrMakeRecord/IrMakeEnum/IrMakeException.  All other calls
-        (functions, host, indirect) still raise NotImplementedError (deferred M4).
+        are lowered to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
+        calls are lowered to IrDirectCall.  All other calls (lambdas, indirect, host)
+        still raise NotImplementedError (deferred M4b/M6).
         """
-        from agm.agl.scope.symbols import BinderKind
-
         callee = call_node.callee
+
+        # Check for builtin calls first
+        builtin_kind = self._checked.resolved.builtin_calls.get(nid)
+        if builtin_kind is not None:
+            raise NotImplementedError(
+                "Lowering of builtin calls is not yet implemented (deferred to M6)"
+            )
 
         # (a) VarRef callee in constructor_refs
         if isinstance(callee, VarRef):
@@ -835,21 +1065,69 @@ class _Lowerer:
                 return self._lower_named_constructor_call(  # pragma: no cover
                     nid, callee.name, None, call_node.named_args, span
                 )
+            # (c) Direct user function call
+            if (
+                callee_ref is not None
+                and callee_ref.kind is BinderKind.function_binding
+            ):
+                return self._lower_direct_call(call_node, callee_ref, nid, span)
 
-        # (c) FieldAccess callee in qualified_constructor_refs (enum variant call).
-        # Any other callee type or non-constructor FieldAccess falls through to (d).
-        elif isinstance(callee, FieldAccess):  # pragma: no branch
+        elif isinstance(callee, FieldAccess):
             qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
-            if qcr is not None:  # pragma: no branch — non-constructor FieldAccess call is M4+
+            if qcr is not None:
                 owner_name, variant_name, _qcr_mid = qcr
                 return self._lower_named_constructor_call(
                     nid, owner_name, variant_name, call_node.named_args, span
                 )
 
-        # (d) Calling a ConstructorValue (first-class) — deferred to M4.
-        # Non-constructor calls (functions/host/indirect) — deferred to M4.
+        # Lambda/indirect/value call — deferred to M4b
         raise NotImplementedError(
-            "Lowering of non-constructor Call is not yet implemented (deferred to M4)"
+            "Lowering of indirect/value calls is not yet implemented (deferred to M4b)"
+        )
+
+    def _lower_direct_call(
+        self,
+        call_node: "Call",
+        callee_ref: BindingRef,
+        result_node_id: int,
+        span: "SourceSpan",
+    ) -> IrDirectCall:
+        """Lower a direct call to a named user function."""
+        fn_id = self._fn_node_to_id.get(callee_ref.decl_node_id)
+        assert fn_id is not None, (
+            f"compiler bug: no FunctionId for function decl_node_id={callee_ref.decl_node_id!r}"
+        )
+
+        sig = self._checked.type_env.get_function_signature_by_node_id(callee_ref.decl_node_id)
+        if sig is None:
+            sig = self._checked.type_env.get_function_signature(callee_ref.name)
+        assert sig is not None, (
+            f"compiler bug: no signature for function {callee_ref.name!r}"
+        )
+
+        pos_args = list(call_node.args)
+        named_args: dict[str, Expr] = {na.name: na.value for na in call_node.named_args}
+
+        ir_args: list[IrExpr | UseDefault] = []
+        pos_idx = 0
+        for i, (pname, ptype, has_default) in enumerate(sig.params):
+            if pname in named_args:
+                ir_args.append(self.lower_coerced(named_args[pname], ptype))
+            elif pos_idx < len(pos_args):
+                ir_args.append(self.lower_coerced(pos_args[pos_idx], ptype))
+                pos_idx += 1
+            elif has_default:
+                ir_args.append(UseDefault(param_index=i))
+            else:
+                raise AssertionError(
+                    f"compiler bug: missing required arg for param {pname!r} in call to"
+                    f" {callee_ref.name!r} (checker should have caught this)"
+                )
+
+        return IrDirectCall(
+            location=self._loc(span),
+            function_id=fn_id,
+            arguments=tuple(ir_args),
         )
 
     def _lower_named_constructor_call(
@@ -1132,9 +1410,11 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Declarations with no runtime action in M2
             # ----------------------------------------------------------
+            case FuncDef() as funcdef:
+                return self._lower_funcdef(funcdef, top_level=top_level)
+
             case (
-                FuncDef()
-                | AgentDecl()
+                AgentDecl()
                 | RecordDef()
                 | EnumDef()
                 | TypeAlias()
@@ -1298,10 +1578,16 @@ class _Lowerer:
 
     def lower(self) -> ExecutableProgram:
         """Lower the checked program to an ``ExecutableProgram``."""
-        # Populate nominals before lowering items so that validate can check them.
         self._build_nominals()
 
         body = self._checked.resolved.program.body
+
+        # Phase 1: pre-allocate function symbols and IDs for mutual recursion
+        for item in body.items:
+            if isinstance(item, FuncDef):
+                self._prealloc_funcdef(item)
+
+        # Phase 2: lower all items
         ir_items: list[IrExpr] = []
         for item in body.items:
             ir = self.lower_item(item, top_level=True)
@@ -1319,6 +1605,7 @@ class _Lowerer:
             symbols=dict(self._symbols),
             nominals=dict(self._nominals),
             sources={self._source_id: self._source_file},
+            functions=dict(self._functions),
         )
 
 

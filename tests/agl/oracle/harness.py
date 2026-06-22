@@ -24,9 +24,11 @@ from agm.agl.eval.interpreter import Interpreter
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.eval.scope import Scope
 from agm.agl.eval.values import (
+    Closure,
     DictValue,
     EnumValue,
     ExceptionValue,
+    IrClosureValue,
     ListValue,
     RecordValue,
     TextValue,
@@ -39,6 +41,8 @@ from agm.agl.runtime.codec import OutputCodec, TextCodec
 from agm.agl.runtime.contract import materialize_contract
 from agm.agl.scope import resolve
 from agm.agl.typecheck import check
+
+_CLOSURE_SENTINEL: TextValue = TextValue("<closure>")
 
 # ---------------------------------------------------------------------------
 # Shared capabilities helper for the M2 node subset
@@ -194,6 +198,8 @@ def _normalize_value(val: Value) -> Value:
     ``trace_id`` fields at any nesting depth.  Non-exception, non-container
     values are returned unchanged.
     """
+    if isinstance(val, (Closure, IrClosureValue)):
+        return _CLOSURE_SENTINEL
     if isinstance(val, ExceptionValue):
         return _normalize_exception(val)
     if isinstance(val, ListValue):

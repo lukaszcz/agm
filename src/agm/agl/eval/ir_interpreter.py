@@ -47,6 +47,7 @@ from agm.agl.eval.values import (
     EnumValue,
     ExceptionValue,
     IntValue,
+    IrClosureValue,
     JsonValue,
     ListValue,
     RecordValue,
@@ -55,7 +56,7 @@ from agm.agl.eval.values import (
     Value,
 )
 from agm.agl.ir.contracts import ConversionFailureMode
-from agm.agl.ir.ids import SymbolId
+from agm.agl.ir.ids import FunctionId, Location, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAnd,
@@ -76,6 +77,7 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrConvert,
+    IrDirectCall,
     IrExpr,
     IrField,
     IrIf,
@@ -83,6 +85,7 @@ from agm.agl.ir.nodes import (
     IrLiteralPlan,
     IrLoad,
     IrLoop,
+    IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
@@ -101,6 +104,7 @@ from agm.agl.ir.nodes import (
     IrVariantIs,
     IrVariantPlan,
     IrWildcardPlan,
+    UseDefault,
 )
 from agm.agl.ir.operations import (
     ArithOp,
@@ -224,17 +228,27 @@ class IrInterpreter:
     #: in the oracle harness (``loop_limit=100`` in ``tests/agl/oracle/harness.py``).
     DEFAULT_LOOP_LIMIT: int = 100
 
+    DEFAULT_MAX_CALL_DEPTH: int = 256
+
     def __init__(
         self,
         program: ExecutableProgram,
         *,
         trace: TraceStore | None = None,
         loop_limit: int = DEFAULT_LOOP_LIMIT,
+        max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
     ) -> None:
         self._program = program
-        self._frame: Frame = {}
+        self._frames: list[Frame] = [{}]
+        self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._loop_limit: int = loop_limit
+        self._max_call_depth: int = max_call_depth
+
+    @property
+    def _frame(self) -> Frame:
+        """Return the current (top-of-stack) frame."""
+        return self._frames[-1]
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -294,6 +308,74 @@ class IrInterpreter:
                 return BoolValue(False)
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def _get_closure_for(self, fn_id: FunctionId) -> IrClosureValue:
+        """Look up the IrClosureValue for fn_id from the function's symbol in the base frame."""
+        desc = self._program.functions[fn_id]
+        slot = self._frames[0].get(desc.function_symbol)
+        if slot is None:
+            raise InvalidIrError(
+                f"IrDirectCall: function_symbol for fn_id={fn_id!r} not in base frame"
+            )
+        val = slot.value if isinstance(slot, Cell) else slot
+        if not isinstance(val, IrClosureValue):
+            raise InvalidIrError(
+                f"IrDirectCall: function_symbol slot is not IrClosureValue,"
+                f" got {type(val).__name__}"
+            )
+        return val
+
+    def _execute_direct_call(
+        self,
+        fn_id: FunctionId,
+        arguments: "tuple[IrExpr | UseDefault, ...]",
+        location: Location,
+    ) -> Value:
+        """Execute a direct call to a user function."""
+        if self._call_depth >= self._max_call_depth:
+            raise AglRaise(
+                _make_exc_value(
+                    "RecursionError",
+                    f"Maximum call depth of {self._max_call_depth} exceeded",
+                    trace_id=self._trace.new_event_id(),
+                )
+            )
+        desc = self._program.functions[fn_id]
+        closure_val = self._get_closure_for(fn_id)
+        captures_dict: Frame = dict(closure_val.captures)
+
+        bound_values: list[Value] = []
+        for param, arg in zip(desc.params, arguments):
+            if isinstance(arg, UseDefault):
+                assert param.default is not None, (
+                    "UseDefault arg but param has no default (lowerer bug)"
+                )
+                self._frames.append(dict(captures_dict))
+                try:
+                    val = self._eval(param.default)
+                finally:
+                    self._frames.pop()
+            else:
+                val = self._eval(arg)
+            bound_values.append(val)
+
+        call_frame: Frame = dict(captures_dict)
+        for param, val in zip(desc.params, bound_values):
+            param_desc = self._program.symbols.get(param.symbol)
+            if param_desc is not None and param_desc.mutable:
+                call_frame[param.symbol] = Cell(val)
+            else:
+                call_frame[param.symbol] = val
+
+        self._frames.append(call_frame)
+        self._call_depth += 1
+        try:
+            result = self._eval(desc.body)
+        finally:
+            self._call_depth -= 1
+            self._frames.pop()
+
+        return result
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -700,6 +782,31 @@ class IrInterpreter:
                         metadata=JsonValue(None),
                     )
                 )
+
+
+            case IrMakeClosure(function_id=fn_id, captures=captures):
+                cap_slots: list[tuple[SymbolId, Value | Cell]] = []
+                for cap in captures:
+                    slot = self._frame.get(cap.symbol)
+                    if slot is None:
+                        raise InvalidIrError(
+                            f"IrMakeClosure: capture symbol_id={cap.symbol.value!r}"
+                            " not in frame"
+                        )
+                    if cap.by_cell:
+                        if not isinstance(slot, Cell):
+                            raise InvalidIrError(
+                                f"IrMakeClosure: by_cell capture symbol_id={cap.symbol.value!r}"
+                                " but slot is not Cell"
+                            )
+                        cap_slots.append((cap.symbol, slot))
+                    else:
+                        val = slot.value if isinstance(slot, Cell) else slot
+                        cap_slots.append((cap.symbol, val))
+                return IrClosureValue(function_id=fn_id, captures=tuple(cap_slots))
+
+            case IrDirectCall(function_id=fn_id, arguments=arguments):
+                return self._execute_direct_call(fn_id, arguments, node.location)
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

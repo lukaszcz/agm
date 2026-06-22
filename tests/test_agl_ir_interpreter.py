@@ -43,12 +43,15 @@ from agm.agl.eval.values import (
 from agm.agl.ir import (
     ExecutableModule,
     ExecutableProgram,
+    FunctionDescriptor,
+    FunctionId,
     IndexKind,
     IntToDecimal,
     InvalidIrError,
     IrAssign,
     IrBind,
     IrBlock,
+    IrCapture,
     IrCoerce,
     IrConstBool,
     IrConstDecimal,
@@ -56,10 +59,13 @@ from agm.agl.ir import (
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrDirectCall,
     IrExpr,
     IrField,
+    IrFunctionParam,
     IrIndexStep,
     IrLoad,
+    IrMakeClosure,
     IrMakeDict,
     IrMakeList,
     IrMakeRecord,
@@ -76,6 +82,7 @@ from agm.agl.ir import (
     SymbolDescriptor,
     SymbolId,
     ToJson,
+    UseDefault,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID
@@ -99,6 +106,7 @@ def _make_program(
     initializers: tuple[IrExpr, ...],
     symbols: dict[SymbolId, SymbolDescriptor] | None = None,
     nominals: dict[NominalId, NominalDescriptor] | None = None,
+    functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
 ) -> ExecutableProgram:
     """Build a minimal single-module ExecutableProgram."""
     sources = {_SOURCE_ID: SourceFile(display_name="<test>", normalized_text=_SOURCE_TEXT)}
@@ -110,6 +118,7 @@ def _make_program(
         symbols=symbols or {},
         nominals=nominals or {},
         sources=sources,
+        functions=functions or {},
     )
 
 
@@ -1281,3 +1290,234 @@ class TestImportIsolation:
         assert not forbidden, (
             f"ir_interpreter.py imports typecheck modules: {sorted(forbidden)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# M4a: IrMakeClosure and IrDirectCall evaluation + defensive error paths
+# ---------------------------------------------------------------------------
+
+_FN_SID = SymbolId(100)
+_FN_ID = FunctionId(0)
+_PARAM_SID = SymbolId(101)
+_LOCAL_SID = SymbolId(102)
+
+
+def _fn_sym_desc() -> SymbolDescriptor:
+    return SymbolDescriptor(
+        symbol_id=_FN_SID, mutable=False, public_name="f", owner=ENTRY_ID
+    )
+
+
+def _param_sym_desc() -> SymbolDescriptor:
+    return SymbolDescriptor(
+        symbol_id=_PARAM_SID, mutable=False, public_name="x", owner=_FN_ID
+    )
+
+
+def _make_fn_descriptor(
+    body: IrExpr, params: "tuple[IrFunctionParam, ...]" = ()
+) -> FunctionDescriptor:
+    return FunctionDescriptor(
+        function_id=_FN_ID,
+        function_symbol=_FN_SID,
+        module_id=ENTRY_ID,
+        params=params,
+        body=body,
+    )
+
+
+class TestM4aFunctionEvaluation:
+    """Tests for IrMakeClosure and IrDirectCall evaluation."""
+
+    def test_simple_direct_call(self) -> None:
+        """IrDirectCall evaluates a function returning a constant."""
+        body = IrConstInt(_LOC, 42)
+        fn_desc = _make_fn_descriptor(body)
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
+                IrBind(_LOC, SymbolId(200), IrDirectCall(_LOC, _FN_ID, ())),
+            ),
+            symbols={
+                _FN_SID: _fn_sym_desc(),
+                SymbolId(200): SymbolDescriptor(
+                    symbol_id=SymbolId(200), mutable=False, public_name="result", owner=ENTRY_ID
+                ),
+            },
+            functions={_FN_ID: fn_desc},
+        )
+        result = IrInterpreter(prog).run()
+        from agm.agl.eval.values import IntValue
+        assert result["result"] == IntValue(42)
+
+    def test_direct_call_with_param(self) -> None:
+        """IrDirectCall with an argument evaluates correctly."""
+        param = IrFunctionParam(symbol=_PARAM_SID, default=None)
+        body = IrLoad(_LOC, _PARAM_SID)  # return the param
+        fn_desc = _make_fn_descriptor(body, params=(param,))
+        result_sym = SymbolId(200)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            _PARAM_SID: _param_sym_desc(),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
+                IrBind(_LOC, result_sym, IrDirectCall(_LOC, _FN_ID, (IrConstInt(_LOC, 7),))),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        result = IrInterpreter(prog).run()
+        from agm.agl.eval.values import IntValue
+        assert result["result"] == IntValue(7)
+
+    def test_direct_call_with_use_default(self) -> None:
+        """IrDirectCall with UseDefault uses the default expression."""
+        param = IrFunctionParam(symbol=_PARAM_SID, default=IrConstInt(_LOC, 99))
+        body = IrLoad(_LOC, _PARAM_SID)
+        fn_desc = _make_fn_descriptor(body, params=(param,))
+        result_sym = SymbolId(200)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            _PARAM_SID: _param_sym_desc(),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
+                IrBind(_LOC, result_sym, IrDirectCall(_LOC, _FN_ID, (UseDefault(param_index=0),))),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        result = IrInterpreter(prog).run()
+        from agm.agl.eval.values import IntValue
+        assert result["result"] == IntValue(99)
+
+    def test_direct_call_with_mutable_param(self) -> None:
+        """IrDirectCall with a mutable param symbol creates a Cell in the call frame."""
+        # Create a function with a mutable param symbol (not produced by lowerer but valid IR)
+        mutable_param_sym = SymbolId(150)
+        mutable_param_desc = SymbolDescriptor(
+            symbol_id=mutable_param_sym, mutable=True, public_name="x", owner=_FN_ID
+        )
+        param = IrFunctionParam(symbol=mutable_param_sym, default=None)
+        body = IrLoad(_LOC, mutable_param_sym)
+        fn_desc = _make_fn_descriptor(body, params=(param,))
+        result_sym = SymbolId(201)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            mutable_param_sym: mutable_param_desc,
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="result2", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
+                IrBind(_LOC, result_sym, IrDirectCall(_LOC, _FN_ID, (IrConstInt(_LOC, 55),))),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        result = IrInterpreter(prog).run()
+        from agm.agl.eval.values import IntValue
+        assert result["result2"] == IntValue(55)
+
+
+class TestM4aInterpreterDefensivePaths:
+    """Defensive error paths in IrMakeClosure and IrDirectCall evaluation."""
+
+    def test_get_closure_for_symbol_not_in_frame_raises(self) -> None:
+        """_get_closure_for raises InvalidIrError when function symbol not bound."""
+        body = IrConstInt(_LOC, 0)
+        fn_desc = _make_fn_descriptor(body)
+        # IrDirectCall without binding the closure first — symbol not in frame
+        result_sym = SymbolId(200)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                # No IrBind for _FN_SID — so slot will be None when IrDirectCall executes
+                IrBind(_LOC, result_sym, IrDirectCall(_LOC, _FN_ID, ())),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="not in base frame"):
+            IrInterpreter(prog).run()
+
+    def test_get_closure_for_slot_not_ir_closure_value_raises(self) -> None:
+        """_get_closure_for raises InvalidIrError when slot holds a non-IrClosureValue."""
+        body = IrConstInt(_LOC, 0)
+        fn_desc = _make_fn_descriptor(body)
+        result_sym = SymbolId(200)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            result_sym: SymbolDescriptor(
+                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                # Bind an IntValue (not IrClosureValue) into the function symbol slot
+                IrBind(_LOC, _FN_SID, IrConstInt(_LOC, 42)),
+                IrBind(_LOC, result_sym, IrDirectCall(_LOC, _FN_ID, ())),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="not IrClosureValue"):
+            IrInterpreter(prog).run()
+
+    def test_ir_make_closure_capture_not_in_frame_raises(self) -> None:
+        """IrMakeClosure raises InvalidIrError when a capture symbol is not in frame."""
+        missing_sym = SymbolId(999)
+        bad_cap = IrCapture(symbol=missing_sym, by_cell=False)
+        body = IrConstInt(_LOC, 0)
+        fn_desc = _make_fn_descriptor(body)
+        symbols = {_FN_SID: _fn_sym_desc()}
+        prog = _make_program(
+            initializers=(
+                # Try to close over missing_sym which is not bound
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, (bad_cap,))),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="not in frame"):
+            IrInterpreter(prog).run()
+
+    def test_ir_make_closure_by_cell_not_cell_raises(self) -> None:
+        """IrMakeClosure with by_cell=True raises when slot is not a Cell."""
+        # Bind an immutable (non-cell) symbol and try to capture it by_cell
+        cap_sym = SymbolId(200)
+        bad_cap = IrCapture(symbol=cap_sym, by_cell=True)  # by_cell but cap_sym is immutable
+        body = IrConstInt(_LOC, 0)
+        fn_desc = _make_fn_descriptor(body)
+        symbols = {
+            _FN_SID: _fn_sym_desc(),
+            cap_sym: SymbolDescriptor(
+                symbol_id=cap_sym, mutable=False, public_name="c", owner=ENTRY_ID
+            ),
+        }
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, cap_sym, IrConstInt(_LOC, 5)),  # immutable, not a Cell
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, (bad_cap,))),
+            ),
+            symbols=symbols,
+            functions={_FN_ID: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="not Cell"):
+            IrInterpreter(prog).run()

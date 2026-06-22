@@ -23,12 +23,14 @@ from agm.agl.ir import (
     CompareKind,
     ExecutableModule,
     ExecutableProgram,
+    FunctionDescriptor,
     FunctionId,
     IndexKind,
     IntToDecimal,
     IrAssign,
     IrBind,
     IrBlock,
+    IrCapture,
     IrCoerce,
     IrCompare,
     IrConstBool,
@@ -37,10 +39,13 @@ from agm.agl.ir import (
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrDirectCall,
     IrField,
+    IrFunctionParam,
     IrIndex,
     IrIndexStep,
     IrLoad,
+    IrMakeClosure,
     IrMakeDict,
     IrMakeList,
     IrRenderTemplate,
@@ -55,6 +60,7 @@ from agm.agl.ir import (
     SourceId,
     SymbolDescriptor,
     SymbolId,
+    UseDefault,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ModuleId
@@ -133,6 +139,7 @@ def _make_program(
     symbols: dict[SymbolId, SymbolDescriptor] | None = None,
     nominals: dict[NominalId, NominalDescriptor] | None = None,
     sources: dict[SourceId, SourceFile] | None = None,
+    functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
 ) -> ExecutableProgram:
     """Build a valid base program; callers override individual tables."""
     nom_desc = NominalDescriptor(nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD)
@@ -144,6 +151,7 @@ def _make_program(
         symbols=_default_symbols() if symbols is None else symbols,
         nominals={NOM0: nom_desc} if nominals is None else nominals,
         sources={SID0: sf} if sources is None else sources,
+        functions=functions or {},
     )
 
 
@@ -386,13 +394,14 @@ class TestDeepTierSymbolDescriptor:
         with pytest.raises(InvalidIrError, match="owner"):
             validate_ir(prog)
 
-    def test_symbol_owner_function_id_is_violation(self) -> None:
-        """In M1 there is no functions table — FunctionId owner is a violation."""
+    def test_symbol_owner_function_id_is_violation_when_not_in_functions(self) -> None:
+        """FunctionId owner is a violation when the function is not in program.functions."""
         bad = SymbolDescriptor(
             symbol_id=SYM0, mutable=False, public_name="z", owner=FN0
         )
         prog = _make_program(symbols=_symbols_with_sym0(bad))
-        with pytest.raises(InvalidIrError, match="FunctionId"):
+        # FN0 is not in program.functions, so it's still a violation
+        with pytest.raises(InvalidIrError, match="not in program.functions"):
             validate_ir(prog)
 
     def test_symbol_consistency_skipped_when_shallow(self) -> None:
@@ -912,3 +921,159 @@ class TestIrRenderTemplateValidation:
         )
         with pytest.raises(InvalidIrError, match="source_id"):
             validate_ir(prog, deep=True)
+
+# ===========================================================================
+# M4a — FunctionDescriptor table, IrMakeClosure, IrDirectCall
+# ===========================================================================
+
+
+def _fn_sym_desc() -> SymbolDescriptor:
+    """A symbol descriptor with FunctionId owner (valid in M4a)."""
+    return SymbolDescriptor(symbol_id=SYM1, mutable=False, public_name="f", owner=FN0)
+
+
+def _make_fn_param(sym: SymbolId = SYM1) -> IrFunctionParam:
+    return IrFunctionParam(symbol=sym, default=None)
+
+
+def _make_fn_desc(
+    fn_id: FunctionId = FN0,
+    fn_sym: SymbolId = SYM0,
+    mod_id: ModuleId = MOD_A,
+    params: "tuple[IrFunctionParam, ...]" = (),
+) -> FunctionDescriptor:
+    return FunctionDescriptor(
+        function_id=fn_id,
+        function_symbol=fn_sym,
+        module_id=mod_id,
+        params=params,
+        body=IrConstInt(location=LOC, value=42),
+    )
+
+
+def _make_closure(fn_id: FunctionId = FN0, captures: "tuple[IrCapture, ...]" = ()) -> IrMakeClosure:
+    return IrMakeClosure(location=LOC, function_id=fn_id, captures=captures)
+
+
+def _make_direct_call(fn_id: FunctionId = FN0, args: "tuple" = ()) -> IrDirectCall:
+    return IrDirectCall(location=LOC, function_id=fn_id, arguments=args)
+
+
+class TestM4aFunctionDescriptorTable:
+    """FunctionDescriptor table consistency invariants."""
+
+    def test_valid_function_with_symbol_in_table(self) -> None:
+        """A valid FunctionDescriptor with symbol in program.symbols passes."""
+        # fn_sym is SYM0 which is in the default symbols table
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        prog = _make_program(functions={FN0: fn_desc})
+        validate_ir(prog)  # no exception
+
+    def test_function_id_key_mismatch_raises(self) -> None:
+        """function_id inside FunctionDescriptor must match dict key."""
+        fn_id_wrong = FunctionId(value=99)
+        fn_desc = _make_fn_desc(fn_id=fn_id_wrong, fn_sym=SYM0)
+        prog = _make_program(functions={FN0: fn_desc})  # key=FN0 but desc.fn_id=99
+        with pytest.raises(InvalidIrError, match="mismatch"):
+            validate_ir(prog)
+
+    def test_function_symbol_not_in_symbols_raises(self) -> None:
+        """FunctionDescriptor.function_symbol must be in program.symbols."""
+        fn_desc = _make_fn_desc(fn_sym=SymbolId(value=999))  # 999 not in default symbols
+        prog = _make_program(functions={FN0: fn_desc})
+        with pytest.raises(InvalidIrError, match="function_symbol"):
+            validate_ir(prog)
+
+    def test_function_module_not_in_modules_raises(self) -> None:
+        """FunctionDescriptor.module_id must be in program.modules."""
+        fn_desc = _make_fn_desc(mod_id=MOD_B, fn_sym=SYM0)  # MOD_B not in default modules
+        prog = _make_program(functions={FN0: fn_desc})
+        with pytest.raises(InvalidIrError, match="module_id"):
+            validate_ir(prog)
+
+    def test_function_param_symbol_not_in_symbols_raises(self) -> None:
+        """FunctionDescriptor params must reference symbols in program.symbols."""
+        bad_param = _make_fn_param(sym=SymbolId(value=999))
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(bad_param,))
+        prog = _make_program(functions={FN0: fn_desc})
+        with pytest.raises(InvalidIrError, match="param symbol"):
+            validate_ir(prog)
+
+    def test_symbol_owner_function_id_valid_when_in_functions(self) -> None:
+        """FunctionId owner is valid when fn_id is in program.functions."""
+        fn_sym = SymbolDescriptor(symbol_id=SYM0, mutable=False, public_name="f", owner=FN0)
+        fn_desc = _make_fn_desc(fn_id=FN0, fn_sym=SYM0)
+        mut_sym = SymbolDescriptor(symbol_id=SYM_MUT, mutable=True, public_name="y", owner=MOD_A)
+        prog = _make_program(
+            symbols={SYM0: fn_sym, SYM_MUT: mut_sym},
+            functions={FN0: fn_desc},
+        )
+        validate_ir(prog)  # no exception
+
+
+class TestM4aIrMakeClosure:
+    """IrMakeClosure validation invariants."""
+
+    def test_valid_make_closure_passes(self) -> None:
+        """IrMakeClosure with valid function_id in program.functions passes."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, _make_closure(FN0)),),
+            functions={FN0: fn_desc},
+        )
+        validate_ir(prog)  # no exception
+
+    def test_make_closure_unknown_function_id_raises(self) -> None:
+        """IrMakeClosure with unknown function_id raises InvalidIrError (deep=True)."""
+        # FN0 is not in program.functions
+        closure = _make_closure(FN0)
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, closure),))
+        with pytest.raises(InvalidIrError, match="function_id"):
+            validate_ir(prog, deep=True)
+
+    def test_make_closure_bad_capture_symbol_raises(self) -> None:
+        """IrMakeClosure with unknown capture symbol raises InvalidIrError (deep=True)."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        bad_cap = IrCapture(symbol=SymbolId(value=999), by_cell=False)
+        closure = _make_closure(FN0, captures=(bad_cap,))
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, closure),),
+            functions={FN0: fn_desc},
+        )
+        with pytest.raises(InvalidIrError, match="capture"):
+            validate_ir(prog, deep=True)
+
+    def test_make_closure_deep_false_skips_checks(self) -> None:
+        """IrMakeClosure with deep=False skips cross-reference checks."""
+        # FN0 not in functions, but deep=False should skip check
+        closure = _make_closure(FN0)
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, closure),))
+        validate_ir(prog, deep=False)  # no exception
+
+
+class TestM4aIrDirectCall:
+    """IrDirectCall validation invariants."""
+
+    def test_valid_direct_call_passes(self) -> None:
+        """IrDirectCall with valid function_id and UseDefault arg passes."""
+        fn_param = _make_fn_param(sym=SYM0)
+        fn_desc = _make_fn_desc(fn_sym=SYM0, params=(fn_param,))
+        call = _make_direct_call(FN0, args=(UseDefault(param_index=0),))
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, call),),
+            functions={FN0: fn_desc},
+        )
+        validate_ir(prog)  # no exception
+
+    def test_direct_call_unknown_function_id_raises(self) -> None:
+        """IrDirectCall with unknown function_id raises InvalidIrError (deep=True)."""
+        call = _make_direct_call(FN0)
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, call),))
+        with pytest.raises(InvalidIrError, match="function_id"):
+            validate_ir(prog, deep=True)
+
+    def test_direct_call_deep_false_skips_check(self) -> None:
+        """IrDirectCall with deep=False skips function_id cross-reference check."""
+        call = _make_direct_call(FN0)
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, call),))
+        validate_ir(prog, deep=False)  # no exception

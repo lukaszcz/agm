@@ -20,14 +20,15 @@ M1 fields only.  Fields deferred to later milestones are noted in comments:
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
-from agm.agl.ir.nodes import IrExpr
+from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.modules.ids import ModuleId
 
 __all__ = [
     "ExecutableModule",
+    "FunctionDescriptor",
     "ExecutableProgram",
     "NominalDescriptor",
     "NominalKind",
@@ -127,6 +128,18 @@ class SourceFile:
     normalized_text: str
 
 
+
+@dataclass(frozen=True, slots=True)
+class FunctionDescriptor:
+    """Descriptor for a user-defined function."""
+
+    function_id: FunctionId
+    function_symbol: SymbolId
+    module_id: ModuleId
+    params: "tuple[IrFunctionParam, ...]"
+    body: IrExpr
+
+
 # ---------------------------------------------------------------------------
 # Module descriptor
 # ---------------------------------------------------------------------------
@@ -183,3 +196,4 @@ class ExecutableProgram:
     symbols: dict[SymbolId, SymbolDescriptor]
     nominals: dict[NominalId, NominalDescriptor]
     sources: dict[SourceId, SourceFile]
+    functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)

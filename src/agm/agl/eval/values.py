@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
 
 # ---------------------------------------------------------------------------
 # Re-export all leaf tags and helpers from the canonical home
@@ -46,6 +46,7 @@ from agm.agl.values import (
 )
 
 if TYPE_CHECKING:
+    from agm.agl.eval.frames import Slot
     from agm.agl.eval.scope import Scope
     from agm.agl.syntax.nodes import Expr
     from agm.agl.typecheck.types import Type
@@ -247,6 +248,21 @@ class ExceptionValue:
         return NotImplemented
 
 
+
+@dataclass(frozen=True, slots=True)
+class IrClosureValue:
+    """An IR closure: function_id plus its captured environment."""
+
+    function_id: FunctionId
+    captures: "tuple[tuple[SymbolId, Slot], ...]"
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __hash__(self) -> int:
+        return id(self)
+
+
 # ---------------------------------------------------------------------------
 # Broad Value union (legacy interpreter union — includes all types)
 # ---------------------------------------------------------------------------
@@ -266,6 +282,7 @@ Value: TypeAlias = (
     | AgentValue
     | ConstructorValue
     | Closure
+    | IrClosureValue
 )
 
 __all__ = [
@@ -274,6 +291,7 @@ __all__ = [
     "BaseValue",
     "BoolValue",
     "Closure",
+    "IrClosureValue",
     "ConstructorValue",
     "DecimalValue",
     "DictValue",

@@ -482,3 +482,32 @@ def test_helpers_re_exported_from_eval_values() -> None:
     assert _json_eq(1, decimal.Decimal("1")) is True
     assert _json_eq(True, 1) is False
     assert isinstance(_json_hash(1), int)
+
+
+def test_ir_closure_value_identity_equality() -> None:
+    """IrClosureValue uses identity-based equality (__eq__ = self is other)."""
+    from agm.agl.eval.values import IrClosureValue
+    from agm.agl.ir.ids import FunctionId
+
+    v = IrClosureValue(function_id=FunctionId(0), captures=())
+    # Same object is equal to itself
+    assert v == v
+    # Different object (even with same content) is not equal
+    v2 = IrClosureValue(function_id=FunctionId(0), captures=())
+    assert v != v2
+    # Not equal to non-IrClosureValue objects
+    assert v.__eq__(42) is not True  # returns bool (NotImplemented would be False)
+    assert not (v == v2)
+
+
+def test_ir_closure_value_identity_hash() -> None:
+    """IrClosureValue uses identity-based hash (__hash__ = id(self))."""
+    from agm.agl.eval.values import IrClosureValue
+    from agm.agl.ir.ids import FunctionId
+
+    v = IrClosureValue(function_id=FunctionId(0), captures=())
+    # Hash is id(v) 
+    assert hash(v) == id(v)
+    # Can be used in a set
+    s: set[IrClosureValue] = {v}
+    assert v in s

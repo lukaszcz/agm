@@ -65,6 +65,7 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrConvert,
+    IrDirectCall,
     IrExpr,
     IrField,
     IrIf,
@@ -73,6 +74,7 @@ from agm.agl.ir.nodes import (
     IrLiteralPlan,
     IrLoad,
     IrLoop,
+    IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
@@ -91,6 +93,7 @@ from agm.agl.ir.nodes import (
     IrVariantIs,
     IrVariantPlan,
     IrWildcardPlan,
+    UseDefault,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
 from agm.agl.ir.program import ExecutableProgram, NominalKind, SourceFile
@@ -576,6 +579,34 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(body, ctx)
             _validate_expr(condition, ctx)
 
+
+        case IrMakeClosure(function_id=fn_id, captures=captures):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                if fn_id not in ctx.program.functions:
+                    raise InvalidIrError(
+                        f"IrMakeClosure references function_id={fn_id!r}"
+                        " which is not in program.functions"
+                    )
+                for cap in captures:
+                    if cap.symbol not in ctx.program.symbols:
+                        raise InvalidIrError(
+                            f"IrMakeClosure capture references symbol_id={cap.symbol!r}"
+                            " which is not in program.symbols"
+                        )
+
+        case IrDirectCall(function_id=fn_id, arguments=arguments):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                if fn_id not in ctx.program.functions:
+                    raise InvalidIrError(
+                        f"IrDirectCall references function_id={fn_id!r}"
+                        " which is not in program.functions"
+                    )
+            for arg in arguments:
+                if not isinstance(arg, UseDefault):
+                    _validate_expr(arg, ctx)
+
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -617,12 +648,11 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
                     " which is not in program.modules"
                 )
         elif isinstance(owner, FunctionId):
-            # FunctionId — not valid in M1 (no functions table)
-            raise InvalidIrError(
-                f"SymbolDescriptor for symbol_id={sym_key!r} has a FunctionId owner"
-                f" ({owner!r}); FunctionId owners are not permitted in M1 (no"
-                " functions table exists yet)"
-            )
+            if owner not in program.functions:
+                raise InvalidIrError(
+                    f"SymbolDescriptor for symbol_id={sym_key!r} has owner={owner!r}"
+                    " which is not in program.functions"
+                )
         else:
             assert_never(owner)  # pragma: no cover
 
@@ -633,6 +663,33 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
                 f"program.nominals entry keyed by {nom_key!r} has"
                 f" nominal={nom_desc.nominal!r} (mismatch)"
             )
+
+
+    # 4. functions table consistency
+    fn_ctx = _Context(program, deep=True)
+    for fn_key, fn_desc in program.functions.items():
+        if fn_desc.function_id != fn_key:
+            raise InvalidIrError(
+                f"program.functions entry keyed by {fn_key!r} has"
+                f" function_id={fn_desc.function_id!r} (mismatch)"
+            )
+        if fn_desc.function_symbol not in program.symbols:
+            raise InvalidIrError(
+                f"FunctionDescriptor for {fn_key!r} has function_symbol={fn_desc.function_symbol!r}"
+                " which is not in program.symbols"
+            )
+        if fn_desc.module_id not in program.modules:
+            raise InvalidIrError(
+                f"FunctionDescriptor for {fn_key!r} has module_id={fn_desc.module_id!r}"
+                " which is not in program.modules"
+            )
+        for param in fn_desc.params:
+            if param.symbol not in program.symbols:
+                raise InvalidIrError(
+                    f"FunctionDescriptor for {fn_key!r}: param symbol {param.symbol!r}"
+                    " is not in program.symbols"
+                )
+        _validate_expr(fn_desc.body, fn_ctx)
 
     # (Sources table has no key/id consistency invariant beyond being keyed by
     # SourceId; key consistency is structural to dict construction.)

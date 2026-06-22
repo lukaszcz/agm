@@ -52,7 +52,7 @@ import decimal
 from dataclasses import dataclass
 
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
-from agm.agl.ir.ids import Location, NominalId, SymbolId
+from agm.agl.ir.ids import FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
     ArithKind,
     ArithOp,
@@ -73,6 +73,7 @@ __all__ = [
     "IrBind",
     "IrBindPlan",
     "IrBlock",
+    "IrCapture",
     "IrCase",
     "IrCaseArm",
     "IrCatchHandler",
@@ -84,11 +85,13 @@ __all__ = [
     "IrConstJsonNull",
     "IrConstText",
     "IrConstUnit",
+    "IrDirectCall",
     "IrConstructorPlan",
     "IrContains",
     "IrConvert",
     "IrExpr",
     "IrField",
+    "IrFunctionParam",
     "IrIf",
     "IrIfBranch",
     "IrIndex",
@@ -97,6 +100,7 @@ __all__ = [
     "IrLoad",
     "IrLoop",
     "IrMakeConstructor",
+    "IrMakeClosure",
     "IrMakeDict",
     "IrMakeEnum",
     "IrMakeException",
@@ -115,6 +119,7 @@ __all__ = [
     "IrVariantIs",
     "IrVariantPlan",
     "IrWildcardPlan",
+    "UseDefault",
 ]
 
 
@@ -772,6 +777,55 @@ class IrLoop:
 
 
 # ---------------------------------------------------------------------------
+# Function/closure nodes (M4a)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class IrCapture:
+    """A captured outer variable in an IrMakeClosure.
+
+    by_cell: True for var (share the Cell), False for let/param (snapshot value).
+    """
+
+    symbol: SymbolId
+    by_cell: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UseDefault:
+    """Sentinel in IrDirectCall.arguments: use the param default for this arg."""
+
+    param_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class IrFunctionParam:
+    """A function parameter in a FunctionDescriptor."""
+
+    symbol: SymbolId
+    default: "IrExpr | None"
+
+
+@dataclass(frozen=True, slots=True)
+class IrMakeClosure:
+    """IR closure creation: evaluates to an IrClosureValue."""
+
+    location: Location
+    function_id: FunctionId
+    captures: "tuple[IrCapture, ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class IrDirectCall:
+    """IR direct call to a named user function."""
+
+    location: Location
+    function_id: FunctionId
+    arguments: "tuple[IrExpr | UseDefault, ...]"
+
+
+# ---------------------------------------------------------------------------
 # Closed IrExpr union
 # ---------------------------------------------------------------------------
 
@@ -816,4 +870,6 @@ IrExpr = (
     | IrTry
     | IrCase
     | IrLoop
+    | IrMakeClosure
+    | IrDirectCall
 )

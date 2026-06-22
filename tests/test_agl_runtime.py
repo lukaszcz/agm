@@ -2454,6 +2454,16 @@ class TestSerializeV2OpaqueValues:
         with pytest.raises(TypeError, match="Closure"):
             value_to_json_obj(closure)
 
+    def test_ir_closure_value_raises(self) -> None:
+        """IrClosureValue has no JSON representation — TypeError is raised."""
+        from agm.agl.eval.values import IrClosureValue
+        from agm.agl.ir.ids import FunctionId
+        from agm.agl.runtime.serialize import value_to_json_obj
+
+        ir_closure = IrClosureValue(function_id=FunctionId(0), captures=())
+        with pytest.raises(TypeError, match="IrClosureValue"):
+            value_to_json_obj(ir_closure)
+
 
 # ---------------------------------------------------------------------------
 # Coverage: runtime.py — uncovered branches and new v2 properties

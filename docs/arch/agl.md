@@ -11,8 +11,10 @@ source (.agl)
   → [4] scope / name resolution  (full static pass)
   → [5] type checking  (full static pass; selects output contract specs)
   → host preparation  (materializes output contracts; no program execution)
-  → [6] evaluator  (tree-walking interpreter)
+  → [6a] evaluator  (tree-walking interpreter)  ← current default
         ↘ host runtime: agents, codecs, trace store
+  → [6b] lowerer (typeless IR; agm.agl.lower) + IrInterpreter (agm.agl.eval.ir_interpreter)
+         ← migration-in-progress alternative (oracle tested against [6a])
 ```
 
 ## Firewall rule
@@ -760,6 +762,90 @@ sections from the layered config files and returns a `ModuleRootsConfig` with
 
 Multi-file e2e tests live in `tests/test_agl_multifile.py`; static fixture
 modules used by those tests are in `tests/agl/multi_file/`.
+
+
+## Execution IR (migration in progress)
+
+`agm.agl.ir` defines a **typeless intermediate representation** used during the
+migration from the tree-walking evaluator to an IR-based execution model.  The IR
+is a closed expression union (`IrExpr`) + a set of table types (`ExecutableProgram`).
+
+### IR node categories
+
+- **Constants** — `IrConstInt`, `IrConstDecimal`, `IrConstBool`, `IrConstText`,
+  `IrConstUnit`, `IrConstJsonNull`.
+- **Bindings / load** — `IrBind` (let/var declaration), `IrLoad` (read a symbol),
+  `IrAssign` (mutate a var cell through an optional index path).
+- **Coercions** — `IrCoerce(value, operation)` applies a compiled conversion
+  (from `agm.agl.ir.operations`).
+- **Containers** — `IrMakeList`, `IrMakeDict`.
+- **Field / index access** — `IrField`, `IrIndex`.
+- **Control flow** — `IrIf`, `IrCase`, `IrLoop`, `IrTry`, `IrRaise`.
+- **Template rendering** — `IrRenderTemplate`.
+- **Comparisons** — `IrCompare`.
+- **Nominal construction** — `IrMakeRecord`, `IrMakeEnum`, `IrMakeConstructor`,
+  `IrCast`, `IrIsTest`.
+- **Functions** (M4a) — `IrMakeClosure` (bind a function's closure), `IrDirectCall`
+  (call a top-level user-defined function by `FunctionId`).
+- **Sequences / blocks** — `IrSequence`, `IrBlock`.
+
+### Key tables in `ExecutableProgram`
+
+- `symbols: dict[SymbolId, SymbolDescriptor]` — all declared symbols with owner
+  and mutability.
+- `nominals: dict[NominalId, NominalDescriptor]` — record/enum/exception definitions.
+- `functions: dict[FunctionId, FunctionDescriptor]` — per-function body, params,
+  and captures (added in M4a).
+- `modules: dict[ModuleId, ExecutableModule]` — per-module initializer sequences.
+- `sources: dict[SourceId, SourceFile]` — source text for runtime diagnostics.
+
+### Lowering (`agm.agl.lower`)
+
+`lower_program(checked, ...)` lowers a `CheckedProgram` to an `ExecutableProgram`
+in two phases for top-level `FuncDef` nodes (enabling mutual recursion):
+
+1. **Phase 1** — `_prealloc_funcdef` pre-allocates `FunctionId` and `SymbolId`
+   for every root-level `FuncDef`.
+2. **Phase 2** — `lower_item` lowers each item; `_lower_funcdef` computes
+   captures (by walking the body for free variables), builds `FunctionDescriptor`
+   entries, and emits `IrBind(sym, IrMakeClosure(fn_id, captures))`.
+
+The `validate=True` option calls `validate_ir` after lowering for structural
+consistency checks.
+
+### IrInterpreter (`agm.agl.eval.ir_interpreter`)
+
+A stack-based interpreter over `ExecutableProgram`.  Key design points:
+
+- **Frame stack** — `_frames: list[Frame]` with one base frame (module-level
+  bindings) and per-call frames pushed/popped in `_execute_direct_call`.
+- **Mutable symbols** — represented as `Cell` wrappers; `IrAssign` writes through
+  the cell.
+- **Function calls** — `IrDirectCall` evaluates args, constructs a call frame from
+  the closure captures + evaluated params, pushes it onto the frame stack, evaluates
+  the body, and pops.
+- **Call-depth guard** — configurable `max_call_depth` (default 256); exceeding it
+  raises `AglRaise(RecursionError)`.
+- **Capture handling** — `IrMakeClosure` reads each capture from the current frame,
+  storing by-value for immutable captures and the `Cell` itself for mutable ones.
+
+### Oracle testing
+
+A differential oracle (`tests/agl/oracle/harness.py`) runs both the legacy AST
+interpreter and the IR pipeline on the same source and asserts they produce
+identical outputs.  `IrClosureValue` and `Closure` are normalized to a sentinel
+before comparison (closures are identity-valued, not equality-valued).
+
+### Test files
+
+| File | Coverage area |
+|------|--------------|
+| `tests/test_agl_ir_nodes.py` | IR node frozen-dataclass invariants |
+| `tests/test_agl_ir_validate.py` | structural IR validator (M1+M4a invariants) |
+| `tests/test_agl_ir_interpreter.py` | hand-built IR program evaluation |
+| `tests/test_agl_lower.py` | lowering pipeline |
+| `tests/test_agl_oracle_m2.py` .. `test_agl_oracle_m4a_functions.py` | oracle differential tests |
+
 
 ## Package layout and test locations
 

@@ -929,6 +929,32 @@ class TestTypedCalls:
         assert isinstance(call.callee, FieldAccess)
         assert len(call.type_args) == 1
 
+    def test_typed_call_allowed_as_juxt_argument(self) -> None:
+        prog = parse("f Opt.None::[int]()")
+        call = first(prog)
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "f"
+
+        arg = call.args[0]
+        assert isinstance(arg, Call)
+        assert isinstance(arg.callee, FieldAccess)
+        assert len(arg.type_args) == 1
+        assert isinstance(arg.type_args[0], IntT)
+        assert arg.args == ()
+
+    def test_typed_call_with_args_allowed_as_juxt_argument(self) -> None:
+        prog = parse("f Box::[int](1)")
+        call = first(prog)
+        assert isinstance(call, Call)
+        arg = call.args[0]
+        assert isinstance(arg, Call)
+        assert isinstance(arg.callee, VarRef)
+        assert arg.callee.name == "Box"
+        assert len(arg.args) == 1
+        assert isinstance(arg.args[0], IntLit)
+        assert isinstance(arg.type_args[0], IntT)
+
     def test_dcolon_without_type_brackets_is_not_a_call(self) -> None:
         # ``ask-request::`` with no ``[...]`` is rejected.
         with pytest.raises(AglSyntaxError):

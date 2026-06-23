@@ -440,7 +440,10 @@ suite_expr: _INDENT block _DEDENT
 // Does NOT chain: `f a b` is a parse error.
 //
 // juxt_arg allows an optional dotted field-access tail so `print res.stdout`
-// and `print a.b.c` parse as juxt_call with a field_access argument.
+// and `print a.b.c` parse as juxt_call with a field_access argument. It also
+// admits explicit typed calls so `f Opt.None::[int]()` works like
+// `f (Opt.None::[int]())` without opening the door to ordinary nested paren
+// calls such as `print classify(x)`.
 // Conflict-safety: DOT is NOT in FOLLOW(juxt).
 //
 // paren-call results are still excluded: `print classify(x)` is a parse error
@@ -455,6 +458,7 @@ juxt_arg: juxt_atom juxt_suffix*
 
 juxt_suffix: DOT field_name       -> juxt_field_suffix
            | INDEX_LSQB expr RSQB -> juxt_index_suffix
+           | DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> juxt_typed_call_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
 // Qualified refs (qual_var_ref/qual_constructor) are NOT included here — they

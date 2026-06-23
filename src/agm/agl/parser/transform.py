@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import decimal
 from itertools import count
-from typing import cast
+from typing import TypeAlias, cast
 
 from lark import Transformer, v_args
 from lark.lexer import Token
@@ -56,7 +56,9 @@ from agm.agl.syntax.types import (
 
 # Types used internally
 _NamedArgList = list[syntax.NamedArg]
-_JuxtSuffix = tuple[str, str] | tuple[str, syntax.Expr]
+_ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
+_JuxtTypedCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
+_JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtTypedCall]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -868,7 +870,8 @@ class AstBuilder(Transformer):
         """juxt_arg: juxt_atom juxt_suffix*
 
         Builds the restricted postfix chain allowed by single-arg call sugar,
-        such as ``print res.stdout`` and ``print xs[0]``.
+        such as ``print res.stdout``, ``print xs[0]``, and
+        ``f Opt.None::[int]()``.
         """
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
         assert non_tokens, "juxt_arg: no base atom"
@@ -882,10 +885,21 @@ class AstBuilder(Transformer):
                     span=self._span_from_meta(meta),
                     node_id=self._next_id(),
                 )
-            else:
+            elif kind == "index":
                 result = syntax.IndexAccess(
                     obj=result,
                     index=cast(syntax.Expr, value),
+                    span=self._span_from_meta(meta),
+                    node_id=self._next_id(),
+                )
+            else:
+                type_args_val, arg_lists = cast(_JuxtTypedCall, value)
+                pos_args, named_args = arg_lists
+                result = syntax.Call(
+                    callee=result,
+                    args=tuple(pos_args),
+                    named_args=tuple(named_args),
+                    type_args=type_args_val,
                     span=self._span_from_meta(meta),
                     node_id=self._next_id(),
                 )
@@ -900,6 +914,27 @@ class AstBuilder(Transformer):
         """juxt_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix."""
         index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
         return ("index", index_expr)
+
+    def juxt_typed_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
+        """juxt_suffix: DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR."""
+        type_args_val = cast(
+            tuple[TypeExpr, ...],
+            next(
+                (
+                    arg
+                    for arg in args
+                    if isinstance(arg, tuple)
+                    and len(arg) > 0
+                    and isinstance(arg[0], _ALL_TYPE_EXPRS)
+                ),
+                (),
+            ),
+        )
+        arg_lists: _ArgLists = ([], [])
+        for arg in args:
+            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
+                arg_lists = cast(_ArgLists, arg)
+        return ("typed_call", (type_args_val, arg_lists))
 
     def typed_postfix_call(self, meta: Meta, args: _Args) -> syntax.Call:
         """Apply explicit type arguments to any postfix callee expression."""

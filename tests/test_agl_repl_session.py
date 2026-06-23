@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglError
-from agm.agl.eval.values import IntValue
+from agm.agl.eval.values import BoolValue, IntValue
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.typecheck.types import IntType, TextType
@@ -1228,6 +1228,18 @@ class TestFuncDef:
         assert r.ok
         assert r.value is not None
         assert _int(r.value) == 7
+
+    def test_typed_nullary_constructor_call_as_juxt_arg(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry(
+            "enum Opt[T]\n"
+            "  | None\n"
+            "def f(x: Opt[int]) -> bool = false\n"
+            "f Opt.None::[int]()"
+        )
+        assert r.ok, r.diagnostics
+        assert isinstance(r.value, BoolValue)
+        assert r.value.value is False
 
     def test_funcdef_result_used_in_binding(self) -> None:
         # A function defined in entry 1 can be used in a let-binding in entry 2.

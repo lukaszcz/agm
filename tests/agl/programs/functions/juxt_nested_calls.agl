@@ -1,0 +1,18 @@
+# Single-argument call sugar accepts nested call results as the argument.
+
+enum Opt
+  | None
+  | Some(x: int)
+
+def unwrap(o: Opt) -> int =
+  case o of
+    | None => 0
+    | Some(x) => x
+
+def label(o: Opt) -> text = "value=${unwrap(o)}"
+
+print label(Opt.Some(x: 1))
+let nested_label = label Opt.Some(x: 2)
+print nested_label
+let none_value = unwrap Opt.None
+print none_value

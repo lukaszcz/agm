@@ -48,7 +48,8 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
 - `Call(callee, args, named_args)` — the single call node for all invocations
   (user `def`s, built-ins `print`/`exec`/`ask`/`parse_json`, function values).
   Both the parenthesized form `f(a, b, name: v)` and the single-arg sugar `f x`
-  desugar to `Call`.
+  desugar to `Call`; the sugar argument may itself be a postfix call such as
+  `g(x)` or `Opt.Some(x: 1)`.
 - `Cast(expr, type_expr, is_test)` — the `as` / `as?` cast node. `is_test=True`
   for `as?` (yields `bool`, never raises); `is_test=False` for `as` (converts
   or raises `CastError`). The typechecker validates the source–target pair

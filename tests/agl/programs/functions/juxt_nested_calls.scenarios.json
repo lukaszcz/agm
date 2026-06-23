@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "nested_call_result_argument",
+      "expect": {
+        "stdout": "value=1\nvalue=2\n0\n"
+      }
+    }
+  ]
+}

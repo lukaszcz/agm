@@ -1,2 +1,0 @@
-def classify(n: int) -> text = "hi"
-print classify(1)

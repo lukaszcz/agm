@@ -32,6 +32,8 @@
 //     not juxtaposition) and excludes unary-minus (so `f -1` = subtraction).
 //   - Juxtaposition does NOT chain: `f a b` is a parse error.
 //   - Result: `print x + 1` = `(print x) + 1`; `f (x+1)` = call; `f -1` = sub.
+//   - A nested postfix call can be the single sugar argument, so
+//     `f g(x)` = `f(g(x))` while `f g x` remains invalid.
 //
 // (B) `fn` keyword required for lambdas:
 //   - Keyword-free `(params) -> R => body` is NOT LALR(1): after `(name` the
@@ -441,13 +443,8 @@ suite_expr: _INDENT block _DEDENT
 //
 // juxt_arg allows an optional dotted field-access tail so `print res.stdout`
 // and `print a.b.c` parse as juxt_call with a field_access argument. It also
-// admits explicit typed calls so `f Opt.None::[int]()` works like
-// `f (Opt.None::[int]())` without opening the door to ordinary nested paren
-// calls such as `print classify(x)`.
+// admits calls so `f Opt.Some(x: 1)` works like `f(Opt.Some(x: 1))`.
 // Conflict-safety: DOT is NOT in FOLLOW(juxt).
-//
-// paren-call results are still excluded: `print classify(x)` is a parse error
-// (requires parens: `print(classify(x))`).
 // ---------------------------------------------------------------------------
 
 juxt: postfix juxt_arg -> juxt_call
@@ -458,6 +455,7 @@ juxt_arg: juxt_atom juxt_suffix*
 
 juxt_suffix: DOT field_name       -> juxt_field_suffix
            | INDEX_LSQB expr RSQB -> juxt_index_suffix
+           | LPAR arg_list? RPAR -> juxt_call_suffix
            | DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> juxt_typed_call_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.

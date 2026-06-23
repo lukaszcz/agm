@@ -247,7 +247,11 @@ unary          ::= "-" unary | juxt
 juxt           ::= postfix juxt_arg     (* single-arg sugar; non-chaining *)
                | postfix
 
-juxt_arg       ::= atom_no_call        (* excludes "("-led forms and calls *)
+juxt_arg       ::= atom_no_call juxt_suffix*
+juxt_suffix    ::= "." NAME
+               | "[" expr "]"                  (* adjacent bracket only *)
+               | "(" arg_list? ")"
+               | "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
 
 postfix        ::= postfix "." NAME                (* field access OR variant qualification *)
                | postfix "(" arg_list? ")"         (* call with parentheses *)
@@ -274,7 +278,7 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"
                | list_literal | dict_literal | NAME
-               | template | postfix "." NAME
+               | template
 
 qualified_constructor ::= NAME ("." NAME)?
 

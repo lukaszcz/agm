@@ -13,7 +13,7 @@ Covers:
 - Input/agent/config declarations.
 - Error cases: == produces friendly AglSyntaxError; bad syntax raises AglSyntaxError.
 - REPL seam: parse_program_seeded and is_incomplete_source.
-- Negative cases: f a b (juxt does not chain); print classify(x) (call needs parens).
+- Negative cases: f a b (juxt does not chain).
 
 NOTE: This file must NOT modify tests/test_agl_e2e.py or tests/agl/.
       No static-analysis suppression comments in this file.
@@ -803,6 +803,35 @@ class TestCalls:
         assert isinstance(inner.callee, VarRef)
         assert inner.callee.name == "classify"
 
+    def test_juxt_call_with_call_result(self) -> None:
+        """print classify(x) desugars to print(classify(x))."""
+        call = first(parse("print classify(x)"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "print"
+        inner = call.args[0]
+        assert isinstance(inner, Call)
+        assert isinstance(inner.callee, VarRef)
+        assert inner.callee.name == "classify"
+
+    def test_juxt_call_with_qualified_constructor_call_argument(self) -> None:
+        """f Opt.Some(x: 1) desugars to f(Opt.Some(x: 1))."""
+        call = first(parse("f Opt.Some(x: 1)"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "f"
+
+        arg = call.args[0]
+        assert isinstance(arg, Call)
+        assert isinstance(arg.callee, FieldAccess)
+        assert arg.callee.field == "Some"
+        assert isinstance(arg.callee.obj, VarRef)
+        assert arg.callee.obj.name == "Opt"
+        assert arg.args == ()
+        assert len(arg.named_args) == 1
+        assert arg.named_args[0].name == "x"
+        assert isinstance(arg.named_args[0].value, IntLit)
+
     def test_juxt_call_list_literal_preserved(self) -> None:
         call = first(parse("f [2]"))
         assert isinstance(call, Call)
@@ -1520,11 +1549,6 @@ class TestNegativeCases:
         """f a b is a parse error — juxt does not chain."""
         with pytest.raises(AglSyntaxError):
             parse("f a b")
-
-    def test_print_call_result_needs_parens(self) -> None:
-        """print classify(x) is a parse error; use print(classify(x))."""
-        with pytest.raises(AglSyntaxError):
-            parse("print classify(x)")
 
     def test_bare_assignment_is_equality(self) -> None:
         """In v2, n = 2 is a BinaryOp(EQ) expression (not a mutation).

@@ -292,8 +292,9 @@ See [Types](types.md#casts-and-convertibility) and
 **Application (level 9)** is the single-argument call sugar (`print x`,
 `ask "…"`, `f val`). It binds tighter than all binary operators:
 `print x + 1` parses as `(print x) + 1`. Application is **non-chaining**:
-`f g x` is a parse error — only one juxtaposition per expression. To chain,
-use parentheses: `f(g(x))`.
+`f g x` is a parse error — only one juxtaposition per expression. A nested
+postfix call can be the single sugar argument, so `f g(x)` parses as
+`f(g(x))`.
 
 **Calls with parentheses (level 10)** are left-associative postfix and
 support multiple arguments: `f(a, b)`, `f(a)(b)` (curried — not yet

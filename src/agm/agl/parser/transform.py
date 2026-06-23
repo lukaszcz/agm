@@ -57,8 +57,8 @@ from agm.agl.syntax.types import (
 # Types used internally
 _NamedArgList = list[syntax.NamedArg]
 _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
-_JuxtTypedCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
-_JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtTypedCall]
+_JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
+_JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtCall]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -871,7 +871,7 @@ class AstBuilder(Transformer):
 
         Builds the restricted postfix chain allowed by single-arg call sugar,
         such as ``print res.stdout``, ``print xs[0]``, and
-        ``f Opt.None::[int]()``.
+        ``f Opt.Some(x: 1)`` and ``f Opt.None::[int]()``.
         """
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
         assert non_tokens, "juxt_arg: no base atom"
@@ -893,7 +893,7 @@ class AstBuilder(Transformer):
                     node_id=self._next_id(),
                 )
             else:
-                type_args_val, arg_lists = cast(_JuxtTypedCall, value)
+                type_args_val, arg_lists = cast(_JuxtCall, value)
                 pos_args, named_args = arg_lists
                 result = syntax.Call(
                     callee=result,
@@ -914,6 +914,14 @@ class AstBuilder(Transformer):
         """juxt_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix."""
         index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
         return ("index", index_expr)
+
+    def juxt_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
+        """juxt_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
+        arg_lists: _ArgLists = ([], [])
+        for arg in args:
+            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
+                arg_lists = cast(_ArgLists, arg)
+        return ("call", ((), arg_lists))
 
     def juxt_typed_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
         """juxt_suffix: DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR."""

@@ -257,12 +257,8 @@ no named arguments, the parentheses may be dropped:
 print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is valid sugar argument
-```
-
-A *call result* as the lone argument still needs parentheses:
-
-```agl
-print(classify(x))    # compound arg: parens required
+print classify(x)     # equivalent to print(classify(x))
+f Opt.Some(x: 1)      # equivalent to f(Opt.Some(x: 1))
 ```
 
 Application binds **tighter than all operators**:

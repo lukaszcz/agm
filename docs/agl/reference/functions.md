@@ -221,14 +221,8 @@ written directly after the callee:
 print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is a valid sugar argument
-```
-
-The sugar applies only to simple atoms and field-access chains — not to
-call-result expressions. When the sole argument is itself a call, the
-parentheses are required:
-
-```agl
-print(classify(x))    # compound arg: parens required
+print classify(x)     # equivalent to print(classify(x))
+f Opt.Some(x: 1)      # equivalent to f(Opt.Some(x: 1))
 ```
 
 Application binds **tighter than all operators**:

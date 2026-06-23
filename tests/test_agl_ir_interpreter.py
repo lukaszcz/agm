@@ -68,8 +68,10 @@ from agm.agl.ir import (
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
+    IrMakeException,
     IrMakeList,
     IrMakeRecord,
+    IrRaise,
     IrSequence,
     Location,
     MapDictValues,
@@ -1327,6 +1329,16 @@ def _make_fn_descriptor(
     )
 
 
+def _loc_at_line(line: int) -> Location:
+    return Location(
+        source_id=_SOURCE_ID,
+        start_offset=line * 10,
+        end_offset=line * 10 + 1,
+        start_line=line,
+        start_col=0,
+    )
+
+
 class TestM4aFunctionEvaluation:
     """Tests for IrMakeClosure and IrDirectCall evaluation."""
 
@@ -1350,6 +1362,86 @@ class TestM4aFunctionEvaluation:
         result = IrInterpreter(prog).run()
         from agm.agl.eval.values import IntValue
         assert result["result"] == IntValue(42)
+
+    def test_param_default_can_call_top_level_function(self) -> None:
+        """Entry param defaults can call functions whose closure initializer appears later."""
+        from agm.agl.ir.program import IrParam
+
+        param_sym = SymbolId(700)
+        fn_desc = _make_fn_descriptor(IrConstInt(_LOC, 42))
+        param = IrParam(
+            symbol=param_sym,
+            public_name="x",
+            required=False,
+            default=IrDirectCall(_LOC, _FN_ID, ()),
+            location=_LOC,
+        )
+        prog = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={
+                ENTRY_ID: ExecutableModule(
+                    module_id=ENTRY_ID,
+                    initializers=(IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),),
+                )
+            },
+            symbols={
+                _FN_SID: _fn_sym_desc(),
+                param_sym: SymbolDescriptor(
+                    symbol_id=param_sym,
+                    mutable=False,
+                    public_name="x",
+                    owner=ENTRY_ID,
+                ),
+            },
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
+            functions={_FN_ID: fn_desc},
+            params=(param,),
+        )
+
+        result = IrInterpreter(prog).run()
+
+        assert result["x"] == IntValue(42)
+
+    def test_agl_raise_preserves_inner_function_span(self) -> None:
+        """Nested AglRaise failures keep the innermost IR node location."""
+        from agm.agl.eval.exceptions import AglRaise
+
+        raise_loc = _loc_at_line(1)
+        call_loc = _loc_at_line(3)
+        fn_desc = _make_fn_descriptor(
+            IrRaise(
+                raise_loc,
+                IrMakeException(
+                    raise_loc,
+                    NominalId(ENTRY_ID, "Abort"),
+                    "Abort",
+                    (("message", IrConstText(raise_loc, "boom")),),
+                ),
+            )
+        )
+        result_sym = SymbolId(701)
+        prog = _make_program(
+            initializers=(
+                IrBind(raise_loc, _FN_SID, IrMakeClosure(raise_loc, _FN_ID, ())),
+                IrBind(call_loc, result_sym, IrDirectCall(call_loc, _FN_ID, ())),
+            ),
+            symbols={
+                _FN_SID: _fn_sym_desc(),
+                result_sym: SymbolDescriptor(
+                    symbol_id=result_sym,
+                    mutable=False,
+                    public_name="result",
+                    owner=ENTRY_ID,
+                ),
+            },
+            functions={_FN_ID: fn_desc},
+        )
+
+        with pytest.raises(AglRaise) as exc_info:
+            IrInterpreter(prog).run()
+
+        assert exc_info.value.span == raise_loc
 
     def test_direct_call_with_param(self) -> None:
         """IrDirectCall with an argument evaluates correctly."""
@@ -1733,6 +1825,7 @@ class TestM6cIrExec:
         structured_exec: bool = False,
         max_attempts: int = 1,
         is_unit: bool = False,
+        location: Location = _LOC,
     ) -> ExecutableProgram:
         """Build a minimal program with a single IrExec initializer."""
         from agm.agl.ir.contracts import ContractRequest
@@ -1751,7 +1844,7 @@ class TestM6cIrExec:
             is_unit=is_unit,
         )
         node = IrExec(
-            location=_LOC,
+            location=location,
             command=command,
             contract_id=cid,
             max_attempts=max_attempts,
@@ -1871,6 +1964,65 @@ class TestM6cIrExec:
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
         assert exc_info.value.exc.display_name == "ExecError"
+
+    def test_ir_exec_spawn_error_records_exec_trace(self, tmp_path: pathlib.Path) -> None:
+        """A shell spawn failure still records the attempted exec command."""
+        import json
+        import unittest.mock
+
+        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.runtime.trace import TraceStore
+        from agm.core.process import ProcessCaptureResult
+
+        fake_result = ProcessCaptureResult(
+            returncode=None,
+            stdout="",
+            stderr="",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error="No such file or directory",
+            spawn_errno=2,
+        )
+        prog = self._make_exec_program(IrConstText(_LOC, "dummy"))
+        trace_path = tmp_path / "trace.jsonl"
+        trace = TraceStore(path=trace_path)
+        with unittest.mock.patch(
+            "agm.core.process.run_capture_result",
+            return_value=fake_result,
+        ):
+            with pytest.raises(AglRaise) as exc_info:
+                IrInterpreter(prog, trace=trace).run()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines() if line]
+        exec_records = [rec for rec in records if rec["kind"] == "exec_command"]
+        assert len(exec_records) == 1
+        record = exec_records[0]
+        assert record["command"] == "dummy"
+        assert record["exit_code"] == -1
+        assert record["stderr"] == "No such file or directory"
+        assert exc_info.value.exc.fields["trace_id"].value == record["trace_id"]
+
+    def test_ir_exec_preserves_command_expression_raise_span(self) -> None:
+        """IrExec does not overwrite a span from its command expression."""
+        from agm.agl.eval.exceptions import AglRaise
+
+        command_loc = _loc_at_line(4)
+        exec_loc = _loc_at_line(8)
+        command = IrRaise(
+            command_loc,
+            IrMakeException(
+                command_loc,
+                NominalId(ENTRY_ID, "Abort"),
+                "Abort",
+                (("message", IrConstText(command_loc, "boom")),),
+            ),
+        )
+        prog = self._make_exec_program(command, location=exec_loc)
+
+        with pytest.raises(AglRaise) as exc_info:
+            IrInterpreter(prog).run()
+
+        assert exc_info.value.span == command_loc
 
     def test_ir_exec_retry_timeout_raises_exec_error(self) -> None:
         """On retry, timeout in subsequent shell call raises ExecError (lines 1288-1289)."""

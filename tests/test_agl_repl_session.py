@@ -1451,6 +1451,24 @@ class TestImports:
         assert not r.ok
         assert r.error is not None
 
+    def test_agl_raise_in_graph_mode_records_exception_trace(self, tmp_path: Path) -> None:
+        import json
+
+        lib = tmp_path / 'mylib.agl'
+        lib.write_text('def boom() -> int = raise Abort(message: "boom")\n')
+        trace = tmp_path / "trace.jsonl"
+        s = self._make_session_with_root(tmp_path)
+        s._trace_path = trace
+
+        r = s.eval_entry("import mylib\nboom()")
+
+        assert not r.ok
+        records = [json.loads(line) for line in trace.read_text().splitlines() if line]
+        kinds = [rec["kind"] for rec in records]
+        assert "exception" in kinds
+        assert kinds[-1] == "run_end"
+        assert records[-1]["ok"] is False
+
     def test_re_import_replaces_accumulated(self, tmp_path: Path) -> None:
         # Re-importing the same module with a different using clause in a later
         # entry replaces the prior accumulated import declaration (dedup).

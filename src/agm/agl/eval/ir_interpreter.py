@@ -404,6 +404,23 @@ class IrInterpreter:
 
         return result
 
+    def _install_entry_function_closures(self) -> None:
+        """Pre-install available entry-module function closures for param defaults."""
+        entry_module = self._program.modules[self._program.entry_module]
+        for node in entry_module.initializers:
+            match node:
+                case IrBind(
+                    symbol=sym,
+                    value=IrMakeClosure(function_id=fn_id, captures=()) as closure_node,
+                ):
+                    desc = self._program.functions.get(fn_id)
+                    if desc is None or desc.function_symbol != sym:
+                        continue
+                    value = self._eval(closure_node)
+                    self._frames[0][sym] = value
+                case _:
+                    continue
+
     def _check_call_depth(self) -> None:
         if self._call_depth >= self._max_call_depth:
             raise AglRaise(
@@ -536,6 +553,7 @@ class IrInterpreter:
         All evaluation runs under the pinned AgL decimal context.
         """
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            self._install_entry_function_closures()
             # Install entry params into the base frame before any initializer.
             for ir_param in self._program.params:
                 if ir_param.symbol in self._param_values:
@@ -556,7 +574,7 @@ class IrInterpreter:
                 module_values = self.module_initializer_values.setdefault(mod.module_id, [])
                 for node in mod.initializers:
                     try:
-                        value = self._eval(node)
+                        value = self._eval_initializer(node)
                         self.initializer_values.append(value)
                         module_values.append(value)
                     except AglRaise as exc:
@@ -564,6 +582,18 @@ class IrInterpreter:
                             exc.span = node.location
                         raise
         return self._collect_results()
+
+    def _eval_initializer(self, node: IrExpr) -> Value:
+        match node:
+            case IrBind(symbol=sym, value=IrMakeClosure(function_id=fn_id)):
+                desc = self._program.functions.get(fn_id)
+                if desc is not None and desc.function_symbol == sym:
+                    slot = self._frames[0].get(sym)
+                    if slot is not None:
+                        return slot.value if isinstance(slot, Cell) else slot
+            case _:
+                pass
+        return self._eval(node)
 
     # ------------------------------------------------------------------
     # Expression evaluator (closed IrExpr dispatch, D4)
@@ -919,7 +949,7 @@ class IrInterpreter:
                         f"IrRaise: exc evaluated to {type(exc_val).__name__},"
                         " expected ExceptionValue"
                     )
-                raise AglRaise(exc_val)
+                raise AglRaise(exc_val, span=node.location)
 
             case IrTry(body=body_expr, handlers=handlers):
                 try:
@@ -1027,7 +1057,8 @@ class IrInterpreter:
                             exc.message,
                             trace_id=self._trace.new_event_id(),
                             raw=TextValue(val.value),
-                        )
+                        ),
+                        span=node.location,
                     ) from exc
                 return JsonValue(obj)
 
@@ -1040,7 +1071,14 @@ class IrInterpreter:
                 contract_id=contract_id,
                 max_attempts=max_attempts,
             ):
-                return self._eval_ir_ask(node, agent_expr, prompt_expr, contract_id, max_attempts)
+                try:
+                    return self._eval_ir_ask(
+                        node, agent_expr, prompt_expr, contract_id, max_attempts
+                    )
+                except AglRaise as exc:
+                    if exc.span is None:
+                        exc.span = node.location
+                    raise
 
             case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
                 return self._eval_ir_ask_request(node, agent_expr, prompt_expr, contract_id)
@@ -1050,7 +1088,12 @@ class IrInterpreter:
                 contract_id=contract_id,
                 max_attempts=max_attempts,
             ):
-                return self._eval_ir_exec(node, command_expr, contract_id, max_attempts)
+                try:
+                    return self._eval_ir_exec(node, command_expr, contract_id, max_attempts)
+                except AglRaise as exc:
+                    if exc.span is None:
+                        exc.span = node.location
+                    raise
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
@@ -1303,15 +1346,25 @@ class IrInterpreter:
             isolate_process_group=True,
         )
         if result.spawn_error is not None:
+            spawn_error = str(result.spawn_error)
+            trace_id = self._trace.exec_command(
+                command=cmd,
+                exit_code=-1,
+                duration=result.elapsed,
+                stdout=result.stdout,
+                stderr=spawn_error,
+                timed_out=False,
+                span=location,
+            )
             raise AglRaise(
                 _make_exc_value(
                     "ExecError",
-                    f"Failed to spawn shell: {result.spawn_error}",
-                    trace_id=self._trace.new_event_id(),
+                    f"Failed to spawn shell: {spawn_error}",
+                    trace_id=trace_id,
                     command=TextValue(cmd),
                     exit_code=IntValue(-1),
                     stdout=TextValue(""),
-                    stderr=TextValue(""),
+                    stderr=TextValue(spawn_error),
                     timed_out=BoolValue(False),
                 )
             )

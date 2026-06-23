@@ -1123,6 +1123,12 @@ class ReplSession:
             interp.run()
         except AglRaise as exc:
             error = exception_value_to_run_error(exc.exc, span=exc.span)
+            trace.exception(
+                type_name=error.type_name,
+                message=str(error.fields.get("message", "")),
+                trace_id=str(error.fields.get("trace_id", "")),
+                span=exc.span,
+            )
             trace.run_end(ok=False)
             installed = self._promote_ir_state(
                 text=text,
